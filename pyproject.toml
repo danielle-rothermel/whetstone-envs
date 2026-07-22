@@ -57,6 +57,9 @@ artifacts = [
     "src/whetstone_envs/c18/_vendor/prontoqa/bad_patterns.txt",
     "src/whetstone_envs/c18/_vendor/prontoqa/LICENSE",
     "src/whetstone_envs/c18/_vendor/prontoqa/PROVENANCE.md",
+    "src/whetstone_envs/c23/_vendor/inductionbench/LICENSE",
+    "src/whetstone_envs/c23/_vendor/inductionbench/PROVENANCE.md",
+    "src/whetstone_envs/c23/_vendor/inductionbench/VENDORED_DIFF.patch",
 ]
 
 [tool.pytest.ini_options]
@@ -73,6 +76,7 @@ include = ["src/**/*.py", "tests/**/*.py"]
 extend-exclude = [
     "src/whetstone_envs/c22/_vendor/**",
     "src/whetstone_envs/c18/_vendor/**",
+    "src/whetstone_envs/c23/_vendor/**",
 ]
 line-length = 79
 
@@ -180,4 +184,10 @@ include = ["src", "tests"]
 exclude = [
     "src/whetstone_envs/c22/_vendor/**",
     "src/whetstone_envs/c18/_vendor/**",
+    "src/whetstone_envs/c23/_vendor/**",
+]
+
+[tool.ty.environment]
+extra-paths = [
+    "src/whetstone_envs/c23/_vendor/inductionbench",
 ]

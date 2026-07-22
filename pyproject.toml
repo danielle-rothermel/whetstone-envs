@@ -17,7 +17,12 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "absl-py>=2.5.0",
+    "immutabledict>=4.3.1",
+    "langdetect>=1.0.9",
+    "nltk>=3.10.0",
+]
 
 [project.urls]
 Repository = "https://github.com/danielle-rothermel/whetstone-envs"
@@ -47,6 +52,9 @@ venv = ".venv"
 
 [tool.ruff]
 include = ["src/**/*.py", "tests/**/*.py"]
+# Vendored third-party code (google-research IFEval) is kept byte-for-byte
+# verbatim; never lint or reformat it. See the PROVENANCE.md alongside it.
+extend-exclude = ["src/whetstone_envs/c22/_vendor/**"]
 line-length = 79
 
 [tool.ruff.lint]
@@ -95,9 +103,27 @@ ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PLR2004", "PLC0415"]
+# The c22 probe prompts are copied verbatim from the baseline spec's
+# drafted text (Section 2); reflowing them to <=79 cols would break the
+# byte-for-byte render test. E501 is the only line-length rule that
+# applies to the triple-quoted template literals.
+"src/whetstone_envs/c22/prompts.py" = ["E501"]
+# c22 generation uses the stdlib ``random`` module deliberately and
+# never for cryptographic purposes: reproducibility from a pinned seed is
+# the entire point, so S311 (non-crypto RNG) does not apply.
+"src/whetstone_envs/c22/generate.py" = ["S311"]
+"src/whetstone_envs/c22/atoms.py" = ["S311"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]
 
 [tool.ty.src]
 include = ["src", "tests"]
+# Vendored google-research IFEval is kept byte-for-byte verbatim and is
+# not type-checked; it also imports itself absolutely as
+# ``instruction_following_eval``, so its own directory is added as an
+# extra module search path for the c22 code that imports it.
+exclude = ["src/whetstone_envs/c22/_vendor/**"]
+
+[tool.ty.environment]
+extra-paths = ["src/whetstone_envs/c22/_vendor"]

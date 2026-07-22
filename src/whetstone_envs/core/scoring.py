@@ -125,8 +125,19 @@ class Aggregate:
 
     @property
     def complete(self) -> bool:
-        """True only if every contributing result resolved to a score."""
-        return self.failed_count == 0 and self.missing_count == 0
+        """True only if every contributing result resolved to a score.
+
+        Equivalent to ``mean is not None``: a resolved mean is produced
+        (by :func:`_mean_of_observations` / :func:`_mean_of_children`)
+        exactly when there is at least one usable observation, no
+        failed/missing observation, and every contributing child is
+        itself complete. A zero-observation aggregate (empty or fully
+        exhausted) therefore reports ``complete=False`` rather than a
+        vacuously-complete zero, and an incomplete child forces its
+        parent incomplete instead of silently vanishing from the mean
+        (rubric 13).
+        """
+        return self.mean is not None
 
 
 def _mean_of_observations(obs: Iterable[Observation]) -> Aggregate:

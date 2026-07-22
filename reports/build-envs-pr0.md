@@ -111,3 +111,65 @@ Run in `whetstone-envs`:
   to `main`; nothing pushed to any remote.
 - Surgical additions only — no changes to existing modules beyond adding
   `core/`; existing `test_package.py` untouched.
+
+## Review fixes
+
+Two blocking review findings on `envs/00-harness` addressed.
+
+### 1. Criterion-13 silent-completeness bug in `core/scoring.py`
+
+`Aggregate.complete` was `failed_count == 0 and missing_count == 0`,
+which ignored `usable == 0`. A zero-observation aggregate therefore
+reported `complete=True` with `mean=None`, and — worse — in
+`_mean_of_children` the `all_complete = all(c.complete for c in
+children)` gate treated such an empty-but-"complete" child as complete
+and then averaged only children whose `mean is not None`, so an empty
+task/stratum silently vanished from the parent mean. Confirmed
+pre-fix: `aggregate_stratum([aggregate_task([]), aggregate_task([scored('a',0,1)])]).mean == 1.0`
+with `complete == True`, and `aggregate_overall([aggregate_stratum([])]).complete == True`.
+
+Fix: `Aggregate.complete` is now defined as `self.mean is not None`. A
+resolved `mean` is produced by `_mean_of_observations` /
+`_mean_of_children` exactly when there is at least one usable
+observation, no failed/missing observation, and every contributing
+child is itself complete (the child-completeness gate in
+`_mean_of_children` already keys off `c.complete`). This ties
+completeness to the authoritative "did this aggregate resolve" signal,
+so:
+
+- an empty/exhausted task, stratum, or overall reports
+  `complete=False` (`mean=None`), never a vacuous zero; and
+- an empty child mixed with a scored child forces the parent
+  `mean=None` / `complete=False` — it no longer silently vanishes from
+  the parent mean.
+
+The change is confined to the `complete` property; the mean-computation
+functions were already correct once `complete` reflected zero-usable
+inputs, so no other logic changed.
+
+### 2. Guard test asserted too little
+
+`tests/core/test_scoring.py::test_empty_stratum_is_incomplete_not_zero`
+now also asserts `agg.complete is False`. Added four tests pinning the
+criterion-13 contract at every level and along the silent-vanish path:
+
+- `test_empty_task_is_incomplete_not_zero`,
+  `test_empty_overall_is_incomplete_not_zero` — zero-observation
+  aggregates report `mean is None` / `complete is False` at task and
+  overall levels.
+- `test_empty_task_mixed_with_scored_does_not_silently_vanish`,
+  `test_empty_stratum_mixed_with_scored_does_not_silently_vanish` —
+  mixing an empty sub-aggregate with a scored one yields `mean is None`
+  / `complete is False` at the parent (the empty child does not
+  disappear into a 1.0 mean).
+
+These two new mixed-case tests fail against the old `complete`
+definition, so the contract is now actually pinned.
+
+### Gates (re-run, all green)
+
+- `uv run ruff check .` — All checks passed
+- `uv run ruff format --check .` — all files formatted
+- `uv run ty check` — All checks passed
+- `uv run pytest` — 59 passed (was 55; +4 guard tests)
+- `uv run pre-commit run --all-files` — every hook passed

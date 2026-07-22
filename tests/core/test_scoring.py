@@ -155,7 +155,42 @@ def test_stratum_and_overall_helpers_compose() -> None:
 
 
 def test_empty_stratum_is_incomplete_not_zero() -> None:
-    # No children means nothing to average; mean is None, not 0.0.
+    # No children means nothing to average; mean is None, not 0.0, and
+    # the aggregate must be visibly incomplete -- a zero-observation
+    # aggregate is not vacuously complete (rubric 13).
     agg = aggregate_stratum([])
     assert agg.mean is None
     assert agg.total == 0
+    assert agg.complete is False
+
+
+def test_empty_task_is_incomplete_not_zero() -> None:
+    agg = aggregate_task([])
+    assert agg.mean is None
+    assert agg.total == 0
+    assert agg.complete is False
+
+
+def test_empty_overall_is_incomplete_not_zero() -> None:
+    agg = aggregate_overall([aggregate_stratum([])])
+    assert agg.mean is None
+    assert agg.complete is False
+
+
+def test_empty_task_mixed_with_scored_does_not_silently_vanish() -> None:
+    # An empty task composed alongside a scored one must not disappear
+    # from the parent mean: the empty child forces incompleteness rather
+    # than the parent averaging only the scored child to 1.0.
+    empty = aggregate_task([])
+    scored_task = aggregate_task([scored("a", 0, 1)])
+    stratum = aggregate_stratum([empty, scored_task])
+    assert stratum.mean is None
+    assert stratum.complete is False
+
+
+def test_empty_stratum_mixed_with_scored_does_not_silently_vanish() -> None:
+    empty = aggregate_stratum([])
+    scored_stratum = aggregate_stratum([aggregate_task([scored("a", 0, 1)])])
+    overall = aggregate_overall([empty, scored_stratum])
+    assert overall.mean is None
+    assert overall.complete is False

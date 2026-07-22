@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -63,6 +64,13 @@ DEFAULT_SEED_START = 1_000_000
 CONSTRAINT_COUNTS: tuple[int, ...] = (3, 4, 5)
 MIX_EASY = "easy"
 MIX_MIXED = "mixed"
+# The 'hard' mix (hardest configuration of the original IFEval suite, no
+# hidden-information change): a 'hard' stack always includes ALL hard-pool
+# atoms that do not conflict, then fills any remaining count from the easy
+# pool (hard-first, conflict-aware). It differs from 'mixed' -- which
+# seeds a single hard atom and fills randomly from the combined pool -- by
+# maximizing hard-atom density rather than merely guaranteeing one.
+MIX_HARD = "hard"
 
 # Trivial base micro-tasks (spec: "produce a short answer or micro-
 # description"). Kept generic so the constraint stack, not the base task,
@@ -82,6 +90,76 @@ BASE_TASKS: tuple[str, ...] = (
 def stratum_label(n_constraints: int, mix: str) -> str:
     """The stratum label for a (constraint-count, atom-mix) cell."""
     return f"n{n_constraints}_{mix}"
+
+
+@dataclass(frozen=True, slots=True)
+class Preset:
+    """A named, self-describing generation configuration.
+
+    A preset pins the generation *axes* (the constraint-count levels, the
+    atom-mix levels, and the fresh seed start) so a whole pool variant is
+    expressible as config rather than a code fork. ``generate_pool`` and
+    ``build_manifest`` already accept these axes as arguments; a preset
+    just bundles a proposed default N with them under a stable name.
+
+    Parameters
+    ----------
+    name:
+        Stable identity for the preset (recorded on its manifest).
+    constraint_counts:
+        The constraint-count axis levels for this variant.
+    mixes:
+        The atom-mix axis levels for this variant.
+    seed_start:
+        First fresh seed. Chosen disjoint from both the published IFEval
+        dataset keys and every other preset's range so instances from
+        different variants never collide.
+    n_per_stratum:
+        Proposed default instances per stratum (config-overridable at the
+        call site).
+    """
+
+    name: str
+    constraint_counts: tuple[int, ...]
+    mixes: tuple[str, ...]
+    seed_start: int
+    n_per_stratum: int = 20
+
+    def generate(self, *, n_per_stratum: int | None = None) -> TaskPool:
+        """Generate this preset's pool (``n_per_stratum`` overridable)."""
+        return generate_pool(
+            n_per_stratum=(
+                self.n_per_stratum if n_per_stratum is None else n_per_stratum
+            ),
+            constraint_counts=self.constraint_counts,
+            mixes=self.mixes,
+            seed_start=self.seed_start,
+        )
+
+    def build_manifest(self, pool: TaskPool) -> Manifest:
+        """Derive this preset's manifest (name recorded as generator id)."""
+        return Manifest.from_pool(
+            pool,
+            generator_version=f"{GENERATOR_VERSION}+{self.name}",
+            seed_range=(self.seed_start, self.seed_start + len(pool)),
+        )
+
+
+# --- Hard-mode preset -----------------------------------------------------
+# The hardest configuration of the original IFEval suite (no hidden-info
+# change): 3 strata via counts x mixes = {(3, 6, 8)} x {hard}. At n=3 the
+# 'hard' mix places all 3 hard atoms and needs no easy fill (pure-hard); at
+# n=6 / n=8 it is 3 hard + 3 / 5 easy fill. The seed start is disjoint from
+# both the published IFEval key range and the base c22 pool seeds
+# (1_000_000..) so hard-variant instances never collide with either.
+HARD_SEED_START = 2_000_000
+HARD_PRESET = Preset(
+    name="hard",
+    constraint_counts=(3, 6, 8),
+    mixes=(MIX_HARD,),
+    seed_start=HARD_SEED_START,
+    n_per_stratum=20,
+)
 
 
 def _conflicts(chosen: Sequence[str], candidate: str) -> bool:
@@ -105,15 +183,31 @@ def _sample_atom_ids(
     """Sample ``n_constraints`` distinct, non-conflicting atom ids.
 
     ``easy`` draws entirely from the easy pool; ``mixed`` guarantees at
-    least one hard-pool atom, filling the rest from the combined pool.
-    Selection honors ``INSTRUCTION_CONFLICTS`` so no stacked pair
-    contradicts.
+    least one hard-pool atom, filling the rest from the combined pool;
+    ``hard`` places ALL non-conflicting hard-pool atoms first, then fills
+    any remaining count from the easy pool (hard-first). Selection honors
+    ``INSTRUCTION_CONFLICTS`` so no stacked pair contradicts; an infeasible
+    request raises loudly rather than silently returning a short stack.
     """
     easy_ids = [a.instruction_id for a in EASY_POOL]
     hard_ids = [a.instruction_id for a in HARD_POOL]
 
     chosen: list[str] = []
-    if mix == MIX_MIXED:
+    if mix == MIX_HARD:
+        # Hard-first: place every hard-pool atom that does not conflict
+        # with the ones already chosen, in a shuffled order, then fill any
+        # remaining count from the easy pool. This maximizes hard-atom
+        # density -- a 'hard' stack contains all hard atoms that co-exist.
+        hard_order = list(hard_ids)
+        rng.shuffle(hard_order)
+        for cand in hard_order:
+            if len(chosen) >= n_constraints:
+                break
+            if cand in chosen or _conflicts(chosen, cand):
+                continue
+            chosen.append(cand)
+        pool = list(easy_ids)
+    elif mix == MIX_MIXED:
         # Seed the stack with one hard atom so "mixed" always includes a
         # hard-pool constraint.
         chosen.append(rng.choice(hard_ids))
@@ -306,21 +400,44 @@ def _main(argv: Sequence[str] | None = None) -> int:
         help="first fresh seed (default: 1_000_000)",
     )
     parser.add_argument(
+        "--preset",
+        choices=["hard"],
+        default=None,
+        help=(
+            "named generation preset (overrides the axis flags and writes "
+            "the preset's own manifest by default). 'hard' = the hardest "
+            "IFEval configuration: counts (3, 6, 8) x mix 'hard'."
+        ),
+    )
+    parser.add_argument(
         "--manifest",
         type=Path,
-        default=Path(__file__).with_name("manifest.json"),
-        help="where to write the default-config manifest JSON",
+        default=None,
+        help=(
+            "where to write the manifest JSON (default: manifest.json, or "
+            "manifest_<preset>.json when --preset is given)"
+        ),
     )
     args = parser.parse_args(argv)
 
-    pool = generate_pool(
-        n_per_stratum=args.n_per_stratum,
-        constraint_counts=args.constraint_counts,
-        mixes=args.mixes,
-        seed_start=args.seed_start,
-    )
-    manifest = build_manifest(pool, args.seed_start)
-    manifest.write(args.manifest)
+    if args.preset == "hard":
+        pool = HARD_PRESET.generate(n_per_stratum=args.n_per_stratum)
+        manifest = HARD_PRESET.build_manifest(pool)
+        manifest_path = args.manifest or Path(__file__).with_name(
+            "manifest_hard.json",
+        )
+    else:
+        pool = generate_pool(
+            n_per_stratum=args.n_per_stratum,
+            constraint_counts=args.constraint_counts,
+            mixes=args.mixes,
+            seed_start=args.seed_start,
+        )
+        manifest = build_manifest(pool, args.seed_start)
+        manifest_path = args.manifest or Path(__file__).with_name(
+            "manifest.json",
+        )
+    manifest.write(manifest_path)
     return 0
 
 

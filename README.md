@@ -33,7 +33,15 @@ One module per candidate, added as each baseline spec is implemented:
 - `c11` — JSON canonicalization (RFC 8785 / JCS)
 - `c18` — PrOntoQA deductive entailment
 - `c19` — Minigrid state prediction
-- `c22` — stacked IFEval instruction-following constraints
+- `c22` — stacked IFEval instruction-following constraints —
+  [`whetstone_envs.c22`](src/whetstone_envs/c22)
+  ([generate](src/whetstone_envs/c22/generate.py) ·
+  [oracle](src/whetstone_envs/c22/oracle.py) ·
+  [prompts](src/whetstone_envs/c22/prompts.py) ·
+  [tests](tests/c22)). Reuses Google Research's IFEval checker library
+  verbatim (vendored under
+  [`c22/_vendor`](src/whetstone_envs/c22/_vendor), Apache-2.0) for both
+  generation-side constraint selection and the scoring oracle.
 - `c23` — subregular rule induction (InductionBench-style)
 
 ## Development

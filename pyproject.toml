@@ -24,6 +24,7 @@ dependencies = [
     "nltk>=3.10.0",
     "pydantic>=2.13.4",
     "typer>=0.27.0",
+    "rfc8785>=0.1.4",
 ]
 
 [project.urls]
@@ -115,6 +116,16 @@ ignore = ["PLR1711", "S101", "TRY003"]
 # the entire point, so S311 (non-crypto RNG) does not apply.
 "src/whetstone_envs/c22/generate.py" = ["S311"]
 "src/whetstone_envs/c22/atoms.py" = ["S311"]
+# c11 generation/strata use the stdlib ``random`` module deliberately for
+# seed-pinned reproducibility, never cryptographically: S311 (non-crypto
+# RNG) does not apply.
+"src/whetstone_envs/c11/generate.py" = ["S311"]
+"src/whetstone_envs/c11/strata.py" = ["S311"]
+# The c11 probe prompts are copied verbatim from the baseline spec's
+# drafted text (Section 2); reflowing them to <=79 cols would break the
+# byte-for-byte render test, so E501 does not apply to the templates.
+"src/whetstone_envs/c11/prompts.py" = ["E501"]
+"tests/c11/test_prompts.py" = ["E501", "RUF001"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]

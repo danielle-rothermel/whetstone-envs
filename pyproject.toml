@@ -26,6 +26,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "typer>=0.27.0",
     "rfc8785>=0.1.4",
+    "scipy>=1.11.0",
 ]
 
 [project.urls]
@@ -47,6 +48,17 @@ dev = [
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/whetstone_envs"]
+# The c18 subprocess boundary reads the vendored prontoqa generator by
+# file path (it runs `run_experiment.py` as a subprocess), so the vendored
+# non-Python data files must ship inside the wheel alongside the package.
+artifacts = [
+    "src/whetstone_envs/c18/_vendor/prontoqa/bad_patterns.txt",
+    "src/whetstone_envs/c18/_vendor/prontoqa/LICENSE",
+    "src/whetstone_envs/c18/_vendor/prontoqa/PROVENANCE.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
@@ -56,9 +68,12 @@ venv = ".venv"
 
 [tool.ruff]
 include = ["src/**/*.py", "tests/**/*.py"]
-# The pinned IFEval snapshot retains upstream formatting; its complete
-# import-isolation and exact-count patch is recorded alongside it.
-extend-exclude = ["src/whetstone_envs/c22/_vendor/**"]
+# Vendored snapshots retain upstream formatting and are covered by their
+# provenance records and regression suites instead of first-party lint.
+extend-exclude = [
+    "src/whetstone_envs/c22/_vendor/**",
+    "src/whetstone_envs/c18/_vendor/**",
+]
 line-length = 79
 
 [tool.ruff.lint]
@@ -142,12 +157,23 @@ ignore = ["PLR1711", "S101", "TRY003"]
 # drafted text (Section 2.2); reflowing it to <=79 cols would break the
 # byte-for-byte render test, so E501 does not apply to that module.
 "src/whetstone_envs/c19/prompts.py" = ["E501"]
+# The c18 probe prompts are copied verbatim from the baseline spec's
+# drafted text (Section 2); reflowing them to <=79 cols would break the
+# byte-for-byte render test. RUF001 covers the spec's own U+2014 em dash.
+"src/whetstone_envs/c18/prompts.py" = ["E501", "RUF001"]
+"tests/c18/test_prompts.py" = ["E501", "RUF001"]
+# The c18 subprocess boundary exposes every owner-open generation knob as
+# a keyword-only argument (config surface); the arg count is intentional.
+"src/whetstone_envs/c18/upstream.py" = ["PLR0913"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]
 
 [tool.ty.src]
 include = ["src", "tests"]
-# The pinned IFEval snapshot retains upstream annotations and is checked
-# through its regression suite instead of the first-party type checker.
-exclude = ["src/whetstone_envs/c22/_vendor/**"]
+# Vendored snapshots retain upstream annotations and are checked through
+# their regression suites instead of the first-party type checker.
+exclude = [
+    "src/whetstone_envs/c22/_vendor/**",
+    "src/whetstone_envs/c18/_vendor/**",
+]

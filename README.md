@@ -41,7 +41,22 @@ One module per candidate, added as each baseline spec is implemented:
   (Apache-2.0) strictly unmodified, and the ceiling prompt's worked-
   example outputs are regenerated through `rfc8785.dumps`, never
   hand-typed.
-- `c18` — PrOntoQA deductive entailment
+- `c18` — PrOntoQA deductive entailment —
+  [`whetstone_envs.c18`](src/whetstone_envs/c18)
+  ([generate](src/whetstone_envs/c18/generate.py) ·
+  [oracle](src/whetstone_envs/c18/oracle.py) ·
+  [prompts](src/whetstone_envs/c18/prompts.py) ·
+  [upstream](src/whetstone_envs/c18/upstream.py) ·
+  [tests](tests/c18)). Depth-binned (D1/D2/D3/D5) True/False entailment
+  over fictional nonce predicates, reseeded from the vendored
+  [`asaparov/prontoqa`](https://github.com/asaparov/prontoqa) (Apache-2.0)
+  generator through a subprocess boundary (`--model-name json`,
+  `--ontology fictional`, fresh `--seed` per depth). The generator's
+  stored label is definitional, so an independent from-scratch
+  forward-chaining fixpoint oracle re-derives the label from the public
+  facts + query alone, and construction asserts the two agree. Both probe
+  prompts are verbatim from the baseline spec (Section 2); scored 0/1
+  exact match.
 - `c19` — Minigrid grid-world state prediction —
   [`whetstone_envs.c19`](src/whetstone_envs/c19)
   ([generate](src/whetstone_envs/c19/generate.py) ·

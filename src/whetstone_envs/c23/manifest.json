@@ -1,0 +1,15 @@
+{
+  "content_hash": "d9f4b078cb37da0d85402a0ff4b4104c1ee7d05ca30141a89cdd868dd574984e",
+  "generator_version": "c23-generate-1",
+  "schema_version": 1,
+  "seed_range": [
+    555000000,
+    555000004
+  ],
+  "stratum_counts": {
+    "S1": 50,
+    "S2": 50,
+    "S3": 50,
+    "S4": 50
+  }
+}

@@ -10,12 +10,9 @@ logic, so it lives in :mod:`whetstone_envs.core`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 
 def _freeze_inputs(
@@ -60,7 +57,7 @@ class Instance:
     id: str
     seed: int
     strata: tuple[str, ...]
-    prompt_inputs: MappingProxyType[str, str] = field(
+    prompt_inputs: Mapping[str, str] = field(
         default_factory=lambda: _freeze_inputs({}),
     )
     gold: str = ""
@@ -78,6 +75,20 @@ class Instance:
                 "prompt_inputs",
                 _freeze_inputs(self.prompt_inputs),
             )
+
+    def __hash__(self) -> int:
+        # The dataclass-generated __hash__ would try to hash the
+        # unhashable MappingProxyType; hash its sorted items instead so
+        # value-equal instances still hash equal.
+        return hash(
+            (
+                self.id,
+                self.seed,
+                self.strata,
+                tuple(sorted(self.prompt_inputs.items())),
+                self.gold,
+            ),
+        )
 
 
 def make_instance(

@@ -1,0 +1,17 @@
+{
+  "content_hash": "236144f8d0807da5af35b1f5149bcd0ede99d1df8563055cb22df88389c6ee6d",
+  "generator_version": "c22-generate-1",
+  "schema_version": 1,
+  "seed_range": [
+    1000000,
+    1000120
+  ],
+  "stratum_counts": {
+    "n3_easy": 20,
+    "n3_mixed": 20,
+    "n4_easy": 20,
+    "n4_mixed": 20,
+    "n5_easy": 20,
+    "n5_mixed": 20
+  }
+}

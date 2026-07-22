@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -37,7 +38,7 @@ import config  # vendored stub (whetstone_envs.c23 put it on sys.path)
 import synthetic_data_generation as _sdg  # vendored InductionBench module
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
 # The three transducer families the ISL/OSL path exposes (spec Section 1
 # secondary axis). ``L_OSL`` / ``R_OSL`` use the vendored ``_OSL`` spelling
@@ -83,7 +84,7 @@ class RawInstance:
 
 
 def vocab_for(vocab_size: int) -> list[str]:
-    """Return the vendored alphabet of ``vocab_size`` symbols (``a``, ``b``...)."""
+    """Return the vendored alphabet of ``vocab_size`` symbols (a, b, ...)."""
     if not 1 <= vocab_size <= len(_ALPHABET):
         msg = f"vocab_size must be in 1..{len(_ALPHABET)}, got {vocab_size}"
         raise UpstreamError(msg)
@@ -287,9 +288,9 @@ def _draw_query_candidates(
     for _ in range(count):
         picks: list[str] = []
         for _ in range(per_instance):
-            length = random.randint(2, max_len)  # noqa: S311 - repro, not crypto
+            length = random.randint(2, max_len)
             picks.append(
-                "".join(random.choice(vocab) for _ in range(length)),  # noqa: S311
+                "".join(random.choice(vocab) for _ in range(length)),
             )
         out.append(picks)
     return out

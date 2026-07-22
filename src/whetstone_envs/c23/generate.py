@@ -249,7 +249,11 @@ def generate_pool(
     _assert_fresh_seeds(consumed_seeds)
 
     per_stratum: list[list[Instance]] = []
-    for (label, rule_type, k), seed in zip(strata, consumed_seeds, strict=True):
+    for (label, rule_type, k), seed in zip(
+        strata,
+        consumed_seeds,
+        strict=True,
+    ):
         per_stratum.append(
             _build_stratum(
                 label,
@@ -324,7 +328,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         "--n-per-stratum",
         type=int,
         default=DEFAULT_N_PER_STRATUM,
-        help=f"instances per stratum (spec Sec 1.3 default {DEFAULT_N_PER_STRATUM})",
+        help=f"instances per stratum (default {DEFAULT_N_PER_STRATUM})",
     )
     parser.add_argument(
         "--n-demos",
@@ -336,7 +340,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         "--max-query-len",
         type=int,
         default=DEFAULT_MAX_QUERY_LEN,
-        help=f"longest held-out query length (default {DEFAULT_MAX_QUERY_LEN})",
+        help=f"longest held-out query (default {DEFAULT_MAX_QUERY_LEN})",
     )
     parser.add_argument(
         "--seed-start",

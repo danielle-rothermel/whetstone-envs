@@ -81,7 +81,27 @@ One module per candidate, added as each baseline spec is implemented:
   with namespaced imports and exact word counts (vendored under
   [`c22/_vendor`](src/whetstone_envs/c22/_vendor), Apache-2.0) for
   generation-side constraint selection and the scoring oracle.
-- `c23` — subregular rule induction (InductionBench-style)
+- `c23` — subregular rule induction (InductionBench-style) —
+  [`whetstone_envs.c23`](src/whetstone_envs/c23)
+  ([generate](src/whetstone_envs/c23/generate.py) ·
+  [oracle](src/whetstone_envs/c23/oracle.py) ·
+  [prompts](src/whetstone_envs/c23/prompts.py) ·
+  [upstream](src/whetstone_envs/c23/upstream.py) ·
+  [tests](tests/c23)). Infer one latent subregular ISL/L-OSL/R-OSL
+  string-transform rule from a few `IN -> OUT` demonstrations, then apply it
+  to one held-out query; scored 0/1 exact match. Four strata (S1 ISL k2, S2
+  L-OSL k2, S3 R-OSL k2, S4 ISL k3; |Σ|=4, single-rule) reseeded from the
+  vendored [InductionBench](https://github.com/Wenyueh/inductive_reasoning_benchmark)
+  (Apache-2.0) generator. The upstream active path does not import or run as
+  shipped, so the vendor is applied as four named, individually-committed
+  patches (config stub; drop the broken import; thread a real seed;
+  `list(set(...))` → `sorted(...)` at the 6 nondeterminism sites) with a
+  `VENDORED_DIFF.patch` capturing the whole delta — the `sorted()` fix makes
+  the pool byte-identical across runs under a randomized `PYTHONHASHSEED`.
+  The oracle reuses the vendored `apply_ISL_rule` / `apply_L_OSL_rule` /
+  `apply_R_OSL_rule` transducers unmodified, re-applied to the held-out
+  query; the ceiling prompt states the task conventions without leaking the
+  latent rule.
 
 ## Development
 

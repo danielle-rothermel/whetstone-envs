@@ -30,7 +30,17 @@ specs each task family here implements.
 
 One module per candidate, added as each baseline spec is implemented:
 
-- `c11` — JSON canonicalization (RFC 8785 / JCS)
+- `c11` — JSON canonicalization (RFC 8785 / JCS) —
+  [`whetstone_envs.c11`](src/whetstone_envs/c11)
+  ([generate](src/whetstone_envs/c11/generate.py) ·
+  [oracle](src/whetstone_envs/c11/oracle.py) ·
+  [prompts](src/whetstone_envs/c11/prompts.py) ·
+  [tests](tests/c11)). Adversarial seeded generator (one messy input per
+  JCS sub-rule stratum); the oracle delegates canonicalization to
+  trailofbits [`rfc8785`](https://github.com/trailofbits/rfc8785.py)
+  (Apache-2.0) strictly unmodified, and the ceiling prompt's worked-
+  example outputs are regenerated through `rfc8785.dumps`, never
+  hand-typed.
 - `c18` — PrOntoQA deductive entailment
 - `c19` — Minigrid state prediction
 - `c22` — stacked IFEval instruction-following constraints —

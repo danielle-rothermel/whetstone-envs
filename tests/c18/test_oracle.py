@@ -22,6 +22,7 @@ from whetstone_envs.c18 import oracle
 from whetstone_envs.c18.oracle import (
     OracleError,
     entailment_label,
+    extract_verdict,
     score,
     score_gold,
 )
@@ -152,6 +153,83 @@ def test_score_exact_match_and_normalization() -> None:
     assert score("  True\n", q, query) == 1
     assert score("```\nTrue\n```", q, query) == 1
     assert score("False", q, query) == 0
+
+
+# --- Verdict extraction (spec Section 3 decision rule) --------------------
+# A chain-of-thought ceiling reply ends with the verdict on its own final
+# line (spec Section 2.2); a naive reply may append a trailing rationale.
+# Scoring the whole reply against the gold token scores every such reply 0.
+# These fixtures pin the prescribed extraction of the final True/False
+# verdict. The two multi-line replies below are the LIVE responses captured
+# in the pilot that exposed the bug (instance c18-D5-1000000003-0001 and a
+# naive rationale-trailing sibling), quoted verbatim.
+
+# Verbatim live ceiling (chain-of-thought) reply: ends "...not entailed."
+# then the verdict "False" on its own final line. Gold was False; the
+# whole-text match scored this 0 before the fix.
+_LIVE_CEILING_COT = (
+    "Wren is an impus. Impuses are vumpuses, so Wren is a vumpus. "
+    "Vumpuses are gorpuses, so Wren is a gorpus. Following the rules step "
+    "by step, no rule makes Wren amenable; the query property is not "
+    "entailed.\n\nFalse"
+)
+# Verbatim live naive reply: the verdict leads, then a rationale clause is
+# appended (the shape that cost the naive probe 3 calls).
+_LIVE_NAIVE_TRAILING = (
+    "True, since Sally is a brimpus and every brimpus is sour."
+)
+
+
+def test_extract_verdict_bare_tokens() -> None:
+    assert extract_verdict("True") == "True"
+    assert extract_verdict("False") == "False"
+    assert extract_verdict("true") == "True"
+    assert extract_verdict("FALSE") == "False"
+
+
+def test_extract_verdict_cot_takes_final_line_token() -> None:
+    # Spec 2.2: the verdict is the last standalone token after reasoning.
+    assert extract_verdict(_LIVE_CEILING_COT) == "False"
+
+
+def test_extract_verdict_naive_trailing_rationale() -> None:
+    # A verdict followed by an appended rationale still resolves to the
+    # verdict (the rationale here restates no verdict token).
+    assert extract_verdict(_LIVE_NAIVE_TRAILING) == "True"
+    assert extract_verdict("False. It is not derivable from the rules.") == (
+        "False"
+    )
+
+
+def test_extract_verdict_no_token_returned_unchanged() -> None:
+    # No verdict token -> unchanged, so it still fails exact match (0).
+    assert extract_verdict("I cannot determine the answer.") == (
+        "I cannot determine the answer."
+    )
+
+
+def test_score_live_ceiling_cot_response_scores_correctly() -> None:
+    # The regression: the verbatim live D5 CoT reply, gold False, must now
+    # score 1 (it scored 0 before the extraction fix).
+    assert score_gold(_LIVE_CEILING_COT, "False") == 1
+    assert score_gold(_LIVE_CEILING_COT, "True") == 0
+
+
+def test_score_live_naive_trailing_rationale_scores_correctly() -> None:
+    # The naive verdict-with-trailing-rationale reply, gold True, scores 1.
+    assert score_gold(_LIVE_NAIVE_TRAILING, "True") == 1
+    assert score_gold(_LIVE_NAIVE_TRAILING, "False") == 0
+
+
+def test_score_cot_response_via_reredive_path() -> None:
+    # The same extraction applies on the re-derive-from-text scoring path.
+    q = (
+        "Wren is an impus. Impuses are vumpuses. Vumpuses are gorpuses. "
+        "Gorpuses are zumpuses. Zumpuses are shumpuses. "
+        "Every shumpus is amenable. Each lorpus is not amenable."
+    )
+    query = "True or false: Wren is not amenable."  # gold False
+    assert score(_LIVE_CEILING_COT, q, query) == 1
 
 
 def test_score_unparsable_input_is_zero_not_raise() -> None:

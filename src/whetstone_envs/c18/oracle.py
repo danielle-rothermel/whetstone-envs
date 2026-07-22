@@ -258,22 +258,59 @@ def entailment_label(question: str, query: str) -> str:
     return "True" if (goal.name, goal.negated) in closure else "False"
 
 
+# --- Verdict extraction (baseline spec Section 3 decision rule) ------------
+# The spec's decision rule scores a single True/False verdict by exact
+# match, and the ceiling probe (Section 2.2) instructs the model to "end
+# your reply with exactly one word on its own final line: either True or
+# False". A chain-of-thought reply therefore ends with the verdict but is
+# many lines long, and even the naive probe may append a trailing rationale
+# clause. Matching the *whole* reply against the gold token scores every
+# such well-formed reply 0 (observed live: a CoT reply ending
+# "...not entailed.\n\nFalse" with gold "False" scored 0). This extractor
+# recovers the prescribed verdict token before the exact-match compare: it
+# takes the LAST standalone ``True``/``False`` word in the (already shared-
+# normalized) text -- the spec's final-line convention -- and canonicalizes
+# its case. Text containing no verdict token is returned unchanged, so a
+# genuinely unparseable reply still fails the exact match (scores 0) rather
+# than being coerced to a verdict.
+_VERDICT_RE = re.compile(r"\b(true|false)\b", re.IGNORECASE)
+
+
+def extract_verdict(text: str) -> str:
+    """Extract the final True/False verdict from a normalized reply.
+
+    Returns the canonical ``"True"`` / ``"False"`` for the last standalone
+    verdict token in ``text`` (the spec Section 2.2 final-line convention:
+    reasoning may precede it, and a naive reply may trail a rationale after
+    it, but the verdict is the last such token). Text with no verdict token
+    is returned unchanged so it still fails exact match rather than being
+    silently coerced to a label.
+    """
+    matches = _VERDICT_RE.findall(text)
+    if not matches:
+        return text
+    return matches[-1].capitalize()
+
+
 def score(prediction: str, question: str, query: str) -> int:
     """Return 1 iff ``prediction`` matches the re-derived label, else 0.
 
-    The model's ``prediction`` and the freshly re-derived gold are both
-    passed through the shared
+    The model's ``prediction`` is passed through the shared
     :func:`whetstone_envs.core.probes.normalize` (strip surrounding
-    whitespace / one code fence) before a case-insensitive exact-match
-    compare -- no partial credit (rubric criterion 2). A question/query
-    the oracle cannot parse scores ``0`` rather than raising: a model
-    response is graded, not trusted.
+    whitespace / one code fence) and then :func:`extract_verdict` (the
+    spec Section 3 verdict extraction: recover the final True/False token
+    from a chain-of-thought or rationale-trailing reply) before a
+    case-insensitive exact-match compare against the freshly re-derived
+    gold -- no partial credit (rubric criterion 2). A question/query the
+    oracle cannot parse scores ``0`` rather than raising: a model response
+    is graded, not trusted.
     """
     try:
         gold = entailment_label(question, query)
     except OracleError:
         return 0
-    return int(normalize(prediction).lower() == normalize(gold).lower())
+    predicted = extract_verdict(normalize(prediction))
+    return int(predicted.lower() == normalize(gold).lower())
 
 
 def score_gold(prediction: str, gold: str) -> int:
@@ -281,8 +318,11 @@ def score_gold(prediction: str, gold: str) -> int:
 
     The pool-facing entry point mirroring the other candidates'
     ``score_gold``: given an instance's already-derived ``gold`` label and
-    a model response, return 0 or 1 by normalized case-insensitive exact
-    match. Use :func:`score` instead to re-derive straight from the public
-    question + query.
+    a model response, return 0 or 1. The prediction is shared-normalized
+    and then run through :func:`extract_verdict` (spec Section 3) so a
+    chain-of-thought or rationale-trailing reply is scored on its final
+    True/False verdict, not its whole text. Use :func:`score` instead to
+    re-derive straight from the public question + query.
     """
-    return int(normalize(prediction).lower() == normalize(gold).lower())
+    predicted = extract_verdict(normalize(prediction))
+    return int(predicted.lower() == normalize(gold).lower())

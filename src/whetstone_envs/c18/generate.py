@@ -33,6 +33,7 @@ constraints (rubric criterion 8) as checks, not comments:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -190,6 +191,7 @@ def generate_pool(
     n_per_stratum: int = DEFAULT_N_PER_STRATUM,
     depths: Sequence[int] = DEFAULT_DEPTHS,
     distractors: str = DEFAULT_DISTRACTORS,
+    distractors_by_depth: dict[int, str] | None = None,
     ontology: str = FIXED_ONTOLOGY,
     seed_start: int = DEFAULT_SEED_START,
 ) -> TaskPool:
@@ -205,7 +207,16 @@ def generate_pool(
         1 / Open Decision O2).
     distractors:
         Native distractor knob (spec Open Decision O1; default
-        ``relevant`` = ON to avoid the trivial shortcut).
+        ``relevant`` = ON to avoid the trivial shortcut). Applied uniformly
+        unless a depth appears in ``distractors_by_depth``.
+    distractors_by_depth:
+        Optional per-depth override of ``distractors``. Needed for the hard
+        preset: the upstream fictional ontology can sustain relevant
+        distractors only up to ~5 hops (deeper chains exhaust the nonce
+        concept/property vocabulary and never generate), so a deep-chain
+        variant sets distractors ``none`` at those depths where they are
+        infeasible and keeps them ``relevant`` where the generator can
+        produce them. A depth absent from the map uses ``distractors``.
     ontology:
         Pinned to ``fictional``; any other value fails the construction
         assertion (contamination guard).
@@ -225,6 +236,7 @@ def generate_pool(
     consumed_seeds = [seed_start + i for i in range(len(depths))]
     _assert_fresh_seeds(consumed_seeds)
 
+    by_depth = distractors_by_depth or {}
     per_stratum: list[list[Instance]] = []
     for depth, seed in zip(depths, consumed_seeds, strict=True):
         per_stratum.append(
@@ -232,7 +244,7 @@ def generate_pool(
                 depth,
                 seed,
                 n_per_stratum,
-                distractors=distractors,
+                distractors=by_depth.get(depth, distractors),
             ),
         )
 
@@ -280,6 +292,163 @@ def build_manifest(pool: TaskPool, seed_start: int, n_depths: int) -> Manifest:
     )
 
 
+# --- Hard-mode preset -----------------------------------------------------
+# The hardest configuration of the *upstream PrOntoQA* suite along the two
+# axes this env already exposes -- deduction depth and distractors -- with
+# NO hidden-information change (no Unknown label, no OOD rule type, no
+# constraint-puzzle stratum). It pushes hop depth well past the base pool's
+# D5 ceiling (D5, D8, D10). Both axes are native `generate_pool` arguments,
+# so the preset is config, not a code fork.
+#
+# UPSTREAM CEILING (measured, root-caused). The pinned vendored generator
+# cannot produce chains deeper than ~5 hops with distractors ON: relevant
+# distractors add sibling ontology branches drawn from the SAME fixed 17-name
+# fictional concept pool (run_experiment.py line ~348) plus a bounded set of
+# property families, and a 6+-hop main chain PLUS those distractor branches
+# exhausts that vocabulary, so `generate_question` rejects (returns None)
+# indefinitely. Empirically: D5+relevant succeeds (~0.4% accept, sub-second
+# for N=3); D6/D8/D10+relevant produce ZERO instances in >100k attempts each
+# (~590k rejected attempts across four independent probes). `irrelevant`
+# distractors are worse still (a fully disjoint parallel ontology). Distractors
+# OFF, by contrast, generate D6/D8/D10 in milliseconds.
+#
+# Consequently the hard preset keeps distractors ON at the DEEPEST depth where
+# the generator can honor them (D5) and drops them to `none` at D8/D10, where
+# they are upstream-infeasible. At those depths the 8- and 10-hop chain length
+# is itself the dominant hardness lever (far past base c18's D5 ceiling), so
+# the trivial property-string-match shortcut a distractor guards against is
+# already blunted by chain length. Reaching D8/D10 WITH distractors would
+# require vendoring a larger concept ontology -- out of scope this pass
+# (depth + distractors only, no ontology change). See
+# HARD_DISTRACTORS_BY_DEPTH.
+#
+# The forward-chaining fixpoint ORACLE is UNCHANGED: it is a pure function of
+# the public question + query text and closes to a least fixpoint regardless
+# of chain length or how many distractor rules pad the theory (its design
+# property; verified by hand-traced D8, D10-with-distractor, and
+# distractor-not-entailed fixtures in the oracle tests). Nothing in oracle.py
+# special-cases depth or distractor count.
+HARD_DEPTHS: tuple[int, ...] = (5, 8, 10)
+
+# Per-depth distractor policy (see the ceiling note above): distractors ON
+# (`relevant`) at D5 where the generator honors them, `none` at D8/D10 where
+# they are upstream-infeasible. A depth absent here falls back to the preset's
+# base `distractors`. This is the one forced deviation from a uniform
+# distractors-ON hard variant, dictated by the pinned upstream's vocabulary.
+HARD_DISTRACTORS_BY_DEPTH: dict[int, str] = {
+    5: "relevant",
+    8: "none",
+    10: "none",
+}
+
+# N per depth stratum for the hard variant (config-overridable at the call
+# site via `HARD_PRESET.generate(n_per_stratum=...)`). 20 is the committed
+# default -- large enough for a meaningful split, small enough that a full
+# regenerate stays tractable.
+HARD_N_PER_STRATUM = 20
+
+# Fresh seed start for the hard variant. Chosen strictly disjoint from BOTH
+# the published PrOntoQA space (reserved <= RESERVED_SEED_MAX, plus the
+# upstream default seed) AND the base c18 pool's fresh window
+# (DEFAULT_SEED_START == 1_000_000_000, which consumes one seed per default
+# depth). 2_000_000_000 sits an order of magnitude above the base start, so
+# a hard instance can never reuse a base-pool or published seed.
+HARD_SEED_START = 2_000_000_000
+
+# Split sizes per stratum for the hard variant: internal 2 / official 6 /
+# held_out 12 = 20 per stratum with no unused instances, giving whole-pool
+# totals internal 6 / official 18 / held_out 36 across the three depths.
+HARD_INTERNAL_EVAL_PER_STRATUM = 2
+HARD_OFFICIAL_PER_STRATUM = 6
+HARD_HELD_OUT_PER_STRATUM = 12
+
+
+@dataclass(frozen=True, slots=True)
+class Preset:
+    """A named, self-describing c18 generation configuration.
+
+    A preset pins the two difficulty axes this env exposes -- the depth
+    stratum levels and the distractor knob -- plus a disjoint fresh seed
+    start, so a whole pool variant is expressible as config rather than a
+    code fork. :func:`generate_pool` and :func:`build_manifest` already
+    accept these axes; a preset just bundles a proposed default N with them
+    under a stable name (recorded on the manifest's ``generator_version``).
+
+    Parameters
+    ----------
+    name:
+        Stable identity for the preset (folded into its manifest version).
+    depths:
+        The hop-depth stratum levels for this variant.
+    distractors:
+        The native distractor knob applied to any depth not overridden by
+        ``distractors_by_depth`` (``relevant`` = ON).
+    seed_start:
+        First fresh seed; one seed is consumed per depth stratum,
+        contiguously, and asserted fresh + disjoint from the base pool.
+    n_per_stratum:
+        Proposed default instances per depth stratum (overridable at the
+        call site).
+    distractors_by_depth:
+        Optional per-depth distractor override, threaded straight into
+        :func:`generate_pool`. The hard preset uses it to keep distractors
+        ON at the deepest depth the upstream generator can honor (D5) and
+        drop them to ``none`` at the deeper strata where they are
+        upstream-infeasible (see the module ceiling note).
+    """
+
+    name: str
+    depths: tuple[int, ...]
+    distractors: str
+    seed_start: int
+    n_per_stratum: int = HARD_N_PER_STRATUM
+    distractors_by_depth: dict[int, str] | None = None
+
+    def generate(self, *, n_per_stratum: int | None = None) -> TaskPool:
+        """Generate this preset's pool (``n_per_stratum`` overridable)."""
+        return generate_pool(
+            n_per_stratum=(
+                self.n_per_stratum if n_per_stratum is None else n_per_stratum
+            ),
+            depths=self.depths,
+            distractors=self.distractors,
+            distractors_by_depth=self.distractors_by_depth,
+            seed_start=self.seed_start,
+        )
+
+    def build_manifest(self, pool: TaskPool) -> Manifest:
+        """Derive this preset's manifest (name recorded as generator id)."""
+        return Manifest.from_pool(
+            pool,
+            generator_version=f"{GENERATOR_VERSION}+{self.name}",
+            seed_range=(self.seed_start, self.seed_start + len(self.depths)),
+        )
+
+    def default_split_sizes(self, pool: TaskPool) -> tuple[int, int, int]:
+        """Return ``(internal_eval_n, official_n, held_out_n)`` for ``pool``.
+
+        Scales the hard-variant per-stratum split (2 / 6 / 12) by the number
+        of depth strata; the interleaved layout keeps each contiguous slice
+        depth-balanced (mirrors the module-level ``default_split_sizes``).
+        """
+        n_strata = len(pool.strata)
+        return (
+            HARD_INTERNAL_EVAL_PER_STRATUM * n_strata,
+            HARD_OFFICIAL_PER_STRATUM * n_strata,
+            HARD_HELD_OUT_PER_STRATUM * n_strata,
+        )
+
+
+HARD_PRESET = Preset(
+    name="hard",
+    depths=HARD_DEPTHS,
+    distractors=DEFAULT_DISTRACTORS,
+    seed_start=HARD_SEED_START,
+    n_per_stratum=HARD_N_PER_STRATUM,
+    distractors_by_depth=HARD_DISTRACTORS_BY_DEPTH,
+)
+
+
 def _main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point: regenerate the default pool and write its manifest.
 
@@ -295,8 +464,12 @@ def _main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--n-per-stratum",
         type=int,
-        default=DEFAULT_N_PER_STRATUM,
-        help=f"instances per depth stratum (default {DEFAULT_N_PER_STRATUM})",
+        default=None,
+        help=(
+            "instances per depth stratum (default: the base pool's "
+            f"{DEFAULT_N_PER_STRATUM}, or the preset's own default under "
+            "--preset)"
+        ),
     )
     parser.add_argument(
         "--depths",
@@ -318,21 +491,49 @@ def _main(argv: Sequence[str] | None = None) -> int:
         help=f"first fresh seed (default {DEFAULT_SEED_START})",
     )
     parser.add_argument(
+        "--preset",
+        choices=["hard"],
+        default=None,
+        help=(
+            "named generation preset (overrides the axis flags and writes "
+            "the preset's own manifest by default). 'hard' = the hardest "
+            "upstream PrOntoQA configuration along this env's axes: depths "
+            "(5, 8, 10) x distractors ON, no hidden-information change."
+        ),
+    )
+    parser.add_argument(
         "--manifest",
         type=Path,
-        default=Path(__file__).with_name("manifest.json"),
-        help="where to write the default-config manifest JSON",
+        default=None,
+        help=(
+            "where to write the manifest JSON (default: manifest.json, or "
+            "manifest_<preset>.json when --preset is given)"
+        ),
     )
     args = parser.parse_args(argv)
 
-    pool = generate_pool(
-        n_per_stratum=args.n_per_stratum,
-        depths=args.depths,
-        distractors=args.distractors,
-        seed_start=args.seed_start,
-    )
-    manifest = build_manifest(pool, args.seed_start, len(args.depths))
-    manifest.write(args.manifest)
+    if args.preset == "hard":
+        pool = HARD_PRESET.generate(n_per_stratum=args.n_per_stratum)
+        manifest = HARD_PRESET.build_manifest(pool)
+        manifest_path = args.manifest or Path(__file__).with_name(
+            "manifest_hard.json",
+        )
+    else:
+        pool = generate_pool(
+            n_per_stratum=(
+                DEFAULT_N_PER_STRATUM
+                if args.n_per_stratum is None
+                else args.n_per_stratum
+            ),
+            depths=args.depths,
+            distractors=args.distractors,
+            seed_start=args.seed_start,
+        )
+        manifest = build_manifest(pool, args.seed_start, len(args.depths))
+        manifest_path = args.manifest or Path(__file__).with_name(
+            "manifest.json",
+        )
+    manifest.write(manifest_path)
     return 0
 
 

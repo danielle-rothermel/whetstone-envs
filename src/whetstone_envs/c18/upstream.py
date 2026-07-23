@@ -74,16 +74,28 @@ class RawInstance:
     hops: int
 
 
-def _output_filename(hops: int, seed: int) -> str:
-    """Reconstruct the vendored json output filename for ``(hops, seed)``.
+def _output_filename(
+    hops: int, seed: int, distractors: str = "relevant"
+) -> str:
+    """Reconstruct the vendored json output filename for this run config.
 
     Mirrors the ``log_suffix`` assembly in the vendored ``__main__`` for
-    the config this boundary uses: fictional ontology, ModusPonens,
-    relevant distractors, 8-shot, COT -- every one of which contributes an
-    *empty* suffix, so only the hop count and (non-default) seed remain.
-    Kept in lockstep with that code so we read exactly the file it wrote.
+    the config this boundary uses: fictional ontology, ModusPonens, 8-shot,
+    COT, ``--test-distractors`` pinned equal to ``--distractors`` -- every
+    one of which contributes an *empty* suffix. The distractor mode is the
+    one config axis this boundary varies (the c18 base + hard presets use
+    ``relevant`` and ``none``), and the vendored suffix logic appends
+    ``_nodistractor`` for ``none`` / ``_irrelevantdistractor`` for
+    ``irrelevant`` while ``relevant`` (the upstream default) stays empty.
+    Both ``--distractors`` and ``--test-distractors`` are set equal here, so
+    the ``_testdistractor`` mismatch suffixes never appear. Kept in lockstep
+    with that code so we read exactly the file the generator wrote.
     """
     suffix = f"{hops}hop"
+    if distractors == "none":
+        suffix += "_nodistractor"
+    elif distractors == "irrelevant":
+        suffix += "_irrelevantdistractor"
     if seed != UPSTREAM_DEFAULT_SEED:
         suffix += f"_seed{seed}"
     return suffix + ".json"
@@ -160,7 +172,7 @@ def generate_raw(
                 f"hops={hops} seed={seed}: {proc.stderr[-500:]}"
             )
             raise UpstreamError(msg)
-        out_path = work / _output_filename(hops, seed)
+        out_path = work / _output_filename(hops, seed, distractors)
         if not out_path.exists():
             msg = (
                 f"vendored prontoqa wrote no output file "

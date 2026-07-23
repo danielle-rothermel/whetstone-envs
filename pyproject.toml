@@ -64,6 +64,16 @@ artifacts = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Two-tier suite. The default run deselects the `slow` tier so the everyday
+# `uv run pytest` stays fast; the slow tier (full-N PrOntoQA regeneration --
+# the byte-for-byte manifest diff that is the pool's determinism guarantee)
+# runs as its own CI job via `-m slow`. Deselected-by-default does NOT mean
+# never-run: see the `slow` job in .github/workflows/ci.yml. See
+# tests/README.md for the tiering conventions.
+addopts = "-m 'not slow'"
+markers = [
+    "slow: irreducibly >5s (full-N PrOntoQA regeneration / manifest diff); deselected by default, run explicitly with -m slow",
+]
 
 [tool.pyright]
 venvPath = "."

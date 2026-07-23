@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from whetstone_envs.c18 import generate, oracle
 from whetstone_envs.c18.generate import (
     DEFAULT_DISTRACTORS,
@@ -106,10 +108,14 @@ def test_preset_regenerates_byte_identical() -> None:
     assert [i.gold for i in a.instances] == [i.gold for i in b.instances]
 
 
+@pytest.mark.slow
 def test_committed_hard_manifest_matches_regenerated_pool() -> None:
     # The frozen manifest must still describe a freshly generated hard pool
     # (the regeneration diff check). This regenerates the FULL deep pool and
-    # is slow; it is the canonical guard that the committed hash is live.
+    # is slow (~16s); it is the canonical guard that the committed hash is
+    # live, and the ONE slow-tier hard-pool test (deselected by default; run
+    # with `-m slow`). Every other hard-preset property is N-independent and
+    # runs at tiny N or off the committed manifest.
     pool = HARD_PRESET.generate()
     frozen = Manifest.read(_HARD_MANIFEST_PATH)
     assert frozen.matches_pool(pool)

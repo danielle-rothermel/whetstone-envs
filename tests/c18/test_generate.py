@@ -7,6 +7,14 @@ own hand-traced-fixture file (``test_oracle.py``), never here.
 Each pool is produced by reseeding the vendored PrOntoQA generator (one
 subprocess per depth), so tests use a small N and a single depth where a
 full four-depth pool is not needed, to stay fast.
+
+Performance tiering. A full default pool (N=30, distractors ON) costs ~12s
+because relevant-distractor generation is heavy rejection sampling; the
+COMPOSITION and SPLIT properties under test are N-independent (interleaved
+layout, per-stratum counts), so they run against the committed manifest or a
+tiny-N pool. Exactly one test -- the byte-for-byte manifest regeneration diff
+that IS the determinism guarantee -- regenerates the full default pool and
+carries ``@pytest.mark.slow`` (deselected by default; run with ``-m slow``).
 """
 
 from __future__ import annotations
@@ -74,51 +82,76 @@ def test_regenerating_twice_is_byte_identical() -> None:
     ]
 
 
+@pytest.mark.slow
 def test_committed_manifest_matches_regenerated_default_pool() -> None:
     # The frozen default-config manifest must still describe a freshly
-    # generated default pool (the regeneration diff check).
+    # generated default pool (the regeneration diff check). This is the
+    # canonical determinism guarantee for the DEFAULT pool: it regenerates
+    # the full N=30 pool (~12s, relevant-distractor rejection sampling) and
+    # is the ONE slow-tier default-pool test. It also re-establishes the
+    # pool == committed-manifest equivalence that the composition tests below
+    # rely on when they read the manifest instead of regenerating.
     pool = generate_pool()
     frozen = Manifest.read(_MANIFEST_PATH)
     assert frozen.matches_pool(pool)
     assert frozen.generator_version == GENERATOR_VERSION
-
-
-def test_strata_coverage_matches_manifest_counts() -> None:
-    # Strata coverage (checklist A): every depth stratum carries the
-    # declared N; the manifest agrees.
-    pool = generate_pool()
-    frozen = Manifest.read(_MANIFEST_PATH)
+    # Strata coverage (checklist A): every depth stratum carries the declared
+    # N. Verified here against a live full pool; the fast tier reads the same
+    # counts off the committed manifest.
     assert pool.stratum_counts() == frozen.stratum_counts
     assert pool.stratum_counts() == {
         depth_label(d): DEFAULT_N_PER_STRATUM for d in DEFAULT_DEPTHS
     }
 
 
+def test_strata_coverage_matches_manifest_counts() -> None:
+    # Strata coverage (checklist A): every depth stratum carries the declared
+    # N. Read from the committed manifest -- the slow-tier regeneration test
+    # above proves the manifest still matches a freshly generated pool, so
+    # the manifest counts are authoritative without paying full generation.
+    frozen = Manifest.read(_MANIFEST_PATH)
+    assert frozen.stratum_counts == {
+        depth_label(d): DEFAULT_N_PER_STRATUM for d in DEFAULT_DEPTHS
+    }
+    assert set(frozen.stratum_counts) == {"D1", "D2", "D3", "D5"}
+    assert sum(frozen.stratum_counts.values()) == DEFAULT_N_PER_STRATUM * len(
+        DEFAULT_DEPTHS
+    )
+
+
 def test_default_pool_is_the_spec_proposed_depth_shape() -> None:
-    # Spec Section 1: the depth axis is D1, D2, D3, D5.
+    # Spec Section 1: the depth axis is D1, D2, D3, D5. The depth->stratum
+    # labelling is N-independent, so a tiny-N pool exercises the real
+    # generation path over all four depths without the full-N cost; the
+    # committed manifest (checked slow-tier) pins the full-N counts.
     assert DEFAULT_DEPTHS == (1, 2, 3, 5)
-    pool = generate_pool()
+    pool = generate_pool(n_per_stratum=1)
     assert set(pool.strata) == {"D1", "D2", "D3", "D5"}
-    assert len(pool) == DEFAULT_N_PER_STRATUM * len(DEFAULT_DEPTHS)
+    frozen = Manifest.read(_MANIFEST_PATH)
+    assert set(frozen.stratum_counts) == {"D1", "D2", "D3", "D5"}
 
 
 def test_default_split_is_disjoint_and_depth_balanced() -> None:
     # TaskPool.split draws complete strata combinations round-robin; PoolSplit
-    # asserts the resulting subsets are disjoint at construction.
+    # asserts disjointness. This balance is N-independent, so a tiny-N pool
+    # with a proportional split exercises it without the full-N cost.
     assert DEFAULT_N_PER_STRATUM == (
         DEFAULT_INTERNAL_EVAL_PER_STRATUM
         + DEFAULT_OFFICIAL_PER_STRATUM
         + DEFAULT_HELD_OUT_PER_STRATUM
     )
     assert DEFAULT_INTERNAL_EVAL_PER_STRATUM >= 2
-    pool = generate_pool()
-    ie, off, ho = default_split_sizes(pool)
+    # Balance is exercised on a tiny-N real pool over all four depths with a
+    # proportional 1/2/3 per-stratum split (6 per stratum, no leftovers).
+    pool = generate_pool(n_per_stratum=6)
     n_strata = len(pool.strata)
-    assert (ie, off, ho) == (
+    # default_split_sizes scales the per-stratum split by the stratum count.
+    assert default_split_sizes(pool) == (
         DEFAULT_INTERNAL_EVAL_PER_STRATUM * n_strata,
         DEFAULT_OFFICIAL_PER_STRATUM * n_strata,
         DEFAULT_HELD_OUT_PER_STRATUM * n_strata,
     )
+    ie, off, ho = (1 * n_strata, 2 * n_strata, 3 * n_strata)
     split = pool.split(ie, off, ho)
 
     def counts(subset: tuple[Instance, ...]) -> set[int]:
@@ -127,9 +160,9 @@ def test_default_split_is_disjoint_and_depth_balanced() -> None:
             out[inst.strata[0]] = out.get(inst.strata[0], 0) + 1
         return set(out.values())
 
-    assert counts(split.internal_eval) == {DEFAULT_INTERNAL_EVAL_PER_STRATUM}
-    assert counts(split.official) == {DEFAULT_OFFICIAL_PER_STRATUM}
-    assert counts(split.held_out) == {DEFAULT_HELD_OUT_PER_STRATUM}
+    assert counts(split.internal_eval) == {1}
+    assert counts(split.official) == {2}
+    assert counts(split.held_out) == {3}
 
 
 def test_n_per_stratum_is_configurable() -> None:

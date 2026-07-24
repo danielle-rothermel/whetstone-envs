@@ -103,8 +103,8 @@ def test_default_pool_is_the_spec_proposed_depth_shape() -> None:
 
 
 def test_default_split_is_disjoint_and_depth_balanced() -> None:
-    # The interleaved layout makes each contiguous split slice carry the
-    # same per-depth count; PoolSplit asserts disjointness at construction.
+    # TaskPool.split draws complete strata combinations round-robin; PoolSplit
+    # asserts the resulting subsets are disjoint at construction.
     assert DEFAULT_N_PER_STRATUM == (
         DEFAULT_INTERNAL_EVAL_PER_STRATUM
         + DEFAULT_OFFICIAL_PER_STRATUM

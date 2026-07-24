@@ -13,6 +13,9 @@ from pathlib import Path
 import pytest
 
 from whetstone_envs.c22 import generate
+from whetstone_envs.c22._vendor.instruction_following_eval import (
+    instructions_registry,
+)
 from whetstone_envs.c22.generate import (
     DEFAULT_SEED_START,
     GENERATOR_VERSION,
@@ -21,7 +24,7 @@ from whetstone_envs.c22.generate import (
     build_manifest,
     generate_pool,
 )
-from whetstone_envs.c22.spec import ConstraintSpec
+from whetstone_envs.c22.spec import ConstraintSpec, compatibility_error
 from whetstone_envs.core.manifest import Manifest, content_hash
 
 _MANIFEST_PATH = Path(generate.__file__).with_name("manifest.json")
@@ -97,8 +100,6 @@ def test_mixed_strata_include_a_hard_atom() -> None:
 
 
 def test_stacked_atoms_are_distinct_and_non_conflicting() -> None:
-    from instruction_following_eval import instructions_registry
-
     conflicts = instructions_registry.INSTRUCTION_CONFLICTS
     pool = generate_pool(n_per_stratum=5)
     for inst in pool.instances:
@@ -110,6 +111,7 @@ def test_stacked_atoms_are_distinct_and_non_conflicting() -> None:
                 assert b not in conflicts.get(a, set()), (
                     f"{inst.id}: {a} conflicts with {b}"
                 )
+        assert compatibility_error(ids, spec.kwargs_list) is None
 
 
 def test_contamination_guard_seeds_are_above_published_range() -> None:
@@ -124,7 +126,7 @@ def test_contamination_guard_seeds_are_above_published_range() -> None:
 def test_contamination_guard_rejects_a_published_seed_range() -> None:
     # If someone points the generator at the published range, the
     # assertion must fire at construction rather than silently proceed.
-    with pytest.raises(AssertionError, match="contamination guard"):
+    with pytest.raises(ValueError, match="published IFEval key ceiling"):
         generate_pool(n_per_stratum=1, seed_start=PUBLISHED_KEY_MIN)
 
 

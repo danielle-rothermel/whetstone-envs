@@ -13,8 +13,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Package marker for the vendored IFEval library. The upstream
-# google-research checkout ships this directory WITHOUT an __init__.py
-# (it is imported as a namespace path under the repo root). This marker
-# is the only addition to the vendored tree; every other file in this
-# directory is a byte-for-byte copy of upstream. See PROVENANCE.md.
+# Package marker for the namespaced IFEval snapshot. See PROVENANCE.md
+# and VENDORED_DIFF.patch for the complete local patch.

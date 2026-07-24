@@ -38,9 +38,9 @@ One module per candidate, added as each baseline spec is implemented:
   ([generate](src/whetstone_envs/c22/generate.py) ·
   [oracle](src/whetstone_envs/c22/oracle.py) ·
   [prompts](src/whetstone_envs/c22/prompts.py) ·
-  [tests](tests/c22)). Reuses Google Research's IFEval checker library
-  verbatim (vendored under
-  [`c22/_vendor`](src/whetstone_envs/c22/_vendor), Apache-2.0) for both
+  [tests](tests/c22)). Reuses a pinned Google Research IFEval snapshot
+  with namespaced imports and exact word counts (vendored under
+  [`c22/_vendor`](src/whetstone_envs/c22/_vendor), Apache-2.0) for
   generation-side constraint selection and the scoring oracle.
 - `c23` — subregular rule induction (InductionBench-style)
 

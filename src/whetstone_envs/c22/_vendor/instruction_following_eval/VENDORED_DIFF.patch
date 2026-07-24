@@ -1,0 +1,131 @@
+diff --git a/instruction_following_eval/__init__.py b/instruction_following_eval/__init__.py
+new file mode 100644
+index 0000000..2760059
+--- /dev/null
++++ b/instruction_following_eval/__init__.py
+@@ -0,0 +1,17 @@
++# coding=utf-8
++# Copyright 2026 The Google Research Authors.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Package marker for the namespaced IFEval snapshot. See PROVENANCE.md
++# and VENDORED_DIFF.patch for the complete local patch.
+diff --git a/instruction_following_eval/evaluation_lib.py b/instruction_following_eval/evaluation_lib.py
+index 2d507c3..ea08472 100644
+--- a/instruction_following_eval/evaluation_lib.py
++++ b/instruction_following_eval/evaluation_lib.py
+@@ -20,7 +20,7 @@ import dataclasses
+ import json
+ from typing import Dict, Optional, Sequence, Union
+ 
+-from instruction_following_eval import instructions_registry
++from . import instructions_registry
+ 
+ 
+ @dataclasses.dataclass
+@@ -217,4 +217,3 @@ def print_report(outputs):
+   for instruction_id in sorted(tier1_total.keys()):
+     accuracy = tier1_correct[instruction_id] / tier1_total[instruction_id]
+     print(f"{instruction_id} {accuracy}")
+-
+diff --git a/instruction_following_eval/instructions.py b/instruction_following_eval/instructions.py
+index 70aaec6..9650703 100644
+--- a/instruction_following_eval/instructions.py
++++ b/instruction_following_eval/instructions.py
+@@ -24,7 +24,7 @@ from typing import Dict, Optional, Sequence, Union
+ from absl import logging
+ import langdetect
+ 
+-from instruction_following_eval import instructions_util
++from . import instructions_util
+ 
+ 
+ _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
+@@ -820,11 +820,12 @@ class NumberOfWords(Instruction):
+     Args:
+       num_words: An integer specifying the number of words contained in the
+         response.
+-      relation: A string in (`less than`, `at least`), defining the relational
+-        operator for comparison.
+-        Two relational comparisons are supported for now:
++      relation: A string in (`less than`, `at least`, `exactly`), defining the
++        relational operator for comparison.
++        Three relational comparisons are supported for this checker:
+         if 'less than', the actual number of words < num_words;
+         if 'at least', the actual number of words >= num_words.
++        if 'exactly', the actual number of words == num_words.
+ 
+     Returns:
+       A string representing the instruction description.
+@@ -838,9 +839,10 @@ class NumberOfWords(Instruction):
+ 
+     if relation is None:
+       self._comparison_relation = random.choice(_COMPARISON_RELATION)
+-    elif relation not in _COMPARISON_RELATION:
++    elif relation not in (*_COMPARISON_RELATION, "exactly"):
+       raise ValueError("The supported relation for comparison must be in "
+-                       f"{_COMPARISON_RELATION}, but {relation} is given.")
++                       f"{(*_COMPARISON_RELATION, 'exactly')}, but "
++                       f"{relation} is given.")
+     else:
+       self._comparison_relation = relation
+ 
+@@ -868,6 +870,8 @@ class NumberOfWords(Instruction):
+       return num_words < self._num_words
+     elif self._comparison_relation == _COMPARISON_RELATION[1]:
+       return num_words >= self._num_words  # pytype: disable=bad-return-type
++    elif self._comparison_relation == "exactly":
++      return num_words == self._num_words
+ 
+ 
+ class JsonFormat(Instruction):
+diff --git a/instruction_following_eval/instructions_registry.py b/instruction_following_eval/instructions_registry.py
+index 6b42adc..f43e249 100644
+--- a/instruction_following_eval/instructions_registry.py
++++ b/instruction_following_eval/instructions_registry.py
+@@ -14,7 +14,7 @@
+ # limitations under the License.
+ 
+ """Registry of all instructions."""
+-from instruction_following_eval import instructions
++from . import instructions
+ 
+ _KEYWORD = "keywords:"
+ 
+diff --git a/instruction_following_eval/instructions_test.py b/instruction_following_eval/instructions_test.py
+index 9877688..faf5125 100644
+--- a/instruction_following_eval/instructions_test.py
++++ b/instruction_following_eval/instructions_test.py
+@@ -17,7 +17,7 @@
+ 
+ from absl.testing import absltest
+ from absl.testing import parameterized
+-from instruction_following_eval import instructions
++from . import instructions
+ 
+ 
+ # pylint:disable=g-complex-comprehension
+diff --git a/instruction_following_eval/instructions_util_test.py b/instruction_following_eval/instructions_util_test.py
+index 9846ea9..507dc4a 100644
+--- a/instruction_following_eval/instructions_util_test.py
++++ b/instruction_following_eval/instructions_util_test.py
+@@ -17,7 +17,7 @@
+ 
+ from absl.testing import absltest
+ from absl.testing import parameterized
+-from instruction_following_eval import instructions_util
++from . import instructions_util
+ 
+ 
+ class InstructionsUtilTest(parameterized.TestCase):

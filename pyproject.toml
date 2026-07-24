@@ -22,6 +22,8 @@ dependencies = [
     "immutabledict>=4.3.1",
     "langdetect>=1.0.9",
     "nltk>=3.10.0",
+    "pydantic>=2.13.4",
+    "typer>=0.27.0",
 ]
 
 [project.urls]
@@ -52,8 +54,8 @@ venv = ".venv"
 
 [tool.ruff]
 include = ["src/**/*.py", "tests/**/*.py"]
-# Vendored third-party code (google-research IFEval) is kept byte-for-byte
-# verbatim; never lint or reformat it. See the PROVENANCE.md alongside it.
+# The pinned IFEval snapshot retains upstream formatting; its complete
+# import-isolation and exact-count patch is recorded alongside it.
 extend-exclude = ["src/whetstone_envs/c22/_vendor/**"]
 line-length = 79
 
@@ -119,11 +121,6 @@ runtime-evaluated-decorators = ["dataclasses.dataclass"]
 
 [tool.ty.src]
 include = ["src", "tests"]
-# Vendored google-research IFEval is kept byte-for-byte verbatim and is
-# not type-checked; it also imports itself absolutely as
-# ``instruction_following_eval``, so its own directory is added as an
-# extra module search path for the c22 code that imports it.
+# The pinned IFEval snapshot retains upstream annotations and is checked
+# through its regression suite instead of the first-party type checker.
 exclude = ["src/whetstone_envs/c22/_vendor/**"]
-
-[tool.ty.environment]
-extra-paths = ["src/whetstone_envs/c22/_vendor"]

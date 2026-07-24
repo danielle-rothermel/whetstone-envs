@@ -13,10 +13,8 @@ Determinism discipline (spec Section 7, item 8 -- the shipped
 * every value we need to reproduce is drawn from a per-instance
   ``random.Random(seed)`` and passed into ``build_description`` as an
   explicit kwarg (see :mod:`whetstone_envs.c22.atoms`);
-* immediately before each ``build_description`` we also seed the
-  module-global ``random`` from the same instance RNG, so any atom that
-  still reaches for the global RNG internally is reproducible too. No
-  vendored line is edited to achieve this.
+* supported atoms receive complete kwargs, so neither description
+  building nor scoring reaches for the module-global RNG.
 
 Contamination guard (spec Section 6 / rubric criterion 8): the fresh
 seed range is asserted at construction to lie strictly above -- and to
@@ -25,21 +23,23 @@ never intersect -- the published IFEval dataset's integer key range.
 
 from __future__ import annotations
 
-import argparse
-import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from random import Random
+from typing import TYPE_CHECKING, Annotated
 
-from instruction_following_eval import instructions_registry
+import typer
 
+from whetstone_envs.c22._vendor.instruction_following_eval import (
+    instructions_registry,
+)
 from whetstone_envs.c22.atoms import (
     EASY_POOL,
     HARD_POOL,
     Atom,
     atom_for,
 )
-from whetstone_envs.c22.spec import ConstraintSpec
+from whetstone_envs.c22.spec import ConstraintSpec, compatibility_error
 from whetstone_envs.core.instance import make_instance
 from whetstone_envs.core.manifest import Manifest
 from whetstone_envs.core.pool import TaskPool
@@ -49,7 +49,8 @@ if TYPE_CHECKING:
 
     from whetstone_envs.core.instance import Instance
 
-GENERATOR_VERSION = "c22-generate-1"
+GENERATOR_VERSION = "c22-generate-2"
+MAX_COMPATIBILITY_ATTEMPTS = 100
 
 # --- Contamination bounds (rubric criterion 8) ----------------------------
 # The published google-research IFEval dataset (input_data.jsonl, 541 rows,
@@ -176,7 +177,7 @@ def _conflicts(chosen: Sequence[str], candidate: str) -> bool:
 
 
 def _sample_atom_ids(
-    rng: random.Random,
+    rng: Random,
     n_constraints: int,
     mix: str,
 ) -> list[str]:
@@ -245,66 +246,105 @@ def _make_instance(
     mix: str,
 ) -> Instance:
     """Construct one pinned :class:`Instance` for a (seed, cell)."""
-    rng = random.Random(seed)
-    base_task = rng.choice(BASE_TASKS)
-    atom_ids = _sample_atom_ids(rng, n_constraints, mix)
+    rng = Random(seed)
+    last_conflict: str | None = None
+    for _attempt in range(1, MAX_COMPATIBILITY_ATTEMPTS + 1):
+        base_task = rng.choice(BASE_TASKS)
+        atom_ids = _sample_atom_ids(rng, n_constraints, mix)
 
-    descriptions: list[str] = []
-    kwargs_list: list[dict[str, object]] = []
-    for atom_id in atom_ids:
-        atom: Atom = atom_for(atom_id)
-        kwargs = atom.derive_kwargs(rng)
-        # Seed the module-global RNG too, so any value the vendored
-        # build_description samples internally (for a field we did not
-        # pass explicitly) is still reproducible. We derive a fresh
-        # sub-seed per atom from the instance RNG to avoid cross-atom
-        # coupling.
-        random.seed(rng.random())
-        cls = instructions_registry.INSTRUCTION_DICT[atom_id]
-        instruction = cls(atom_id)
-        desc = instruction.build_description(**kwargs)
-        # Re-read the checker's own resolved args so serialized kwargs
-        # match exactly what the oracle will reconstruct (e.g. sorted
-        # keyword lists), independent of what we passed in.
-        resolved = instruction.get_instruction_args() or {}
-        descriptions.append(desc)
-        kwargs_list.append(dict(resolved))
+        descriptions: list[str] = []
+        kwargs_list: list[dict[str, object]] = []
+        for atom_id in atom_ids:
+            atom: Atom = atom_for(atom_id)
+            kwargs = atom.derive_kwargs(rng)
+            cls = instructions_registry.INSTRUCTION_DICT[atom_id]
+            instruction = cls(atom_id)
+            desc = instruction.build_description(**kwargs)
+            # Persist the checker's normalized arguments, including sorted
+            # keyword lists, so the oracle reconstructs the same state.
+            resolved = instruction.get_instruction_args() or {}
+            descriptions.append(desc)
+            kwargs_list.append(dict(resolved))
 
-    spec = ConstraintSpec(
-        base_task=base_task,
-        constraint_descriptions=tuple(descriptions),
-        instruction_id_list=tuple(atom_ids),
-        kwargs_list=tuple(kwargs_list),
+        last_conflict = compatibility_error(atom_ids, kwargs_list)
+        if last_conflict is not None:
+            continue
+
+        spec = ConstraintSpec(
+            base_task=base_task,
+            constraint_descriptions=tuple(descriptions),
+            instruction_id_list=tuple(atom_ids),
+            kwargs_list=tuple(kwargs_list),
+        )
+        return make_instance(
+            id=f"c22-{seed}",
+            seed=seed,
+            strata=stratum_label(n_constraints, mix),
+            prompt_inputs={"constraints_block": spec.constraints_block()},
+            gold=spec.to_gold(),
+        )
+
+    msg = (
+        "could not generate a semantically compatible C22 instance "
+        f"for seed={seed}, n_constraints={n_constraints}, mix={mix!r} "
+        f"after {MAX_COMPATIBILITY_ATTEMPTS} attempts; "
+        f"last conflict: {last_conflict}"
     )
-    return make_instance(
-        id=f"c22-{seed}",
-        seed=seed,
-        strata=stratum_label(n_constraints, mix),
-        prompt_inputs={"constraints_block": spec.constraints_block()},
-        gold=spec.to_gold(),
+    raise RuntimeError(msg)
+
+
+def _require_positive_int(value: object, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        msg = f"{name} must be a positive integer"
+        raise ValueError(msg)
+    return value
+
+
+def _validate_generation_config(
+    *,
+    n_per_stratum: object,
+    constraint_counts: Sequence[object],
+    mixes: Sequence[object],
+    seed_start: object,
+) -> tuple[int, tuple[int, ...], tuple[str, ...], int]:
+    """Validate and normalize every public generation input up front."""
+    valid_n = _require_positive_int(
+        n_per_stratum,
+        name="n_per_stratum",
     )
-
-
-def _assert_fresh_seeds(seeds: Sequence[int]) -> None:
-    """Assert no generated seed collides with a published dataset key.
-
-    Encodes rubric criterion 8: the fresh range must sit strictly above
-    the published IFEval key ceiling and never intersect its range.
-    """
-    for seed in seeds:
-        if PUBLISHED_KEY_MIN <= seed <= PUBLISHED_KEY_MAX:
+    if not constraint_counts:
+        msg = "constraint_counts must not be empty"
+        raise ValueError(msg)
+    valid_counts = tuple(
+        _require_positive_int(value, name="constraint_counts item")
+        for value in constraint_counts
+    )
+    if not mixes:
+        msg = "mixes must not be empty"
+        raise ValueError(msg)
+    valid_mixes: list[str] = []
+    allowed_mixes = {MIX_EASY, MIX_MIXED, MIX_HARD}
+    for mix in mixes:
+        if not isinstance(mix, str) or mix not in allowed_mixes:
             msg = (
-                f"seed {seed} intersects the published IFEval key range "
-                f"[{PUBLISHED_KEY_MIN}, {PUBLISHED_KEY_MAX}] -- "
-                f"contamination guard (rubric criterion 8)"
+                f"unknown atom mix {mix!r}; expected one of "
+                f"{sorted(allowed_mixes)!r}"
             )
-            raise AssertionError(msg)
-        if seed <= PUBLISHED_KEY_MAX:
-            msg = (
-                f"seed {seed} is not strictly above the published IFEval "
-                f"key ceiling {PUBLISHED_KEY_MAX} -- contamination guard"
-            )
-            raise AssertionError(msg)
+            raise ValueError(msg)
+        valid_mixes.append(mix)
+    valid_seed_start = _require_positive_int(seed_start, name="seed_start")
+    if valid_seed_start <= PUBLISHED_KEY_MAX:
+        msg = (
+            f"seed_start must be above the published IFEval key ceiling "
+            f"{PUBLISHED_KEY_MAX}; got {valid_seed_start}"
+        )
+        raise ValueError(msg)
+    return (
+        valid_n,
+        valid_counts,
+        tuple(valid_mixes),
+        valid_seed_start,
+    )
 
 
 def generate_pool(
@@ -334,19 +374,28 @@ def generate_pool(
     fixed cell order, and every sampled value flows from a per-instance
     ``random.Random(seed)``.
     """
+    (
+        valid_n,
+        valid_counts,
+        valid_mixes,
+        valid_seed_start,
+    ) = _validate_generation_config(
+        n_per_stratum=n_per_stratum,
+        constraint_counts=constraint_counts,
+        mixes=mixes,
+        seed_start=seed_start,
+    )
+
     instances: list[Instance] = []
-    seeds: list[int] = []
-    next_seed = seed_start
-    for n_constraints in constraint_counts:
-        for mix in mixes:
-            for _ in range(n_per_stratum):
-                seeds.append(next_seed)
+    next_seed = valid_seed_start
+    for n_constraints in valid_counts:
+        for mix in valid_mixes:
+            for _ in range(valid_n):
                 instances.append(
                     _make_instance(next_seed, n_constraints, mix),
                 )
                 next_seed += 1
 
-    _assert_fresh_seeds(seeds)
     return TaskPool(instances)
 
 
@@ -363,83 +412,79 @@ def build_manifest(pool: TaskPool, seed_start: int) -> Manifest:
     )
 
 
-def _main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point: regenerate the default pool and write its manifest.
+app = typer.Typer(
+    add_completion=False,
+    help="Generate the C22 stacked-IFEval pool and manifest.",
+)
 
-    Every owner-open numeric is a flag with the spec's proposed default,
-    so changing N-per-stratum, the axes, or the seed start never requires
-    an env-code edit (PLAN "Config surface").
-    """
-    parser = argparse.ArgumentParser(
-        prog="whetstone-envs-c22-generate",
-        description="Generate the c22 stacked-IFEval pool and manifest.",
-    )
-    parser.add_argument(
-        "--n-per-stratum",
-        type=int,
-        default=20,
-        help="instances per stratum (spec Section 1 proposed: 20)",
-    )
-    parser.add_argument(
-        "--constraint-counts",
-        type=int,
-        nargs="+",
-        default=list(CONSTRAINT_COUNTS),
-        help="constraint-count axis levels (default: 3 4 5)",
-    )
-    parser.add_argument(
-        "--mixes",
-        nargs="+",
-        default=[MIX_EASY, MIX_MIXED],
-        help="atom-mix axis levels (default: easy mixed)",
-    )
-    parser.add_argument(
-        "--seed-start",
-        type=int,
-        default=DEFAULT_SEED_START,
-        help="first fresh seed (default: 1_000_000)",
-    )
-    parser.add_argument(
-        "--preset",
-        choices=["hard"],
-        default=None,
-        help=(
-            "named generation preset (overrides the axis flags and writes "
-            "the preset's own manifest by default). 'hard' = the hardest "
-            "IFEval configuration: counts (3, 6, 8) x mix 'hard'."
-        ),
-    )
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=None,
-        help=(
-            "where to write the manifest JSON (default: manifest.json, or "
-            "manifest_<preset>.json when --preset is given)"
-        ),
-    )
-    args = parser.parse_args(argv)
 
-    if args.preset == "hard":
-        pool = HARD_PRESET.generate(n_per_stratum=args.n_per_stratum)
-        manifest = HARD_PRESET.build_manifest(pool)
-        manifest_path = args.manifest or Path(__file__).with_name(
+@app.command()
+def main(  # noqa: PLR0913
+    n_per_stratum: Annotated[
+        int,
+        typer.Option(help="Instances per stratum."),
+    ] = 20,
+    constraint_counts: Annotated[
+        list[int] | None,
+        typer.Option(
+            help="Constraint-count axis level; repeat for multiple levels.",
+        ),
+    ] = None,
+    mixes: Annotated[
+        list[str] | None,
+        typer.Option(help="Atom mix; repeat for multiple levels."),
+    ] = None,
+    seed_start: Annotated[
+        int,
+        typer.Option(help="First fresh seed."),
+    ] = DEFAULT_SEED_START,
+    preset: Annotated[
+        str | None,
+        typer.Option(help="Named preset; currently only 'hard'."),
+    ] = None,
+    manifest_path: Annotated[
+        Path | None,
+        typer.Option("--manifest", help="Manifest output path."),
+    ] = None,
+) -> None:
+    """Regenerate a validated C22 pool manifest."""
+    selected_counts = (
+        CONSTRAINT_COUNTS
+        if constraint_counts is None
+        else tuple(constraint_counts)
+    )
+    selected_mixes = (
+        (MIX_EASY, MIX_MIXED) if mixes is None else tuple(mixes)
+    )
+    if preset not in {None, "hard"}:
+        msg = f"unknown preset {preset!r}; expected 'hard'"
+        raise typer.BadParameter(msg, param_hint="--preset")
+
+    try:
+        if preset == "hard":
+            pool = HARD_PRESET.generate(n_per_stratum=n_per_stratum)
+        else:
+            pool = generate_pool(
+                n_per_stratum=n_per_stratum,
+                constraint_counts=selected_counts,
+                mixes=selected_mixes,
+                seed_start=seed_start,
+            )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+
+    if preset == "hard":
+        generated_manifest = HARD_PRESET.build_manifest(pool)
+        output_path = manifest_path or Path(__file__).with_name(
             "manifest_hard.json",
         )
     else:
-        pool = generate_pool(
-            n_per_stratum=args.n_per_stratum,
-            constraint_counts=args.constraint_counts,
-            mixes=args.mixes,
-            seed_start=args.seed_start,
-        )
-        manifest = build_manifest(pool, args.seed_start)
-        manifest_path = args.manifest or Path(__file__).with_name(
+        generated_manifest = build_manifest(pool, seed_start)
+        output_path = manifest_path or Path(__file__).with_name(
             "manifest.json",
         )
-    manifest.write(manifest_path)
-    return 0
+    generated_manifest.write(output_path)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(_main())
+    app()

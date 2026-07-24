@@ -20,8 +20,9 @@ Determinism exclusions (spec Section 1, "deliberately excluded"):
   pinned runtime download.
 
 The remaining atoms check via pure regex / counting only. The hard-pool
-``length_constraints:number_words`` uses IFEval's ``count_words``, a
-``RegexpTokenizer(r"\\w+")`` that needs no download.
+``length_constraints:number_words`` requires exactly N words using
+IFEval's ``count_words``, a ``RegexpTokenizer(r"\\w+")`` that needs no
+download.
 """
 
 from __future__ import annotations
@@ -78,8 +79,8 @@ def _kw_end_checker(rng: Random) -> dict[str, object]:
 
 
 def _kw_number_words(rng: Random) -> dict[str, object]:
-    """A word-count floor: 'answer with at least N words'."""
-    return {"num_words": rng.randint(3, 12), "relation": "at least"}
+    """An exact count: ``Answer with exactly N words.``"""
+    return {"num_words": rng.randint(3, 12), "relation": "exactly"}
 
 
 def _kw_letter_frequency(rng: Random) -> dict[str, object]:
@@ -142,8 +143,8 @@ EASY_POOL: tuple[Atom, ...] = (
 )
 
 # --- Hard pool ------------------------------------------------------------
-# exact-word-count-equals-N (word-count floor) and forbidden-letter across
-# the whole output -- per-atom pass ~0.55-0.75 per the spec.
+# exact-word-count-equals-N and forbidden-letter across the whole output
+# -- per-atom pass ~0.55-0.75 per the spec.
 HARD_POOL: tuple[Atom, ...] = (
     Atom("length_constraints:number_words", _kw_number_words),
     Atom("keywords:letter_frequency", _kw_letter_frequency),

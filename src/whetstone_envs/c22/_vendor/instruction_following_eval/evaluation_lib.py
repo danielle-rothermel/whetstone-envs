@@ -20,7 +20,7 @@ import dataclasses
 import json
 from typing import Dict, Optional, Sequence, Union
 
-from instruction_following_eval import instructions_registry
+from . import instructions_registry
 
 
 @dataclasses.dataclass
@@ -217,4 +217,3 @@ def print_report(outputs):
   for instruction_id in sorted(tier1_total.keys()):
     accuracy = tier1_correct[instruction_id] / tier1_total[instruction_id]
     print(f"{instruction_id} {accuracy}")
-

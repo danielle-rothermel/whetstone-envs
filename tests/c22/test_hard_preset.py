@@ -15,6 +15,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from whetstone_envs.c22 import generate, oracle
+from whetstone_envs.c22._vendor.instruction_following_eval import (
+    instructions_registry,
+)
 from whetstone_envs.c22.generate import (
     DEFAULT_SEED_START,
     HARD_PRESET,
@@ -24,7 +27,7 @@ from whetstone_envs.c22.generate import (
     PUBLISHED_KEY_MIN,
 )
 from whetstone_envs.c22.prompts import PROBES
-from whetstone_envs.c22.spec import ConstraintSpec
+from whetstone_envs.c22.spec import ConstraintSpec, compatibility_error
 from whetstone_envs.core.manifest import Manifest, content_hash
 
 _HARD_MANIFEST_PATH = Path(generate.__file__).with_name("manifest_hard.json")
@@ -52,7 +55,7 @@ def test_committed_hard_manifest_matches_regenerated_pool() -> None:
     pool = HARD_PRESET.generate()
     frozen = Manifest.read(_HARD_MANIFEST_PATH)
     assert frozen.matches_pool(pool)
-    assert frozen.generator_version == "c22-generate-1+hard"
+    assert frozen.generator_version == "c22-generate-2+hard"
 
 
 # --- Strata composition ---------------------------------------------------
@@ -107,18 +110,18 @@ def test_hard_fill_beyond_three_comes_from_the_easy_pool() -> None:
 
 
 def test_no_stacked_pair_conflicts_across_the_whole_pool() -> None:
-    from instruction_following_eval import instructions_registry
-
     conflicts = instructions_registry.INSTRUCTION_CONFLICTS
     pool = HARD_PRESET.generate()
     for inst in pool.instances:
-        ids = list(ConstraintSpec.from_gold(inst.gold).instruction_id_list)
+        spec = ConstraintSpec.from_gold(inst.gold)
+        ids = list(spec.instruction_id_list)
         assert len(ids) == len(set(ids)), f"{inst.id} has duplicate atoms"
         for i, a in enumerate(ids):
             for b in ids[i + 1 :]:
                 assert b not in conflicts.get(a, set()), (
                     f"{inst.id}: {a} conflicts with {b}"
                 )
+        assert compatibility_error(ids, spec.kwargs_list) is None
 
 
 # --- Contamination / seed disjointness ------------------------------------
@@ -170,10 +173,10 @@ def test_probes_render_for_hard_instances_without_gold_leak() -> None:
 
 # --- Oracle fixtures: word-count x forbidden-word interaction --------------
 # Hand-built (NOT generator-produced) instances with independently verified
-# verdicts. Each exercises the hard interaction: reaching the word-count
-# floor while keeping a forbidden token out of the whole answer.
+# verdicts. Each exercises the hard interaction: hitting the exact word
+# count while keeping a forbidden token out of the whole answer.
 
-# A pure-hard 3-atom stack: >=5 words, no 'z', forbid 'quarnex'.
+# A pure-hard 3-atom stack: exactly 5 words, no 'z', forbid 'quarnex'.
 _PURE_HARD = ConstraintSpec(
     base_task="Name a fruit.",
     constraint_descriptions=("words", "letter", "forbidden"),
@@ -183,13 +186,13 @@ _PURE_HARD = ConstraintSpec(
         "keywords:forbidden_words",
     ),
     kwargs_list=(
-        {"num_words": 5, "relation": "at least"},
+        {"num_words": 5, "relation": "exactly"},
         {"letter": "z", "let_frequency": 1, "let_relation": "less than"},
         {"forbidden_words": ["quarnex"]},
     ),
 )
 
-# An n8 stack: 3 hard (>=8 words, no 'q', forbid 'zylthorn') + 5 easy.
+# An n8 stack: 3 hard (exactly 8 words, no 'q', forbid 'zylthorn') + 5 easy.
 _N8 = ConstraintSpec(
     base_task="Describe a season in a few words.",
     constraint_descriptions=tuple("abcdefgh"),
@@ -204,7 +207,7 @@ _N8 = ConstraintSpec(
         "detectable_content:postscript",
     ),
     kwargs_list=(
-        {"num_words": 8, "relation": "at least"},
+        {"num_words": 8, "relation": "exactly"},
         {"letter": "q", "let_frequency": 1, "let_relation": "less than"},
         {"forbidden_words": ["zylthorn"]},
         {"keywords": ["vopflim"]},
@@ -235,20 +238,14 @@ def test_pure_hard_oracle_pass_and_fail() -> None:
 
 
 def test_n8_oracle_pass_and_fail_word_count_x_forbidden() -> None:
-    # PASS: >=8 words, no 'q', no 'zylthorn', plus every easy atom.
-    passing = (
-        "winter brings snow and cold winds vopflim everywhere here "
-        "[note] P.S. stay warm END OF ANSWER"
-    )
+    # PASS: exactly 8 tokenizer words plus every easy atom.
+    passing = "cold vopflim [x] P.S. END OF ANSWER"
     good = oracle.check(_N8, passing)
     assert good.score == 1
     assert all(v for _, v in good.per_atom)
-    # FAIL: the word-count floor is met only by padding with the forbidden
-    # token 'zylthorn'; word-count passes but forbidden-word fails -- the
-    # exact interaction the hard mix is meant to make load-bearing.
-    failing = (
-        "winter snow cold winds zylthorn vopflim [note] P.S. END OF ANSWER"
-    )
+    # FAIL: replacing one word with the forbidden token preserves the
+    # exact count, so only the forbidden-word atom fails.
+    failing = "zylthorn vopflim [x] P.S. END OF ANSWER"
     bad = oracle.check(_N8, failing)
     assert bad.score == 0
     verdicts = dict(bad.per_atom)

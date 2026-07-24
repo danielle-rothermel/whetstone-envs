@@ -87,9 +87,9 @@ _EASY_FIXTURES: list[tuple[str, dict[str, object], str, str]] = [
 _HARD_FIXTURES: list[tuple[str, dict[str, object], str, str]] = [
     (
         "length_constraints:number_words",
-        {"num_words": 4, "relation": "at least"},
-        "exactly four words here",  # 4 words >= 4
-        "too short",  # 2 words < 4
+        {"num_words": 4, "relation": "exactly"},
+        "exactly four words here",  # exactly 4 words
+        "only three words",  # 3 words
     ),
     (
         "keywords:letter_frequency",
@@ -134,6 +134,16 @@ def test_single_atom_pass_and_fail(
     spec = _single_atom_spec(instruction_id, kwargs)
     assert oracle.check(spec, passing).score == 1
     assert oracle.check(spec, failing).score == 0
+
+
+def test_exact_word_count_rejects_both_adjacent_counts() -> None:
+    spec = _single_atom_spec(
+        "length_constraints:number_words",
+        {"num_words": 4, "relation": "exactly"},
+    )
+    assert oracle.check(spec, "one two three four").score == 1
+    assert oracle.check(spec, "one two three").score == 0
+    assert oracle.check(spec, "one two three four five").score == 0
 
 
 def test_score_gold_round_trips_through_json() -> None:

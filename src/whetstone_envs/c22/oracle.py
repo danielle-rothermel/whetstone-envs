@@ -7,10 +7,10 @@ iff **every** constraint passes -- strict all-pass, no partial credit
 (rubric criteria 2 and 4).
 
 The all-pass reduction reuses Google Research's
-``evaluation_lib.test_instruction_following_strict`` verbatim; this
-module only marshals a :class:`ConstraintSpec` into the ``InputExample``
-that function consumes and reports the per-atom verdicts as a diagnostic
-fact (rubric criteria 10, 11).
+``evaluation_lib.test_instruction_following_strict``; this module only
+marshals a :class:`ConstraintSpec` into the ``InputExample`` that
+function consumes and reports the per-atom verdicts as a diagnostic fact
+(rubric criteria 10, 11).
 """
 
 from __future__ import annotations
@@ -18,8 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
-from instruction_following_eval import evaluation_lib
-
+from whetstone_envs.c22._vendor.instruction_following_eval import (
+    evaluation_lib,
+)
 from whetstone_envs.c22.spec import ConstraintSpec
 from whetstone_envs.core.probes import normalize
 

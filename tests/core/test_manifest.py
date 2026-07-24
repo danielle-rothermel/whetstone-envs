@@ -29,12 +29,28 @@ def _build_pool(factory: Callable[..., Instance]) -> TaskPool:
     return TaskPool(instances)
 
 
-def test_content_hash_is_deterministic(
-    synthetic_instance: Callable[..., Instance],
-) -> None:
-    # Regenerating the pool twice must yield a byte-identical hash.
-    assert content_hash(_build_pool(synthetic_instance)) == content_hash(
-        _build_pool(synthetic_instance)
+@pytest.fixture
+def valid_manifest_payload() -> dict[str, object]:
+    """Return one known-valid payload for single-field mutation tests."""
+    return {
+        "schema_version": 1,
+        "generator_version": "generator@1.0",
+        "seed_range": [10, 20],
+        "stratum_counts": {"easy": 2, "hard": 0},
+        "content_hash": "a" * 64,
+    }
+
+
+def test_content_hash_matches_pinned_vector() -> None:
+    inst = make_instance(
+        id="vector-1",
+        seed=7,
+        strata=("easy", "short"),
+        prompt_inputs={"b": "2", "a": "1"},
+        gold="yes",
+    )
+    assert content_hash(TaskPool([inst])) == (
+        "765870a223a64fdd2d4cd0f00351b8d683a864e10b78b5906da05e3058988353"
     )
 
 
@@ -116,32 +132,160 @@ def test_detects_drifted_pool(
     )
     drifted = TaskPool(
         [synthetic_instance(i, "easy") for i in range(2)]
-        + [synthetic_instance(i, "hard") for i in range(2, 4)]
-        + [synthetic_instance(9, "hard")]
+        + [synthetic_instance(2, "hard")]
+        + [synthetic_instance(3, "hard", gold="changed")]
     )
-    # An extra hard instance changes both the count and the hash.
+    assert drifted.stratum_counts() == frozen.stratum_counts
     assert frozen.matches_pool(drifted) is False
 
 
-def test_from_dict_rejects_bad_seed_range() -> None:
-    with pytest.raises(TypeError, match="two-element"):
-        Manifest.from_dict(
-            {
-                "generator_version": "g",
-                "seed_range": [1, 2, 3],
-                "stratum_counts": {"easy": 1},
-                "content_hash": "abc",
-            }
-        )
+def test_from_dict_accepts_known_valid_payload(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    assert Manifest.from_dict(valid_manifest_payload).to_dict() == (
+        valid_manifest_payload
+    )
 
 
-def test_from_dict_rejects_non_numeric_count() -> None:
-    with pytest.raises(TypeError, match="integer manifest field"):
-        Manifest.from_dict(
-            {
-                "generator_version": "g",
-                "seed_range": [1, 2],
-                "stratum_counts": {"easy": "lots"},
-                "content_hash": "abc",
-            }
-        )
+def test_from_dict_rejects_missing_schema_version(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload.pop("schema_version")
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*schema_version)(?=.*required)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_from_dict_rejects_unsupported_schema_version(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["schema_version"] = 2
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*schema_version)(?=.*unsupported)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_from_dict_rejects_non_string_generator_version(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["generator_version"] = 123
+    with pytest.raises(
+        TypeError,
+        match=r"(?i)(?=.*generator_version)(?=.*string)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema_version", 1.5),
+        ("seed_range", [10.5, 20]),
+        ("stratum_counts", {"easy": 2.5, "hard": 0}),
+    ],
+    ids=["schema-version", "seed", "count"],
+)
+def test_from_dict_rejects_fractional_integer_fields(
+    valid_manifest_payload: dict[str, object],
+    field: str,
+    value: object,
+) -> None:
+    valid_manifest_payload[field] = value
+    with pytest.raises(
+        TypeError,
+        match=rf"(?i)(?=.*{field})(?=.*integer)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_from_dict_rejects_bad_seed_range_shape(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["seed_range"] = [10, 20, 30]
+    with pytest.raises(
+        TypeError,
+        match=r"(?i)(?=.*seed_range)(?=.*two-element)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_from_dict_rejects_reversed_seed_range(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["seed_range"] = [20, 10]
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*seed_range)(?=.*ordered)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_from_dict_rejects_non_numeric_count(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["stratum_counts"] = {
+        "easy": "lots",
+        "hard": 0,
+    }
+    with pytest.raises(
+        TypeError,
+        match=r"(?i)(?=.*stratum_counts)(?=.*integer)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_from_dict_rejects_negative_count(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["stratum_counts"] = {"easy": -1, "hard": 0}
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*stratum_counts)(?=.*non-negative)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+@pytest.mark.parametrize(
+    "bad_hash",
+    [
+        "a" * 63,
+        "g" * 64,
+        "A" * 64,
+    ],
+    ids=["wrong-length", "non-hex", "uppercase"],
+)
+def test_from_dict_rejects_malformed_content_hash(
+    valid_manifest_payload: dict[str, object],
+    bad_hash: str,
+) -> None:
+    valid_manifest_payload["content_hash"] = bad_hash
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*content_hash)(?=.*sha-256)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_read_rejects_non_object_json(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(
+        TypeError,
+        match=r"(?i)(?=.*manifest)(?=.*object)",
+    ):
+        Manifest.read(path)
+
+
+def test_from_dict_rejects_unknown_fields(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["unexpected"] = "value"
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*unknown)(?=.*unexpected)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)

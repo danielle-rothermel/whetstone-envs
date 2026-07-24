@@ -29,9 +29,11 @@ def test_normalize(raw: str, expected: str) -> None:
 
 
 def test_normalize_is_idempotent() -> None:
-    raw = '```json\n{"a": 1}\n```'
+    payload = '{"a": 1}'
+    raw = f"  \n```text\n  ```json\n{payload}\n```  \n```  \n"
     once = normalize(raw)
-    assert normalize(once) == once
+    assert once == payload
+    assert normalize(once) == payload
 
 
 def test_normalize_preserves_internal_backticks() -> None:
@@ -54,6 +56,22 @@ def test_render_uses_only_prompt_inputs() -> None:
     )
     assert pair.render_naive(inst) == "Answer: Q?"
     assert pair.render_ceiling(inst) == "Think about H, then answer Q?."
+
+
+def test_probe_pair_defaults_to_prompt_input_renderer() -> None:
+    inst = make_instance(
+        id="t1",
+        seed=1,
+        strata="s",
+        prompt_inputs={"question": "Q?", "hint": "H"},
+    )
+    pair = ProbePair(
+        naive_template="Answer: {question}",
+        ceiling_template="Use {hint} for {question}",
+    )
+
+    assert pair.render_naive(inst) == "Answer: Q?"
+    assert pair.render_ceiling(inst) == "Use H for Q?"
 
 
 def test_render_cannot_leak_gold() -> None:

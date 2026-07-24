@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import dataclasses
+from types import MappingProxyType
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from whetstone_envs.core.instance import Instance, make_instance
+from whetstone_envs.core.pool import TaskPool
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def test_make_instance_normalizes_single_stratum() -> None:
@@ -56,7 +62,78 @@ def test_instances_are_hashable_and_value_equal() -> None:
     assert len({a, b}) == 1
 
 
-def test_direct_construction_freezes_plain_mapping() -> None:
-    inst = Instance(id="t1", seed=1, strata=("s",), prompt_inputs={"k": "v"})
+@pytest.mark.parametrize(
+    "mapping_kind",
+    ["dict", "proxy"],
+    ids=["dict", "proxy"],
+)
+def test_direct_construction_detaches_prompt_inputs(
+    mapping_kind: str,
+) -> None:
+    backing = {"k": "v"}
+    prompt_inputs = (
+        backing if mapping_kind == "dict" else MappingProxyType(backing)
+    )
+    inst = Instance(
+        id="t1",
+        seed=1,
+        strata=("s",),
+        prompt_inputs=prompt_inputs,
+    )
+    original_hash = hash(inst)
+    members = {inst}
+
+    backing["k"] = "mutated"
+
+    assert inst.prompt_inputs["k"] == "v"
+    assert hash(inst) == original_hash
+    assert inst in members
     with pytest.raises(TypeError):
         inst.prompt_inputs["k"] = "x"  # ty: ignore[invalid-assignment]
+
+
+@pytest.mark.parametrize(
+    "prompt_inputs",
+    [
+        {1: "value"},
+        {"key": 1},
+    ],
+    ids=["non-string-key", "non-string-value"],
+)
+def test_prompt_inputs_require_string_keys_and_values(
+    prompt_inputs: dict[object, object],
+) -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"(?i)(?=.*prompt_inputs)(?=.*string)",
+    ):
+        Instance(
+            id="t1",
+            seed=1,
+            strata=("s",),
+            prompt_inputs=cast("Mapping[str, str]", prompt_inputs),
+        )
+
+
+@pytest.mark.parametrize("stratum", ["", " ", "\t\n"])
+def test_blank_stratum_rejected(stratum: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*strat)(?=.*(?:non-empty|blank))",
+    ):
+        make_instance(id="t1", seed=1, strata=stratum)
+
+
+def test_repeated_strata_are_ordered_and_deduplicated_in_pool() -> None:
+    inst = make_instance(
+        id="t1",
+        seed=1,
+        strata=("easy", "hard", "easy", "hard"),
+    )
+    pool = TaskPool([inst])
+
+    assert inst.strata == ("easy", "hard")
+    assert pool.strata == ("easy", "hard")
+    assert pool.stratum_counts() == {"easy": 1, "hard": 1}
+    assert pool.in_stratum("easy") == (inst,)
+    assert pool.in_stratum("hard") == (inst,)

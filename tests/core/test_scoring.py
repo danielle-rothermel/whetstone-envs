@@ -79,6 +79,11 @@ def test_missing_repeat_makes_task_incomplete() -> None:
     assert agg.complete is False
 
 
+def test_aggregate_task_rejects_mixed_task_ids() -> None:
+    with pytest.raises(ValueError, match="single task"):
+        aggregate_task([scored("a", 0, 1), scored("b", 0, 1)])
+
+
 # --- task -> stratum -> overall -----------------------------------------
 
 
@@ -101,8 +106,77 @@ def test_full_ladder_all_complete() -> None:
     # of stratum means, not of raw scores -- aggregation crosses strata.
     assert root.mean == pytest.approx(0.75)
     assert root.complete is True
-    child_means = sorted(c.mean for c in root.children if c.mean is not None)
-    assert child_means == pytest.approx([0.5, 1.0])
+    strata = {child.label: child for child in root.children}
+    assert set(strata) == {"easy", "hard"}
+    assert strata["easy"].mean == pytest.approx(0.5)
+    assert strata["hard"].mean == pytest.approx(1.0)
+    assert {child.label for child in strata["easy"].children} == {
+        "easy-0",
+        "easy-1",
+    }
+    assert {child.label for child in strata["hard"].children} == {
+        "hard-0",
+        "hard-1",
+    }
+
+
+def test_planned_matrix_marks_unobserved_repeat_missing() -> None:
+    root = aggregate(
+        [scored("task", 0, 1)],
+        {"task": "easy"},
+        expected_repeat_ids=(0, 1),
+    )
+    task = root.children[0].children[0]
+
+    assert task.label == "task"
+    assert task.total == 2
+    assert task.usable == 1
+    assert task.missing_count == 1
+    assert task.mean is None
+    assert root.complete is False
+
+
+def test_planned_matrix_includes_fully_absent_expected_task() -> None:
+    root = aggregate(
+        [scored("observed", 0, 1)],
+        {"observed": "easy", "absent": "hard"},
+        expected_repeat_ids=(0,),
+    )
+    strata = {child.label: child for child in root.children}
+    absent_task = strata["hard"].children[0]
+
+    assert absent_task.label == "absent"
+    assert absent_task.total == 1
+    assert absent_task.usable == 0
+    assert absent_task.missing_count == 1
+    assert absent_task.mean is None
+    assert root.missing_count == 1
+    assert root.complete is False
+
+
+def test_planned_matrix_rejects_duplicate_task_repeat_pair() -> None:
+    observations = [scored("task-a", 7, 1), scored("task-a", 7, 1)]
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*duplicate)(?=.*task-a)(?=.*repeat(?:_id)?\D*7)",
+    ):
+        aggregate(
+            observations,
+            {"task-a": "easy"},
+            expected_repeat_ids=(7,),
+        )
+
+
+def test_planned_matrix_rejects_unexpected_repeat() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*unexpected)(?=.*repeat(?:_id)?\D*3)",
+    ):
+        aggregate(
+            [scored("task", 3, 1)],
+            {"task": "easy"},
+            expected_repeat_ids=(0,),
+        )
 
 
 def test_aggregation_crosses_strata_not_raw_mean() -> None:
@@ -171,9 +245,16 @@ def test_empty_task_is_incomplete_not_zero() -> None:
     assert agg.complete is False
 
 
-def test_empty_overall_is_incomplete_not_zero() -> None:
+def test_overall_with_empty_stratum_is_incomplete_not_zero() -> None:
     agg = aggregate_overall([aggregate_stratum([])])
     assert agg.mean is None
+    assert agg.complete is False
+
+
+def test_empty_overall_is_incomplete_not_zero() -> None:
+    agg = aggregate_overall([])
+    assert agg.mean is None
+    assert agg.total == 0
     assert agg.complete is False
 
 

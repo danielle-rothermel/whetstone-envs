@@ -34,20 +34,43 @@ def test_duplicate_id_rejected(
         TaskPool([dup, dup])
 
 
-def test_split_is_contiguous_and_disjoint(
-    two_stratum_pool: TaskPool,
+def test_split_is_stratified_and_independent_of_global_layout(
+    synthetic_instance: Callable[..., Instance],
 ) -> None:
-    split = two_stratum_pool.split(2, 2, 2)
-    assert [i.id for i in split.internal_eval] == ["easy-0", "easy-1"]
-    assert [i.id for i in split.official] == ["easy-2", "hard-3"]
-    assert [i.id for i in split.held_out] == ["hard-4", "hard-5"]
-
-    ids = (
-        {i.id for i in split.internal_eval}
-        | {i.id for i in split.official}
-        | {i.id for i in split.held_out}
+    easy = [synthetic_instance(i, "easy") for i in range(3)]
+    hard = [synthetic_instance(i, "hard") for i in range(3, 6)]
+    blocked_pool = TaskPool([*easy, *hard])
+    interleaved_pool = TaskPool(
+        [easy[0], hard[0], easy[1], hard[1], easy[2], hard[2]]
     )
-    assert len(ids) == 6
+
+    blocked = blocked_pool.split(2, 2, 2)
+    interleaved = interleaved_pool.split(2, 2, 2)
+    expected_ids = {inst.id for inst in blocked_pool.instances}
+
+    blocked_roles: dict[str, set[str]] = {}
+    interleaved_roles: dict[str, set[str]] = {}
+    for role in ("internal_eval", "official", "held_out"):
+        blocked_subset = getattr(blocked, role)
+        interleaved_subset = getattr(interleaved, role)
+        assert len(blocked_subset) == 2
+        assert len(interleaved_subset) == 2
+        assert {inst.strata[0] for inst in blocked_subset} == {
+            "easy",
+            "hard",
+        }
+        assert {inst.strata[0] for inst in interleaved_subset} == {
+            "easy",
+            "hard",
+        }
+        blocked_roles[role] = {inst.id for inst in blocked_subset}
+        interleaved_roles[role] = {inst.id for inst in interleaved_subset}
+
+    assert set().union(*blocked_roles.values()) == expected_ids
+    assert sum(map(len, blocked_roles.values())) == len(expected_ids)
+    assert set().union(*interleaved_roles.values()) == expected_ids
+    assert sum(map(len, interleaved_roles.values())) == len(expected_ids)
+    assert blocked_roles == interleaved_roles
 
 
 def test_split_allows_leaving_instances_unassigned(

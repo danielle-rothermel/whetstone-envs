@@ -36,15 +36,17 @@ def test_oracle_scores_feed_the_aggregation_ladder() -> None:
         scored("task-b", 0, oracle.check(spec, "blue").score),  # 0
         scored("task-b", 1, oracle.check(spec, "blue").score),  # 0
         scored("task-c", 0, oracle.check(spec, "red DONE").score),  # 1
+        scored("task-c", 1, oracle.check(spec, "red DONE").score),  # 1
         scored("task-d", 0, oracle.check(spec, "red").score),  # 0
+        scored("task-d", 1, oracle.check(spec, "red").score),  # 0
     ]
     task_strata = {
-        "task-a": "n3_easy",
-        "task-b": "n3_easy",
-        "task-c": "n3_mixed",
-        "task-d": "n3_mixed",
+        "task-a": ("n3_easy",),
+        "task-b": ("n3_easy",),
+        "task-c": ("n3_mixed",),
+        "task-d": ("n3_mixed",),
     }
-    root = aggregate(observations, task_strata)
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0, 1))
     # n3_easy: mean(1, 0) = 0.5 ; n3_mixed: mean(1, 0) = 0.5 ; overall 0.5
     assert root.complete
     assert root.mean == 0.5
@@ -57,8 +59,8 @@ def test_failed_observation_makes_aggregate_visibly_incomplete() -> None:
         scored("task-a", 0, oracle.check(spec, "blue DONE").score),  # 1
         failed("task-b", 0),  # infra failure, no score
     ]
-    task_strata = {"task-a": "n3_easy", "task-b": "n3_easy"}
-    root = aggregate(observations, task_strata)
+    task_strata = {"task-a": ("n3_easy",), "task-b": ("n3_easy",)}
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0,))
     # rubric 13: a failed observation must not silently score zero; the
     # aggregate is incomplete and names the shortfall.
     assert root.mean is None

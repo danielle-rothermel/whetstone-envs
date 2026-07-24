@@ -4,9 +4,10 @@ The hard preset is the hardest configuration of the *upstream PrOntoQA*
 suite along the two axes this env already exposes -- deduction depth and
 distractors -- with NO hidden-information design change (no Unknown label,
 no OOD rule type, no constraint-puzzle stratum). It pushes hop depth past
-the base pool's D5 ceiling (depths ``(5, 8, 10)``) with distractors held ON
-at every depth, drawing from a fresh seed range disjoint from both the
-published PrOntoQA space and the base c18 pool.
+the base pool's D5 ceiling (depths ``(5, 8, 10)``), using relevant
+distractors at D5 and none at D8/D10, where upstream cannot generate
+deep relevant-distractor cases. It draws from a fresh seed range disjoint
+from both the published PrOntoQA space and the base c18 pool.
 
 These are the no-LLM-call blocking checks (preset determinism, strata
 composition, contamination / seed disjointness, prompts-unchanged) plus the
@@ -26,8 +27,6 @@ a static assertion. The oracle fixtures call no subprocess and are fast.
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
 
 from whetstone_envs.c18 import generate, oracle
 from whetstone_envs.c18.generate import (
@@ -90,8 +89,8 @@ def test_hard_distractor_policy_is_on_at_d5_off_at_deep_strata() -> None:
 
 # --- Determinism ----------------------------------------------------------
 # Exercised through the preset mechanism at the base pool's shallow depths
-# so the (slow) deep strata do not run in the fast suite; the depth axis is
-# only config, so the reproducibility property is identical at any depth.
+# to avoid a second full deep-pool regeneration; the depth axis is only
+# config, so the reproducibility property is identical at any depth.
 
 
 def test_preset_regenerates_byte_identical() -> None:
@@ -108,14 +107,12 @@ def test_preset_regenerates_byte_identical() -> None:
     assert [i.gold for i in a.instances] == [i.gold for i in b.instances]
 
 
-@pytest.mark.slow
 def test_committed_hard_manifest_matches_regenerated_pool() -> None:
     # The frozen manifest must still describe a freshly generated hard pool
     # (the regeneration diff check). This regenerates the FULL deep pool and
-    # is slow (~16s); it is the canonical guard that the committed hash is
-    # live, and the ONE slow-tier hard-pool test (deselected by default; run
-    # with `-m slow`). Every other hard-preset property is N-independent and
-    # runs at tiny N or off the committed manifest.
+    # is the canonical guard that the committed hash is live. It is the ONE
+    # full hard-pool regeneration; every other hard-preset property is
+    # N-independent and runs at tiny N or off the committed manifest.
     pool = HARD_PRESET.generate()
     frozen = Manifest.read(_HARD_MANIFEST_PATH)
     assert frozen.matches_pool(pool)

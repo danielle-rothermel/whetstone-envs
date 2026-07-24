@@ -8,13 +8,12 @@ Each pool is produced by reseeding the vendored PrOntoQA generator (one
 subprocess per depth), so tests use a small N and a single depth where a
 full four-depth pool is not needed, to stay fast.
 
-Performance tiering. A full default pool (N=30, distractors ON) costs ~12s
+Regeneration policy. A full default pool (N=30, distractors ON) costs ~12s
 because relevant-distractor generation is heavy rejection sampling; the
 COMPOSITION and SPLIT properties under test are N-independent (interleaved
 layout, per-stratum counts), so they run against the committed manifest or a
 tiny-N pool. Exactly one test -- the byte-for-byte manifest regeneration diff
-that IS the determinism guarantee -- regenerates the full default pool and
-carries ``@pytest.mark.slow`` (deselected by default; run with ``-m slow``).
+that IS the determinism guarantee -- regenerates the full default pool.
 """
 
 from __future__ import annotations
@@ -82,22 +81,21 @@ def test_regenerating_twice_is_byte_identical() -> None:
     ]
 
 
-@pytest.mark.slow
 def test_committed_manifest_matches_regenerated_default_pool() -> None:
     # The frozen default-config manifest must still describe a freshly
     # generated default pool (the regeneration diff check). This is the
     # canonical determinism guarantee for the DEFAULT pool: it regenerates
     # the full N=30 pool (~12s, relevant-distractor rejection sampling) and
-    # is the ONE slow-tier default-pool test. It also re-establishes the
-    # pool == committed-manifest equivalence that the composition tests below
-    # rely on when they read the manifest instead of regenerating.
+    # is the ONE full default-pool regeneration. It also re-establishes the
+    # pool == committed-manifest equivalence used by the composition tests
+    # below.
     pool = generate_pool()
     frozen = Manifest.read(_MANIFEST_PATH)
     assert frozen.matches_pool(pool)
     assert frozen.generator_version == GENERATOR_VERSION
     # Strata coverage (checklist A): every depth stratum carries the declared
-    # N. Verified here against a live full pool; the fast tier reads the same
-    # counts off the committed manifest.
+    # N. Verified here against a live full pool; the other checks read the
+    # same counts off the committed manifest.
     assert pool.stratum_counts() == frozen.stratum_counts
     assert pool.stratum_counts() == {
         depth_label(d): DEFAULT_N_PER_STRATUM for d in DEFAULT_DEPTHS
@@ -106,9 +104,9 @@ def test_committed_manifest_matches_regenerated_default_pool() -> None:
 
 def test_strata_coverage_matches_manifest_counts() -> None:
     # Strata coverage (checklist A): every depth stratum carries the declared
-    # N. Read from the committed manifest -- the slow-tier regeneration test
-    # above proves the manifest still matches a freshly generated pool, so
-    # the manifest counts are authoritative without paying full generation.
+    # N. Read from the committed manifest -- the regeneration test above
+    # proves the manifest still matches a freshly generated pool, so the
+    # counts are authoritative without paying for another full generation.
     frozen = Manifest.read(_MANIFEST_PATH)
     assert frozen.stratum_counts == {
         depth_label(d): DEFAULT_N_PER_STRATUM for d in DEFAULT_DEPTHS
@@ -123,7 +121,7 @@ def test_default_pool_is_the_spec_proposed_depth_shape() -> None:
     # Spec Section 1: the depth axis is D1, D2, D3, D5. The depth->stratum
     # labelling is N-independent, so a tiny-N pool exercises the real
     # generation path over all four depths without the full-N cost; the
-    # committed manifest (checked slow-tier) pins the full-N counts.
+    # regeneration-checked manifest pins the full-N counts.
     assert DEFAULT_DEPTHS == (1, 2, 3, 5)
     pool = generate_pool(n_per_stratum=1)
     assert set(pool.strata) == {"D1", "D2", "D3", "D5"}

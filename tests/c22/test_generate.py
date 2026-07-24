@@ -88,7 +88,7 @@ def test_constraint_counts_match_stratum_label() -> None:
 def test_mixed_strata_include_a_hard_atom() -> None:
     hard_ids = {a.instruction_id for a in generate.HARD_POOL}
     easy_ids = {a.instruction_id for a in generate.EASY_POOL}
-    pool = generate_pool(n_per_stratum=5)
+    pool = generate_pool()
     for inst in pool.instances:
         (label,) = inst.strata
         spec = ConstraintSpec.from_gold(inst.gold)
@@ -101,7 +101,7 @@ def test_mixed_strata_include_a_hard_atom() -> None:
 
 def test_stacked_atoms_are_distinct_and_non_conflicting() -> None:
     conflicts = instructions_registry.INSTRUCTION_CONFLICTS
-    pool = generate_pool(n_per_stratum=5)
+    pool = generate_pool()
     for inst in pool.instances:
         spec = ConstraintSpec.from_gold(inst.gold)
         ids = list(spec.instruction_id_list)

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from whetstone_envs.c22 import generate, oracle
 from whetstone_envs.c22._vendor.instruction_following_eval import (
     instructions_registry,
@@ -55,7 +57,7 @@ def test_committed_hard_manifest_matches_regenerated_pool() -> None:
     pool = HARD_PRESET.generate()
     frozen = Manifest.read(_HARD_MANIFEST_PATH)
     assert frozen.matches_pool(pool)
-    assert frozen.generator_version == "c22-generate-2+hard"
+    assert frozen.generator_version == "c22-generate-3+hard"
 
 
 # --- Strata composition ---------------------------------------------------
@@ -179,7 +181,11 @@ def test_probes_render_for_hard_instances_without_gold_leak() -> None:
 # A pure-hard 3-atom stack: exactly 5 words, no 'z', forbid 'quarnex'.
 _PURE_HARD = ConstraintSpec(
     base_task="Name a fruit.",
-    constraint_descriptions=("words", "letter", "forbidden"),
+    constraint_descriptions=(
+        "Answer with exactly 5 words.",
+        "In your response, the letter z should appear less than 1 times.",
+        "Do not include keywords ['quarnex'] in the response.",
+    ),
     instruction_id_list=(
         "length_constraints:number_words",
         "keywords:letter_frequency",
@@ -195,7 +201,19 @@ _PURE_HARD = ConstraintSpec(
 # An n8 stack: 3 hard (exactly 8 words, no 'q', forbid 'zylthorn') + 5 easy.
 _N8 = ConstraintSpec(
     base_task="Describe a season in a few words.",
-    constraint_descriptions=tuple("abcdefgh"),
+    constraint_descriptions=(
+        "Answer with exactly 8 words.",
+        "In your response, the letter q should appear less than 1 times.",
+        "Do not include keywords ['zylthorn'] in the response.",
+        "Include keywords ['vopflim'] in the response.",
+        "Finish your response with this exact phrase END OF ANSWER. "
+        "No other words should follow this phrase.",
+        "In your entire response, refrain from the use of any commas.",
+        "The response must contain at least 1 placeholders represented "
+        "by square brackets, such as [address].",
+        "At the end of your response, please explicitly add a postscript "
+        "starting with P.S.",
+    ),
     instruction_id_list=(
         "length_constraints:number_words",
         "keywords:letter_frequency",
@@ -266,3 +284,31 @@ def test_hard_mix_generates_a_short_stack_deterministically() -> None:
     for inst in pool.instances:
         ids = set(ConstraintSpec.from_gold(inst.gold).instruction_id_list)
         assert ids == _HARD_IDS
+
+
+@pytest.mark.parametrize(
+    ("instance_id", "response"),
+    [
+        (
+            "c22-2000037",
+            "<<*red* *blue* [x] tree sun moon sky>>",
+        ),
+        (
+            "c22-2000041",
+            '"P.S.jaxbrynSIGNED OFF"',
+        ),
+        (
+            "c22-2000048",
+            "<<[P.P.S][a][b]>>FULLY DONE",
+        ),
+    ],
+)
+def test_reviewed_exact_word_seeds_have_full_satisfying_responses(
+    instance_id: str,
+    response: str,
+) -> None:
+    pool_by_id = {
+        instance.id: instance for instance in HARD_PRESET.generate().instances
+    }
+    instance = pool_by_id[instance_id]
+    assert oracle.score_gold(instance.gold, response) == 1

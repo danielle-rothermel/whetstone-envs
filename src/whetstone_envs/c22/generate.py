@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 
     from whetstone_envs.core.instance import Instance
 
-GENERATOR_VERSION = "c22-generate-2"
+GENERATOR_VERSION = "c22-generate-3"
 MAX_COMPATIBILITY_ATTEMPTS = 100
 
 # --- Contamination bounds (rubric criterion 8) ----------------------------
@@ -435,9 +435,9 @@ def main(  # noqa: PLR0913
         typer.Option(help="Atom mix; repeat for multiple levels."),
     ] = None,
     seed_start: Annotated[
-        int,
+        int | None,
         typer.Option(help="First fresh seed."),
-    ] = DEFAULT_SEED_START,
+    ] = None,
     preset: Annotated[
         str | None,
         typer.Option(help="Named preset; currently only 'hard'."),
@@ -459,16 +459,29 @@ def main(  # noqa: PLR0913
     if preset not in {None, "hard"}:
         msg = f"unknown preset {preset!r}; expected 'hard'"
         raise typer.BadParameter(msg, param_hint="--preset")
+    if preset == "hard" and (
+        constraint_counts is not None
+        or mixes is not None
+        or seed_start is not None
+    ):
+        msg = (
+            "--preset hard cannot be combined with --constraint-counts, "
+            "--mixes, or --seed-start"
+        )
+        raise typer.BadParameter(msg, param_hint="--preset")
 
     try:
         if preset == "hard":
             pool = HARD_PRESET.generate(n_per_stratum=n_per_stratum)
         else:
+            selected_seed_start = (
+                DEFAULT_SEED_START if seed_start is None else seed_start
+            )
             pool = generate_pool(
                 n_per_stratum=n_per_stratum,
                 constraint_counts=selected_counts,
                 mixes=selected_mixes,
-                seed_start=seed_start,
+                seed_start=selected_seed_start,
             )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
@@ -479,7 +492,7 @@ def main(  # noqa: PLR0913
             "manifest_hard.json",
         )
     else:
-        generated_manifest = build_manifest(pool, seed_start)
+        generated_manifest = build_manifest(pool, selected_seed_start)
         output_path = manifest_path or Path(__file__).with_name(
             "manifest.json",
         )

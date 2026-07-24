@@ -112,6 +112,24 @@ def test_typer_cli_generates_a_manifest(tmp_path: Path) -> None:
     assert manifest.stratum_counts == {"n3_easy": 1}
 
 
+def test_typer_hard_preset_rejects_ignored_axis_overrides() -> None:
+    result = CliRunner().invoke(
+        generate.app,
+        [
+            "--preset",
+            "hard",
+            "--constraint-counts",
+            "0",
+            "--mixes",
+            "unknown",
+            "--seed-start",
+            "1",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "cannot be combined" in result.output
+
+
 @pytest.mark.parametrize(
     "args",
     [

@@ -14,6 +14,9 @@ from __future__ import annotations
 import pytest
 
 from whetstone_envs.c22 import oracle
+from whetstone_envs.c22._vendor.instruction_following_eval import (
+    instructions_registry,
+)
 from whetstone_envs.c22.atoms import EASY_POOL, HARD_POOL
 from whetstone_envs.c22.spec import ConstraintSpec
 
@@ -22,10 +25,14 @@ def _single_atom_spec(
     instruction_id: str,
     kwargs: dict[str, object],
 ) -> ConstraintSpec:
-    """A hand-built one-atom spec (base task/description are irrelevant)."""
+    """A hand-built one-atom spec with its checker-canonical description."""
+    instruction = instructions_registry.INSTRUCTION_DICT[instruction_id](
+        instruction_id,
+    )
+    description = instruction.build_description(**kwargs)
     return ConstraintSpec(
         base_task="Answer the question.",
-        constraint_descriptions=("(constraint text)",),
+        constraint_descriptions=(description,),
         instruction_id_list=(instruction_id,),
         kwargs_list=(kwargs,),
     )
@@ -157,7 +164,12 @@ def test_strict_all_pass_requires_every_atom() -> None:
     # A hand-built 3-atom stack: keyword + no-comma + end phrase.
     spec = ConstraintSpec(
         base_task="Name a color.",
-        constraint_descriptions=("a", "b", "c"),
+        constraint_descriptions=(
+            "Include keywords ['zylthorn'] in the response.",
+            "In your entire response, refrain from the use of any commas.",
+            "Finish your response with this exact phrase DONE. "
+            "No other words should follow this phrase.",
+        ),
         instruction_id_list=(
             "keywords:existence",
             "punctuation:no_comma",

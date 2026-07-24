@@ -28,6 +28,15 @@ def test_make_instance_accepts_stratum_tuple() -> None:
     assert inst.strata == ("easy", "short")
 
 
+def test_direct_construction_rejects_bare_string_strata() -> None:
+    with pytest.raises(TypeError, match=r"(?i)(?=.*strata)(?=.*tuple)"):
+        Instance(
+            id="t1",
+            seed=7,
+            strata=cast("tuple[str, ...]", "easy"),
+        )
+
+
 def test_instance_is_frozen() -> None:
     inst = make_instance(id="t1", seed=1, strata="s")
     with pytest.raises(dataclasses.FrozenInstanceError):

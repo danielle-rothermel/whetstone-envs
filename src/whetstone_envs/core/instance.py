@@ -18,13 +18,18 @@ from types import MappingProxyType
 def _freeze_inputs(
     inputs: Mapping[str, str],
 ) -> MappingProxyType[str, str]:
-    """Return a read-only, order-preserving view of ``inputs``.
+    """Validate and return a detached, read-only copy of ``inputs``.
 
     Copying into a fresh ``dict`` first detaches the view from the
     caller's mutable mapping, so a frozen instance cannot be mutated
     through the reference the caller still holds.
     """
-    return MappingProxyType(dict(inputs))
+    detached = dict(inputs)
+    for key, value in detached.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            msg = "Instance.prompt_inputs keys and values must be strings"
+            raise TypeError(msg)
+    return MappingProxyType(detached)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,15 +71,28 @@ class Instance:
         if not self.id:
             msg = "Instance.id must be a non-empty string"
             raise ValueError(msg)
-        if not self.strata:
+        if not isinstance(self.strata, tuple):
+            msg = "Instance.strata must be a tuple of strings"
+            raise TypeError(msg)
+        labels = self.strata
+        if not labels:
             msg = f"Instance {self.id!r} must declare at least one stratum"
             raise ValueError(msg)
-        if not isinstance(self.prompt_inputs, MappingProxyType):
-            object.__setattr__(
-                self,
-                "prompt_inputs",
-                _freeze_inputs(self.prompt_inputs),
+        if any(not isinstance(label, str) for label in labels):
+            msg = f"Instance {self.id!r} stratum labels must be strings"
+            raise TypeError(msg)
+        if any(not label.strip() for label in labels):
+            msg = (
+                f"Instance {self.id!r} stratum labels must be non-empty "
+                "and not blank"
             )
+            raise ValueError(msg)
+        object.__setattr__(self, "strata", tuple(dict.fromkeys(labels)))
+        object.__setattr__(
+            self,
+            "prompt_inputs",
+            _freeze_inputs(self.prompt_inputs),
+        )
 
     def __hash__(self) -> int:
         # The dataclass-generated __hash__ would try to hash the
@@ -111,6 +129,6 @@ def make_instance(
         id=id,
         seed=seed,
         strata=labels,
-        prompt_inputs=_freeze_inputs(prompt_inputs or {}),
+        prompt_inputs={} if prompt_inputs is None else prompt_inputs,
         gold=gold,
     )

@@ -22,16 +22,19 @@ if TYPE_CHECKING:
 
 def _synthetic_instance(
     index: int,
-    stratum: str,
+    stratum: str | tuple[str, ...],
     *,
     gold: str = "yes",
 ) -> Instance:
     """Build a deterministic synthetic instance for tests."""
+    stratum_label = (
+        stratum if isinstance(stratum, str) else "/".join(stratum)
+    )
     return make_instance(
-        id=f"{stratum}-{index}",
+        id=f"{stratum_label}-{index}",
         seed=1000 + index,
         strata=stratum,
-        prompt_inputs={"question": f"q{index}", "hint": stratum},
+        prompt_inputs={"question": f"q{index}", "hint": stratum_label},
         gold=gold,
     )
 

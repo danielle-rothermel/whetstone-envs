@@ -14,5 +14,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync
+      # NLTK ships tokenizer models separately from the Python package.
+      # The vendored IFEval test suite exercises word/sentence constraints
+      # that require this resource on a clean runner.
+      - name: Provision NLTK tokenizer data
+        env:
+          NLTK_DATA: ${{ runner.temp }}/nltk_data
+        run: uv run python -m nltk.downloader -d "$NLTK_DATA" punkt_tab
       - run: uv run ruff check .
       - run: uv run pytest
+        env:
+          NLTK_DATA: ${{ runner.temp }}/nltk_data

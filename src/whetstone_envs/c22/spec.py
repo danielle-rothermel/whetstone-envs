@@ -4,18 +4,29 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import string
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Self, cast
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from whetstone_envs.c22._vendor.instruction_following_eval import (
     instructions_registry,
+    instructions_util,
 )
 from whetstone_envs.c22.atoms import all_atom_ids
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterator, Sequence
 
 _ALLOWED_ATOM_IDS = frozenset(all_atom_ids())
 _NO_KWARGS = frozenset(
@@ -25,6 +36,45 @@ _NO_KWARGS = frozenset(
         "punctuation:no_comma",
     },
 )
+_REGEX_META_CHARACTERS = frozenset(r".^$*+?{}[]\|()")
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenJsonMapping(Mapping[str, object]):
+    """A detached immutable JSON object stored inside validated gold."""
+
+    values: MappingProxyType[str, object]
+
+    def __getitem__(self, key: str) -> object:
+        return self.values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+
+def _freeze_json_value(value: object) -> object:
+    if isinstance(value, dict):
+        mapping = cast("dict[str, object]", value)
+        frozen = {
+            key: _freeze_json_value(item) for key, item in mapping.items()
+        }
+        return _FrozenJsonMapping(MappingProxyType(frozen))
+    if isinstance(value, list):
+        return tuple(_freeze_json_value(item) for item in value)
+    return value
+
+
+def _thaw_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            key: _thaw_json_value(item) for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return [_thaw_json_value(item) for item in value]
+    return value
 
 
 def _require_exact_keys(
@@ -69,6 +119,17 @@ def _require_nonempty_string_list(
     return cast("list[str]", value)
 
 
+def _require_safe_regex_literal(value: str, *, field_name: str) -> None:
+    if not value.isascii() or any(
+        character in _REGEX_META_CHARACTERS for character in value
+    ):
+        msg = (
+            f"{field_name} must be an ASCII literal without regex "
+            "metacharacters"
+        )
+        raise ValueError(msg)
+
+
 def _validate_json_value(value: object, *, path: str) -> None:
     if value is None or isinstance(value, str | bool | int):
         return
@@ -102,16 +163,26 @@ def _validate_atom_kwargs(  # noqa: PLR0912
 
     if instruction_id == "keywords:existence":
         _require_exact_keys(instruction_id, kwargs, {"keywords"})
-        _require_nonempty_string_list(
+        keywords = _require_nonempty_string_list(
             kwargs["keywords"],
             field_name=f"{instruction_id}.keywords",
         )
+        for keyword in keywords:
+            _require_safe_regex_literal(
+                keyword,
+                field_name=f"{instruction_id}.keywords item",
+            )
     elif instruction_id == "keywords:forbidden_words":
         _require_exact_keys(instruction_id, kwargs, {"forbidden_words"})
-        _require_nonempty_string_list(
+        forbidden_words = _require_nonempty_string_list(
             kwargs["forbidden_words"],
             field_name=f"{instruction_id}.forbidden_words",
         )
+        for forbidden_word in forbidden_words:
+            _require_safe_regex_literal(
+                forbidden_word,
+                field_name=f"{instruction_id}.forbidden_words item",
+            )
     elif instruction_id == "startend:end_checker":
         _require_exact_keys(instruction_id, kwargs, {"end_phrase"})
         _require_nonempty_string(
@@ -120,10 +191,15 @@ def _validate_atom_kwargs(  # noqa: PLR0912
         )
     elif instruction_id == "detectable_content:postscript":
         _require_exact_keys(instruction_id, kwargs, {"postscript_marker"})
-        _require_nonempty_string(
+        marker = _require_nonempty_string(
             kwargs["postscript_marker"],
             field_name=f"{instruction_id}.postscript_marker",
         )
+        if marker not in {"P.S.", "P.P.S"}:
+            _require_safe_regex_literal(
+                marker,
+                field_name=f"{instruction_id}.postscript_marker",
+            )
     elif instruction_id == "detectable_content:number_placeholders":
         _require_exact_keys(instruction_id, kwargs, {"num_placeholders"})
         _require_positive_integer(
@@ -182,6 +258,53 @@ def _validate_atom_kwargs(  # noqa: PLR0912
         raise ValueError(msg)
 
 
+def _canonical_description(
+    instruction_id: str,
+    kwargs: Mapping[str, object],
+) -> str:
+    instruction_cls = instructions_registry.INSTRUCTION_DICT[instruction_id]
+    instruction = instruction_cls(instruction_id)
+    return cast("str", instruction.build_description(**dict(kwargs)))
+
+
+def _ordered_literal_merge(first: str, final: str) -> str:
+    """Shortest exact merge containing ``first`` and ending in ``final``."""
+    first_folded = first.casefold()
+    final_folded = final.casefold()
+    if first_folded in final_folded:
+        return final
+    max_overlap = min(len(first_folded), len(final_folded))
+    for width in range(max_overlap, 0, -1):
+        if first_folded[-width:] == final_folded[:width]:
+            return first + final[width:]
+    return first + final
+
+
+def _required_word_lower_bound(
+    *,
+    required_keywords: Sequence[str],
+    end_phrase: str | None,
+    postscript_marker: str | None,
+) -> int:
+    """Sound token lower bound for C22's coexisting required literals."""
+    if postscript_marker is not None and end_phrase is not None:
+        structural_literal = _ordered_literal_merge(
+            postscript_marker,
+            end_phrase,
+        )
+    else:
+        structural_literal = postscript_marker or end_phrase or ""
+
+    literal_counts = [
+        instructions_util.count_words(structural_literal),
+        *(
+            instructions_util.count_words(keyword)
+            for keyword in required_keywords
+        ),
+    ]
+    return max(literal_counts)
+
+
 def compatibility_error(  # noqa: PLR0912
     instruction_ids: Sequence[str],
     kwargs_list: Sequence[Mapping[str, object]],
@@ -200,6 +323,9 @@ def compatibility_error(  # noqa: PLR0912
     required_literals: list[str] = []
     forbidden_words: list[str] = []
     forbidden_letters: list[str] = []
+    end_phrase: str | None = None
+    postscript_marker: str | None = None
+    exact_word_budget: int | None = None
     for instruction_id, kwargs in zip(
         instruction_ids,
         kwargs_list,
@@ -210,13 +336,15 @@ def compatibility_error(  # noqa: PLR0912
             required_keywords.extend(keywords)
             required_literals.extend(keywords)
         elif instruction_id == "startend:end_checker":
-            end_phrase = kwargs["end_phrase"]
-            assert isinstance(end_phrase, str)
+            raw_end_phrase = kwargs["end_phrase"]
+            assert isinstance(raw_end_phrase, str)
+            end_phrase = raw_end_phrase.strip()
             required_literals.append(end_phrase)
         elif instruction_id == "detectable_content:postscript":
-            marker = kwargs["postscript_marker"]
-            assert isinstance(marker, str)
-            required_literals.append(marker)
+            raw_marker = kwargs["postscript_marker"]
+            assert isinstance(raw_marker, str)
+            postscript_marker = raw_marker.strip()
+            required_literals.append(postscript_marker)
         elif instruction_id == "keywords:forbidden_words":
             words = cast("list[str]", kwargs["forbidden_words"])
             forbidden_words.extend(words)
@@ -224,11 +352,22 @@ def compatibility_error(  # noqa: PLR0912
             letter = kwargs["letter"]
             assert isinstance(letter, str)
             forbidden_letters.append(letter)
+        elif instruction_id == "length_constraints:number_words":
+            budget = kwargs["num_words"]
+            assert isinstance(budget, int)
+            exact_word_budget = budget
 
-    forbidden_words_folded = {word.casefold() for word in forbidden_words}
-    for keyword in required_keywords:
-        if keyword.casefold() in forbidden_words_folded:
-            return f"required keyword {keyword!r} is also forbidden"
+    for forbidden_word in forbidden_words:
+        pattern = re.compile(
+            rf"\b{forbidden_word}\b",
+            flags=re.IGNORECASE,
+        )
+        for literal in required_literals:
+            if pattern.search(literal):
+                return (
+                    f"required literal {literal!r} contains forbidden "
+                    f"word {forbidden_word!r}"
+                )
 
     for literal in required_literals:
         for letter in forbidden_letters:
@@ -237,6 +376,18 @@ def compatibility_error(  # noqa: PLR0912
                     f"required literal {literal!r} contains forbidden "
                     f"letter {letter!r}"
                 )
+
+    if exact_word_budget is not None:
+        lower_bound = _required_word_lower_bound(
+            required_keywords=required_keywords,
+            end_phrase=end_phrase,
+            postscript_marker=postscript_marker,
+        )
+        if exact_word_budget < lower_bound:
+            return (
+                f"exact word budget {exact_word_budget} is below the "
+                f"mandatory required-literal lower bound {lower_bound}"
+            )
     return None
 
 
@@ -248,7 +399,7 @@ class ConstraintSpec(BaseModel):
     base_task: str
     constraint_descriptions: tuple[str, ...]
     instruction_id_list: tuple[str, ...]
-    kwargs_list: tuple[dict[str, object], ...]
+    kwargs_list: tuple[Mapping[str, object], ...]
 
     @field_validator("base_task")
     @classmethod
@@ -293,8 +444,8 @@ class ConstraintSpec(BaseModel):
     @classmethod
     def _validate_json_kwargs(
         cls,
-        value: tuple[dict[str, object], ...],
-    ) -> tuple[dict[str, object], ...]:
+        value: tuple[Mapping[str, object], ...],
+    ) -> tuple[Mapping[str, object], ...]:
         if not value:
             msg = "kwargs_list must not be empty"
             raise ValueError(msg)
@@ -323,6 +474,20 @@ class ConstraintSpec(BaseModel):
         ):
             _validate_atom_kwargs(instruction_id, kwargs)
 
+        for instruction_id, kwargs, description in zip(
+            self.instruction_id_list,
+            self.kwargs_list,
+            self.constraint_descriptions,
+            strict=True,
+        ):
+            canonical = _canonical_description(instruction_id, kwargs)
+            if description != canonical:
+                msg = (
+                    f"description for {instruction_id!r} must equal its "
+                    f"canonical vendored description {canonical!r}"
+                )
+                raise ValueError(msg)
+
         error = compatibility_error(
             self.instruction_id_list,
             self.kwargs_list,
@@ -330,7 +495,22 @@ class ConstraintSpec(BaseModel):
         if error is not None:
             msg = f"contradictory C22 constraint stack: {error}"
             raise ValueError(msg)
+        frozen_kwargs = tuple(
+            cast("_FrozenJsonMapping", _freeze_json_value(dict(kwargs)))
+            for kwargs in self.kwargs_list
+        )
+        object.__setattr__(self, "kwargs_list", frozen_kwargs)
         return self
+
+    @field_serializer("kwargs_list")
+    def _serialize_kwargs(
+        self,
+        value: tuple[Mapping[str, object], ...],
+    ) -> list[dict[str, object]]:
+        return [
+            cast("dict[str, object]", _thaw_json_value(kwargs))
+            for kwargs in value
+        ]
 
     def constraints_block(self) -> str:
         """Render the base task plus the model-visible constraint lines."""

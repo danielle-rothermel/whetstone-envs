@@ -39,6 +39,10 @@ parts:
    unchanged, so existing `"less than"` and `"at least"` behavior and all
    other checker semantics stay pinned to upstream.
 
+The artifact uses zero-context hunks so blank context lines do not embed
+trailing whitespace. From the pinned upstream repository root, replay it
+with `git apply --unidiff-zero VENDORED_DIFF.patch`.
+
 ## Runtime dependencies
 
 The upstream requirements used by these modules (`absl`, `langdetect`,

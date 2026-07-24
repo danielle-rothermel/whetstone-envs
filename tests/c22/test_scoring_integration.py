@@ -21,7 +21,10 @@ from whetstone_envs.core.scoring import (
 def _spec(end_phrase: str) -> ConstraintSpec:
     return ConstraintSpec(
         base_task="Name a color.",
-        constraint_descriptions=("end with a phrase",),
+        constraint_descriptions=(
+            f"Finish your response with this exact phrase {end_phrase}. "
+            "No other words should follow this phrase.",
+        ),
         instruction_id_list=("startend:end_checker",),
         kwargs_list=({"end_phrase": end_phrase},),
     )

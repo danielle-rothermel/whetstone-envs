@@ -47,7 +47,9 @@ from whetstone_envs.c18.generate import (
 )
 from whetstone_envs.c18.oracle import entailment_label
 from whetstone_envs.c18.prompts import PROBES
+from whetstone_envs.core.instance import make_instance
 from whetstone_envs.core.manifest import Manifest, content_hash
+from whetstone_envs.core.pool import TaskPool
 
 _HARD_MANIFEST_PATH = Path(generate.__file__).with_name("manifest_hard.json")
 
@@ -151,10 +153,16 @@ def test_hard_split_sizes_partition_each_stratum_exactly() -> None:
         == HARD_N_PER_STRATUM
     )
 
-    class _FakePool:
-        strata = ("D5", "D8", "D10")
+    pool = TaskPool(
+        make_instance(
+            id=f"hard-d{depth}",
+            seed=HARD_SEED_START + index,
+            strata=depth_label(depth),
+        )
+        for index, depth in enumerate(HARD_DEPTHS)
+    )
 
-    ie, off, ho = HARD_PRESET.default_split_sizes(_FakePool())
+    ie, off, ho = HARD_PRESET.default_split_sizes(pool)
     assert (ie, off, ho) == (6, 18, 36)
     assert ie + off + ho == HARD_N_PER_STRATUM * 3
 

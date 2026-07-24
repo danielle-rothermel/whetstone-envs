@@ -6,10 +6,10 @@ prompt). :class:`ProbePair` bundles both templates plus a render
 function so every candidate renders prompts the same way.
 
 :func:`normalize` is the single normalization step shared by every
-candidate's exact-match scoring: strip surrounding whitespace and a
-single wrapping code fence. Keeping it here means every oracle extracts
-predictions identically, so scoring differences come from the model,
-not from per-candidate string handling.
+candidate's exact-match scoring: strip surrounding whitespace and all
+complete wrapping code-fence pairs. Keeping it here means every oracle
+extracts predictions identically, so scoring differences come from the
+model, not from per-candidate string handling.
 """
 
 from __future__ import annotations
@@ -43,13 +43,30 @@ def _strip_code_fence(text: str) -> str:
 def normalize(prediction: str) -> str:
     """Normalize a raw model prediction for exact-match comparison.
 
-    Strips surrounding whitespace, then removes a single wrapping code
-    fence (re-stripping whitespace the fence exposed). Idempotent: the
-    normalization of an already-normalized string is itself.
+    Strips surrounding whitespace, then removes complete wrapping code
+    fences to a fixed point, re-stripping whitespace after each pair.
+    Unmatched fences and backticks within the remaining answer are
+    preserved. No other content is changed, so exact-match semantics are
+    deterministic and normalization is idempotent.
     """
-    stripped = prediction.strip()
-    unfenced = _strip_code_fence(stripped)
-    return unfenced.strip()
+    normalized = prediction.strip()
+    while True:
+        unfenced = _strip_code_fence(normalized)
+        if unfenced == normalized:
+            return normalized
+        normalized = unfenced.strip()
+
+
+def render_with_prompt_inputs(template: str, instance: Instance) -> str:
+    """Render ``template`` against ``instance.prompt_inputs`` only.
+
+    Formatting is restricted to the instance's public prompt inputs, so
+    a template can never interpolate gold/oracle-only state even by
+    accident. A template field with no matching input raises
+    ``KeyError`` -- a loud template-drift signal rather than a silent
+    empty substitution.
+    """
+    return template.format(**dict(instance.prompt_inputs))
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +89,7 @@ class ProbePair:
 
     naive_template: str
     ceiling_template: str
-    render: Callable[[str, Instance], str]
+    render: Callable[[str, Instance], str] = render_with_prompt_inputs
 
     def render_naive(self, instance: Instance) -> str:
         """Render the naive prompt for ``instance``."""
@@ -81,15 +98,3 @@ class ProbePair:
     def render_ceiling(self, instance: Instance) -> str:
         """Render the ceiling prompt for ``instance``."""
         return self.render(self.ceiling_template, instance)
-
-
-def render_with_prompt_inputs(template: str, instance: Instance) -> str:
-    """Render ``template`` against ``instance.prompt_inputs`` only.
-
-    Formatting is restricted to the instance's public prompt inputs, so
-    a template can never interpolate gold/oracle-only state even by
-    accident. A template field with no matching input raises
-    ``KeyError`` -- a loud template-drift signal rather than a silent
-    empty substitution.
-    """
-    return template.format(**dict(instance.prompt_inputs))

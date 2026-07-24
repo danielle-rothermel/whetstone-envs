@@ -41,6 +41,11 @@ def test_normalize_preserves_internal_backticks() -> None:
     assert normalize("a `b` c") == "a `b` c"
 
 
+@pytest.mark.parametrize("raw", ["```\nanswer", "answer\n```"])
+def test_normalize_preserves_unmatched_fence_lines(raw: str) -> None:
+    assert normalize(raw) == raw
+
+
 def test_render_uses_only_prompt_inputs() -> None:
     inst = make_instance(
         id="t1",

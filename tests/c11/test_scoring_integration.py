@@ -25,15 +25,17 @@ def test_oracle_scores_feed_the_aggregation_ladder() -> None:
         scored("task-b", 0, oracle.score(_MESSY, _MESSY)),  # 0 (still messy)
         scored("task-b", 1, oracle.score(_MESSY, _MESSY)),  # 0
         scored("task-c", 0, oracle.score(_GOLD, _MESSY)),  # 1
+        scored("task-c", 1, oracle.score(_GOLD, _MESSY)),  # 1
         scored("task-d", 0, oracle.score("garbage", _MESSY)),  # 0
+        scored("task-d", 1, oracle.score("garbage", _MESSY)),  # 0
     ]
     task_strata = {
-        "task-a": "S1_flat",
-        "task-b": "S1_flat",
-        "task-c": "S2_keysort",
-        "task-d": "S2_keysort",
+        "task-a": ("S1_flat",),
+        "task-b": ("S1_flat",),
+        "task-c": ("S2_keysort",),
+        "task-d": ("S2_keysort",),
     }
-    root = aggregate(observations, task_strata)
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0, 1))
     # S1_flat: mean(1, 0) = 0.5 ; S2_keysort: mean(1, 0) = 0.5 ; overall 0.5
     assert root.complete
     assert root.mean == 0.5
@@ -45,8 +47,8 @@ def test_failed_observation_makes_aggregate_visibly_incomplete() -> None:
         scored("task-a", 0, oracle.score(_GOLD, _MESSY)),  # 1
         failed("task-b", 0),  # infra failure, no score
     ]
-    task_strata = {"task-a": "S1_flat", "task-b": "S1_flat"}
-    root = aggregate(observations, task_strata)
+    task_strata = {"task-a": ("S1_flat",), "task-b": ("S1_flat",)}
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0,))
     # rubric 13: a failed observation must not silently score zero.
     assert root.mean is None
     assert not root.complete

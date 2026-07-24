@@ -95,12 +95,16 @@ def test_full_ladder_all_complete() -> None:
         scored("hard-1", 0, 1),
     ]
     task_strata = {
-        "easy-0": "easy",
-        "easy-1": "easy",
-        "hard-0": "hard",
-        "hard-1": "hard",
+        "easy-0": ("easy",),
+        "easy-1": ("easy",),
+        "hard-0": ("hard",),
+        "hard-1": ("hard",),
     }
-    root = aggregate(observations, task_strata)
+    root = aggregate(
+        observations,
+        task_strata,
+        expected_repeat_ids=(0,),
+    )
     # easy stratum mean = (1 + 0)/2 = 0.5; hard = (1 + 1)/2 = 1.0;
     # overall = mean of stratum means = 0.75. Crucially this is the mean
     # of stratum means, not of raw scores -- aggregation crosses strata.
@@ -123,7 +127,7 @@ def test_full_ladder_all_complete() -> None:
 def test_planned_matrix_marks_unobserved_repeat_missing() -> None:
     root = aggregate(
         [scored("task", 0, 1)],
-        {"task": "easy"},
+        {"task": ("easy",)},
         expected_repeat_ids=(0, 1),
     )
     task = root.children[0].children[0]
@@ -139,7 +143,7 @@ def test_planned_matrix_marks_unobserved_repeat_missing() -> None:
 def test_planned_matrix_includes_fully_absent_expected_task() -> None:
     root = aggregate(
         [scored("observed", 0, 1)],
-        {"observed": "easy", "absent": "hard"},
+        {"observed": ("easy",), "absent": ("hard",)},
         expected_repeat_ids=(0,),
     )
     strata = {child.label: child for child in root.children}
@@ -162,7 +166,7 @@ def test_planned_matrix_rejects_duplicate_task_repeat_pair() -> None:
     ):
         aggregate(
             observations,
-            {"task-a": "easy"},
+            {"task-a": ("easy",)},
             expected_repeat_ids=(7,),
         )
 
@@ -174,7 +178,61 @@ def test_planned_matrix_rejects_unexpected_repeat() -> None:
     ):
         aggregate(
             [scored("task", 3, 1)],
-            {"task": "easy"},
+            {"task": ("easy",)},
+            expected_repeat_ids=(0,),
+        )
+
+
+def test_planned_matrix_rejects_duplicate_expected_repeat_ids() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*duplicate)(?=.*expected)(?=.*repeat_id\D*0)",
+    ):
+        aggregate(
+            [],
+            {"task": ("easy",)},
+            expected_repeat_ids=(0, 0),
+        )
+
+
+def test_multi_stratum_task_contributes_complete_repeats_once_each() -> None:
+    root = aggregate(
+        [scored("shared", 0, 1), scored("shared", 1, 0)],
+        {"shared": ("easy", "hard")},
+        expected_repeat_ids=(0, 1),
+    )
+    strata = {child.label: child for child in root.children}
+
+    assert [child.label for child in root.children] == ["easy", "hard"]
+    assert set(strata) == {"easy", "hard"}
+    for stratum in strata.values():
+        assert len(stratum.children) == 1
+        task = stratum.children[0]
+        assert task.label == "shared"
+        assert task.total == 2
+        assert task.usable == 2
+        assert task.mean == pytest.approx(0.5)
+    assert root.total == 4
+    assert root.mean == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize(
+    ("strata", "match"),
+    [
+        ((), "at least one stratum"),
+        ((" ",), "nonblank"),
+        (("easy", "easy"), "duplicate stratum"),
+    ],
+    ids=["empty", "blank", "duplicate"],
+)
+def test_task_strata_require_canonical_label_tuples(
+    strata: tuple[str, ...],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        aggregate(
+            [],
+            {"task": strata},
             expected_repeat_ids=(0,),
         )
 
@@ -190,12 +248,16 @@ def test_aggregation_crosses_strata_not_raw_mean() -> None:
         scored("hard-0", 0, 0),
     ]
     task_strata = {
-        "easy-0": "easy",
-        "easy-1": "easy",
-        "easy-2": "easy",
-        "hard-0": "hard",
+        "easy-0": ("easy",),
+        "easy-1": ("easy",),
+        "easy-2": ("easy",),
+        "hard-0": ("hard",),
     }
-    root = aggregate(observations, task_strata)
+    root = aggregate(
+        observations,
+        task_strata,
+        expected_repeat_ids=(0,),
+    )
     assert root.mean == pytest.approx(0.5)
 
 
@@ -204,8 +266,12 @@ def test_failed_observation_propagates_to_overall() -> None:
         scored("easy-0", 0, 1),
         failed("hard-0", 0),
     ]
-    task_strata = {"easy-0": "easy", "hard-0": "hard"}
-    root = aggregate(observations, task_strata)
+    task_strata = {"easy-0": ("easy",), "hard-0": ("hard",)}
+    root = aggregate(
+        observations,
+        task_strata,
+        expected_repeat_ids=(0,),
+    )
     # The whole run's overall aggregate is visibly incomplete even
     # though one stratum was fully scored.
     assert root.mean is None
@@ -216,7 +282,11 @@ def test_failed_observation_propagates_to_overall() -> None:
 
 def test_missing_task_stratum_raises() -> None:
     with pytest.raises(KeyError, match="no stratum"):
-        aggregate([scored("t", 0, 1)], {})
+        aggregate(
+            [scored("t", 0, 1)],
+            {},
+            expected_repeat_ids=(0,),
+        )
 
 
 def test_stratum_and_overall_helpers_compose() -> None:

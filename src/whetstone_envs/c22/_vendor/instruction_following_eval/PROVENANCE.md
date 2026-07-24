@@ -1,55 +1,49 @@
-# Vendored: google-research IFEval (`instruction_following_eval`)
+# Pinned google-research IFEval snapshot
 
-- **Upstream:** https://github.com/google-research/google-research/tree/master/instruction_following_eval
-- **Vendored commit:** `37ffb72669bc762fe899d5eaec83d28be2c882cc` (2026-07-20)
-- **License:** Apache-2.0 (see `LICENSE` in this directory; per-file
-  headers read `Copyright 2026 The Google Research Authors`).
-- **Vendored on:** 2026-07-22, for whetstone-envs candidate **c22**
-  (stacked IFEval instruction-following constraints).
+C22 vendors the checker and test modules from
+[`google-research/google-research`](https://github.com/google-research/google-research/tree/37ffb72669bc762fe899d5eaec83d28be2c882cc/instruction_following_eval)
+at commit `37ffb72669bc762fe899d5eaec83d28be2c882cc` (2026-07-20).
+The snapshot was prepared for C22 on 2026-07-22.
 
-## Why vendored
+The upstream code is Apache-2.0. `LICENSE` is copied from the upstream
+repository root, and every upstream-derived Python file retains its
+copyright and license header.
 
-The c22 baseline spec reuses this checker library **verbatim** for both
-the generation-side constraint selection (`build_description`) and the
-scoring oracle (`check_following` /
-`evaluation_lib.test_instruction_following_strict`). Vendoring pins the
-exact checker version so a regenerated pool and a re-scored response are
-reproducible against a frozen manifest.
+## Snapshot scope
 
-## What was and was not changed
+The runtime and upstream regression-suite files pinned here are:
 
-Byte-for-byte copies of upstream (unmodified):
-
-- `instructions.py`
-- `instructions_util.py`
-- `instructions_registry.py`
 - `evaluation_lib.py`
+- `instructions.py`
+- `instructions_registry.py`
+- `instructions_util.py`
 - `instructions_test.py`
 - `instructions_util_test.py`
-- `LICENSE`
 
-Added by this vendor (not present upstream):
+`__init__.py` makes those files a private package at
+`whetstone_envs.c22._vendor.instruction_following_eval`. First-party C22
+code and the vendored modules use that namespace exclusively.
 
-- `__init__.py` — a package marker only. Upstream imports this directory
-  as a path under the repo root and ships no `__init__.py`; the marker
-  lets the vendored tree be imported as `instruction_following_eval`
-  once `whetstone_envs.c22._vendor` has put this directory on
-  `sys.path`. The marker adds no logic.
-- `PROVENANCE.md` — this file.
+## Local patch
 
-No line of upstream checker logic was edited. The module-global
-`random` seed plumbing flagged in the repo review is handled entirely in
-`whetstone_envs.c22.generate` (which seeds `random` before each
-`build_description` and passes explicit nonce kwargs), never by editing
-the vendored source.
+The complete patch against the pinned upstream files is
+[`VENDORED_DIFF.patch`](VENDORED_DIFF.patch). It has two functional
+parts:
+
+1. Absolute intra-package imports in production and test modules are
+   package-relative. Importing C22 is isolated from top-level
+   `instruction_following_eval` modules and does not change module search
+   paths.
+2. `NumberOfWords` accepts the C22-local relation `"exactly"` and checks
+   equality. The shared upstream `_COMPARISON_RELATION` tuple remains
+   unchanged, so existing `"less than"` and `"at least"` behavior and all
+   other checker semantics stay pinned to upstream.
 
 ## Runtime dependencies
 
-The upstream `requirements.txt` lists `absl`, `langdetect`, `nltk`,
-`immutabledict`; these are declared in the repo's `pyproject.toml`.
-`instructions_util.count_words` uses only `nltk.tokenize.RegexpTokenizer`
-(a pure-regex tokenizer, no `punkt` download). The c22 atom pool
-deliberately excludes every atom whose `check_following` calls
-`langdetect` (casing/language atoms) or the `punkt` sentence tokenizer
-(sentence-count atoms), per the spec's determinism exclusions, so no
-network download is ever required at generation or scoring time.
+The upstream requirements used by these modules (`absl`, `langdetect`,
+`nltk`, and `immutabledict`) are declared in this repository's
+`pyproject.toml`. C22 uses complete explicit kwargs for every supported
+atom. Its word counter is the pure-regex
+`nltk.tokenize.RegexpTokenizer`; supported C22 generation and scoring do
+not require a network download or module-global random sampling.

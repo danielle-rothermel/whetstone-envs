@@ -107,7 +107,7 @@ reviewed in parallel — but are listed here in the recommended landing
 order to keep the stack shallow and reviewable.
 
 1. **PR 0 — shared harness** (`core/`): instance/pool/probe/scoring/manifest primitives, fully unit-tested against synthetic fixtures (no real task logic yet).
-2. **PR 1 — c22** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c22-baseline-spec.html), stacked IFEval constraints): cheapest build — reuses the `google-research` IFEval checker library verbatim for both generation and oracle. Best candidate to prove the shared harness's shape is right before other candidates build on it.
+2. **PR 1 — c22** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c22-baseline-spec.html), stacked IFEval constraints): cheapest build — reuses a pinned, namespaced `google-research` IFEval checker snapshot for both generation and oracle, with a documented exact-word-count patch. Best candidate to prove the shared harness's shape is right before other candidates build on it.
 3. **PR 2 — c11** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c11-baseline-spec.html), JSON canonicalization / RFC 8785 JCS): reuses `json-schema-faker` + `trailofbits/rfc8785-py` unmodified. Self-contained, no vendored/patched upstream code.
 4. **PR 3 — c19** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c19-baseline-spec.html), Minigrid state prediction): depends on the `minigrid` package as a real runtime (not just a checker library) — env instantiation, seeded rollout execution, object-model introspection for the oracle.
 5. **PR 4 — c18** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c18-baseline-spec.html), PrOntoQA): wraps `asaparov/prontoqa`'s `run_experiment.py` as a subprocess/import boundary, plus a from-scratch ~30–50 line forward-chaining fixpoint oracle (the one candidate needing a hand-written oracle, not a reused one).
@@ -143,7 +143,8 @@ Every candidate PR (1–5 above) must include, in this order:
      criteria 2 and 8).
    - Where the spec names a specific reference implementation (c11:
      `rfc8785.dumps` unmodified; c22: `check_following` /
-     `test_instruction_following_strict` unmodified; c19: the Minigrid
+     `test_instruction_following_strict` from the pinned checker snapshot;
+     c19: the Minigrid
      object-model walk; c23: `apply_ISL_rule`/`apply_L_OSL_rule`/
      `apply_R_OSL_rule` reapplied to the held-out query), use it
      unmodified — do not reimplement logic a reference already

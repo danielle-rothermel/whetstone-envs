@@ -24,7 +24,7 @@ from typing import Dict, Optional, Sequence, Union
 from absl import logging
 import langdetect
 
-from instruction_following_eval import instructions_util
+from . import instructions_util
 
 
 _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
@@ -820,11 +820,12 @@ class NumberOfWords(Instruction):
     Args:
       num_words: An integer specifying the number of words contained in the
         response.
-      relation: A string in (`less than`, `at least`), defining the relational
-        operator for comparison.
-        Two relational comparisons are supported for now:
+      relation: A string in (`less than`, `at least`, `exactly`), defining the
+        relational operator for comparison.
+        Three relational comparisons are supported for this checker:
         if 'less than', the actual number of words < num_words;
         if 'at least', the actual number of words >= num_words.
+        if 'exactly', the actual number of words == num_words.
 
     Returns:
       A string representing the instruction description.
@@ -838,9 +839,10 @@ class NumberOfWords(Instruction):
 
     if relation is None:
       self._comparison_relation = random.choice(_COMPARISON_RELATION)
-    elif relation not in _COMPARISON_RELATION:
+    elif relation not in (*_COMPARISON_RELATION, "exactly"):
       raise ValueError("The supported relation for comparison must be in "
-                       f"{_COMPARISON_RELATION}, but {relation} is given.")
+                       f"{(*_COMPARISON_RELATION, 'exactly')}, but "
+                       f"{relation} is given.")
     else:
       self._comparison_relation = relation
 
@@ -868,6 +870,8 @@ class NumberOfWords(Instruction):
       return num_words < self._num_words
     elif self._comparison_relation == _COMPARISON_RELATION[1]:
       return num_words >= self._num_words  # pytype: disable=bad-return-type
+    elif self._comparison_relation == "exactly":
+      return num_words == self._num_words
 
 
 class JsonFormat(Instruction):

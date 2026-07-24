@@ -108,16 +108,15 @@ def _require_single_token_literal_list(
     field_name: str,
 ) -> list[str]:
     literals = _require_nonempty_string_list(value, field_name=field_name)
-    for literal in literals:
-        _require_safe_regex_literal(
-            literal,
-            field_name=f"{field_name} item",
-        )
-    if (
-        len(literals) != 1
-        or instructions_util.count_words(literals[0]) != 1
-    ):
+    if len(literals) != 1:
         msg = f"{field_name} must contain exactly one single-token literal"
+        raise ValueError(msg)
+    _require_safe_regex_literal(
+        literals[0],
+        field_name=f"{field_name} item",
+    )
+    if re.fullmatch(r"\w+", literals[0]) is None:
+        msg = f"{field_name} must contain one full Unicode word token"
         raise ValueError(msg)
     return literals
 

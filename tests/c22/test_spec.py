@@ -442,8 +442,15 @@ def test_multi_keyword_exact_budget_is_outside_c22_contract() -> None:
         )
 
 
-def test_safe_unicode_single_token_keyword_remains_supported() -> None:
-    kwargs: dict[str, object] = {"keywords": ["café"]}
+@pytest.mark.parametrize(
+    ("keyword", "response"),
+    [("café", "CAFÉ"), ("猫", "猫")],
+)
+def test_safe_unicode_single_token_keyword_remains_supported(
+    keyword: str,
+    response: str,
+) -> None:
+    kwargs: dict[str, object] = {"keywords": [keyword]}
     instruction_ids = ["keywords:existence"]
     spec = ConstraintSpec(
         base_task="Name a color.",
@@ -453,7 +460,68 @@ def test_safe_unicode_single_token_keyword_remains_supported() -> None:
         instruction_id_list=tuple(instruction_ids),
         kwargs_list=(kwargs,),
     )
-    assert oracle.check(spec, "CAFÉ").score == 1
+    assert oracle.check(spec, response).score == 1
+
+
+@pytest.mark.parametrize("forbidden_word", ["a,", "-a"])
+def test_serialized_forbidden_word_rejects_edge_punctuation(
+    forbidden_word: str,
+) -> None:
+    instruction_ids = ["keywords:forbidden_words"]
+    kwargs_list: list[dict[str, object]] = [
+        {"forbidden_words": [forbidden_word]},
+    ]
+    data: dict[str, object] = {
+        "base_task": "Name a color.",
+        "constraint_descriptions": _canonical_descriptions(
+            instruction_ids,
+            kwargs_list,
+        ),
+        "instruction_id_list": instruction_ids,
+        "kwargs_list": kwargs_list,
+    }
+
+    with pytest.raises(ValidationError, match="full Unicode word token"):
+        ConstraintSpec.from_gold(_gold(data))
+
+
+def test_serialized_required_keyword_rejects_outer_whitespace() -> None:
+    instruction_ids = [
+        "length_constraints:number_words",
+        "keywords:existence",
+    ]
+    kwargs_list: list[dict[str, object]] = [
+        {"num_words": 1, "relation": "exactly"},
+        {"keywords": [" a "]},
+    ]
+    data: dict[str, object] = {
+        "base_task": "Name a color.",
+        "constraint_descriptions": _canonical_descriptions(
+            instruction_ids,
+            kwargs_list,
+        ),
+        "instruction_id_list": instruction_ids,
+        "kwargs_list": kwargs_list,
+    }
+
+    with pytest.raises(ValidationError, match="full Unicode word token"):
+        ConstraintSpec.from_gold(_gold(data))
+
+
+def test_valid_forbidden_word_is_detected_by_oracle() -> None:
+    instruction_ids = ["keywords:forbidden_words"]
+    kwargs: dict[str, object] = {"forbidden_words": ["blocked"]}
+    spec = ConstraintSpec(
+        base_task="Name a color.",
+        constraint_descriptions=tuple(
+            _canonical_descriptions(instruction_ids, [kwargs]),
+        ),
+        instruction_id_list=tuple(instruction_ids),
+        kwargs_list=(kwargs,),
+    )
+
+    assert oracle.check(spec, "This is BLOCKED here.").score == 0
+    assert oracle.check(spec, "This is allowed.").score == 1
 
 
 @pytest.mark.parametrize(

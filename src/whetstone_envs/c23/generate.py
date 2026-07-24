@@ -99,8 +99,8 @@ RESERVED_SEED_MAX = 100_000_000
 DEFAULT_SEED_START = 555_000_000
 
 # Split sizes per stratum (disjoint internal-eval / official / held-out).
-# Scaled to the default N; the interleaved layout keeps each contiguous slice
-# stratum-balanced. Owner-open.
+# TaskPool.split groups complete strata combinations and draws them
+# round-robin. Owner-open.
 DEFAULT_INTERNAL_EVAL_PER_STRATUM = 10
 DEFAULT_OFFICIAL_PER_STRATUM = 20
 DEFAULT_HELD_OUT_PER_STRATUM = 20
@@ -238,10 +238,11 @@ def generate_pool(
     Deterministic given the arguments: each stratum consumes one fixed seed
     and the vendored generator is byte-reproducible under a fixed seed after
     the four vendor patches (the ``sorted(...)`` determinism fix), verified
-    across runs under a randomized ``PYTHONHASHSEED``. The strata are
-    interleaved round-robin so a contiguous
-    :meth:`~whetstone_envs.core.pool.TaskPool.split` slice is
-    stratum-balanced.
+    across runs under a randomized ``PYTHONHASHSEED``. The deterministic
+    generation order interleaves strata round-robin. Role stratification is
+    handled independently by :meth:`~whetstone_envs.core.pool.TaskPool.split`,
+    which groups complete strata combinations before drawing its disjoint
+    subsets round-robin.
     """
     _assert_single_rule(number_of_rules)
 
@@ -283,10 +284,10 @@ def default_split_sizes(
 ) -> tuple[int, int, int]:
     """Return ``(internal_eval_n, official_n, held_out_n)`` for a pool.
 
-    Scales the per-stratum split sizes by the number of strata. The
-    interleaved layout makes each contiguous front slice of
-    ``k * n_strata`` instances exactly ``k`` per stratum, so all three
-    disjoint slices are stratum-balanced.
+    Scales the per-stratum split sizes by the number of strata.
+    :meth:`~whetstone_envs.core.pool.TaskPool.split` groups complete strata
+    combinations and draws them round-robin, yielding disjoint,
+    stratum-balanced subsets for these role sizes.
     """
     n_strata = len(pool.strata)
     return (

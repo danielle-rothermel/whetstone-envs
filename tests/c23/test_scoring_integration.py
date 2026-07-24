@@ -33,18 +33,21 @@ def test_oracle_scores_feed_the_aggregation_ladder() -> None:
         scored("s1-b", 1, _score(_ISL, "acb")),
         # S2 (L-OSL): one correct, one wrong.
         scored("s2-a", 0, _score(_LOSL, _LOSL[4])),
+        scored("s2-a", 1, _score(_LOSL, _LOSL[4])),
         scored("s2-b", 0, _score(_LOSL, "abab")),  # wrong
+        scored("s2-b", 1, _score(_LOSL, "abab")),
         # S3 (R-OSL): one correct.
         scored("s3-a", 0, _score(_ROSL, _ROSL[4])),
+        scored("s3-a", 1, _score(_ROSL, _ROSL[4])),
     ]
     task_strata = {
-        "s1-a": "S1",
-        "s1-b": "S1",
-        "s2-a": "S2",
-        "s2-b": "S2",
-        "s3-a": "S3",
+        "s1-a": ("S1",),
+        "s1-b": ("S1",),
+        "s2-a": ("S2",),
+        "s2-b": ("S2",),
+        "s3-a": ("S3",),
     }
-    root = aggregate(observations, task_strata)
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0, 1))
     # S1: mean(1, 0) = 0.5 ; S2: mean(1, 0) = 0.5 ; S3: mean(1) = 1.0
     # overall = mean(0.5, 0.5, 1.0) = 2/3.
     assert root.complete
@@ -58,8 +61,8 @@ def test_failed_observation_makes_aggregate_visibly_incomplete() -> None:
         scored("s1-a", 0, _score(_ISL, _ISL[4])),
         failed("s2-a", 0),
     ]
-    task_strata = {"s1-a": "S1", "s2-a": "S2"}
-    root = aggregate(observations, task_strata)
+    task_strata = {"s1-a": ("S1",), "s2-a": ("S2",)}
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0,))
     # rubric 13: a failed observation must not silently score zero.
     assert root.mean is None
     assert not root.complete

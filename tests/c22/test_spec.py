@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import pickle
 
 import pytest
 from pydantic import ValidationError
@@ -232,6 +234,67 @@ def test_construction_detaches_nested_kwargs_from_mutable_input() -> None:
     assert oracle.check(spec, "ok").score == 1
 
 
+def test_deep_model_copy_preserves_immutable_validated_gold() -> None:
+    spec = ConstraintSpec.from_gold(
+        _gold(
+            {
+                "base_task": "Name a color.",
+                "constraint_descriptions": [
+                    "Include keywords ['ok'] in the response.",
+                ],
+                "instruction_id_list": ["keywords:existence"],
+                "kwargs_list": [{"keywords": ["ok"]}],
+            },
+        ),
+    )
+    copied = spec.model_copy(deep=True)
+    assert copied is not spec
+    assert copied.to_gold() == spec.to_gold()
+
+    copied_keywords = copied.kwargs_list[0]["keywords"]
+    assert isinstance(copied_keywords, tuple)
+    with pytest.raises(TypeError, match="item assignment"):
+        copied_keywords[0] = "["  # ty: ignore[invalid-assignment]
+
+    assert copied.to_gold() == spec.to_gold()
+    assert oracle.check(copied, "ok").score == 1
+
+
+def test_pickle_round_trip_preserves_immutable_validated_gold() -> None:
+    spec = ConstraintSpec.from_gold(
+        _gold(
+            {
+                "base_task": "Name a color.",
+                "constraint_descriptions": [
+                    "Include keywords ['ok'] in the response.",
+                ],
+                "instruction_id_list": ["keywords:existence"],
+                "kwargs_list": [{"keywords": ["ok"]}],
+            },
+        ),
+    )
+    restored = pickle.loads(  # noqa: S301 - trusted in-memory fixture
+        pickle.dumps(spec),
+    )
+    assert isinstance(restored, ConstraintSpec)
+    assert restored.to_gold() == spec.to_gold()
+
+    restored_keywords = restored.kwargs_list[0]["keywords"]
+    assert isinstance(restored_keywords, tuple)
+    with pytest.raises(TypeError, match="item assignment"):
+        restored_keywords[0] = "["
+
+    assert restored.to_gold() == spec.to_gold()
+    assert oracle.check(restored, "ok").score == 1
+
+
+def test_standard_deepcopy_preserves_immutable_validated_gold() -> None:
+    spec = ConstraintSpec.from_gold(_gold(_VALID_DATA))
+    copied = copy.deepcopy(spec)
+    assert copied is not spec
+    assert copied.to_gold() == spec.to_gold()
+
+
 def test_prompt_description_must_match_scored_kwargs() -> None:
     data = dict(_VALID_DATA)
     data["constraint_descriptions"] = ["Answer with exactly 100 words."]
@@ -309,6 +372,88 @@ def test_required_literal_cannot_also_be_a_forbidden_word(
             instruction_id_list=tuple(instruction_ids),
             kwargs_list=tuple(kwargs_list),
         )
+
+
+def test_direct_required_end_cannot_conflict_with_no_comma() -> None:
+    instruction_ids = ["startend:end_checker", "punctuation:no_comma"]
+    kwargs_list: list[dict[str, object]] = [
+        {"end_phrase": "DONE, NOW"},
+        {},
+    ]
+    with pytest.raises(ValidationError, match=r"comma.*no_comma"):
+        ConstraintSpec(
+            base_task="Name a color.",
+            constraint_descriptions=tuple(
+                _canonical_descriptions(instruction_ids, kwargs_list),
+            ),
+            instruction_id_list=tuple(instruction_ids),
+            kwargs_list=tuple(kwargs_list),
+        )
+
+
+@pytest.mark.parametrize(
+    ("required_id", "required_kwargs"),
+    [
+        (
+            "detectable_content:postscript",
+            {"postscript_marker": "POST,SCRIPT"},
+        ),
+    ],
+)
+def test_gold_required_literal_cannot_conflict_with_no_comma(
+    required_id: str,
+    required_kwargs: dict[str, object],
+) -> None:
+    instruction_ids = [required_id, "punctuation:no_comma"]
+    kwargs_list: list[dict[str, object]] = [required_kwargs, {}]
+    data: dict[str, object] = {
+        "base_task": "Name a color.",
+        "constraint_descriptions": _canonical_descriptions(
+            instruction_ids,
+            kwargs_list,
+        ),
+        "instruction_id_list": instruction_ids,
+        "kwargs_list": kwargs_list,
+    }
+    with pytest.raises(ValidationError, match=r"comma.*no_comma"):
+        ConstraintSpec.from_gold(_gold(data))
+
+
+def test_multi_keyword_exact_budget_is_outside_c22_contract() -> None:
+    instruction_ids = [
+        "length_constraints:number_words",
+        "keywords:existence",
+    ]
+    kwargs_list: list[dict[str, object]] = [
+        {"num_words": 2, "relation": "exactly"},
+        {"keywords": ["a b", "c d"]},
+    ]
+    with pytest.raises(
+        ValidationError,
+        match="exactly one single-token literal",
+    ):
+        ConstraintSpec(
+            base_task="Name a color.",
+            constraint_descriptions=tuple(
+                _canonical_descriptions(instruction_ids, kwargs_list),
+            ),
+            instruction_id_list=tuple(instruction_ids),
+            kwargs_list=tuple(kwargs_list),
+        )
+
+
+def test_safe_unicode_single_token_keyword_remains_supported() -> None:
+    kwargs: dict[str, object] = {"keywords": ["café"]}
+    instruction_ids = ["keywords:existence"]
+    spec = ConstraintSpec(
+        base_task="Name a color.",
+        constraint_descriptions=tuple(
+            _canonical_descriptions(instruction_ids, [kwargs]),
+        ),
+        instruction_id_list=tuple(instruction_ids),
+        kwargs_list=(kwargs,),
+    )
+    assert oracle.check(spec, "CAFÉ").score == 1
 
 
 @pytest.mark.parametrize(

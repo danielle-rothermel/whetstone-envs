@@ -7,10 +7,9 @@ import math
 import re
 import string
 from collections.abc import Mapping
-from dataclasses import dataclass
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Self, cast
 
+from immutabledict import immutabledict
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -26,7 +25,7 @@ from whetstone_envs.c22._vendor.instruction_following_eval import (
 from whetstone_envs.c22.atoms import all_atom_ids
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Sequence
 
 _ALLOWED_ATOM_IDS = frozenset(all_atom_ids())
 _NO_KWARGS = frozenset(
@@ -39,29 +38,13 @@ _NO_KWARGS = frozenset(
 _REGEX_META_CHARACTERS = frozenset(r".^$*+?{}[]\|()")
 
 
-@dataclass(frozen=True, slots=True)
-class _FrozenJsonMapping(Mapping[str, object]):
-    """A detached immutable JSON object stored inside validated gold."""
-
-    values: MappingProxyType[str, object]
-
-    def __getitem__(self, key: str) -> object:
-        return self.values[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.values)
-
-    def __len__(self) -> int:
-        return len(self.values)
-
-
 def _freeze_json_value(value: object) -> object:
     if isinstance(value, dict):
         mapping = cast("dict[str, object]", value)
         frozen = {
             key: _freeze_json_value(item) for key, item in mapping.items()
         }
-        return _FrozenJsonMapping(MappingProxyType(frozen))
+        return immutabledict(frozen)
     if isinstance(value, list):
         return tuple(_freeze_json_value(item) for item in value)
     return value
@@ -119,13 +102,30 @@ def _require_nonempty_string_list(
     return cast("list[str]", value)
 
 
-def _require_safe_regex_literal(value: str, *, field_name: str) -> None:
-    if not value.isascii() or any(
-        character in _REGEX_META_CHARACTERS for character in value
+def _require_single_token_literal_list(
+    value: object,
+    *,
+    field_name: str,
+) -> list[str]:
+    literals = _require_nonempty_string_list(value, field_name=field_name)
+    for literal in literals:
+        _require_safe_regex_literal(
+            literal,
+            field_name=f"{field_name} item",
+        )
+    if (
+        len(literals) != 1
+        or instructions_util.count_words(literals[0]) != 1
     ):
+        msg = f"{field_name} must contain exactly one single-token literal"
+        raise ValueError(msg)
+    return literals
+
+
+def _require_safe_regex_literal(value: str, *, field_name: str) -> None:
+    if any(character in _REGEX_META_CHARACTERS for character in value):
         msg = (
-            f"{field_name} must be an ASCII literal without regex "
-            "metacharacters"
+            f"{field_name} must be a literal without regex metacharacters"
         )
         raise ValueError(msg)
 
@@ -163,26 +163,16 @@ def _validate_atom_kwargs(  # noqa: PLR0912
 
     if instruction_id == "keywords:existence":
         _require_exact_keys(instruction_id, kwargs, {"keywords"})
-        keywords = _require_nonempty_string_list(
+        _require_single_token_literal_list(
             kwargs["keywords"],
             field_name=f"{instruction_id}.keywords",
         )
-        for keyword in keywords:
-            _require_safe_regex_literal(
-                keyword,
-                field_name=f"{instruction_id}.keywords item",
-            )
     elif instruction_id == "keywords:forbidden_words":
         _require_exact_keys(instruction_id, kwargs, {"forbidden_words"})
-        forbidden_words = _require_nonempty_string_list(
+        _require_single_token_literal_list(
             kwargs["forbidden_words"],
             field_name=f"{instruction_id}.forbidden_words",
         )
-        for forbidden_word in forbidden_words:
-            _require_safe_regex_literal(
-                forbidden_word,
-                field_name=f"{instruction_id}.forbidden_words item",
-            )
     elif instruction_id == "startend:end_checker":
         _require_exact_keys(instruction_id, kwargs, {"end_phrase"})
         _require_nonempty_string(
@@ -326,6 +316,7 @@ def compatibility_error(  # noqa: PLR0912
     end_phrase: str | None = None
     postscript_marker: str | None = None
     exact_word_budget: int | None = None
+    forbids_commas = False
     for instruction_id, kwargs in zip(
         instruction_ids,
         kwargs_list,
@@ -356,6 +347,16 @@ def compatibility_error(  # noqa: PLR0912
             budget = kwargs["num_words"]
             assert isinstance(budget, int)
             exact_word_budget = budget
+        elif instruction_id == "punctuation:no_comma":
+            forbids_commas = True
+
+    if forbids_commas:
+        for literal in required_literals:
+            if "," in literal:
+                return (
+                    f"required literal {literal!r} contains a comma "
+                    "forbidden by 'punctuation:no_comma'"
+                )
 
     for forbidden_word in forbidden_words:
         pattern = re.compile(
@@ -496,7 +497,10 @@ class ConstraintSpec(BaseModel):
             msg = f"contradictory C22 constraint stack: {error}"
             raise ValueError(msg)
         frozen_kwargs = tuple(
-            cast("_FrozenJsonMapping", _freeze_json_value(dict(kwargs)))
+            cast(
+                "immutabledict[str, object]",
+                _freeze_json_value(dict(kwargs)),
+            )
             for kwargs in self.kwargs_list
         )
         object.__setattr__(self, "kwargs_list", frozen_kwargs)

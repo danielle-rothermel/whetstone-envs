@@ -83,6 +83,27 @@ def test_from_pool_records_counts_and_hash(
     assert manifest.schema_version == MANIFEST_SCHEMA_VERSION
 
 
+def test_manifest_detaches_and_freezes_stratum_counts() -> None:
+    pool = TaskPool(
+        [make_instance(id="easy-0", seed=0, strata="easy")],
+    )
+    source_counts = pool.stratum_counts()
+    manifest = Manifest(
+        generator_version="g",
+        seed_range=(0, 1),
+        stratum_counts=source_counts,
+        content_hash=content_hash(pool),
+    )
+    serialized = manifest.to_json()
+
+    source_counts["easy"] = 2
+
+    assert manifest.to_json() == serialized
+    assert manifest.matches_pool(pool) is True
+    with pytest.raises(TypeError):
+        manifest.stratum_counts["easy"] = 2  # ty: ignore[invalid-assignment]
+
+
 def test_manifest_round_trips_through_json(
     synthetic_instance: Callable[..., Instance],
 ) -> None:

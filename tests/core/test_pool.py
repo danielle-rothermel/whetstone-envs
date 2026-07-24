@@ -83,6 +83,27 @@ def test_split_allows_leaving_instances_unassigned(
     assert assigned == 3
 
 
+def test_split_redistributes_quota_across_full_strata_combinations(
+    synthetic_instance: Callable[..., Instance],
+) -> None:
+    alpha = [synthetic_instance(0, ("shared", "alpha"))]
+    beta = [synthetic_instance(1, ("shared", "beta"))]
+    gamma = [
+        synthetic_instance(index, ("shared", "gamma")) for index in range(2, 7)
+    ]
+
+    split = TaskPool([*alpha, *beta, *gamma]).split(4, 2, 1)
+
+    assert split.internal_eval == (
+        alpha[0],
+        beta[0],
+        gamma[0],
+        gamma[1],
+    )
+    assert split.official == (gamma[2], gamma[3])
+    assert split.held_out == (gamma[4],)
+
+
 def test_split_oversize_rejected(two_stratum_pool: TaskPool) -> None:
     with pytest.raises(ValueError, match="sum to"):
         two_stratum_pool.split(3, 3, 3)

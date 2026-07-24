@@ -9,6 +9,7 @@ leak from held-out into an eval the optimizer can see.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -114,13 +115,16 @@ class TaskPool:
         official_n: int,
         held_out_n: int,
     ) -> PoolSplit:
-        """Carve the pool into three disjoint contiguous subsets.
+        """Carve the pool into three disjoint stratified subsets.
 
-        The subsets are taken in pool order: the first
-        ``internal_eval_n`` instances, then ``official_n``, then
-        ``held_out_n``. Sizes are the per-spec proposed numbers, passed
-        in by the caller rather than hardcoded here. Their sum must not
-        exceed the pool size; the result asserts the three subsets are
+        Instances are grouped by their complete ``strata`` tuple, then
+        drawn round-robin in first-seen combination order. This makes
+        membership independent of whether generation order blocks or
+        interleaves the combinations, while preserving the original
+        order within each combination. Sizes are the per-spec proposed
+        numbers, passed in by the caller rather than hardcoded here.
+        Their sum must not exceed the pool size; any unused tail remains
+        unassigned, and the result asserts the three subsets are
         disjoint.
         """
         for name, size in (
@@ -139,13 +143,25 @@ class TaskPool:
             )
             raise ValueError(msg)
 
+        by_combination: dict[tuple[str, ...], deque[Instance]] = {}
+        for inst in self.instances:
+            by_combination.setdefault(inst.strata, deque()).append(inst)
+
+        active = deque(by_combination.values())
+        stratified: list[Instance] = []
+        while len(stratified) < total:
+            combination = active.popleft()
+            stratified.append(combination.popleft())
+            if combination:
+                active.append(combination)
+
         cut1 = internal_eval_n
         cut2 = cut1 + official_n
         cut3 = cut2 + held_out_n
         return PoolSplit(
-            internal_eval=self.instances[:cut1],
-            official=self.instances[cut1:cut2],
-            held_out=self.instances[cut2:cut3],
+            internal_eval=tuple(stratified[:cut1]),
+            official=tuple(stratified[cut1:cut2]),
+            held_out=tuple(stratified[cut2:cut3]),
         )
 
     def as_sequence(self) -> Sequence[Instance]:

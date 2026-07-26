@@ -2,10 +2,12 @@
 
 Produces a :class:`~whetstone_envs.core.pool.TaskPool` of stacked
 IFEval-constraint instances, deterministic given
-``(generator_version, seed_range)``. Each instance is a trivial base
-micro-task plus 3-5 composed constraints drawn from the atom pools in
-:mod:`whetstone_envs.c22.atoms`, honoring IFEval's
-``INSTRUCTION_CONFLICTS`` so no two stacked atoms contradict.
+``(generator_version, seed_range)``. Each instance combines
+answer-shaped ``base_task`` scaffolding with 3-5 composed constraints
+drawn from :mod:`whetstone_envs.c22.atoms`, honoring IFEval's
+``INSTRUCTION_CONFLICTS`` so no two stacked atoms contradict. The
+scaffolding is intentionally excluded from scoring: only the
+deterministic IFEval constraint stack is evaluated.
 
 Determinism discipline (spec Section 7, item 8 -- the shipped
 ``config.seed`` is a decoy):

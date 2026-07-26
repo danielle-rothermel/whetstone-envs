@@ -24,6 +24,8 @@ from whetstone_envs.c22.spec import ConstraintSpec
 def _single_atom_spec(
     instruction_id: str,
     kwargs: dict[str, object],
+    *,
+    base_task: str = "Answer the question.",
 ) -> ConstraintSpec:
     """A hand-built one-atom spec with its checker-canonical description."""
     instruction = instructions_registry.INSTRUCTION_DICT[instruction_id](
@@ -31,7 +33,7 @@ def _single_atom_spec(
     )
     description = instruction.build_description(**kwargs)
     return ConstraintSpec(
-        base_task="Answer the question.",
+        base_task=base_task,
         constraint_descriptions=(description,),
         instruction_id_list=(instruction_id,),
         kwargs_list=(kwargs,),
@@ -158,6 +160,17 @@ def test_score_gold_round_trips_through_json() -> None:
     gold = spec.to_gold()
     assert oracle.score_gold(gold, "here is zylthorn") == 1
     assert oracle.score_gold(gold, "not present") == 0
+
+
+def test_base_task_is_intentionally_not_scored() -> None:
+    spec = _single_atom_spec(
+        "punctuation:no_comma",
+        {},
+        base_task="Name a color.",
+    )
+    # "Paris" satisfies no-comma but not the requested color; C22
+    # intentionally scores only deterministic IFEval constraints.
+    assert oracle.score_gold(spec.to_gold(), "Paris") == 1
 
 
 def test_strict_all_pass_requires_every_atom() -> None:

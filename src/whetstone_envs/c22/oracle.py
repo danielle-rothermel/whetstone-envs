@@ -6,6 +6,10 @@ RNG or atom tables) and re-runs the vendored IFEval checkers, returning 1
 iff **every** constraint passes -- strict all-pass, no partial credit
 (rubric criteria 2 and 4).
 
+``ConstraintSpec.base_task`` is answer-shaped scaffolding and is
+intentionally excluded from deterministic IFEval-only scoring. C22 does
+not attempt semantic answer validation.
+
 The all-pass reduction reuses Google Research's
 ``evaluation_lib.test_instruction_following_strict``; this module only
 marshals a :class:`ConstraintSpec` into the ``InputExample`` that

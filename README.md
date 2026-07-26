@@ -42,7 +42,21 @@ One module per candidate, added as each baseline spec is implemented:
   example outputs are regenerated through `rfc8785.dumps`, never
   hand-typed.
 - `c18` — PrOntoQA deductive entailment
-- `c19` — Minigrid state prediction
+- `c19` — Minigrid grid-world state prediction —
+  [`whetstone_envs.c19`](src/whetstone_envs/c19)
+  ([generate](src/whetstone_envs/c19/generate.py) ·
+  [oracle](src/whetstone_envs/c19/oracle.py) ·
+  [prompts](src/whetstone_envs/c19/prompts.py) ·
+  [envs](src/whetstone_envs/c19/envs.py) ·
+  [tests](tests/c19)). Seeded generator over four stochastic-layout
+  Farama-Foundation [`minigrid`](https://github.com/Farama-Foundation/Minigrid)
+  (Apache-2.0) envs — a real runtime dependency: it instantiates seeded
+  envs, renders their ASCII grid, and walks the live object model for
+  ground truth. The oracle reproduces that derived-fact walk
+  independently from the public ASCII alone, and construction asserts
+  the two agree. Predicts one derived fact (coordinate, heading,
+  carrying-flag, or what-is-in-front) under vanilla Minigrid dynamics,
+  scored 0/1 exact match.
 - `c22` — stacked IFEval instruction-following constraints —
   [`whetstone_envs.c22`](src/whetstone_envs/c22)
   ([generate](src/whetstone_envs/c22/generate.py) ·

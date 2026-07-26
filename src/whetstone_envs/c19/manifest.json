@@ -1,0 +1,37 @@
+{
+  "content_hash": "15ac862980a9e99af99de8880aa974685b5e7bd51442e1155ac107bb99bc4e9d",
+  "generator_version": "c19-generate-1",
+  "schema_version": 1,
+  "seed_range": [
+    1000000,
+    1000390
+  ],
+  "stratum_counts": {
+    "Empty-Random|medium|coordinate": 15,
+    "Empty-Random|medium|front": 15,
+    "Empty-Random|medium|heading": 15,
+    "Empty-Random|small|coordinate": 15,
+    "Empty-Random|small|front": 15,
+    "Empty-Random|small|heading": 15,
+    "Fetch|medium|carrying": 15,
+    "Fetch|medium|coordinate": 15,
+    "Fetch|medium|front": 15,
+    "Fetch|medium|heading": 15,
+    "Fetch|small|carrying": 15,
+    "Fetch|small|coordinate": 15,
+    "Fetch|small|front": 15,
+    "Fetch|small|heading": 15,
+    "FourRooms|medium|coordinate": 15,
+    "FourRooms|medium|front": 15,
+    "FourRooms|medium|heading": 15,
+    "FourRooms|small|coordinate": 15,
+    "FourRooms|small|front": 15,
+    "FourRooms|small|heading": 15,
+    "SimpleCrossing|medium|coordinate": 15,
+    "SimpleCrossing|medium|front": 15,
+    "SimpleCrossing|medium|heading": 15,
+    "SimpleCrossing|small|coordinate": 15,
+    "SimpleCrossing|small|front": 15,
+    "SimpleCrossing|small|heading": 15
+  }
+}

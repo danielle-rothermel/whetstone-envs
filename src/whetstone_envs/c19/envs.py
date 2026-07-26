@@ -80,6 +80,9 @@ _FACT_APPLICABILITY: dict[str, frozenset[str]] = {
 
 def applicable_fact_types(env_id: str) -> tuple[str, ...]:
     """Return the fact types meaningful for ``env_id`` (spec Section 1)."""
+    if env_id not in ENV_IDS:
+        msg = f"unknown env id {env_id!r}"
+        raise ValueError(msg)
     return tuple(
         fact for fact in FACT_TYPES if env_id in _FACT_APPLICABILITY[fact]
     )

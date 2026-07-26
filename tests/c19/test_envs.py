@@ -75,3 +75,17 @@ def test_grid_ascii_is_the_initial_state_not_post_walk() -> None:
         roll.command,
         "coordinate",
     ) == roll.facts["coordinate"]
+
+
+def test_pprint_grid_uses_two_characters_for_every_cell() -> None:
+    for env_id in envs.ENV_IDS:
+        for size in envs.SIZE_LEVELS:
+            grid = envs.rollout(
+                env_id,
+                size,
+                _SEED,
+                command_length=0,
+            ).grid_ascii
+            rows = grid.splitlines()
+            assert all(len(row) == 2 * len(rows) for row in rows)
+            assert any("  " in row for row in rows)

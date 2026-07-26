@@ -138,9 +138,9 @@ ignore = ["PLR1711", "S101", "TRY003"]
 # deliberately for seed-pinned reproducibility, never cryptographically:
 # S311 (non-crypto RNG) does not apply.
 "src/whetstone_envs/c19/envs.py" = ["S311"]
-# The c19 ceiling probe body is copied verbatim from the baseline spec's
-# drafted text (Section 2.2); reflowing it to <=79 cols would break the
-# byte-for-byte render test, so E501 does not apply to that module.
+# The c19 ceiling probe is pinned by a stable render test against the
+# installed Minigrid glyph and action contract; reflowing its template
+# would break that render contract, so E501 does not apply to the module.
 "src/whetstone_envs/c19/prompts.py" = ["E501"]
 
 [tool.ruff.lint.flake8-type-checking]

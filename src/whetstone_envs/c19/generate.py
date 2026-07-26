@@ -175,6 +175,26 @@ def generate_pool(
     independently by :meth:`~whetstone_envs.core.pool.TaskPool.split`, which
     groups full strata combinations before drawing its disjoint subsets.
     """
+    if n_per_stratum <= 0:
+        msg = "n_per_stratum must be positive"
+        raise ValueError(msg)
+    if command_length < 0:
+        msg = "command_length must be non-negative"
+        raise ValueError(msg)
+
+    env_ids = tuple(dict.fromkeys(env_ids))
+    size_levels = tuple(dict.fromkeys(size_levels))
+    if not env_ids:
+        msg = "env_ids must not be empty"
+        raise ValueError(msg)
+    if not size_levels:
+        msg = "size_levels must not be empty"
+        raise ValueError(msg)
+    unknown_sizes = [size for size in size_levels if size not in SIZE_LEVELS]
+    if unknown_sizes:
+        msg = f"unknown size level(s): {unknown_sizes!r}"
+        raise ValueError(msg)
+
     stratum_specs: list[tuple[str, str, str]] = [
         (env_id, size, fact)
         for env_id in env_ids

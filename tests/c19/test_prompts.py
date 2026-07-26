@@ -1,11 +1,9 @@
-"""Probe-prompt checks for c19: byte-for-byte render + no gold leak.
+"""Probe-prompt checks for c19: stable rendering, semantics, no gold leak.
 
 The naive prompt is pinned byte-for-byte against a fixed hand-built
-fixture (checklist / PLAN "byte-for-byte render test against a fixed
-fixture"). The ceiling prompt is pinned by its exact spec-verbatim
-prefix, embedded fields, and question-line suffix. A static check asserts
-neither prompt ever contains the instance's gold answer (PLAN "static
-no-gold-leak check").
+fixture. The ceiling prompt is pinned by its prefix, runtime semantics,
+embedded fields, and question-line suffix. A static check asserts neither
+prompt ever contains the instance's gold answer.
 """
 
 from __future__ import annotations
@@ -55,18 +53,18 @@ def test_naive_render_is_byte_for_byte_fixed() -> None:
     assert prompts.render_naive(_FIXTURE) == _EXPECTED_NAIVE
 
 
-def test_ceiling_render_has_spec_verbatim_prefix_and_suffix() -> None:
+def test_ceiling_render_has_stable_prefix_and_suffix() -> None:
     rendered = prompts.render_ceiling(_FIXTURE)
     assert rendered.startswith(
         "You are simulating a robot on a 2D grid. Follow these rules EXACTLY.",
     )
-    # The exact move-semantics block from spec Section 2.2 is present.
+    # The move-semantics block is present.
     assert (
         "  - L = turn left 90 degrees in place (does not move): "
         "E->N->W->S->E.\n"
     ) in rendered
     assert (
-        "  - F = step ONE cell forward in the current facing direction."
+        "  - F = step ONE cell forward in the current facing direction"
         in rendered
     )
     # The public fields are substituted verbatim.
@@ -77,6 +75,23 @@ def test_ceiling_render_has_spec_verbatim_prefix_and_suffix() -> None:
         "QUESTION: What is the robot's final coordinate? Answer on the last "
         "line as: row,col",
     )
+
+
+def test_ceiling_describes_pprint_grid_glyphs_exactly() -> None:
+    rendered = prompts.render_ceiling(_FIXTURE)
+    assert 'two space characters "  " are an empty floor cell' in rendered
+    assert '"AR" = red ball' in rendered
+    assert '"BG" = green box' in rendered
+    assert '"BR"' not in rendered
+    assert 'doubled direction arrow: ">>" faces right' in rendered
+
+
+def test_ceiling_describes_runtime_action_semantics() -> None:
+    rendered = prompts.render_ceiling(_FIXTURE)
+    assert "solid object such as a key, ball," in rendered
+    assert "box, or closed door blocks movement" in rendered
+    assert "pick up a pickup-able key, ball, or box" in rendered
+    assert "object types in these\n    grids do not" in rendered
 
 
 def test_fact_line_variants_are_selected_by_fact_type() -> None:

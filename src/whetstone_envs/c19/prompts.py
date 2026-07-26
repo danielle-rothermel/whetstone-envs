@@ -1,12 +1,10 @@
-r"""The two c19 probe prompts, verbatim from the baseline spec (Section 2).
+r"""The two c19 probe prompts.
 
-Probe (a), the naive prompt, is copied byte-for-byte from spec Section
-2.1; probe (b), the ceiling prompt, from spec Section 2.2. Both are shown
-in the spec for the *final-coordinate* fact, with the fact-specific
-question/answer line varying per fact type (spec Section 2's "Fact-line
-variants" notes). This module encodes each prompt's fixed body plus the
-four fact-line variants, so the rendered prompt is the spec text with
-only the instance's public fields substituted:
+Probe (a), the naive prompt, follows spec Section 2.1. Probe (b), the
+ceiling prompt, makes the installed Minigrid glyph and action semantics
+explicit. Both use the fact-specific question/answer line for the requested
+fact type. This module encodes each prompt's fixed body plus the four
+fact-line variants, with only the instance's public fields substituted:
 
 * ``{GRID}`` -- the ``pprint_grid`` ASCII from ``prompt_inputs['grid']``.
 * ``{COMMAND}`` -- the vanilla command string from
@@ -34,7 +32,7 @@ if TYPE_CHECKING:
 # local so prompts has no import-time dependency on Minigrid).
 _FACT_TYPES: tuple[str, ...] = ("coordinate", "heading", "carrying", "front")
 
-# --- Naive probe (spec Section 2.1), byte-for-byte ------------------------
+# --- Naive probe (spec Section 2.1) ---------------------------------------
 # The fact-line is the final sentence; variants are from the Section 2.1
 # "Fact-line variants" note. {GRID} and {COMMAND} are the only slots.
 _NAIVE_HEAD = """Here is a grid and a sequence of moves for the robot.
@@ -62,21 +60,21 @@ _NAIVE_FACT_LINE: dict[str, str] = {
     ),
 }
 
-# --- Ceiling probe (spec Section 2.2), byte-for-byte ----------------------
+# --- Ceiling probe (spec Section 2.2) -------------------------------------
 # The fixed rule body down to (but not including) the QUESTION line, then
-# the QUESTION-line variants from the Section 2.2 "Fact-line variants" note.
+# the fact-specific QUESTION-line variants.
 _CEILING_HEAD = """You are simulating a robot on a 2D grid. Follow these rules EXACTLY.
 
 COORDINATES: cells are written (row, col). Row 0 is the TOP row; col 0 is the LEFTMOST
 column. Rows increase downward, columns increase rightward.
 
 GLYPHS in the grid below (two characters per cell):
-  - a period "." is an empty floor cell the robot may enter.
-  - "#" or "WG"/"WB" etc. (a wall glyph) is a wall; the robot CANNOT enter or pass through it.
-  - a two-letter object glyph (e.g. "KY" = yellow key, "BR" = red ball, "GG" = green goal)
-    is an object occupying that cell.
-  - the robot is shown by a direction arrow: ">" faces right (east), "<" faces left (west),
-    "^" faces up (north / toward row 0), "V" faces down (south).
+  - two space characters "  " are an empty floor cell the robot may enter.
+  - a wall glyph starts with "W" (e.g. "WG"); the robot CANNOT enter or pass through it.
+  - a two-letter tile or object glyph (e.g. "KY" = yellow key, "AR" = red ball,
+    "BG" = green box, "GG" = green goal) identifies the cell contents.
+  - the robot is shown by a doubled direction arrow: ">>" faces right (east),
+    "<<" faces left (west), "^^" faces up (north / toward row 0), "VV" faces down (south).
 
 HEADINGS: the robot has a facing direction, one of E (east/right), W (west/left),
 N (north/up), S (south/down).
@@ -84,13 +82,14 @@ N (north/up), S (south/down).
 MOVES (apply in order, left to right):
   - L = turn left 90 degrees in place (does not move): E->N->W->S->E.
   - R = turn right 90 degrees in place: E->S->W->N->E.
-  - F = step ONE cell forward in the current facing direction. If the cell directly ahead
-    is a wall or is off the edge of the grid, the robot does NOT move (it stays put); it does
-    not wrap around and does not pass through walls.
-  - P = pick up the object in the cell directly ahead, if any, and only if not already
-    carrying something; the robot then carries it.
+  - F = step ONE cell forward in the current facing direction if the cell ahead is empty
+    floor, a goal, or lava. A wall, the grid edge, or a solid object such as a key, ball,
+    box, or closed door blocks movement; the robot stays put and never wraps around.
+  - P = pick up a pickup-able key, ball, or box in the cell directly ahead, if any, and only
+    if not already carrying something; the robot then carries it.
   - D = drop the carried object into the cell directly ahead, if that cell is empty.
-  - T = toggle (open/close) the object directly ahead; does not change position or heading.
+  - T = toggle the object directly ahead if it supports toggling. The object types in these
+    grids do not, so T does not change the grid, position, heading, or carried object.
 
 Work step by step: track the robot's (row, col) position and its heading after EACH move,
 then report only the final answer.

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 _MANIFEST_PATH = Path(generate.__file__).with_name("manifest.json")
 
+
 def _fast_pool(
     *,
     n_per_stratum: int = 2,
@@ -153,6 +154,49 @@ def test_command_length_is_configurable() -> None:
     pool = _fast_pool(command_length=3)
     for inst in pool.instances:
         assert len(inst.prompt_inputs["command"]) == 3
+
+
+@pytest.mark.parametrize("n_per_stratum", [0, -1])
+def test_n_per_stratum_must_be_positive(n_per_stratum: int) -> None:
+    with pytest.raises(ValueError, match="n_per_stratum must be positive"):
+        _fast_pool(n_per_stratum=n_per_stratum)
+
+
+def test_command_length_must_be_non_negative() -> None:
+    with pytest.raises(
+        ValueError,
+        match="command_length must be non-negative",
+    ):
+        _fast_pool(command_length=-1)
+
+
+@pytest.mark.parametrize(
+    "env_ids",
+    [
+        ("Fecth",),
+        ("Fetch", "Fecth"),
+    ],
+)
+def test_unknown_env_id_is_rejected(env_ids: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError, match="unknown env id 'Fecth'"):
+        generate_pool(
+            n_per_stratum=1,
+            env_ids=env_ids,
+            size_levels=("small",),
+        )
+
+
+def test_duplicate_envs_and_sizes_are_deduplicated() -> None:
+    unique = generate_pool(
+        env_ids=("Fetch",),
+        size_levels=("small",),
+    )
+    duplicates = generate_pool(
+        env_ids=("Fetch", "Fetch"),
+        size_levels=("small", "small"),
+    )
+    assert content_hash(duplicates) == content_hash(unique)
+    assert sum(default_split_sizes(duplicates)) == len(duplicates)
 
 
 def test_carrying_is_fetch_only() -> None:

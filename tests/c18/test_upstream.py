@@ -57,6 +57,26 @@ def test_output_filename_reconstruction() -> None:
     assert (
         upstream._output_filename(1, UPSTREAM_DEFAULT_SEED) == "1hop.json"
     )
+    assert (
+        upstream._output_filename(2, 12345, "none", "true")
+        == "2hop_trueontology_nodistractor_seed12345.json"
+    )
+    assert (
+        upstream._output_filename(3, 67890, "none", "false")
+        == "3hop_falseontology_nodistractor_seed67890.json"
+    )
+
+
+def test_generate_raw_reads_true_ontology_output_filename() -> None:
+    rows = generate_raw(
+        hops=2,
+        seed=1_000_100_020,
+        num_trials=1,
+        ontology="true",
+        distractors="none",
+    )
+    assert len(rows) == 1
+    assert rows[0].hops == 2
 
 
 def test_vendored_tree_is_not_written_to() -> None:

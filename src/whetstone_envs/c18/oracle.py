@@ -191,6 +191,8 @@ def _parse(question: str, query: str) -> tuple[_Parsed, _Consequent]:
     for sentence in _split_sentences(question):
         fact_m = _FACT_RE.match(sentence)
         if fact_m is not None and fact_m.group("subj") in ENTITY_NAMES:
+            if fact_m.group("subj") != entity:
+                continue
             cons = _consequent_from_match(fact_m)
             if cons.is_kind:
                 parsed.kinds.add(cons.name)
@@ -267,29 +269,35 @@ def entailment_label(question: str, query: str) -> str:
 # clause. Matching the *whole* reply against the gold token scores every
 # such well-formed reply 0 (observed live: a CoT reply ending
 # "...not entailed.\n\nFalse" with gold "False" scored 0). This extractor
-# recovers the prescribed verdict token before the exact-match compare: it
-# takes the LAST standalone ``True``/``False`` word in the (already shared-
-# normalized) text -- the spec's final-line convention -- and canonicalizes
-# its case. Text containing no verdict token is returned unchanged, so a
-# genuinely unparseable reply still fails the exact match (scores 0) rather
-# than being coerced to a verdict.
-_VERDICT_RE = re.compile(r"\b(true|false)\b", re.IGNORECASE)
+# therefore accepts the two response shapes requested by the probes: an
+# exact verdict on the final non-empty line (ceiling) or a leading verdict
+# followed by a rationale (naive). It never scans rationale text for a
+# later boolean word that could overwrite the response's actual verdict.
+_VERDICT_RE = re.compile(r"(true|false)\b", re.IGNORECASE)
+_FINAL_VERDICT_RE = re.compile(r"(true|false)\.?", re.IGNORECASE)
 
 
 def extract_verdict(text: str) -> str:
     """Extract the final True/False verdict from a normalized reply.
 
-    Returns the canonical ``"True"`` / ``"False"`` for the last standalone
-    verdict token in ``text`` (the spec Section 2.2 final-line convention:
-    reasoning may precede it, and a naive reply may trail a rationale after
-    it, but the verdict is the last such token). Text with no verdict token
-    is returned unchanged so it still fails exact match rather than being
+    Returns the canonical ``"True"`` / ``"False"`` for a verdict-only final
+    non-empty line, optionally followed by one terminal period (the ceiling
+    response shape), or a verdict at the start of the reply followed by a
+    rationale (the naive response shape). Text matching neither protocol is
+    returned unchanged so it still fails exact match rather than being
     silently coerced to a label.
     """
-    matches = _VERDICT_RE.findall(text)
-    if not matches:
-        return text
-    return matches[-1].capitalize()
+    non_empty_lines = [
+        line.strip() for line in text.splitlines() if line.strip()
+    ]
+    if non_empty_lines:
+        final_match = _FINAL_VERDICT_RE.fullmatch(non_empty_lines[-1])
+        if final_match is not None:
+            return final_match.group(1).capitalize()
+    leading_match = _VERDICT_RE.match(text.lstrip())
+    if leading_match is not None:
+        return leading_match.group(1).capitalize()
+    return text
 
 
 def score(prediction: str, question: str, query: str) -> int:
@@ -298,8 +306,8 @@ def score(prediction: str, question: str, query: str) -> int:
     The model's ``prediction`` is passed through the shared
     :func:`whetstone_envs.core.probes.normalize` (strip surrounding
     whitespace / one code fence) and then :func:`extract_verdict` (the
-    spec Section 3 verdict extraction: recover the final True/False token
-    from a chain-of-thought or rationale-trailing reply) before a
+    spec Section 3 verdict extraction: recover the protocol verdict from
+    a chain-of-thought or rationale-trailing reply) before a
     case-insensitive exact-match compare against the freshly re-derived
     gold -- no partial credit (rubric criterion 2). A question/query the
     oracle cannot parse scores ``0`` rather than raising: a model response
@@ -319,10 +327,10 @@ def score_gold(prediction: str, gold: str) -> int:
     The pool-facing entry point mirroring the other candidates'
     ``score_gold``: given an instance's already-derived ``gold`` label and
     a model response, return 0 or 1. The prediction is shared-normalized
-    and then run through :func:`extract_verdict` (spec Section 3) so a
-    chain-of-thought or rationale-trailing reply is scored on its final
-    True/False verdict, not its whole text. Use :func:`score` instead to
-    re-derive straight from the public question + query.
+    and then run through :func:`extract_verdict` (spec Section 3) so the
+    protocol verdict in a chain-of-thought or rationale-trailing reply is
+    scored instead of its whole text. Use :func:`score` instead to re-derive
+    straight from the public question + query.
     """
     predicted = extract_verdict(normalize(prediction))
     return int(predicted.lower() == normalize(gold).lower())

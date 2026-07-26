@@ -175,6 +175,20 @@ def test_depths_are_configurable() -> None:
     assert set(pool.strata) == {"D1", "D3"}
 
 
+def test_duplicate_depths_are_rejected_before_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(
+        *_args: object,
+        **_kwargs: object,
+    ) -> list[Instance]:
+        raise AssertionError("generation must not start")
+
+    monkeypatch.setattr(generate, "_build_stratum", fail_if_called)
+    with pytest.raises(ValueError, match="distinct depth strata"):
+        generate_pool(n_per_stratum=2, depths=(1, 1))
+
+
 def test_instances_carry_only_public_fields() -> None:
     # prompt_inputs exposes only the question and query; the entailment
     # label is the separate oracle-checkable gold field.

@@ -230,6 +230,9 @@ def generate_pool(
     are ordered by deterministic depth-interleaving.
     """
     _assert_fixed_ontology(ontology)
+    if len(set(depths)) != len(depths):
+        msg = f"c18 requires distinct depth strata, got {tuple(depths)!r}"
+        raise ValueError(msg)
 
     consumed_seeds = [seed_start + i for i in range(len(depths))]
     _assert_fresh_seeds(consumed_seeds)
@@ -425,16 +428,49 @@ class Preset:
     def default_split_sizes(self, pool: TaskPool) -> tuple[int, int, int]:
         """Return ``(internal_eval_n, official_n, held_out_n)`` for ``pool``.
 
-        Scales the hard-variant per-stratum split (2 / 6 / 12) by the number
-        of depth strata. :meth:`~whetstone_envs.core.pool.TaskPool.split`
-        draws complete strata combinations round-robin, keeping each
-        disjoint slice depth-balanced.
+        Scales the hard-variant split proportions (2 / 6 / 12 at the
+        default N=20) to the pool's actual uniform per-stratum count, then
+        multiplies by the number of depth strata. This keeps an
+        ``n_per_stratum`` override partitionable and depth-balanced. C18
+        generated pools carry exactly one depth label per instance; this
+        method is not a general apportioner for multi-label pools.
         """
+        stratum_counts = pool.stratum_counts()
+        if not stratum_counts:
+            msg = "cannot derive preset split sizes from an empty pool"
+            raise ValueError(msg)
+        unique_counts = set(stratum_counts.values())
+        if len(unique_counts) != 1:
+            msg = (
+                "preset split sizing requires uniform stratum counts, got "
+                f"{stratum_counts!r}"
+            )
+            raise ValueError(msg)
+
+        n_per_stratum = unique_counts.pop()
+        hard_total = (
+            HARD_INTERNAL_EVAL_PER_STRATUM
+            + HARD_OFFICIAL_PER_STRATUM
+            + HARD_HELD_OUT_PER_STRATUM
+        )
+        internal_per_stratum = (
+            n_per_stratum * HARD_INTERNAL_EVAL_PER_STRATUM // hard_total
+        )
+        official_boundary = (
+            n_per_stratum
+            * (
+                HARD_INTERNAL_EVAL_PER_STRATUM
+                + HARD_OFFICIAL_PER_STRATUM
+            )
+            // hard_total
+        )
+        official_per_stratum = official_boundary - internal_per_stratum
+        held_out_per_stratum = n_per_stratum - official_boundary
         n_strata = len(pool.strata)
         return (
-            HARD_INTERNAL_EVAL_PER_STRATUM * n_strata,
-            HARD_OFFICIAL_PER_STRATUM * n_strata,
-            HARD_HELD_OUT_PER_STRATUM * n_strata,
+            internal_per_stratum * n_strata,
+            official_per_stratum * n_strata,
+            held_out_per_stratum * n_strata,
         )
 
 

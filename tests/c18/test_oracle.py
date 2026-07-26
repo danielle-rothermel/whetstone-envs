@@ -145,6 +145,17 @@ def test_negation_polarity_is_exact() -> None:
     )
 
 
+def test_facts_for_a_distractor_entity_do_not_apply_to_query_entity() -> None:
+    theory = (
+        "Rex is a numpus. Sam is a wumpus. Every wumpus is luminous. "
+        "Every numpus is wooden."
+    )
+    assert (
+        entailment_label(theory, "True or false: Rex is luminous.") == "False"
+    )
+    assert entailment_label(theory, "True or false: Rex is wooden.") == "True"
+
+
 def test_score_exact_match_and_normalization() -> None:
     q, query = _D1, "True or false: Sally is sour."
     assert score("True", q, query) == 1
@@ -192,6 +203,14 @@ def test_extract_verdict_cot_takes_final_line_token() -> None:
     assert extract_verdict(_LIVE_CEILING_COT) == "False"
 
 
+def test_extract_verdict_accepts_period_on_verdict_only_final_line() -> None:
+    prediction = (
+        "The premises mention True, but do not entail the query.\nFalse."
+    )
+    assert extract_verdict(prediction) == "False"
+    assert score_gold(prediction, "False") == 1
+
+
 def test_extract_verdict_naive_trailing_rationale() -> None:
     # A verdict followed by an appended rationale still resolves to the
     # verdict (the rationale here restates no verdict token).
@@ -199,6 +218,12 @@ def test_extract_verdict_naive_trailing_rationale() -> None:
     assert extract_verdict("False. It is not derivable from the rules.") == (
         "False"
     )
+
+
+def test_rationale_boolean_does_not_override_leading_verdict() -> None:
+    prediction = "True, because the statement is not false."
+    assert extract_verdict(prediction) == "True"
+    assert score_gold(prediction, "True") == 1
 
 
 def test_extract_verdict_no_token_returned_unchanged() -> None:

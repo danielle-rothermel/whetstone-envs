@@ -55,6 +55,18 @@ from whetstone_envs.core.pool import TaskPool
 _HARD_MANIFEST_PATH = Path(generate.__file__).with_name("manifest_hard.json")
 
 
+def _synthetic_hard_pool(n_per_stratum: int) -> TaskPool:
+    return TaskPool(
+        make_instance(
+            id=f"hard-d{depth}-{index}",
+            seed=HARD_SEED_START + depth,
+            strata=depth_label(depth),
+        )
+        for depth in HARD_DEPTHS
+        for index in range(n_per_stratum)
+    )
+
+
 # --- Preset identity: the hardest upstream configuration ------------------
 
 
@@ -144,6 +156,7 @@ def test_preset_generate_labels_strata_by_depth() -> None:
     )
     pool = shallow.generate(n_per_stratum=1)
     assert set(pool.strata) == {"D2"}
+    assert all(instance.strata == ("D2",) for instance in pool.instances)
 
 
 def test_hard_split_sizes_partition_each_stratum_exactly() -> None:
@@ -156,18 +169,31 @@ def test_hard_split_sizes_partition_each_stratum_exactly() -> None:
         == HARD_N_PER_STRATUM
     )
 
-    pool = TaskPool(
-        make_instance(
-            id=f"hard-d{depth}",
-            seed=HARD_SEED_START + index,
-            strata=depth_label(depth),
-        )
-        for index, depth in enumerate(HARD_DEPTHS)
-    )
+    pool = _synthetic_hard_pool(HARD_N_PER_STRATUM)
 
     ie, off, ho = HARD_PRESET.default_split_sizes(pool)
     assert (ie, off, ho) == (6, 18, 36)
     assert ie + off + ho == HARD_N_PER_STRATUM * 3
+
+
+def test_hard_split_sizes_scale_with_n_per_stratum_override() -> None:
+    pool = _synthetic_hard_pool(10)
+
+    ie, off, ho = HARD_PRESET.default_split_sizes(pool)
+
+    assert (ie, off, ho) == (3, 9, 18)
+    assert ie + off + ho == len(pool)
+    split = pool.split(ie, off, ho)
+    for subset, expected_per_stratum in (
+        (split.internal_eval, 1),
+        (split.official, 3),
+        (split.held_out, 6),
+    ):
+        counts = {
+            label: sum(label in instance.strata for instance in subset)
+            for label in pool.strata
+        }
+        assert set(counts.values()) == {expected_per_stratum}
 
 
 # --- Contamination / seed disjointness ------------------------------------

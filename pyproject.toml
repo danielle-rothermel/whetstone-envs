@@ -21,6 +21,7 @@ dependencies = [
     "absl-py>=2.5.0",
     "immutabledict>=4.3.1",
     "langdetect>=1.0.9",
+    "minigrid>=3.1.0",
     "nltk>=3.10.0",
     "pydantic>=2.13.4",
     "typer>=0.27.0",
@@ -106,6 +107,13 @@ ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PLR2004", "PLC0415"]
+# c19 tests build ASCII grid fixtures as newline-joined lists, which reads
+# far better than a single embedded-newline literal (FLY002 would collapse
+# them). E501/RUF001 cover the verbatim spec answer lines pinned by the
+# byte-for-byte render test.
+"tests/c19/test_oracle.py" = ["FLY002"]
+"tests/c19/test_prompts.py" = ["FLY002", "E501", "RUF001"]
+"tests/c19/test_scoring_integration.py" = ["FLY002"]
 # The c22 probe prompts are copied verbatim from the baseline spec's
 # drafted text (Section 2); reflowing them to <=79 cols would break the
 # byte-for-byte render test. E501 is the only line-length rule that
@@ -126,6 +134,14 @@ ignore = ["PLR1711", "S101", "TRY003"]
 # byte-for-byte render test, so E501 does not apply to the templates.
 "src/whetstone_envs/c11/prompts.py" = ["E501"]
 "tests/c11/test_prompts.py" = ["E501", "RUF001"]
+# The c19 live-rollout command sampler uses the stdlib ``random`` module
+# deliberately for seed-pinned reproducibility, never cryptographically:
+# S311 (non-crypto RNG) does not apply.
+"src/whetstone_envs/c19/envs.py" = ["S311"]
+# The c19 ceiling probe body is copied verbatim from the baseline spec's
+# drafted text (Section 2.2); reflowing it to <=79 cols would break the
+# byte-for-byte render test, so E501 does not apply to that module.
+"src/whetstone_envs/c19/prompts.py" = ["E501"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]

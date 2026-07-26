@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,11 +43,9 @@ from whetstone_envs.core.manifest import Manifest
 from whetstone_envs.core.pool import TaskPool
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from whetstone_envs.core.instance import Instance
 
-GENERATOR_VERSION = "c11-generate-1"
+GENERATOR_VERSION = "c11-generate-2"
 
 # --- Contamination bounds (rubric criterion 8) ----------------------------
 # c11's pool is synthetic and infinite; there is no published *seed* set to
@@ -159,16 +158,15 @@ def generate_pool(
     Parameters
     ----------
     n_per_stratum:
-        Instances per stratum (official + held-out combined). Default 80
-        = 40 official + 40 held-out (spec Section 1 / 7.3 proposed N per
-        stratum); owner-adjustable.
+        Positive integer number of instances per stratum. The default 82
+        comprises 2 internal-eval + 40 official + 40 held-out instances.
     strata:
-        The strata to populate, in order. Default is all five spec
-        Section 1 strata; a subset is permitted (spec Section 3 outcome
-        (b) biases toward S1/S2, dropping S3).
+        Nonempty sequence of distinct, known strata to populate, in order.
+        Default is all five spec Section 1 strata; a subset is permitted
+        (spec Section 3 outcome (b) biases toward S1/S2, dropping S3).
     seed_start:
-        First fresh seed. Seeds are consumed contiguously and asserted to
-        sit strictly above the reserved published range.
+        First fresh seed, as an integer strictly above the reserved
+        published range. Seeds are consumed contiguously.
 
     Deterministic given the arguments: each stratum consumes its own
     contiguous seed sub-range in order, skipping any seed whose
@@ -179,6 +177,47 @@ def generate_pool(
     :meth:`~whetstone_envs.core.pool.TaskPool.split`, which groups full
     strata combinations before drawing its disjoint subsets.
     """
+    if (
+        not isinstance(n_per_stratum, int)
+        or isinstance(n_per_stratum, bool)
+        or n_per_stratum <= 0
+    ):
+        msg = (
+            f"n_per_stratum must be a positive integer, got {n_per_stratum!r}"
+        )
+        raise ValueError(msg)
+    if (
+        isinstance(strata, (str, bytes))
+        or not isinstance(strata, Sequence)
+        or not strata
+    ):
+        msg = "strata must be a nonempty sequence of known stratum labels"
+        raise ValueError(msg)
+    unknown_strata = [
+        stratum
+        for stratum in strata
+        if not isinstance(stratum, str) or stratum not in BUILDERS
+    ]
+    if unknown_strata:
+        msg = f"unknown strata: {unknown_strata!r}"
+        raise ValueError(msg)
+    if len(set(strata)) != len(strata):
+        msg = (
+            f"duplicate strata in {list(strata)!r} -- each stratum may "
+            "appear at most once"
+        )
+        raise ValueError(msg)
+    if (
+        not isinstance(seed_start, int)
+        or isinstance(seed_start, bool)
+        or seed_start <= RESERVED_SEED_MAX
+    ):
+        msg = (
+            "seed_start must be an integer strictly above "
+            f"{RESERVED_SEED_MAX}, got {seed_start!r}"
+        )
+        raise ValueError(msg)
+
     per_stratum: list[list[Instance]] = []
     consumed_seeds: list[int] = []
     next_seed = seed_start
@@ -241,15 +280,17 @@ def default_split_sizes(
 def build_manifest(pool: TaskPool, seed_start: int) -> Manifest:
     """Derive the default-config :class:`Manifest` for ``pool``.
 
-    The seed range recorded is ``[seed_start, seed_start + len(pool))``.
-    Because some seeds are skipped by the adversarial predicate, the range
-    is an inclusive-of-consumed span, not a dense one; the content hash is
-    what pins reproducibility, and the range documents the fresh window.
+    The seed range records the full half-open window consumed by generation,
+    including candidates skipped by the adversarial predicate.
     """
+    seed_end = max(
+        (instance.seed for instance in pool.instances),
+        default=seed_start - 1,
+    )
     return Manifest.from_pool(
         pool,
         generator_version=GENERATOR_VERSION,
-        seed_range=(seed_start, seed_start + len(pool)),
+        seed_range=(seed_start, seed_end + 1),
     )
 
 

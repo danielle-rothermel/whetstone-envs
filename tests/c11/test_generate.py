@@ -7,6 +7,8 @@ own hand-built-fixture file (``test_oracle.py``), never here.
 
 from __future__ import annotations
 
+import json
+import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,10 +28,18 @@ from whetstone_envs.c11.generate import (
     default_split_sizes,
     generate_pool,
 )
-from whetstone_envs.c11.strata import STRATA
+from whetstone_envs.c11.strata import (
+    STRATA,
+    build_s2,
+    build_s3,
+    build_s4,
+    build_s5,
+)
 from whetstone_envs.core.manifest import Manifest, content_hash
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from whetstone_envs.core.instance import Instance
 
 _MANIFEST_PATH = Path(generate.__file__).with_name("manifest.json")
@@ -107,12 +117,90 @@ def test_n_per_stratum_is_configurable() -> None:
     assert set(pool.stratum_counts().values()) == {3}
 
 
+@pytest.mark.parametrize("n_per_stratum", [0, -1, True, 1.0])
+def test_n_per_stratum_must_be_a_positive_integer(
+    n_per_stratum: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="n_per_stratum must be a positive integer",
+    ):
+        generate_pool(
+            n_per_stratum=n_per_stratum,  # ty: ignore[invalid-argument-type]
+        )
+
+
 def test_strata_subset_is_configurable() -> None:
     # Spec Section 3 outcome (b): the owner may bias toward S1/S2 and drop
     # S3. A strata subset is a constructor arg.
     pool = generate_pool(n_per_stratum=4, strata=("S1_flat", "S2_keysort"))
     assert set(pool.strata) == {"S1_flat", "S2_keysort"}
     assert len(pool) == 8
+
+
+def test_strata_must_be_nonempty() -> None:
+    with pytest.raises(ValueError, match="strata must be a nonempty sequence"):
+        generate_pool(n_per_stratum=2, strata=())
+
+
+@pytest.mark.parametrize("strata", [42, {"S1_flat"}])
+def test_strata_must_be_an_ordered_sequence(strata: object) -> None:
+    with pytest.raises(ValueError, match="strata must be a nonempty sequence"):
+        generate_pool(
+            n_per_stratum=2,
+            strata=strata,  # ty: ignore[invalid-argument-type]
+        )
+
+
+def test_strata_must_contain_known_labels() -> None:
+    with pytest.raises(ValueError, match="unknown strata"):
+        generate_pool(
+            n_per_stratum=2,
+            strata=("S1_flat", "S9_unknown"),
+        )
+
+
+def test_duplicate_strata_are_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate strata"):
+        generate_pool(
+            n_per_stratum=2,
+            strata=("S1_flat", "S1_flat"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("builder", "seed"),
+    [(build_s2, 29), (build_s5, 3)],
+)
+def test_keysort_strata_guarantee_unsorted_outer_keys(
+    builder: Callable[[random.Random], str],
+    seed: int,
+) -> None:
+    messy = builder(random.Random(seed))  # noqa: S311 - seeded generator check
+    keys = list(json.loads(messy))
+    assert keys != sorted(keys)
+
+
+def test_number_stratum_guarantees_number_canonicalization_tension() -> None:
+    messy = build_s3(random.Random(1))  # noqa: S311 - seeded generator check
+    compact = json.dumps(json.loads(messy), separators=(",", ":"))
+    assert compact != oracle.canonicalize(messy)
+
+
+def test_unicode_stratum_guarantees_escape_policy_tension() -> None:
+    messy = build_s4(random.Random(1))  # noqa: S311 - seeded generator check
+    parsed = json.loads(messy)
+    compact_with_input_escapes = json.dumps(
+        parsed,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    assert messy == json.dumps(
+        parsed,
+        separators=(", ", ": "),
+        ensure_ascii=True,
+    )
+    assert compact_with_input_escapes != oracle.canonicalize(messy)
 
 
 def test_every_instance_is_adversarial_and_oracle_consistent() -> None:
@@ -143,11 +231,43 @@ def test_contamination_guard_seeds_are_above_reserved_range() -> None:
         assert inst.seed > RESERVED_SEED_MAX
 
 
-def test_contamination_guard_rejects_a_reserved_seed_range() -> None:
-    # Pointing the generator into the reserved range must fire the
-    # assertion at construction rather than silently proceed.
-    with pytest.raises(AssertionError, match="contamination guard"):
-        generate_pool(n_per_stratum=1, seed_start=1)
+@pytest.mark.parametrize("seed_start", [RESERVED_SEED_MAX, True, 1.0])
+def test_seed_start_must_be_a_fresh_integer(seed_start: object) -> None:
+    # Invalid seed configuration is rejected before candidate construction.
+    with pytest.raises(
+        ValueError,
+        match="seed_start must be an integer strictly above",
+    ):
+        generate_pool(
+            n_per_stratum=1,
+            seed_start=seed_start,  # ty: ignore[invalid-argument-type]
+        )
+
+
+def test_invalid_configuration_fails_before_builder_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(stratum: str, seed: int) -> Instance | None:
+        raise AssertionError(f"unexpected builder call for {stratum=} {seed=}")
+
+    monkeypatch.setattr(generate, "_build_one", fail_if_called)
+    invalid_calls: tuple[Callable[[], object], ...] = (
+        lambda: generate_pool(n_per_stratum=True),
+        lambda: generate_pool(strata=()),
+        lambda: generate_pool(
+            strata=42,  # ty: ignore[invalid-argument-type]
+        ),
+        lambda: generate_pool(
+            strata={"S1_flat"},  # ty: ignore[invalid-argument-type]
+        ),
+        lambda: generate_pool(strata=("S9_unknown",)),
+        lambda: generate_pool(strata=("S1_flat", "S1_flat")),
+        lambda: generate_pool(seed_start=RESERVED_SEED_MAX),
+        lambda: generate_pool(seed_start=True),
+    )
+    for invalid_call in invalid_calls:
+        with pytest.raises(ValueError, match=r"must be|unknown|duplicate"):
+            invalid_call()
 
 
 def test_no_generated_gold_reproduces_a_published_vector() -> None:
@@ -194,3 +314,26 @@ def test_manifest_seed_range_spans_the_pool() -> None:
     start, end = manifest.seed_range
     assert start == DEFAULT_SEED_START
     assert end == DEFAULT_SEED_START + len(pool)
+
+
+def test_manifest_seed_range_includes_rejected_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_build_one = generate._build_one
+
+    def skip_first_seed(stratum: str, seed: int) -> Instance | None:
+        if seed == DEFAULT_SEED_START:
+            return None
+        return real_build_one(stratum, seed)
+
+    monkeypatch.setattr(generate, "_build_one", skip_first_seed)
+    pool = generate_pool(
+        n_per_stratum=1,
+        strata=("S1_flat",),
+        seed_start=DEFAULT_SEED_START,
+    )
+    manifest = build_manifest(pool, DEFAULT_SEED_START)
+    assert manifest.seed_range == (
+        DEFAULT_SEED_START,
+        DEFAULT_SEED_START + 2,
+    )

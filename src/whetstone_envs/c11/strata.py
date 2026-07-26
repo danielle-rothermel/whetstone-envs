@@ -73,32 +73,36 @@ _ASCII_WORDS: tuple[str, ...] = (
     "slate",
 )
 # Strings that force escaping or non-ASCII handling (S4). Each contains a
-# character rfc8785 must escape (control char, quote, backslash) or emit
-# as literal UTF-8 (non-ASCII) -- so the canonical form differs from a
-# naive re-quote.
+# non-ASCII character that the messy serializer escapes but rfc8785 emits
+# as literal UTF-8. Some also cover exact escaping of controls, quotes, and
+# backslashes.
 _ESCAPE_STRINGS: tuple[str, ...] = (
-    'quote " inside',
-    "back\\slash",
-    "tab\tsep",
-    "new\nline",
-    "carriage\rreturn",
-    "ctrl\x01char",
+    'quote " inside-é',
+    "back\\slash-π",
+    "tab\tsep-ü",
+    "new\nline-雪",
+    "carriage\rreturn-é",
+    "ctrl\x01char-λ",
     "unicode-é-accent",
     "emoji-\U0001f600-astral",
     "mix\tü\\end",
 )
 
 
-def _messy_dumps(obj: object) -> str:
+def _messy_dumps(obj: object, *, escape_non_ascii: bool = False) -> str:
     """Serialize ``obj`` to a deliberately non-canonical JSON string.
 
     Uses padded separators so the result always carries insignificant
     whitespace -- guaranteeing it differs from the zero-whitespace
-    canonical form. ``ensure_ascii=False`` keeps non-ASCII characters as
-    literal UTF-8 in the input, mirroring how a real messy document would
-    carry them.
+    canonical form. S4/S5 additionally escape non-ASCII characters in the
+    input so their escape policy genuinely differs from JCS's literal
+    UTF-8 output.
     """
-    return json.dumps(obj, separators=_MESSY_SEPARATORS, ensure_ascii=False)
+    return json.dumps(
+        obj,
+        separators=_MESSY_SEPARATORS,
+        ensure_ascii=escape_non_ascii,
+    )
 
 
 def _unsorted_object(rng: random.Random, keys: list[str]) -> str:
@@ -110,6 +114,8 @@ def _unsorted_object(rng: random.Random, keys: list[str]) -> str:
     """
     ordered = list(keys)
     rng.shuffle(ordered)
+    if ordered == sorted(ordered):
+        ordered[0], ordered[1] = ordered[1], ordered[0]
     pairs = {k: rng.choice(_ASCII_WORDS) for k in ordered}
     # dict preserves insertion order; re-key in the shuffled order.
     obj = {k: pairs[k] for k in ordered}
@@ -154,9 +160,6 @@ def build_s3(rng: random.Random) -> str:
         -0.0,
         1e2,
         1.5e10,
-        0.5,
-        2.50,
-        rng.randint(1, 9_007_199_254_740_991),
     )
     for k in keys:
         obj[k] = rng.choice(menu)
@@ -167,7 +170,7 @@ def build_s4(rng: random.Random) -> str:
     """S4 unicode/escaping: strings needing exact JCS escape policy."""
     keys = sorted(rng.sample(_ASCII_KEYS, rng.randint(2, 4)))
     obj = {k: rng.choice(_ESCAPE_STRINGS) for k in keys}
-    return _messy_dumps(obj)
+    return _messy_dumps(obj, escape_non_ascii=True)
 
 
 def build_s5(rng: random.Random) -> str:
@@ -184,9 +187,15 @@ def build_s5(rng: random.Random) -> str:
         outer_keys[2]: nested,
     }
     # Re-emit with a deliberately non-sorted outer order.
-    shuffled = list(obj.items())
-    rng.shuffle(shuffled)
-    return _messy_dumps(dict(shuffled))
+    shuffled_keys = list(obj)
+    rng.shuffle(shuffled_keys)
+    if shuffled_keys == sorted(shuffled_keys):
+        shuffled_keys[0], shuffled_keys[1] = (
+            shuffled_keys[1],
+            shuffled_keys[0],
+        )
+    shuffled = {key: obj[key] for key in shuffled_keys}
+    return _messy_dumps(shuffled, escape_non_ascii=True)
 
 
 BUILDERS: dict[str, Callable[[random.Random], str]] = {

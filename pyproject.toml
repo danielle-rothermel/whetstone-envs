@@ -128,6 +128,17 @@ ignore = ["PLR1711", "S101", "TRY003"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
+# The c23 probe prompts are copied verbatim from the baseline spec's drafted
+# text (Section 2); reflowing them to <=79 cols would break the byte-for-byte
+# render test. RUF001 covers the spec's own U+2014 em dashes.
+"src/whetstone_envs/c23/prompts.py" = ["E501", "RUF001"]
+"tests/c23/test_prompts.py" = ["E501", "RUF001"]
+# The c23 boundary + generator expose every owner-open generation knob as a
+# keyword-only argument (config surface); the arg count is intentional. The
+# boundary's query/demo draw uses the stdlib ``random`` deliberately for
+# seed-pinned reproducibility, never cryptographically (S311).
+"src/whetstone_envs/c23/upstream.py" = ["PLR0913", "S311"]
+"src/whetstone_envs/c23/generate.py" = ["PLR0913"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]

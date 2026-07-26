@@ -60,7 +60,7 @@ def generate_ISL_rules(args):
         number_of_rules = args.number_of_rules - len(all_k_strings)
         new_rules = one_batch_generating_rules(args, number_of_rules, all_k_strings)
         all_k_strings += new_rules
-        all_k_strings = list(set(all_k_strings))
+        all_k_strings = sorted(set(all_k_strings))  # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream line 53)
 
     # if all k strings are not of length k
     # add random characters to make one of them to be of length k
@@ -68,7 +68,7 @@ def generate_ISL_rules(args):
         all_k_strings[-1] = ''.join([random.choice(config.vocab) for _ in range(args.k - len(all_k_strings[-1]))]) + all_k_strings[-1] 
 
     for k_string in all_k_strings:
-        possible_output = list(set(config.vocab).difference([k_string[-1]])) + [''] # allow deletion
+        possible_output = sorted(set(config.vocab).difference([k_string[-1]])) + [''] # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream line 61); allow deletion
         rules[k_string] = random.choice(possible_output)
 
     # check minimal length of rules
@@ -114,7 +114,7 @@ def generate_OSL_rules(args):
 
     # generate first rule
     new_rule = one_batch_generating_rules(args, 1)[0]
-    possible_output = list(set(config.vocab).difference([new_rule[-1]])) + [''] # allow deletion
+    possible_output = sorted(set(config.vocab).difference([new_rule[-1]])) + [''] # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream lines 107/132); allow deletion
     output = random.choice(possible_output)
 
     # guarantee that at least one rule will be of length k
@@ -139,7 +139,7 @@ def generate_OSL_rules(args):
         if is_suffix:
             continue
 
-        possible_output = list(set(config.vocab).difference([new_rule[-1]])) + [''] # allow deletion
+        possible_output = sorted(set(config.vocab).difference([new_rule[-1]])) + [''] # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream lines 107/132); allow deletion
         output = random.choice(possible_output)
 
         # without suffix check
@@ -230,7 +230,7 @@ def generate_OSL_characteristic_sample(args, rules):
             one_sample_inputs = generate_all_k_strings(config.vocab, k)
             all_possible_suffix += one_sample_inputs
 
-        all_suffix = list(set(list(sample.values())))
+        all_suffix = sorted(set(list(sample.values())))  # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream line 208)
         if set(all_suffix) == set(all_possible_suffix):
             return True
         else:
@@ -266,7 +266,7 @@ def generate_OSL_characteristic_sample(args, rules):
     # if it does not include all possible suffix, keep adding until we can't add anymore
     while not condition_satisfied(sample) or trial_number < args.k:
         k = args.k + trial_number
-        one_sample_inputs = list(set(generate_all_k_strings(config.vocab, k)).difference(set(generate_all_k_strings(config.vocab, k-1))))
+        one_sample_inputs = sorted(set(generate_all_k_strings(config.vocab, k)).difference(set(generate_all_k_strings(config.vocab, k-1))))  # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream line 244)
         for input in one_sample_inputs:
             output = apply_rule(args, rules, input)
             # if same output, do not add as we don't need repetitive output suffix

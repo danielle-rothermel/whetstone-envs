@@ -66,8 +66,8 @@ PUBLISHED_SEEDS: frozenset[int] = frozenset({0, 1, 2, 3, 42, 1337})
 # --- Strata design (spec Section 1) ---------------------------------------
 # N per stratum = 15 (spec Section 1, resolvability arithmetic). Split into
 # an internal-eval slice (>=2/stratum, criterion 5), an official slice, and
-# a held-out slice; the three are disjoint by contiguous interleaved layout
-# (see generate_pool). 3 + 6 + 6 = 15.
+# a held-out slice. TaskPool.split groups complete strata combinations before
+# drawing its disjoint subsets. 3 + 6 + 6 = 15.
 DEFAULT_INTERNAL_EVAL_PER_STRATUM = 3
 DEFAULT_OFFICIAL_PER_STRATUM = 6
 DEFAULT_HELD_OUT_PER_STRATUM = 6
@@ -171,9 +171,9 @@ def generate_pool(
     seed sub-range in a fixed env/size/fact order, and each instance's
     grid and command are pure functions of its seed (Minigrid threads the
     seed through ``reset``; the command RNG is seeded identically). The
-    strata are then interleaved round-robin so a contiguous
-    :meth:`~whetstone_envs.core.pool.TaskPool.split` slice is
-    stratum-balanced.
+    strata are then interleaved round-robin. Role stratification is handled
+    independently by :meth:`~whetstone_envs.core.pool.TaskPool.split`, which
+    groups full strata combinations before drawing its disjoint subsets.
     """
     stratum_specs: list[tuple[str, str, str]] = [
         (env_id, size, fact)
@@ -223,9 +223,10 @@ def default_split_sizes(
 
     Scales the per-stratum split sizes (spec Section 1: internal-eval
     >=2/stratum kept at 3, then 6 official, 6 held-out) by the number of
-    strata present. The interleaved layout makes each contiguous front
-    slice of ``k * n_strata`` instances exactly ``k`` per stratum, so all
-    three disjoint slices are stratum-balanced.
+    strata present. :meth:`~whetstone_envs.core.pool.TaskPool.split`
+    groups complete strata combinations and draws them round-robin, so these
+    role sizes yield disjoint, stratum-balanced internal-eval, official, and
+    held-out subsets: 3/stratum, 6/stratum, and 6/stratum respectively.
     """
     n_strata = len(pool.strata)
     return (

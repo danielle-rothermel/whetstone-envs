@@ -27,15 +27,17 @@ def test_oracle_scores_feed_the_aggregation_ladder() -> None:
         scored("task-b", 0, oracle.score("9,9", _GRID, _CMD, "coordinate")),
         scored("task-b", 1, oracle.score("9,9", _GRID, _CMD, "coordinate")),
         scored("task-c", 0, oracle.score("E", _GRID, _CMD, "heading")),
+        scored("task-c", 1, oracle.score("E", _GRID, _CMD, "heading")),
         scored("task-d", 0, oracle.score("garbage", _GRID, _CMD, "heading")),
+        scored("task-d", 1, oracle.score("garbage", _GRID, _CMD, "heading")),
     ]
     task_strata = {
-        "task-a": "Empty|coordinate",
-        "task-b": "Empty|coordinate",
-        "task-c": "Empty|heading",
-        "task-d": "Empty|heading",
+        "task-a": ("Empty|coordinate",),
+        "task-b": ("Empty|coordinate",),
+        "task-c": ("Empty|heading",),
+        "task-d": ("Empty|heading",),
     }
-    root = aggregate(observations, task_strata)
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0, 1))
     # coordinate: mean(1, 0) = 0.5 ; heading: mean(1, 0) = 0.5 ; overall 0.5
     assert root.complete
     assert root.mean == 0.5
@@ -47,8 +49,11 @@ def test_failed_observation_makes_aggregate_visibly_incomplete() -> None:
         scored("task-a", 0, oracle.score(_GOLD, _GRID, _CMD, "coordinate")),
         failed("task-b", 0),
     ]
-    task_strata = {"task-a": "Empty|coordinate", "task-b": "Empty|coordinate"}
-    root = aggregate(observations, task_strata)
+    task_strata = {
+        "task-a": ("Empty|coordinate",),
+        "task-b": ("Empty|coordinate",),
+    }
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0,))
     # rubric 13: a failed observation must not silently score zero.
     assert root.mean is None
     assert not root.complete

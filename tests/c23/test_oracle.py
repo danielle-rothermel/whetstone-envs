@@ -122,6 +122,71 @@ def test_score_gold_normalizes_both_sides() -> None:
     assert oracle.score_gold("acb", "acd") == 0
 
 
+# --- Output-line extraction (spec Section 2 decision rule) ---------------
+# The ceiling probe (spec Section 2.2) instructs the model to emit "the
+# transformed string, on a single line prefixed with 'Output:'". The scorer
+# previously exact-matched the WHOLE reply, so every Output:-prefixed reply
+# scored 0 (live: ceiling 0/30). These fixtures pin the prescribed
+# extraction -- the text after the LAST Output: line -- across the real live
+# shapes: Output:-prefixed, bare string (naive), and a multi-Output reply.
+def test_extract_output_prefixed_line() -> None:
+    assert oracle.extract_output("Output: acd") == "acd"
+    # Case-insensitive prefix; the whitespace between the colon and the
+    # answer is consumed (the spec strips surrounding whitespace anyway).
+    assert oracle.extract_output("OUTPUT:   acd") == "acd"
+
+
+def test_extract_output_bare_string_has_no_prefix() -> None:
+    # Naive-probe bare emission: no Output: line -> whole text unchanged.
+    assert oracle.extract_output("acd") == "acd"
+    assert oracle.extract_output("VEZ vez fam qor") == "VEZ vez fam qor"
+
+
+def test_extract_output_takes_the_last_of_several() -> None:
+    # A reply that reasons aloud and emits several Output: lines: the LAST
+    # is the answer.
+    reply = "Output: abc\nOn reflection the rule duplicates.\nOutput: acd"
+    assert oracle.extract_output(reply) == "acd"
+
+
+def test_extract_output_preserves_internal_spaces() -> None:
+    # The transformed string may contain spaces (space-separated tokens);
+    # extraction must not split or collapse them.
+    reply = "Output: VEZ vez fam qor"
+    assert oracle.extract_output(reply) == "VEZ vez fam qor"
+
+
+def test_score_gold_extracts_output_prefixed_reply() -> None:
+    # The regression: an Output:-prefixed ceiling reply now scores 1.
+    assert oracle.score_gold("Output: acd", "acd") == 1
+    assert oracle.score_gold("Output: acb", "acd") == 0
+
+
+def test_score_gold_multi_output_scores_on_last() -> None:
+    reply = "Output: abc\nActually, reconsidering:\nOutput: acd"
+    assert oracle.score_gold(reply, "acd") == 1
+    assert oracle.score_gold(reply, "abc") == 0
+
+
+def test_score_gold_bare_naive_emission_still_scores() -> None:
+    # No Output: line (naive bare emission) -> whole reply compared.
+    assert oracle.score_gold("acd", "acd") == 1
+
+
+def test_score_gold_fenced_output_prefixed_reply() -> None:
+    # An Output: line whose string is code-fenced on the same shape the
+    # shared normalize handles: extraction yields the token, normalize
+    # strips a wrapping fence around a bare emission.
+    assert oracle.score_gold("Output: `acd`", "`acd`") == 1
+    assert oracle.score_gold("```\nacd\n```", "acd") == 1
+
+
+def test_score_gold_space_separated_output_matches() -> None:
+    gold = "VEZ vez fam qor"
+    assert oracle.score_gold("Output: VEZ vez fam qor", gold) == 1
+    assert oracle.score_gold("Output: vez fam qor", gold) == 0
+
+
 def test_oracle_reuses_the_vendored_transducers_unmodified() -> None:
     # The oracle must call the vendored apply_*_rule functions, not a
     # reimplementation. Assert the boundary dispatches to the exact vendored

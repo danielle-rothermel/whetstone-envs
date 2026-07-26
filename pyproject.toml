@@ -55,6 +55,14 @@ required-version = "==0.11.25"
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/whetstone_envs"]
+artifacts = [
+    "src/whetstone_envs/c23/_vendor/inductionbench/LICENSE",
+    "src/whetstone_envs/c23/_vendor/inductionbench/PROVENANCE.md",
+    "src/whetstone_envs/c23/_vendor/inductionbench/VENDORED_DIFF.patch",
+]
+
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
@@ -65,7 +73,12 @@ venv = ".venv"
 
 [tool.ruff]
 include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
-extend-exclude = ["src/whetstone_envs/c22/_vendor/**"]
+# Vendored snapshots retain upstream formatting and are covered by their
+# provenance records and regression suites instead of first-party lint.
+extend-exclude = [
+    "src/whetstone_envs/c22/_vendor/**",
+    "src/whetstone_envs/c23/_vendor/**",
+]
 line-length = 79
 
 [tool.ruff.lint]
@@ -121,4 +134,14 @@ runtime-evaluated-decorators = ["dataclasses.dataclass"]
 
 [tool.ty.src]
 include = ["scripts", "src", "tests"]
-exclude = ["src/whetstone_envs/c22/_vendor/**"]
+# Vendored snapshots retain upstream annotations and are checked through
+# their regression suites instead of the first-party type checker.
+exclude = [
+    "src/whetstone_envs/c22/_vendor/**",
+    "src/whetstone_envs/c23/_vendor/**",
+]
+
+[tool.ty.environment]
+extra-paths = [
+    "src/whetstone_envs/c23/_vendor/inductionbench",
+]

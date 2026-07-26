@@ -2,10 +2,20 @@ import argparse
 import random, json
 import time
 import config
-from tqdm import tqdm
 import sys
-sys.path.append('..')
-from utils import generate_all_k_strings, translate_input_output_pairs, translate_fewshot_input_output_pairs
+# PATCH (c23 vendor, patch 2/4): dropped the broken import, the sys.path
+# hack, and the tqdm dependency. Upstream imported
+# `translate_fewshot_input_output_pairs` on this line, a function that does
+# NOT exist in utils.py -> ImportError at import time as cloned. It is used
+# only by generate_few_shot_data, which is off our path, so it is removed
+# from the import. Also removed `from tqdm import tqdm` (a hard import-time
+# dependency, used only by a progress bar over the off-path generate_data
+# loop) and the `sys.path.append('..')` line (upstream line 7): the c23
+# package puts this directory on sys.path so the bare `import config` /
+# `from utils import ...` resolve against the vendored copy without the
+# fragile relative append. `import sys` is kept (above) because the two
+# sys.exit('Cannot generate enough rules') guards below still use it.
+from utils import generate_all_k_strings, translate_input_output_pairs
 
 # ISL function: input-strictly-local-k function
 # rule 1: input abb --> output aba: b is changed to an a if the previous two characters are ab
@@ -402,7 +412,9 @@ def synthetic_data_parser():
 
 def generate_data(args, rules):
     datapoints = []
-    for i in tqdm(range(args.num_of_datapoints), desc='Generating data'):
+    # PATCH (c23 vendor, patch 2/4): tqdm progress-bar wrapper removed
+    # (tqdm import dropped above); iterate range directly.
+    for i in range(args.num_of_datapoints):
         # Generate rules
         rules_i = rules[i]
         # Generate sample dataset

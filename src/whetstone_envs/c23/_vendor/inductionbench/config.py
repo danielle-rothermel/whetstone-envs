@@ -1,14 +1,11 @@
 """Config stub for the vendored InductionBench generator.
 
 **Patch note (added by this vendor; not present upstream).** The upstream
-``standard_benchmark/synthetic_data_generation.py`` does ``import config``
-(upstream line 4) and reads ``config.vocab`` throughout, but the upstream
-repository ships **no** ``config.py`` -- ``import config`` raises
-``ModuleNotFoundError`` as cloned (repos review red flag: "Missing
-``config`` module"). Upstream relied on ``config`` existing purely as a
-namespace object to hang a module-global ``config.vocab`` list on, mutated
-once per run in ``inference.py`` / ``standard_run.py`` (neither of which we
-vendor).
+``standard_benchmark/synthetic_data_generation.py`` reads
+``config.vocab`` throughout, but the upstream repository ships no
+``config.py``. Its bare import therefore raises ``ModuleNotFoundError`` as
+cloned. This vendored copy imports the stub package-relative, keeping the
+generic top-level name unclaimed.
 
 This stub restores exactly that namespace so the vendored generator
 imports. ``vocab`` starts empty; the c23 boundary

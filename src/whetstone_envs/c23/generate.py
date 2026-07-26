@@ -38,9 +38,11 @@ constraints (rubric criterion 8) as checks, not comments:
 
 from __future__ import annotations
 
-import argparse
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
+
+import typer
 
 from whetstone_envs.c23 import oracle, prompts, upstream
 from whetstone_envs.core.instance import make_instance
@@ -48,11 +50,9 @@ from whetstone_envs.core.manifest import Manifest
 from whetstone_envs.core.pool import TaskPool
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from whetstone_envs.core.instance import Instance
 
-GENERATOR_VERSION = "c23-generate-1"
+GENERATOR_VERSION = "c23-generate-2"
 
 # --- Fixed constraints (spec "Fixed constraints") -------------------------
 # Single-rule instances only; vocab held small and fixed at |Sigma|=4.
@@ -63,6 +63,7 @@ FIXED_VOCAB_SIZE = 4
 # (label, rule_type, k). k is the primary axis; type is secondary; vocab is
 # fixed. The k ladder stops at 3 (S4) so the hardest stratum stays reachable.
 Stratum = tuple[str, str, int]
+STRATUM_FIELD_COUNT = 3
 DEFAULT_STRATA: tuple[Stratum, ...] = (
     ("S1", upstream.ISL, 2),
     ("S2", upstream.L_OSL, 2),
@@ -108,6 +109,7 @@ DEFAULT_HELD_OUT_PER_STRATUM = 20
 
 def _assert_single_rule(number_of_rules: int) -> None:
     """Assert the single-rule fixed constraint (spec Fixed constraints)."""
+    _require_int("number_of_rules", number_of_rules)
     if number_of_rules != FIXED_NUMBER_OF_RULES:
         msg = (
             f"c23 baseline is single-rule only (number_of_rules="
@@ -139,6 +141,54 @@ def _assert_fresh_seeds(seeds: Sequence[int]) -> None:
                 f"(rubric criterion 8)"
             )
             raise AssertionError(msg)
+
+
+def _require_int(name: str, value: int) -> int:
+    """Return a strict integer, rejecting booleans and numeric lookalikes."""
+    if type(value) is not int:
+        msg = f"{name} must be an integer, got {type(value).__name__}"
+        raise TypeError(msg)
+    return value
+
+
+def _validate_strata(
+    strata: Sequence[Stratum],
+) -> tuple[Stratum, ...]:
+    """Validate and freeze the public stratum configuration sequence."""
+    if isinstance(strata, (str, bytes)) or not isinstance(strata, Sequence):
+        msg = "strata must be a non-string sequence"
+        raise TypeError(msg)
+    if not strata:
+        msg = "strata must contain at least one configuration"
+        raise ValueError(msg)
+
+    validated: list[Stratum] = []
+    for index, stratum in enumerate(strata):
+        if isinstance(stratum, (str, bytes)) or not isinstance(
+            stratum,
+            Sequence,
+        ):
+            msg = f"strata[{index}] must be a sequence"
+            raise TypeError(msg)
+        if len(stratum) != STRATUM_FIELD_COUNT:
+            msg = (
+                f"strata[{index}] must be a three-item "
+                "(label, rule_type, k) sequence"
+            )
+            raise ValueError(msg)
+        label, rule_type, k = stratum
+        if type(label) is not str:
+            msg = f"strata[{index}] label must be a string"
+            raise TypeError(msg)
+        if not label:
+            msg = f"strata[{index}] label must be a non-empty string"
+            raise ValueError(msg)
+        if type(rule_type) is not str:
+            msg = f"strata[{index}] rule_type must be a string"
+            raise TypeError(msg)
+        _require_int(f"strata[{index}] k", k)
+        validated.append((label, rule_type, k))
+    return tuple(validated)
 
 
 def _build_stratum(
@@ -237,21 +287,63 @@ def generate_pool(
 
     Deterministic given the arguments: each stratum consumes one fixed seed
     and the vendored generator is byte-reproducible under a fixed seed after
-    the four vendor patches (the ``sorted(...)`` determinism fix), verified
+    its determinism fixes, verified
     across runs under a randomized ``PYTHONHASHSEED``. The deterministic
     generation order interleaves strata round-robin. Role stratification is
     handled independently by :meth:`~whetstone_envs.core.pool.TaskPool.split`,
     which groups complete strata combinations before drawing its disjoint
     subsets round-robin.
     """
+    n_per_stratum = _require_int("n_per_stratum", n_per_stratum)
+    n_demos = _require_int("n_demos", n_demos)
+    sample_size_times = _require_int(
+        "sample_size_times",
+        sample_size_times,
+    )
+    max_query_len = _require_int("max_query_len", max_query_len)
+    seed_start = _require_int("seed_start", seed_start)
     _assert_single_rule(number_of_rules)
+    if n_per_stratum < 1:
+        msg = f"n_per_stratum must be positive, got {n_per_stratum}"
+        raise ValueError(msg)
+    if n_demos < 0:
+        msg = f"n_demos must be non-negative, got {n_demos}"
+        raise ValueError(msg)
+    if sample_size_times < 1:
+        msg = f"sample_size_times must be positive, got {sample_size_times}"
+        raise ValueError(msg)
+    if max_query_len < upstream.MIN_QUERY_LEN:
+        msg = (
+            f"max_query_len must be at least {upstream.MIN_QUERY_LEN}, "
+            f"got {max_query_len}"
+        )
+        raise ValueError(msg)
 
-    consumed_seeds = [seed_start + i for i in range(len(strata))]
+    validated_strata = _validate_strata(strata)
+    labels = [label for label, _rule_type, _k in validated_strata]
+    if len(set(labels)) != len(labels):
+        duplicates = sorted(
+            label for label in set(labels) if labels.count(label) > 1
+        )
+        msg = f"stratum labels must be unique, duplicates: {duplicates!r}"
+        raise ValueError(msg)
+    for label, rule_type, k in validated_strata:
+        if rule_type not in upstream.RULE_TYPES:
+            msg = (
+                f"stratum {label!r} has unknown rule_type {rule_type!r} "
+                f"(expected one of {upstream.RULE_TYPES})"
+            )
+            raise ValueError(msg)
+        if k < upstream.MIN_K:
+            msg = f"stratum {label!r} must have k >= {upstream.MIN_K}, got {k}"
+            raise ValueError(msg)
+
+    consumed_seeds = [seed_start + i for i in range(len(validated_strata))]
     _assert_fresh_seeds(consumed_seeds)
 
     per_stratum: list[list[Instance]] = []
     for (label, rule_type, k), seed in zip(
-        strata,
+        validated_strata,
         consumed_seeds,
         strict=True,
     ):
@@ -284,12 +376,53 @@ def default_split_sizes(
 ) -> tuple[int, int, int]:
     """Return ``(internal_eval_n, official_n, held_out_n)`` for a pool.
 
-    Scales the per-stratum split sizes by the number of strata.
+    Scales the per-stratum split sizes by the number of strata after
+    validating that the pool is a balanced, single-label c23 pool and that
+    every stratum contains enough instances for the requested roles.
     :meth:`~whetstone_envs.core.pool.TaskPool.split` groups complete strata
     combinations and draws them round-robin, yielding disjoint,
     stratum-balanced subsets for these role sizes.
     """
-    n_strata = len(pool.strata)
+    role_sizes = {
+        "internal_eval_per_stratum": _require_int(
+            "internal_eval_per_stratum",
+            internal_eval_per_stratum,
+        ),
+        "official_per_stratum": _require_int(
+            "official_per_stratum",
+            official_per_stratum,
+        ),
+        "held_out_per_stratum": _require_int(
+            "held_out_per_stratum",
+            held_out_per_stratum,
+        ),
+    }
+    for name, size in role_sizes.items():
+        if size < 0:
+            msg = f"{name} must be non-negative, got {size}"
+            raise ValueError(msg)
+    if not pool.instances:
+        msg = "cannot derive split sizes for an empty pool"
+        raise ValueError(msg)
+    if any(len(instance.strata) != 1 for instance in pool.instances):
+        msg = "c23 split sizing requires exactly one stratum per instance"
+        raise ValueError(msg)
+
+    counts = pool.stratum_counts()
+    if len(set(counts.values())) != 1:
+        msg = f"c23 split sizing requires balanced strata, got {counts!r}"
+        raise ValueError(msg)
+    requested_per_stratum = sum(role_sizes.values())
+    available_per_stratum = next(iter(counts.values()))
+    if requested_per_stratum > available_per_stratum:
+        msg = (
+            "per-stratum split sizes sum to "
+            f"{requested_per_stratum}, but the pool has only "
+            f"{available_per_stratum} instances per stratum"
+        )
+        raise ValueError(msg)
+
+    n_strata = len(counts)
     return (
         internal_eval_per_stratum * n_strata,
         official_per_stratum * n_strata,
@@ -307,6 +440,11 @@ def build_manifest(
     The seed range recorded is ``[seed_start, seed_start + n_strata)`` --
     one fresh seed per stratum, the exact fresh window consumed.
     """
+    seed_start = _require_int("seed_start", seed_start)
+    n_strata = _require_int("n_strata", n_strata)
+    if n_strata < 1:
+        msg = f"n_strata must be positive, got {n_strata}"
+        raise ValueError(msg)
     return Manifest.from_pool(
         pool,
         generator_version=GENERATOR_VERSION,
@@ -314,59 +452,63 @@ def build_manifest(
     )
 
 
-def _main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point: regenerate the default pool and write its manifest.
+app = typer.Typer(
+    add_completion=False,
+    help="Generate the C23 subregular induction pool and manifest.",
+)
 
-    Every owner-open numeric is a flag with the spec's proposed default, so
-    changing N-per-stratum, the demo count, the query length, or the seed
-    start never requires an env-code edit (PLAN "Config surface").
-    """
-    parser = argparse.ArgumentParser(
-        prog="whetstone-envs-c23-generate",
-        description="Generate the c23 subregular ISL/OSL induction pool.",
-    )
-    parser.add_argument(
-        "--n-per-stratum",
-        type=int,
-        default=DEFAULT_N_PER_STRATUM,
-        help=f"instances per stratum (default {DEFAULT_N_PER_STRATUM})",
-    )
-    parser.add_argument(
-        "--n-demos",
-        type=int,
-        default=DEFAULT_N_DEMOS,
-        help=f"demonstrations per instance (default {DEFAULT_N_DEMOS})",
-    )
-    parser.add_argument(
-        "--max-query-len",
-        type=int,
-        default=DEFAULT_MAX_QUERY_LEN,
-        help=f"longest held-out query (default {DEFAULT_MAX_QUERY_LEN})",
-    )
-    parser.add_argument(
-        "--seed-start",
-        type=int,
-        default=DEFAULT_SEED_START,
-        help=f"first fresh seed (default {DEFAULT_SEED_START})",
-    )
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=Path(__file__).with_name("manifest.json"),
-        help="where to write the default-config manifest JSON",
-    )
-    args = parser.parse_args(argv)
 
-    pool = generate_pool(
-        n_per_stratum=args.n_per_stratum,
-        n_demos=args.n_demos,
-        max_query_len=args.max_query_len,
-        seed_start=args.seed_start,
+@app.command()
+def main(
+    n_per_stratum: Annotated[
+        int,
+        typer.Option(help="Instances per stratum."),
+    ] = DEFAULT_N_PER_STRATUM,
+    n_demos: Annotated[
+        int,
+        typer.Option(help="Demonstrations shown per instance."),
+    ] = DEFAULT_N_DEMOS,
+    sample_size_times: Annotated[
+        int,
+        typer.Option(help="Characteristic-sample size multiplier."),
+    ] = DEFAULT_SAMPLE_SIZE_TIMES,
+    max_query_len: Annotated[
+        int,
+        typer.Option(help="Longest held-out query string."),
+    ] = DEFAULT_MAX_QUERY_LEN,
+    seed_start: Annotated[
+        int,
+        typer.Option(help="First fresh stratum seed."),
+    ] = DEFAULT_SEED_START,
+    manifest_path: Annotated[
+        Path | None,
+        typer.Option("--manifest", help="Manifest output path."),
+    ] = None,
+) -> None:
+    """Regenerate the validated C23 pool manifest."""
+    try:
+        pool = generate_pool(
+            n_per_stratum=n_per_stratum,
+            n_demos=n_demos,
+            sample_size_times=sample_size_times,
+            max_query_len=max_query_len,
+            seed_start=seed_start,
+        )
+        manifest = build_manifest(pool, seed_start, len(DEFAULT_STRATA))
+    except (
+        AssertionError,
+        TypeError,
+        ValueError,
+        upstream.UpstreamError,
+    ) as error:
+        raise typer.BadParameter(str(error)) from error
+    output_path = (
+        manifest_path
+        if manifest_path is not None
+        else Path(__file__).with_name("manifest.json")
     )
-    manifest = build_manifest(pool, args.seed_start, len(DEFAULT_STRATA))
-    manifest.write(args.manifest)
-    return 0
+    manifest.write(output_path)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(_main())
+    app()

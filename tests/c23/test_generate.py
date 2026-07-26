@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from typer.testing import CliRunner
 
 from whetstone_envs.c23 import generate, oracle, upstream
 from whetstone_envs.c23.generate import (
@@ -138,6 +139,36 @@ def test_default_split_is_disjoint_and_stratum_balanced() -> None:
     assert counts(split.held_out) == {DEFAULT_HELD_OUT_PER_STRATUM}
 
 
+def test_split_sizes_reject_pool_smaller_than_role_defaults() -> None:
+    pool = generate_pool(n_per_stratum=2)
+    with pytest.raises(
+        ValueError,
+        match=r"split sizes sum to 50.*only 2 instances per stratum",
+    ):
+        default_split_sizes(pool)
+
+
+def test_split_sizes_accept_roles_that_fit_a_small_pool() -> None:
+    pool = generate_pool(n_per_stratum=2)
+    sizes = default_split_sizes(
+        pool,
+        internal_eval_per_stratum=0,
+        official_per_stratum=1,
+        held_out_per_stratum=1,
+    )
+    assert sizes == (0, 4, 4)
+    split = pool.split(*sizes)
+    assert len(split.internal_eval) == 0
+    assert len(split.official) == 4
+    assert len(split.held_out) == 4
+
+
+def test_split_sizes_reject_negative_role_counts() -> None:
+    pool = generate_pool(n_per_stratum=2)
+    with pytest.raises(ValueError, match="must be non-negative"):
+        default_split_sizes(pool, internal_eval_per_stratum=-1)
+
+
 def test_n_per_stratum_is_configurable() -> None:
     # Owner-open numeric (spec Sec 1.3): N is a constructor arg.
     pool = _fast_pool(n_per_stratum=2)
@@ -152,6 +183,19 @@ def test_n_demos_is_configurable() -> None:
         assert len(lines) == 3
 
 
+def test_zero_demos_produces_a_zero_shot_pool() -> None:
+    pool = generate_pool(n_per_stratum=1, n_demos=0)
+    assert all(
+        instance.prompt_inputs["demos_block"] == ""
+        for instance in pool.instances
+    )
+
+
+def test_negative_demo_count_is_rejected() -> None:
+    with pytest.raises(ValueError, match="n_demos must be non-negative"):
+        generate_pool(n_per_stratum=1, n_demos=-1)
+
+
 def test_strata_are_configurable() -> None:
     # Owner-open: the strata set is a constructor arg.
     pool = generate_pool(
@@ -159,6 +203,118 @@ def test_strata_are_configurable() -> None:
         strata=(("only", upstream.ISL, 2),),
     )
     assert set(pool.strata) == {"only"}
+
+
+def test_duplicate_stratum_labels_are_rejected() -> None:
+    with pytest.raises(ValueError, match="stratum labels must be unique"):
+        generate_pool(
+            n_per_stratum=1,
+            strata=(
+                ("duplicate", upstream.ISL, 2),
+                ("duplicate", upstream.L_OSL, 2),
+            ),
+        )
+
+
+def test_invalid_generation_bounds_are_rejected() -> None:
+    with pytest.raises(ValueError, match="n_per_stratum must be positive"):
+        generate_pool(n_per_stratum=0)
+    with pytest.raises(ValueError, match="strata must contain"):
+        generate_pool(strata=())
+    with pytest.raises(ValueError, match="sample_size_times must be positive"):
+        generate_pool(sample_size_times=0)
+    with pytest.raises(ValueError, match="max_query_len must be at least 2"):
+        generate_pool(max_query_len=1)
+    with pytest.raises(ValueError, match="must have k >= 2"):
+        generate_pool(strata=(("bad-k", upstream.ISL, 1),))
+
+
+def test_python_api_rejects_non_strict_integer_inputs() -> None:
+    with pytest.raises(TypeError, match="n_per_stratum must be an integer"):
+        generate_pool(
+            n_per_stratum=True,
+        )
+    with pytest.raises(TypeError, match="n_demos must be an integer"):
+        generate_pool(
+            n_demos=1.0,  # ty: ignore[invalid-argument-type]
+        )
+    with pytest.raises(TypeError, match="seed_start must be an integer"):
+        generate_pool(
+            seed_start=False,
+        )
+    with pytest.raises(TypeError, match="number_of_rules must be an integer"):
+        generate_pool(
+            number_of_rules=True,
+        )
+    pool = generate_pool(n_per_stratum=1)
+    with pytest.raises(
+        TypeError,
+        match="internal_eval_per_stratum must be an integer",
+    ):
+        default_split_sizes(
+            pool,
+            internal_eval_per_stratum=False,
+        )
+
+
+def test_python_api_rejects_invalid_stratum_sequences() -> None:
+    with pytest.raises(TypeError, match="non-string sequence"):
+        generate_pool(
+            strata="S1",  # ty: ignore[invalid-argument-type]
+        )
+    with pytest.raises(ValueError, match="three-item"):
+        generate_pool(
+            strata=[("S1", upstream.ISL)],  # ty: ignore[invalid-argument-type]
+        )
+    with pytest.raises(TypeError, match=r"strata\[0\] k.*integer"):
+        generate_pool(
+            strata=(("S1", upstream.ISL, True),),
+        )
+
+
+def test_typer_cli_generates_a_manifest(tmp_path: Path) -> None:
+    output = tmp_path / "manifest.json"
+    result = CliRunner().invoke(
+        generate.app,
+        [
+            "--n-per-stratum",
+            "1",
+            "--n-demos",
+            "0",
+            "--sample-size-times",
+            "2",
+            "--max-query-len",
+            "4",
+            "--seed-start",
+            str(DEFAULT_SEED_START),
+            "--manifest",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    manifest = Manifest.read(output)
+    assert manifest.seed_range == (
+        DEFAULT_SEED_START,
+        DEFAULT_SEED_START + len(DEFAULT_STRATA),
+    )
+    assert set(manifest.stratum_counts.values()) == {1}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--n-per-stratum", "0"],
+        ["--n-per-stratum", "true"],
+        ["--n-demos", "-1"],
+        ["--sample-size-times", "0"],
+        ["--max-query-len", "1"],
+        ["--seed-start", "0"],
+    ],
+)
+def test_typer_cli_rejects_invalid_inputs(args: list[str]) -> None:
+    result = CliRunner().invoke(generate.app, args)
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
 
 
 def test_instances_carry_only_public_fields() -> None:

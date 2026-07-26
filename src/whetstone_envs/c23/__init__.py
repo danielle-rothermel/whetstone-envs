@@ -20,13 +20,10 @@ its ``VENDORED_DIFF.patch``); the oracle reuses the vendored
 ``apply_ISL_rule`` / ``apply_L_OSL_rule`` / ``apply_R_OSL_rule``
 transducers **unmodified**, re-applied to the held-out query.
 
-Importing this package installs the one side effect the vendored tree
-needs: it prepends the ``inductionbench`` vendor directory to ``sys.path``
-so the upstream modules' *bare* internal imports (``import config``,
-``from utils import ...``) resolve against the vendored copy without
-editing a single upstream line -- the same convention c22 uses for its
-IFEval vendor. Doing this in the package ``__init__`` means the path is set
-before any submodule's own ``import synthetic_data_generation`` runs.
+The vendored tree is imported only through its package-qualified path.
+Its internal imports are package-relative, so importing c23 neither changes
+``sys.path`` nor claims generic top-level module names such as ``config`` or
+``utils`` in the embedding process.
 
 Public surface:
 
@@ -37,21 +34,9 @@ Public surface:
   vendored ``apply_*_rule`` transducers unmodified, re-applied to the
   held-out query.
 * :mod:`whetstone_envs.c23.prompts` -- the naive/ceiling probe pair,
-  verbatim from the baseline spec (Section 2).
+  with character-level task conventions in the ceiling prompt.
 * :mod:`whetstone_envs.c23.upstream` -- the boundary around the vendored
   generator + oracle (sets ``config.vocab`` under a lock; marshals args).
 """
 
 from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-_VENDOR_DIR = str(
-    Path(__file__).resolve().parent / "_vendor" / "inductionbench",
-)
-if _VENDOR_DIR not in sys.path:
-    # Prepend so the vendored ``synthetic_data_generation`` / ``config`` /
-    # ``utils`` modules win over any like-named module elsewhere on the
-    # path (upstream imports them by bare name).
-    sys.path.insert(0, _VENDOR_DIR)

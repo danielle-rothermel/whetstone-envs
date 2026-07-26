@@ -1,16 +1,14 @@
-r"""The two c23 probe prompts, verbatim from the baseline spec (Section 2).
+r"""The two c23 character-transformation probe prompts.
 
 Probe (a), the naive floor prompt, is the spec Section 2.1 form: the
 demonstration pairs as ``IN -> OUT`` lines, then the query input followed by
 ``->`` and nothing else -- "the entire prompt, no system prompt beyond the
-provider default." Probe (b), the best-effort ceiling prompt, is the spec
-Section 2.2 text byte-for-byte: it states every standard *convention* of the
-ISL/OSL task family (single deterministic rule, tokens =
-whitespace-separated words, local/suffix/positional sensitivity, "fits all
+provider default." Probe (b), the best-effort ceiling prompt, states every
+standard *convention* of the ISL/OSL task family (single deterministic rule,
+individual-character units, bounded adjacent-character context, "fits all
 demos / simplest rule" induction, no-CoT, strict ``Output:`` format) but
-**never** the specific latent rule of any instance -- the "legitimate
-ceiling, not cheating" note (spec Section 2.2): the model still has to induce
-the rule from the demos.
+**never** the specific latent rule of any instance. The model still has to
+induce the rule from the demos.
 
 Both prompts interpolate exactly two instance fields -- the pre-rendered
 ``demos_block`` (``IN -> OUT`` lines) and the ``query`` input string -- both
@@ -26,33 +24,31 @@ from whetstone_envs.core.probes import ProbePair, render_with_prompt_inputs
 
 # --- Probe (a): deliberately naive prompt (spec Section 2.1) ---------------
 # The demonstration pairs as "IN -> OUT" lines, a blank line, then the query
-# input followed by "-> " (trailing space) and nothing else. This is the
-# spec's ``<demos as "IN -> OUT" lines>\n<query IN> -> `` verbatim: no task
-# framing, no statement that a hidden rule exists, no output-format cue.
+# input followed by "-> " (trailing space) and nothing else: no task framing,
+# statement that a hidden rule exists, or output-format cue.
 NAIVE_TEMPLATE = """{demos_block}
 
 {query} -> """
 
 # --- Probe (b): best-effort ceiling prompt (spec Section 2.2) --------------
-# Byte-for-byte from the spec's SYSTEM + USER blocks. States the conventions
-# and inductive bias of the task family without revealing any instance's
-# latent rule (the "legitimate ceiling, not cheating" note). The em dashes
-# and en dash are the spec's own; the "Output:" line is the extraction
+# States the conventions and inductive bias of the task family without
+# revealing any instance's latent rule. The "Output:" line is the extraction
 # contract the scorer's "text after the last Output: line" step consumes.
 CEILING_TEMPLATE = """SYSTEM:
 You are solving a hidden-rule string-transformation puzzle. Each puzzle has one fixed,
 deterministic transformation rule that maps an input string to an output string. The rule
-depends only on the tokens in the input (their identity, their length, their position, and
-the characters at the ends of each token) — it never uses outside knowledge, randomness, or
-context beyond the examples. Tokens are the whitespace-separated words. The same rule was
-applied to every example below. Your job: infer that single rule from the examples, then
-apply exactly the same rule to the final query.
+operates on individual characters and their nearby character context — it never uses outside
+knowledge, randomness, or context beyond the examples. Each input is one sequence of
+characters; whitespace does not define the transformation units. The same rule was applied
+to every example below. Your job: infer that single rule from the examples, then apply exactly
+the same rule to the final query.
 
 Rules of the format:
 - Read all the demonstration pairs. Each is written "INPUT -> OUTPUT".
-- The transformation is a length- and position- and suffix/prefix-sensitive edit over the
-  tokens: tokens may be duplicated, reordered, re-cased, or rewritten based on their local
-  context (the characters immediately around each token position, up to a small window).
+- Each input character may be preserved, replaced, or deleted according to a short,
+  contiguous context of adjacent characters. Depending on the rule family, that context
+  comes from the input or the partially produced output and is evaluated left-to-right or
+  right-to-left.
 - Determine the exact rule that makes ALL demonstrations correct simultaneously. If more than
   one rule fits the demonstrations, choose the simplest one that fits every pair.
 - Do not explain your reasoning. Output only the transformed string for the query.

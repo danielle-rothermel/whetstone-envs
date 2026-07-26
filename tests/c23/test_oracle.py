@@ -190,8 +190,10 @@ def test_score_gold_space_separated_output_matches() -> None:
 def test_oracle_reuses_the_vendored_transducers_unmodified() -> None:
     # The oracle must call the vendored apply_*_rule functions, not a
     # reimplementation. Assert the boundary dispatches to the exact vendored
-    # module objects (import them the way the vendor is imported).
-    import synthetic_data_generation as sdg  # vendored, on sys.path
+    # module objects (through the isolated vendored package).
+    from whetstone_envs.c23._vendor.inductionbench import (
+        synthetic_data_generation as sdg,
+    )
 
     args_like = type("A", (), {"type": upstream.ISL, "k": 2})()
     # Same result whether we call the oracle or the vendored function raw.

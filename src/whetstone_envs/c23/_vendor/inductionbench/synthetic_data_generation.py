@@ -1,8 +1,9 @@
 import argparse
-import random, json
+import json
+from random import Random
 import time
-import config
 import sys
+from . import config
 # PATCH (c23 vendor, patch 2/4): dropped the broken import, the sys.path
 # hack, and the tqdm dependency. Upstream imported
 # `translate_fewshot_input_output_pairs` on this line, a function that does
@@ -11,11 +12,12 @@ import sys
 # from the import. Also removed `from tqdm import tqdm` (a hard import-time
 # dependency, used only by a progress bar over the off-path generate_data
 # loop) and the `sys.path.append('..')` line (upstream line 7): the c23
-# package puts this directory on sys.path so the bare `import config` /
-# `from utils import ...` resolve against the vendored copy without the
-# fragile relative append. `import sys` is kept (above) because the two
+# package imports this module through its isolated package path. `import
+# sys` is kept (above) because the two
 # sys.exit('Cannot generate enough rules') guards below still use it.
-from utils import generate_all_k_strings, translate_input_output_pairs
+from .utils import generate_all_k_strings, translate_input_output_pairs
+
+_RNG = Random()
 
 # ISL function: input-strictly-local-k function
 # rule 1: input abb --> output aba: b is changed to an a if the previous two characters are ab
@@ -33,11 +35,11 @@ def generate_ISL_rules(args):
         all_k_strings = ['']*number_of_rules
         for _ in range(args.k):
             for i in range(number_of_rules):
-                all_k_strings[i] += random.choice(config.vocab)
+                all_k_strings[i] += _RNG.choice(config.vocab)
 
         random_k_all_k_strings = []
         for all_k_string in all_k_strings:
-            length = random.randint(2, args.k)
+            length = _RNG.randint(2, args.k)
             truncated_string = all_k_string[:length]
             is_suffix = False
             for s in random_k_all_k_strings + generated_strings:
@@ -65,11 +67,11 @@ def generate_ISL_rules(args):
     # if all k strings are not of length k
     # add random characters to make one of them to be of length k
     if max([len(k_string) for k_string in all_k_strings]) < args.k:
-        all_k_strings[-1] = ''.join([random.choice(config.vocab) for _ in range(args.k - len(all_k_strings[-1]))]) + all_k_strings[-1] 
+        all_k_strings[-1] = ''.join([_RNG.choice(config.vocab) for _ in range(args.k - len(all_k_strings[-1]))]) + all_k_strings[-1]
 
     for k_string in all_k_strings:
         possible_output = sorted(set(config.vocab).difference([k_string[-1]])) + [''] # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream line 61); allow deletion
-        rules[k_string] = random.choice(possible_output)
+        rules[k_string] = _RNG.choice(possible_output)
 
     # check minimal length of rules
     # check if there is a set of rules with left part r such that v + r = o for all v in vocab
@@ -93,12 +95,12 @@ def generate_OSL_rules(args):
         all_k_strings = ['']*number_of_rules
         for _ in range(args.k):
             for i in range(number_of_rules):
-                all_k_strings[i] += random.choice(config.vocab)
+                all_k_strings[i] += _RNG.choice(config.vocab)
 
         # truncating generated strings to random length between 2 - k
         random_k_all_k_strings = []
         for all_k_string in all_k_strings:
-            length = random.randint(2, args.k)
+            length = _RNG.randint(2, args.k)
             truncated_string = all_k_string[:length]
             is_suffix = False
             for s in random_k_all_k_strings:
@@ -115,11 +117,11 @@ def generate_OSL_rules(args):
     # generate first rule
     new_rule = one_batch_generating_rules(args, 1)[0]
     possible_output = sorted(set(config.vocab).difference([new_rule[-1]])) + [''] # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream lines 107/132); allow deletion
-    output = random.choice(possible_output)
+    output = _RNG.choice(possible_output)
 
     # guarantee that at least one rule will be of length k
     if len(new_rule) < args.k:
-        new_rule = ''.join([random.choice(config.vocab) for _ in range(args.k - len(new_rule))]) + new_rule
+        new_rule = ''.join([_RNG.choice(config.vocab) for _ in range(args.k - len(new_rule))]) + new_rule
 
     rules[new_rule] = output
 
@@ -140,7 +142,7 @@ def generate_OSL_rules(args):
             continue
 
         possible_output = sorted(set(config.vocab).difference([new_rule[-1]])) + [''] # PATCH 4/4: sorted() for determinism (was list(set(...)), upstream lines 107/132); allow deletion
-        output = random.choice(possible_output)
+        output = _RNG.choice(possible_output)
 
         # without suffix check
         rules[new_rule] = output
@@ -149,16 +151,15 @@ def generate_OSL_rules(args):
 
 # PATCH (c23 vendor, patch 3/4): thread a real seed parameter.
 # Upstream had no seed parameter anywhere; reproducibility depended on a
-# module-global random.seed(0) set once in the un-vendored inference.py /
+# process-global random seed set once in the un-vendored inference.py /
 # standard_run.py, with no way to reseed per stratum / instance. Add an
-# explicit `seed` kwarg (default None = do not touch the RNG, preserving
-# the old "caller seeded the global RNG" behaviour) to generate_rules and
-# generate_data; when given, seed the module-global RNG at entry so
-# distinct strata draw distinct, reproducible instances without editing
-# source at each call site.
+# explicit `seed` kwarg to generate_rules and generate_data. A supplied seed
+# resets the vendored module's private RNG; ``None`` continues that private
+# stream without consulting the embedding process's RNG. Generation therefore
+# cannot consume or reseed the process-global random stream.
 def _seed(seed):
     if seed is not None:
-        random.seed(seed)
+        _RNG.seed(seed)
 
 
 def generate_rules(args, seed=None):
@@ -333,8 +334,8 @@ def generate_fixed_size_dataset(args, rules, n):
     n= 0
     if not args.repeat:
         while n < extra_datapoints_number:
-            length = random.randint(1, 3*args.k)
-            datapoint = ''.join([random.choice(config.vocab) for _ in range(length)])
+            length = _RNG.randint(1, 3*args.k)
+            datapoint = ''.join([_RNG.choice(config.vocab) for _ in range(length)])
             if datapoint not in rules:
                 input = datapoint
                 output = apply_rule(args, rules, input)
@@ -427,7 +428,7 @@ def synthetic_data_parser():
 
 def generate_data(args, rules, seed=None):
     # PATCH (c23 vendor, patch 3/4): threaded a real seed parameter (see
-    # generate_rules). When given, reseed the module-global RNG at entry so
+    # generate_rules). When given, reseed the private RNG at entry so
     # the characteristic-sample + fixed-size dataset draw is reproducible.
     _seed(seed)
     datapoints = []
@@ -440,14 +441,14 @@ def generate_data(args, rules, seed=None):
         sample_dataset = generate_characteristic_sample(args, rules_i)
         sample_dataset = generate_fixed_size_dataset(args, rules_i, args.sample_size_times*len(sample_dataset))
 
-        prompt = translate_input_output_pairs(args, sample_dataset)
+        prompt = translate_input_output_pairs(args, sample_dataset, rng=_RNG)
         datapoints.append([sample_dataset, prompt])
 
     return datapoints
 
 def generate_example(example_id, input_output_pairs, example_rule):
     input_output_pairs_keys = list(input_output_pairs.keys())
-    random.shuffle(input_output_pairs_keys)
+    _RNG.shuffle(input_output_pairs_keys)
     input_output_pairs = {key: input_output_pairs[key] for key in input_output_pairs_keys}
     prompt = f"""
 <example_{example_id}>
@@ -477,9 +478,9 @@ def generate_few_shot_data(args, rules):
         example_rule_set = []
         example_text = ''
         for example_id in range(args.shot_number):
-            example_rule = rules[random.choice(list(range(len(rules))))]
+            example_rule = rules[_RNG.choice(list(range(len(rules))))]
             while example_rule == rules_i or example_rule in example_rule_set:
-                example_rule = rules[random.choice(list(range(len(rules))))]
+                example_rule = rules[_RNG.choice(list(range(len(rules))))]
             example_rule_set.append(example_rule)
             sample_dataset_example = generate_characteristic_sample(args, example_rule)
             #sample_dataset_example = generate_fixed_size_dataset(args, example_rule, args.sample_size_times*len(sample_dataset_example))
@@ -496,7 +497,7 @@ if __name__ == '__main__':
     parser = synthetic_data_parser()
     args = parser.parse_args()
 
-    random.seed(0)
+    _RNG.seed(0)
 
     # Check if number_of_rules is smaller than vocab_size^k
     if args.number_of_rules > args.vocab_size**args.k:
@@ -533,4 +534,3 @@ if __name__ == '__main__':
 
     # prompt = translate_input_output_pairs(args, sample_dataset)
     # print(prompt)
-

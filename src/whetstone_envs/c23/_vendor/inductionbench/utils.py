@@ -1,5 +1,3 @@
-import random
-
 # generating all length k string from vocab
 def generate_all_k_strings(vocab, k):
     if k == 0:
@@ -111,9 +109,9 @@ THE RIGHT PART OF THE RULE SHOULD ONLY CONTAIN WHAT THE LAST CHARACTER OF THE LE
 THINK STEP BY STEP BEFORE PROVIDING THE RULES.
 """
 
-def translate_input_output_pairs(args, input_output_pairs):
+def translate_input_output_pairs(args, input_output_pairs, *, rng):
     input_output_pairs_keys = list(input_output_pairs.keys())
-    random.shuffle(input_output_pairs_keys)
+    rng.shuffle(input_output_pairs_keys)
     input_output_pairs = {key: input_output_pairs[key] for key in input_output_pairs_keys}
     k = args.k
     prompt = """

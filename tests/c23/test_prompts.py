@@ -1,11 +1,11 @@
 """Probe-prompt render tests: byte-for-byte + latent-rule leak (checklist A).
 
-Both probes must render byte-for-byte as drafted in the spec Section 2 for a
-fixed fixture (guards against template drift), and neither probe may leak the
-*latent rule* -- the spec's "legitimate ceiling, not cheating" note: the
-ceiling states the task conventions but never the specific rule, so a static
-check confirms the rule's context/output tokens do not appear as an explicit
-rule statement in the rendered ceiling prompt.
+The naive probe preserves the spec-derived open-arrow form. The ceiling probe
+uses corrected character-level task conventions. Both render byte-for-byte
+for a fixed fixture, and neither may leak the latent rule: the ceiling states
+the task family without revealing the specific rule, so a static check
+confirms the rule's context/output tokens do not appear as an explicit rule
+statement.
 """
 
 from __future__ import annotations
@@ -35,26 +35,26 @@ _FIXTURE = make_instance(
     gold="cacd",
 )
 
-# Spec Section 2.1, verbatim, with the fixture's demos + query substituted.
+# Naive template with the fixture's demos + query substituted.
 _EXPECTED_NAIVE = "aa -> aa\nacb -> acd\nbcb -> bcd\n\ncacb -> "
 
-# Spec Section 2.2, byte-for-byte, with the fixture substituted. The em
-# dashes are the spec's own U+2014.
+# Ceiling prompt, byte-for-byte, with the fixture substituted.
 _EXPECTED_CEILING = (
     "SYSTEM:\n"
     "You are solving a hidden-rule string-transformation puzzle. Each puzzle has one fixed,\n"
     "deterministic transformation rule that maps an input string to an output string. The rule\n"
-    "depends only on the tokens in the input (their identity, their length, their position, and\n"
-    "the characters at the ends of each token) — it never uses outside knowledge, randomness, or\n"
-    "context beyond the examples. Tokens are the whitespace-separated words. The same rule was\n"
-    "applied to every example below. Your job: infer that single rule from the examples, then\n"
-    "apply exactly the same rule to the final query.\n"
+    "operates on individual characters and their nearby character context — it never uses outside\n"
+    "knowledge, randomness, or context beyond the examples. Each input is one sequence of\n"
+    "characters; whitespace does not define the transformation units. The same rule was applied\n"
+    "to every example below. Your job: infer that single rule from the examples, then apply exactly\n"
+    "the same rule to the final query.\n"
     "\n"
     "Rules of the format:\n"
     '- Read all the demonstration pairs. Each is written "INPUT -> OUTPUT".\n'
-    "- The transformation is a length- and position- and suffix/prefix-sensitive edit over the\n"
-    "  tokens: tokens may be duplicated, reordered, re-cased, or rewritten based on their local\n"
-    "  context (the characters immediately around each token position, up to a small window).\n"
+    "- Each input character may be preserved, replaced, or deleted according to a short,\n"
+    "  contiguous context of adjacent characters. Depending on the rule family, that context\n"
+    "  comes from the input or the partially produced output and is evaluated left-to-right or\n"
+    "  right-to-left.\n"
     "- Determine the exact rule that makes ALL demonstrations correct simultaneously. If more than\n"
     "  one rule fits the demonstrations, choose the simplest one that fits every pair.\n"
     "- Do not explain your reasoning. Output only the transformed string for the query.\n"
@@ -103,18 +103,20 @@ def test_ceiling_prompt_ends_on_the_output_extraction_contract() -> None:
 
 def test_ceiling_states_conventions_but_not_a_concrete_rule() -> None:
     # The "legitimate ceiling, not cheating" note (spec 2.2): the ceiling
-    # states the family's conventions (single deterministic rule, tokens =
-    # whitespace words, suffix/positional sensitivity, fits-all/simplest,
-    # strict Output:) but reveals no specific latent rule.
+    # states the family's conventions (single deterministic rule, individual
+    # character units, adjacent context, fits-all/simplest, strict Output:)
+    # but reveals no specific latent rule.
     rendered = render_ceiling(_DEMOS_BLOCK, _QUERY)
     for convention in (
         "one fixed",
-        "whitespace-separated words",
-        "suffix/prefix-sensitive",
+        "individual characters",
+        "adjacent characters",
+        "left-to-right or",
         "simplest",
         "Output:",
     ):
         assert convention in rendered
+    assert "whitespace-separated words" not in rendered
     # It must NOT contain an explicit rule statement of the fixture's latent
     # rule (e.g. "cb -> d"): only the demos' own IN -> OUT lines appear.
     assert "cb -> d" not in rendered

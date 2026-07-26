@@ -18,8 +18,8 @@ the InductionBench active path **does not import or run as shipped** — the
 repo review verified three import-time crashes plus a
 `PYTHONHASHSEED`-dependent nondeterminism. So this vendor is applied as a
 small, reviewable series of **named patches** on top of the byte-for-byte
-originals, each recorded as its own git commit, and the whole delta is
-captured in `VENDORED_DIFF.patch` for one-file review.
+originals. The whole delta is captured in `VENDORED_DIFF.patch` for
+one-file review.
 
 Vendoring pins the exact generator + oracle version so a regenerated pool
 is byte-reproducible against a frozen manifest, and so the generation path
@@ -48,47 +48,46 @@ Added by this vendor (not present upstream):
 
 - `config.py` — a config stub (see the config-stub patch below). Upstream
   ships no `config.py` at all.
-- `__init__.py` — a package marker so the vendored bare-import modules load
-  once `whetstone_envs.c23` has put this directory on `sys.path`.
+- `__init__.py` — a package marker for isolated package-relative imports.
 - `PROVENANCE.md` — this file.
-- `VENDORED_DIFF.patch` — the full unified diff of every patch below versus
-  the byte-for-byte upstream, so the delta is reviewable in one place.
+- `VENDORED_DIFF.patch` — the complete, byte-exact, applicable unified diff
+  versus the pinned upstream, including `/dev/null` sections for `config.py`
+  and `__init__.py`, so the delta is reviewable in one place.
 
-## The patches applied (each a separate commit)
+## The patches applied
 
 Every edit below is a minimal, named change; none alters the sampling
 *algorithm* or the three oracle transducers' *logic*. The
 `apply_ISL_rule` / `apply_L_OSL_rule` / `apply_R_OSL_rule` functions are
 **untouched** — the c23 oracle reuses them exactly as written.
 
-1. **config stub** — add `config.py` exposing a mutable `vocab` list, so
-   `import config` (upstream `synthetic_data_generation.py:4`) resolves.
-   Upstream shipped no such file → `ModuleNotFoundError` as cloned.
+1. **config stub** — add `config.py` exposing a mutable `vocab` list for the
+   generator's package-relative config import. Upstream shipped no such file
+   and its bare import fails with `ModuleNotFoundError` as cloned.
 
-2. **drop the broken import + `sys.path.append` hack** — upstream
+2. **package-relative isolation; drop the broken import and path hack** —
+   the vendored generator imports `config` and `utils` package-relative, so
+   it cannot reuse or mutate unrelated top-level modules and c23 does not
+   change the embedding process's `sys.path`. Upstream
    `synthetic_data_generation.py:8` imports
    `translate_fewshot_input_output_pairs`, a function that **does not exist
    in `utils.py`** → `ImportError` at import time. It is used only by
    `generate_few_shot_data`, which is off our path. Remove that name from
-   the import; also remove the `import sys; sys.path.append('..')` lines
-   (upstream lines 6–7): the vendored copy resolves its bare `import
-   config` / `from utils import ...` via the `sys.path` entry the c23
-   package installs, so the fragile relative-path append is unnecessary
-   (and `sys` is re-imported where the code actually needs it, inside the
-   two `sys.exit` guards). Also drop the top-level `from tqdm import tqdm`
+   the import and remove `sys.path.append('..')`. Keep `sys` because the
+   two `sys.exit` guards use it. Also drop the top-level `from tqdm import tqdm`
    and its lone `tqdm(...)` wrapper in `generate_data` (a progress bar over
    an off-path code path for us): `tqdm` is a hard import-time dependency
    upstream, not otherwise required by the generation path we use.
 
-3. **thread a real seed parameter** — upstream seeds only via a
-   module-global `random.seed(0)` set once in the (un-vendored)
-   `inference.py` / `standard_run.py`, with no way to reseed per stratum
-   /instance. Add an explicit `seed` parameter to `generate_rules` and
-   `generate_data` (and a shared `_seed(seed)` helper) that calls
-   `random.seed(seed)` at entry, so distinct strata draw distinct,
-   reproducible instances without editing source. The module-global
-   `__main__` demo block's `random.seed(0)` is left as-is (it is a demo,
-   off our path).
+3. **thread a real seed parameter through a private RNG** — upstream seeds
+   Python's process-global RNG, with no way to reseed per stratum or avoid
+   consuming the embedding application's random stream. The vendored module
+   owns a private `Random` instance. An explicit `seed` parameter on
+   `generate_rules` and `generate_data`, plus the shared `_seed(seed)`
+   helper, seeds only that private RNG. `utils.translate_input_output_pairs`
+   receives the same RNG explicitly. Distinct strata remain reproducible,
+   unrelated threads cannot perturb generation through the process-global
+   RNG, and generation does not mutate that global state.
 
 4. **`list(set(...))` → `sorted(set(...))` at the 6 nondeterminism call
    sites** — upstream lines 53, 61, 107, 132, 208, 244 build lists by

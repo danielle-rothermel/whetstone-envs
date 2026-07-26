@@ -147,11 +147,26 @@ def generate_OSL_rules(args):
 
     return rules
 
-def generate_rules(args):
+# PATCH (c23 vendor, patch 3/4): thread a real seed parameter.
+# Upstream had no seed parameter anywhere; reproducibility depended on a
+# module-global random.seed(0) set once in the un-vendored inference.py /
+# standard_run.py, with no way to reseed per stratum / instance. Add an
+# explicit `seed` kwarg (default None = do not touch the RNG, preserving
+# the old "caller seeded the global RNG" behaviour) to generate_rules and
+# generate_data; when given, seed the module-global RNG at entry so
+# distinct strata draw distinct, reproducible instances without editing
+# source at each call site.
+def _seed(seed):
+    if seed is not None:
+        random.seed(seed)
+
+
+def generate_rules(args, seed=None):
+    _seed(seed)
     # Check if number_of_rules is smaller than vocab_size^k
     if args.number_of_rules > args.vocab_size**args.k:
         raise ValueError('number_of_rules must be smaller than vocab_size^k')
-    
+
     rules = []
 
     if not args.repeat:
@@ -410,7 +425,11 @@ def synthetic_data_parser():
     parser.add_argument('--repeat', action='store_true', help='repeat the same dataset')
     return parser
 
-def generate_data(args, rules):
+def generate_data(args, rules, seed=None):
+    # PATCH (c23 vendor, patch 3/4): threaded a real seed parameter (see
+    # generate_rules). When given, reseed the module-global RNG at entry so
+    # the characteristic-sample + fixed-size dataset draw is reproducible.
+    _seed(seed)
     datapoints = []
     # PATCH (c23 vendor, patch 2/4): tqdm progress-bar wrapper removed
     # (tqdm import dropped above); iterate range directly.

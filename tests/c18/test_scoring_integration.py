@@ -29,15 +29,17 @@ def test_oracle_scores_feed_the_aggregation_ladder() -> None:
         scored("d1-b", 1, oracle.score("False", _D1, _D1_QUERY)),
         # D2 stratum: one correct, one wrong.
         scored("d2-a", 0, oracle.score("True", _D2, _D2_QUERY)),
+        scored("d2-a", 1, oracle.score("True", _D2, _D2_QUERY)),
         scored("d2-b", 0, oracle.score("False", _D2, _D2_QUERY)),
+        scored("d2-b", 1, oracle.score("False", _D2, _D2_QUERY)),
     ]
     task_strata = {
-        "d1-a": "D1",
-        "d1-b": "D1",
-        "d2-a": "D2",
-        "d2-b": "D2",
+        "d1-a": ("D1",),
+        "d1-b": ("D1",),
+        "d2-a": ("D2",),
+        "d2-b": ("D2",),
     }
-    root = aggregate(observations, task_strata)
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0, 1))
     # D1: mean(1, 0) = 0.5 ; D2: mean(1, 0) = 0.5 ; overall 0.5.
     assert root.complete
     assert root.mean == 0.5
@@ -49,8 +51,8 @@ def test_failed_observation_makes_aggregate_visibly_incomplete() -> None:
         scored("d1-a", 0, oracle.score("True", _D1, _D1_QUERY)),
         failed("d2-a", 0),
     ]
-    task_strata = {"d1-a": "D1", "d2-a": "D2"}
-    root = aggregate(observations, task_strata)
+    task_strata = {"d1-a": ("D1",), "d2-a": ("D2",)}
+    root = aggregate(observations, task_strata, expected_repeat_ids=(0,))
     # rubric 13: a failed observation must not silently score zero.
     assert root.mean is None
     assert not root.complete

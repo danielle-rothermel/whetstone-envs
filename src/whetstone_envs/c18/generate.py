@@ -226,10 +226,8 @@ def generate_pool(
 
     Deterministic given the arguments: each depth stratum consumes one
     fixed seed and the vendored generator is byte-reproducible under a
-    fixed seed (repos review; verified by regenerating twice). The strata
-    are then interleaved round-robin so a contiguous
-    :meth:`~whetstone_envs.core.pool.TaskPool.split` slice is
-    depth-balanced.
+    fixed seed (repos review; verified by regenerating twice). Instances
+    are ordered by deterministic depth-interleaving.
     """
     _assert_fixed_ontology(ontology)
 
@@ -248,7 +246,7 @@ def generate_pool(
             ),
         )
 
-    # Interleave: row 0 = one instance from each depth, then row 1, ...
+    # Deterministic depth-interleaving: row 0 has one instance per depth.
     instances: list[Instance] = [
         block[row]
         for row in range(n_per_stratum)
@@ -266,10 +264,10 @@ def default_split_sizes(
 ) -> tuple[int, int, int]:
     """Return ``(internal_eval_n, official_n, held_out_n)`` for a pool.
 
-    Scales the per-stratum split sizes by the number of depth strata. The
-    interleaved layout makes each contiguous front slice of
-    ``k * n_strata`` instances exactly ``k`` per stratum, so all three
-    disjoint slices are depth-balanced.
+    Scales the per-stratum split sizes by the number of depth strata.
+    :meth:`~whetstone_envs.core.pool.TaskPool.split` groups complete strata
+    combinations and draws them round-robin, so all three disjoint slices
+    are depth-balanced.
     """
     n_strata = len(pool.strata)
     return (
@@ -428,8 +426,9 @@ class Preset:
         """Return ``(internal_eval_n, official_n, held_out_n)`` for ``pool``.
 
         Scales the hard-variant per-stratum split (2 / 6 / 12) by the number
-        of depth strata; the interleaved layout keeps each contiguous slice
-        depth-balanced (mirrors the module-level ``default_split_sizes``).
+        of depth strata. :meth:`~whetstone_envs.core.pool.TaskPool.split`
+        draws complete strata combinations round-robin, keeping each
+        disjoint slice depth-balanced.
         """
         n_strata = len(pool.strata)
         return (

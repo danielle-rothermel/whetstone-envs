@@ -1,0 +1,7 @@
+# The vendored generator writes its json/log output to the process cwd.
+# The c18 subprocess boundary runs it in a throwaway temp dir, so nothing
+# should land here; ignore these defensively so a stray manual run never
+# gets committed into the vendored tree.
+*.json
+*.log
+__pycache__/

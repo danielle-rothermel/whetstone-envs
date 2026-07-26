@@ -173,11 +173,11 @@ def generate_pool(
     Deterministic given the arguments: each stratum consumes its own
     contiguous seed sub-range in order, skipping any seed whose
     adversarial predicate fails, so the same config always yields
-    byte-identical instances. The strata are then **interleaved**
-    round-robin (one instance per stratum per row) so that a contiguous
-    :meth:`~whetstone_envs.core.pool.TaskPool.split` slice is
-    stratum-balanced -- the internal-eval front slice then carries
-    >=2/stratum without any per-candidate split logic (spec Section 1).
+    byte-identical instances. The final pool order is a deterministic
+    round-robin interleaving of the strata (one instance per stratum per
+    row). Role stratification is handled independently by
+    :meth:`~whetstone_envs.core.pool.TaskPool.split`, which groups full
+    strata combinations before drawing its disjoint subsets.
     """
     per_stratum: list[list[Instance]] = []
     consumed_seeds: list[int] = []
@@ -224,11 +224,11 @@ def default_split_sizes(
 
     Scales the per-stratum split sizes (spec Section 1: internal-eval
     >=2/stratum, 40 official/stratum, 40 held-out/stratum) by the number
-    of strata present. Because the pool is interleaved round-robin, a
-    contiguous front slice of ``k * n_strata`` instances is exactly ``k``
-    per stratum, so the three disjoint slices are each stratum-balanced:
-    the internal-eval front slice carries >=2/stratum, official the next
-    40/stratum, held-out the final 40/stratum.
+    of strata present. :meth:`~whetstone_envs.core.pool.TaskPool.split`
+    groups complete strata combinations and draws them round-robin, so
+    these role sizes yield disjoint, stratum-balanced internal-eval,
+    official, and held-out subsets: >=2/stratum, 40/stratum, and
+    40/stratum respectively.
     """
     n_strata = len(pool.strata)
     return (

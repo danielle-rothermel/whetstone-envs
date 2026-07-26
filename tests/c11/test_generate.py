@@ -81,10 +81,9 @@ def test_default_n_is_the_spec_proposed_split() -> None:
 
 
 def test_default_split_is_disjoint_and_stratum_balanced() -> None:
-    # The interleaved layout makes each contiguous split slice carry the
-    # same per-stratum count (spec Section 1: >=2/stratum internal-eval,
-    # 40/stratum official, 40/stratum held-out). PoolSplit asserts the
-    # three subsets are disjoint at construction.
+    # TaskPool.split groups full strata combinations before assigning the
+    # three disjoint role subsets (spec Section 1: >=2/stratum
+    # internal-eval, 40/stratum official, 40/stratum held-out).
     pool = generate_pool()
     ie, off, ho = default_split_sizes(pool)
     assert (ie, off, ho) == (10, 200, 200)

@@ -8,6 +8,8 @@ prompt ever contains the instance's gold answer.
 
 from __future__ import annotations
 
+import pytest
+
 from whetstone_envs.c19 import generate, prompts
 from whetstone_envs.core.instance import make_instance
 
@@ -142,6 +144,39 @@ def test_probepair_dispatches_naive_and_ceiling() -> None:
     assert prompts.PROBES.render_ceiling(_FIXTURE) == prompts.render_ceiling(
         _FIXTURE,
     )
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        (prompts.NAIVE_TEMPLATE, prompts.render_naive),
+        (prompts.CEILING_TEMPLATE, prompts.render_ceiling),
+    ],
+)
+def test_probe_render_dispatches_known_sentinels(template, expected) -> None:
+    assert prompts._probe_render(template, _FIXTURE) == expected(_FIXTURE)
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        (prompts.NAIVE_TEMPLATE, prompts.render_naive),
+        (prompts.CEILING_TEMPLATE, prompts.render_ceiling),
+    ],
+)
+def test_probe_render_dispatches_equal_nonidentical_sentinels(
+    template,
+    expected,
+) -> None:
+    reconstructed = bytearray(template, "utf-8").decode()
+    assert reconstructed == template
+    assert reconstructed is not template
+    assert prompts._probe_render(reconstructed, _FIXTURE) == expected(_FIXTURE)
+
+
+def test_probe_render_rejects_unknown_sentinel() -> None:
+    with pytest.raises(KeyError, match="unknown c19 probe template"):
+        prompts._probe_render("c19-unknown", _FIXTURE)
 
 
 def test_no_prompt_leaks_the_gold_answer() -> None:

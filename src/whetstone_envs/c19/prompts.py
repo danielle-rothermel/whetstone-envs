@@ -153,11 +153,11 @@ def _probe_render(template: str, instance: Instance) -> str:
 
     ``ProbePair`` stores the two templates as strings; c19's templates
     are fact-type-parameterized, so the single ``render`` callable picks
-    the naive vs ceiling body by identity of the template it is handed.
+    the naive vs ceiling body by the value of the template it is handed.
     """
-    if template is NAIVE_TEMPLATE:
+    if template == NAIVE_TEMPLATE:
         return render_naive(instance)
-    if template is CEILING_TEMPLATE:
+    if template == CEILING_TEMPLATE:
         return render_ceiling(instance)
     msg = "unknown c19 probe template"
     raise KeyError(msg)

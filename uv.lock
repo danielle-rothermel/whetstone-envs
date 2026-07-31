@@ -789,7 +789,7 @@ requires-dist = [
     { name = "absl-py", specifier = ">=2.5.0" },
     { name = "immutabledict", specifier = ">=4.3.1" },
     { name = "langdetect", specifier = ">=1.0.9" },
-    { name = "minigrid", specifier = ">=3.1.0" },
+    { name = "minigrid", specifier = "==3.1.0" },
     { name = "nltk", specifier = ">=3.10.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "rfc8785", specifier = ">=0.1.4" },

@@ -40,12 +40,12 @@ from whetstone_envs.c11 import oracle
 from whetstone_envs.c11.strata import BUILDERS, STRATA
 from whetstone_envs.core.instance import make_instance
 from whetstone_envs.core.manifest import Manifest
-from whetstone_envs.core.pool import TaskPool
+from whetstone_envs.core.pool import TaskPool, public_prompt_identity
 
 if TYPE_CHECKING:
     from whetstone_envs.core.instance import Instance
 
-GENERATOR_VERSION = "c11-generate-2"
+GENERATOR_VERSION = "c11-generate-3"
 
 # --- Contamination bounds (rubric criterion 8) ----------------------------
 # c11's pool is synthetic and infinite; there is no published *seed* set to
@@ -220,6 +220,7 @@ def generate_pool(
 
     per_stratum: list[list[Instance]] = []
     consumed_seeds: list[int] = []
+    seen_public_identities: set[tuple[tuple[str, str], ...]] = set()
     next_seed = seed_start
     for stratum in strata:
         kept: list[Instance] = []
@@ -235,10 +236,14 @@ def generate_pool(
             seed = next_seed
             next_seed += 1
             attempts += 1
+            consumed_seeds.append(seed)
             inst = _build_one(stratum, seed)
             if inst is None:
                 continue
-            consumed_seeds.append(seed)
+            public_identity = public_prompt_identity(inst)
+            if public_identity in seen_public_identities:
+                continue
+            seen_public_identities.add(public_identity)
             kept.append(inst)
         per_stratum.append(kept)
 
@@ -261,15 +266,60 @@ def default_split_sizes(
 ) -> tuple[int, int, int]:
     """Return ``(internal_eval_n, official_n, held_out_n)`` for a pool.
 
-    Scales the per-stratum split sizes (spec Section 1: internal-eval
-    >=2/stratum, 40 official/stratum, 40 held-out/stratum) by the number
-    of strata present. :meth:`~whetstone_envs.core.pool.TaskPool.split`
-    groups complete strata combinations and draws them round-robin, so
-    these role sizes yield disjoint, stratum-balanced internal-eval,
-    official, and held-out subsets: >=2/stratum, 40/stratum, and
-    40/stratum respectively.
+    Validate and scale the per-stratum split sizes (spec Section 1:
+    internal-eval >=2/stratum, 40 official/stratum, 40 held-out/stratum)
+    by the number of strata present.
+
+    This c11 helper accepts only a balanced pool whose instances each
+    carry exactly one stratum label. It derives the actual per-stratum
+    capacity from that pool and rejects an over-capacity request here,
+    before the scaled totals reach
+    :meth:`~whetstone_envs.core.pool.TaskPool.split`.
     """
-    n_strata = len(pool.strata)
+    requested_per_stratum = (
+        internal_eval_per_stratum,
+        official_per_stratum,
+        held_out_per_stratum,
+    )
+    for name, size in zip(
+        (
+            "internal_eval_per_stratum",
+            "official_per_stratum",
+            "held_out_per_stratum",
+        ),
+        requested_per_stratum,
+        strict=True,
+    ):
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            msg = f"{name} must be a non-negative integer, got {size!r}"
+            raise ValueError(msg)
+
+    if not pool.instances:
+        msg = "c11 split pool must contain at least one instance"
+        raise ValueError(msg)
+    if any(len(instance.strata) != 1 for instance in pool.instances):
+        msg = "c11 split pool instances must each have exactly one stratum"
+        raise ValueError(msg)
+
+    stratum_counts = pool.stratum_counts()
+    capacities = set(stratum_counts.values())
+    if len(capacities) != 1:
+        msg = (
+            "c11 split pool must have balanced strata, got counts "
+            f"{stratum_counts!r}"
+        )
+        raise ValueError(msg)
+    per_stratum_capacity = capacities.pop()
+    requested_total = sum(requested_per_stratum)
+    if requested_total > per_stratum_capacity:
+        msg = (
+            "per-stratum split sizes sum to "
+            f"{requested_total} but pool capacity is "
+            f"{per_stratum_capacity} per stratum"
+        )
+        raise ValueError(msg)
+
+    n_strata = len(stratum_counts)
     return (
         internal_eval_per_stratum * n_strata,
         official_per_stratum * n_strata,
@@ -281,7 +331,9 @@ def build_manifest(pool: TaskPool, seed_start: int) -> Manifest:
     """Derive the default-config :class:`Manifest` for ``pool``.
 
     The seed range records the full half-open window consumed by generation,
-    including candidates skipped by the adversarial predicate.
+    including candidates skipped by the adversarial predicate or duplicate
+    public identity. Generation stops immediately after retaining its final
+    candidate, so the greatest retained seed is also the final consumed seed.
     """
     seed_end = max(
         (instance.seed for instance in pool.instances),

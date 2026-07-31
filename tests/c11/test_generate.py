@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import random
+import re
+from itertools import combinations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,13 +31,17 @@ from whetstone_envs.c11.generate import (
     generate_pool,
 )
 from whetstone_envs.c11.strata import (
+    S3_NONCANONICAL_EXPONENT_LEXEMES,
+    S3_NUMBER,
     STRATA,
     build_s2,
     build_s3,
     build_s4,
     build_s5,
 )
+from whetstone_envs.core.instance import make_instance
 from whetstone_envs.core.manifest import Manifest, content_hash
+from whetstone_envs.core.pool import TaskPool, public_prompt_identity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -43,6 +49,9 @@ if TYPE_CHECKING:
     from whetstone_envs.core.instance import Instance
 
 _MANIFEST_PATH = Path(generate.__file__).with_name("manifest.json")
+_JSON_EXPONENT_TOKEN = re.compile(
+    r"(?<![\w.])-?(?:0|[1-9]\d*)(?:\.\d+)?[eE][+-]?\d+",
+)
 
 
 def test_regenerating_twice_is_byte_identical() -> None:
@@ -65,6 +74,11 @@ def test_committed_manifest_matches_regenerated_default_pool() -> None:
     frozen = Manifest.read(_MANIFEST_PATH)
     assert frozen.matches_pool(pool)
     assert frozen.generator_version == GENERATOR_VERSION
+    assert frozen == build_manifest(pool, DEFAULT_SEED_START)
+    assert frozen.seed_range == (
+        DEFAULT_SEED_START,
+        max(instance.seed for instance in pool.instances) + 1,
+    )
 
 
 def test_strata_coverage_matches_manifest_counts() -> None:
@@ -91,9 +105,8 @@ def test_default_n_is_the_spec_proposed_split() -> None:
 
 
 def test_default_split_is_disjoint_and_stratum_balanced() -> None:
-    # TaskPool.split groups full strata combinations before assigning the
-    # three disjoint role subsets (spec Section 1: >=2/stratum
-    # internal-eval, 40/stratum official, 40/stratum held-out).
+    # The c11 helper translates the per-stratum 2:40:40 request into
+    # destination sizes; TaskPool.split owns deterministic assignment.
     pool = generate_pool()
     ie, off, ho = default_split_sizes(pool)
     assert (ie, off, ho) == (10, 200, 200)
@@ -108,6 +121,149 @@ def test_default_split_is_disjoint_and_stratum_balanced() -> None:
     assert counts(split.internal_eval) == dict.fromkeys(STRATA, 2)
     assert counts(split.official) == dict.fromkeys(STRATA, 40)
     assert counts(split.held_out) == dict.fromkeys(STRATA, 40)
+
+
+def test_default_split_roles_have_disjoint_public_identities() -> None:
+    pool = generate_pool()
+    split = pool.split(*default_split_sizes(pool))
+    role_identities = [
+        {public_prompt_identity(instance) for instance in role}
+        for role in (split.internal_eval, split.official, split.held_out)
+    ]
+    for left, right in combinations(role_identities, 2):
+        assert left.isdisjoint(right)
+
+
+def test_default_pool_has_unique_public_prompt_identities() -> None:
+    pool = generate_pool()
+    identities = [
+        public_prompt_identity(instance) for instance in pool.instances
+    ]
+    assert len(identities) == len(set(identities))
+
+
+def test_configured_small_pool_uses_its_actual_per_stratum_capacity() -> None:
+    pool = generate_pool(n_per_stratum=3)
+    sizes = default_split_sizes(
+        pool,
+        internal_eval_per_stratum=1,
+        official_per_stratum=1,
+        held_out_per_stratum=1,
+    )
+    assert sizes == (5, 5, 5)
+    split = pool.split(*sizes)
+    roles = (split.internal_eval, split.official, split.held_out)
+    assert tuple(map(len, roles)) == (
+        5,
+        5,
+        5,
+    )
+
+    with pytest.raises(ValueError, match="pool capacity is 3 per stratum"):
+        default_split_sizes(pool)
+
+
+@pytest.mark.parametrize("invalid_size", [-1, True, 1.0])
+def test_default_split_sizes_require_nonnegative_integers(
+    invalid_size: object,
+) -> None:
+    pool = generate_pool(n_per_stratum=3)
+    calls: tuple[tuple[str, Callable[[], object]], ...] = (
+        (
+            "internal_eval_per_stratum",
+            lambda: default_split_sizes(
+                pool,
+                internal_eval_per_stratum=invalid_size,  # ty: ignore[invalid-argument-type]
+                official_per_stratum=0,
+                held_out_per_stratum=0,
+            ),
+        ),
+        (
+            "official_per_stratum",
+            lambda: default_split_sizes(
+                pool,
+                internal_eval_per_stratum=0,
+                official_per_stratum=invalid_size,  # ty: ignore[invalid-argument-type]
+                held_out_per_stratum=0,
+            ),
+        ),
+        (
+            "held_out_per_stratum",
+            lambda: default_split_sizes(
+                pool,
+                internal_eval_per_stratum=0,
+                official_per_stratum=0,
+                held_out_per_stratum=invalid_size,  # ty: ignore[invalid-argument-type]
+            ),
+        ),
+    )
+    for name, call in calls:
+        with pytest.raises(
+            ValueError,
+            match=rf"{name} must be a non-negative integer",
+        ):
+            call()
+
+
+def test_default_split_sizes_require_balanced_single_label_strata() -> None:
+    unbalanced = TaskPool(
+        (
+            make_instance(
+                id="s1-a",
+                seed=1,
+                strata="S1_flat",
+                prompt_inputs={"input": '{"a": 1}'},
+            ),
+            make_instance(
+                id="s1-b",
+                seed=2,
+                strata="S1_flat",
+                prompt_inputs={"input": '{"a": 2}'},
+            ),
+            make_instance(
+                id="s2-a",
+                seed=3,
+                strata="S2_keysort",
+                prompt_inputs={"input": '{"b": 1}'},
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="must have balanced strata"):
+        default_split_sizes(
+            unbalanced,
+            internal_eval_per_stratum=1,
+            official_per_stratum=0,
+            held_out_per_stratum=0,
+        )
+
+    multilabel = TaskPool(
+        (
+            make_instance(
+                id="multi",
+                seed=1,
+                strata=("S1_flat", "S2_keysort"),
+                prompt_inputs={"input": '{"a": 1}'},
+            ),
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match="must each have exactly one stratum",
+    ):
+        default_split_sizes(
+            multilabel,
+            internal_eval_per_stratum=0,
+            official_per_stratum=0,
+            held_out_per_stratum=0,
+        )
+
+    with pytest.raises(ValueError, match="must contain at least one instance"):
+        default_split_sizes(
+            TaskPool(()),
+            internal_eval_per_stratum=0,
+            official_per_stratum=0,
+            held_out_per_stratum=0,
+        )
 
 
 def test_n_per_stratum_is_configurable() -> None:
@@ -183,8 +339,39 @@ def test_keysort_strata_guarantee_unsorted_outer_keys(
 
 def test_number_stratum_guarantees_number_canonicalization_tension() -> None:
     messy = build_s3(random.Random(1))  # noqa: S311 - seeded generator check
-    compact = json.dumps(json.loads(messy), separators=(",", ":"))
-    assert compact != oracle.canonicalize(messy)
+    exponent_tokens = _JSON_EXPONENT_TOKEN.findall(messy)
+    assert exponent_tokens
+    assert any(
+        token != oracle.canonicalize(token) for token in exponent_tokens
+    )
+
+
+def test_s3_exponent_lexemes_are_valid_and_pinned_to_oracle_outputs() -> None:
+    assert {
+        lexeme: oracle.canonicalize(lexeme)
+        for lexeme in S3_NONCANONICAL_EXPONENT_LEXEMES
+    } == {
+        "1e2": "100",
+        "1E+2": "100",
+        "1.00e+2": "100",
+        "100e-2": "1",
+        "15e+1": "150",
+    }
+
+
+def test_default_s3_inputs_contain_noncanonical_exponent_lexemes() -> None:
+    pool = generate_pool()
+    s3_instances = pool.in_stratum(S3_NUMBER)
+    assert len(s3_instances) == DEFAULT_N_PER_STRATUM
+    for instance in s3_instances:
+        messy = instance.prompt_inputs["input"]
+        exponent_tokens = _JSON_EXPONENT_TOKEN.findall(messy)
+        assert exponent_tokens, instance.id
+        assert set(exponent_tokens) & set(S3_NONCANONICAL_EXPONENT_LEXEMES)
+        assert any(
+            token != oracle.canonicalize(token) for token in exponent_tokens
+        ), instance.id
+        assert oracle.canonicalize(messy) == instance.gold
 
 
 def test_unicode_stratum_guarantees_escape_policy_tension() -> None:
@@ -337,3 +524,61 @@ def test_manifest_seed_range_includes_rejected_candidates(
         DEFAULT_SEED_START,
         DEFAULT_SEED_START + 2,
     )
+
+
+def test_duplicate_public_identity_is_redrawn_across_strata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def duplicate_then_unique(stratum: str, seed: int) -> Instance:
+        input_json = (
+            '{"same": 1}'
+            if seed <= DEFAULT_SEED_START + 1
+            else '{"different": 2}'
+        )
+        return make_instance(
+            id=f"c11-{stratum}-{seed}",
+            seed=seed,
+            strata=stratum,
+            prompt_inputs={"input": input_json},
+            gold=oracle.canonicalize(input_json),
+        )
+
+    monkeypatch.setattr(generate, "_build_one", duplicate_then_unique)
+    pool = generate_pool(
+        n_per_stratum=1,
+        strata=("S1_flat", "S2_keysort"),
+    )
+    assert [instance.seed for instance in pool.instances] == [
+        DEFAULT_SEED_START,
+        DEFAULT_SEED_START + 2,
+    ]
+    assert len(
+        {public_prompt_identity(instance) for instance in pool.instances},
+    ) == len(pool)
+    assert build_manifest(pool, DEFAULT_SEED_START).seed_range == (
+        DEFAULT_SEED_START,
+        DEFAULT_SEED_START + 3,
+    )
+
+
+def test_duplicate_redraw_preserves_per_stratum_attempt_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def always_same(stratum: str, seed: int) -> Instance:
+        nonlocal calls
+        calls += 1
+        input_json = '{"same": 1}'
+        return make_instance(
+            id=f"c11-{stratum}-{seed}",
+            seed=seed,
+            strata=stratum,
+            prompt_inputs={"input": input_json},
+            gold=oracle.canonicalize(input_json),
+        )
+
+    monkeypatch.setattr(generate, "_build_one", always_same)
+    with pytest.raises(RuntimeError, match="exhausted seed budget"):
+        generate_pool(n_per_stratum=2, strata=("S1_flat",))
+    assert calls == 2 * generate._MAX_ATTEMPTS_PER_INSTANCE

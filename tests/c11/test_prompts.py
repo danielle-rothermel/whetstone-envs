@@ -45,10 +45,9 @@ _FIXTURE = make_instance(
 # deliberately -- that is the drift guard.
 _EXPECTED_NAIVE = "Canonicalize this JSON.\n\n" + _INPUT
 
-# Golden ceiling rendering: verbatim from spec Section 2.2, with the four
-# worked-example Output lines as the real oracle emits them, and {input}
-# filled. Built here from the same fixed head/examples/tail the spec drafts
-# so template drift in the module is caught.
+# Golden ceiling rendering: the fixed rule text and worked-example Output
+# lines as the real oracle emits them, with {input} filled. The literal
+# makes prompt drift deliberate and reviewable.
 _EXPECTED_CEILING = (
     "Convert the JSON below into its RFC 8785 (JCS) canonical form and"
     " return ONLY the\n"
@@ -64,18 +63,23 @@ _EXPECTED_CEILING = (
     "2. No insignificant whitespace: no spaces or newlines anywhere except"
     " inside string\n"
     '   values. `{"a":1,"b":[2,3]}`, never `{ "a": 1 }`.\n'
-    "3. Strings use the shortest JSON escaping: escape only \" \\ and the"
+    '3. Strings use the shortest JSON escaping: escape only " \\ and the'
     " control characters\n"
-    "   U+0000..U+001F. Use the two-character forms \\\" \\\\ \\b \\f \\n"
+    '   U+0000..U+001F. Use the two-character forms \\" \\\\ \\b \\f \\n'
     " \\r \\t where they exist;\n"
     "   otherwise \\u00XX (lowercase hex). Do not escape forward slash or"
     " any other character.\n"
-    "4. Numbers use the ECMAScript Number-to-string (shortest round-trip)"
-    " form: integers with\n"
-    "   no decimal point or exponent; no leading zeros; no \"+\" on"
-    " exponents; \"-0\" becomes \"0\";\n"
-    "   the minimal digit sequence that round-trips to the same IEEE-754"
-    " double.\n"
+    "4. Numbers use the ECMAScript Number-to-string shortest round-trip"
+    " form for finite\n"
+    "   IEEE-754 doubles. For nonzero magnitudes at least 1e-6 and below"
+    " 1e21, use ordinary\n"
+    "   decimal notation; outside that range, use exponent notation."
+    " Exponents use lowercase\n"
+    '   "e", no leading zero, and "+" for a positive exponent (for'
+    " example, 1e+30). Thus even\n"
+    "   an integer-valued number can use exponent notation at large"
+    ' magnitudes. "-0" becomes\n'
+    '   "0".\n'
     "5. Literals are exactly true, false, null. Arrays preserve their"
     " element order.\n"
     "\n"
@@ -92,6 +96,9 @@ _EXPECTED_CEILING = (
     "\n"
     'Input:  {"nested": {"d": 4, "c": 3}, "arr": [true, null]}\n'
     'Output: {"arr":[true,null],"nested":{"c":3,"d":4}}\n'
+    "\n"
+    'Input:  {"large": 1e30}\n'
+    'Output: {"large":1e+30}\n'
     "\n"
     "Now canonicalize:\n"
     "\n" + _INPUT

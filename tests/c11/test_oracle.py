@@ -2,9 +2,9 @@
 
 Checklist A requires a handful of hand-constructed input/gold pairs with
 *independently verified* expected output, asserting the oracle returns
-the exact expected string. For c11 the spec (Section 7.5) names the
-concrete fixtures: the ceiling prompt's four worked examples, regenerated
-through ``rfc8785.dumps`` and compared byte-for-byte.
+the exact expected string. For c11 the concrete fixtures are the ceiling
+prompt's worked examples, regenerated through ``rfc8785.dumps`` and
+compared byte-for-byte.
 
 Every fixture below is written by hand -- its expected canonical string is
 stated as a literal, independently derived from the RFC 8785 rules, not
@@ -23,10 +23,9 @@ import rfc8785
 from whetstone_envs.c11 import oracle
 from whetstone_envs.c11.prompts import WORKED_EXAMPLE_INPUTS
 
-# The spec Section 2.2 worked examples: (messy input, expected canonical).
-# The expected strings are the hand-verified JCS forms; the test also
-# regenerates them through ``rfc8785.dumps`` to prove the placeholders in
-# the HTML spec matched the real oracle (spec Section 7.5).
+# Ceiling-prompt worked examples: (messy input, expected canonical).
+# The expected strings are hand-verified JCS forms; the test also
+# regenerates them through ``rfc8785.dumps`` to pin the real oracle bytes.
 _WORKED_EXAMPLES: list[tuple[str, str]] = [
     ('{"b": 2, "a": 1}', '{"a":1,"b":2}'),
     ('{"x": 1.0, "y": 1e2, "z": -0}', '{"x":1,"y":100,"z":0}'),
@@ -35,6 +34,7 @@ _WORKED_EXAMPLES: list[tuple[str, str]] = [
         '{"nested": {"d": 4, "c": 3}, "arr": [true, null]}',
         '{"arr":[true,null],"nested":{"c":3,"d":4}}',
     ),
+    ('{"large": 1e30}', '{"large":1e+30}'),
 ]
 
 # Additional hand-built fixtures, one per JCS sub-rule the strata stress.
@@ -43,14 +43,17 @@ _SUBRULE_FIXTURES: list[tuple[str, str]] = [
     ('{ "a": 1, "b": 2 }', '{"a":1,"b":2}'),
     # S2 key sort at every level.
     ('{"c": 1, "a": {"z": 1, "b": 2}}', '{"a":{"b":2,"z":1},"c":1}'),
-    # S3 number canonicalization: -0.0 -> 0, 1.50 -> 1.5, 1e2 -> 100.
-    ('{"n": [-0.0, 1.50, 1e2, 100.0]}', '{"n":[0,1.5,100,100]}'),
+    # S3 number canonicalization includes decimal and exponent thresholds.
+    (
+        '{"n": [-0.0, 1.50, 1e2, 100.0, 1e30]}',
+        '{"n":[0,1.5,100,100,1e+30]}',
+    ),
     # S4 escaping: tab -> \t, quote -> \", control U+0001 -> .
     ('{"k": "a\\tb\\"c\\u0001d"}', '{"k":"a\\tb\\"c\\u0001d"}'),
     # S4 non-ASCII: literal UTF-8, never \u-escaped (the pi case).
     ('{"k": "café"}', '{"k":"café"}'),
     # Array element order preserved; literals exact.
-    ('[true, false, null, 3, 2]', "[true,false,null,3,2]"),
+    ("[true, false, null, 3, 2]", "[true,false,null,3,2]"),
 ]
 
 
@@ -64,9 +67,7 @@ def test_worked_examples_regenerate_byte_for_byte() -> None:
 
 
 def test_worked_example_inputs_match_the_prompt_module() -> None:
-    # The inputs the prompt module ships must be exactly the four the
-    # oracle-regeneration test checks -- so the prompt's Output lines are
-    # verified against these same expected strings.
+    # The prompt inputs and oracle-regeneration fixtures stay in lockstep.
     assert tuple(m for m, _ in _WORKED_EXAMPLES) == WORKED_EXAMPLE_INPUTS
 
 

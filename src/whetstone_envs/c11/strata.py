@@ -88,6 +88,18 @@ _ESCAPE_STRINGS: tuple[str, ...] = (
     "mix\tü\\end",
 )
 
+# Generator contract: these exact JSON number tokens enter persisted public
+# inputs. They are literals, never float-derived, so their exponent notation
+# survives until the oracle parses it. The manifest and c11 regression tests
+# pin this tuple's effect on generated identity.
+S3_NONCANONICAL_EXPONENT_LEXEMES: tuple[str, ...] = (
+    "1e2",
+    "1E+2",
+    "1.00e+2",
+    "100e-2",
+    "15e+1",
+)
+
 
 def _messy_dumps(obj: object, *, escape_non_ascii: bool = False) -> str:
     """Serialize ``obj`` to a deliberately non-canonical JSON string.
@@ -143,27 +155,34 @@ def build_s2(rng: random.Random) -> str:
 
 
 def build_s3(rng: random.Random) -> str:
-    """S3 number canonicalization: floats/-0/exponents needing rewrite.
+    """S3 number canonicalization with guaranteed lexical exponent tension.
 
-    Every value is a number whose messy literal differs from its
-    ECMAScript shortest-round-trip canonical form: a trailing ``.0``, an
-    exponent form, or ``-0.0``. Integers stay inside the IEEE-754 safe
-    domain so ``rfc8785`` never rejects them.
+    At least one value is emitted from a hand-authored JSON number token
+    containing an exponent whose spelling is not its ECMAScript canonical
+    spelling. The token is inserted lexically rather than passed through
+    :func:`json.dumps`, which would first turn it into a Python float and
+    could erase the exponent notation this stratum promises to test.
     """
     keys = sorted(rng.sample(_ASCII_KEYS, rng.randint(2, 4)))
-    obj: dict[str, object] = {}
-    # A messy-number menu: each entry's parsed value canonicalizes to a
-    # visibly different string.
-    menu: tuple[object, ...] = (
-        1.0,
-        100.0,
-        -0.0,
-        1e2,
-        1.5e10,
+    exponent_key = rng.choice(keys)
+    other_lexemes: tuple[str, ...] = (
+        "1.0",
+        "100.0",
+        "-0.0",
+        *S3_NONCANONICAL_EXPONENT_LEXEMES,
     )
-    for k in keys:
-        obj[k] = rng.choice(menu)
-    return _messy_dumps(obj)
+    members = [
+        (
+            f"{json.dumps(key)}: "
+            + (
+                rng.choice(S3_NONCANONICAL_EXPONENT_LEXEMES)
+                if key == exponent_key
+                else rng.choice(other_lexemes)
+            )
+        )
+        for key in keys
+    ]
+    return "{" + ", ".join(members) + "}"
 
 
 def build_s4(rng: random.Random) -> str:

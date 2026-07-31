@@ -23,6 +23,7 @@ import random
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -88,6 +89,44 @@ def test_apply_rule_transducers_are_upstream_unmodified() -> None:
     for fn in (sdg.apply_ISL_rule, sdg.apply_L_OSL_rule, sdg.apply_R_OSL_rule):
         body = inspect.getsource(fn)
         assert "PATCH" not in body, fn.__name__
+
+
+def test_supported_hypothesis_class_is_exact_and_auditable() -> None:
+    hypotheses = upstream.enumerate_supported_hypotheses(vocab_size=4)
+    assert upstream.SUPPORTED_RULE_CONFIGURATIONS == (
+        (upstream.ISL, 2),
+        (upstream.L_OSL, 2),
+        (upstream.R_OSL, 2),
+        (upstream.ISL, 3),
+    )
+    assert len(hypotheses) == 448
+    assert Counter(
+        (hypothesis.rule_type, hypothesis.k) for hypothesis in hypotheses
+    ) == {
+        (upstream.ISL, 2): 64,
+        (upstream.L_OSL, 2): 64,
+        (upstream.R_OSL, 2): 64,
+        (upstream.ISL, 3): 256,
+    }
+    assert all(
+        len(hypothesis.context) == hypothesis.k for hypothesis in hypotheses
+    )
+    assert all(
+        hypothesis.replacement == ""
+        or hypothesis.replacement != hypothesis.context[-1]
+        for hypothesis in hypotheses
+    )
+
+
+def test_bounded_exact_cover_recovers_from_greedy_dead_end() -> None:
+    # The first mask has the largest immediate coverage, but choosing it
+    # requires three masks. The latter two masks cover the target in two.
+    masks = (0b001111, 0b010011, 0b101100)
+    assert upstream._exact_cover_masks(masks, 0b111111, 2) == (1, 2)
+
+
+def test_bounded_exact_cover_rejects_empty_masks_for_nonzero_target() -> None:
+    assert upstream._exact_cover_masks((), 0b1, 2) is None
 
 
 def test_vendored_diff_file_is_present_and_reviewable() -> None:
@@ -233,26 +272,122 @@ upstream.generate_raw(
 
 
 def test_non_positive_demo_and_query_configuration_bounds() -> None:
-    common = {
-        "rule_type": upstream.ISL,
-        "k": 2,
-        "vocab_size": 4,
-        "seed": 555_000_000,
-        "num_instances": 1,
-        "sample_size_times": 10,
-    }
     with pytest.raises(upstream.UpstreamError, match="n_demos"):
-        upstream.generate_raw(**common, max_query_len=8, n_demos=-1)
+        upstream.generate_raw(
+            rule_type=upstream.ISL,
+            k=2,
+            vocab_size=4,
+            seed=555_000_000,
+            num_instances=1,
+            sample_size_times=10,
+            max_query_len=8,
+            n_demos=-1,
+        )
     with pytest.raises(upstream.UpstreamError, match="max_query_len"):
-        upstream.generate_raw(**common, max_query_len=1, n_demos=6)
-    with pytest.raises(upstream.UpstreamError, match="exceeds"):
-        upstream.generate_raw(**common, max_query_len=8, n_demos=10_000)
+        upstream.generate_raw(
+            rule_type=upstream.ISL,
+            k=2,
+            vocab_size=4,
+            seed=555_000_000,
+            num_instances=1,
+            sample_size_times=10,
+            max_query_len=1,
+            n_demos=6,
+        )
+    with pytest.raises(upstream.UpstreamError, match="exactly 10000"):
+        upstream.generate_raw(
+            rule_type=upstream.ISL,
+            k=2,
+            vocab_size=4,
+            seed=555_000_000,
+            num_instances=1,
+            sample_size_times=10,
+            max_query_len=8,
+            n_demos=10_000,
+        )
 
 
-def test_query_length_must_leave_space_outside_full_demos() -> None:
+def test_query_is_held_out_from_public_demos() -> None:
+    generated = upstream.generate_raw(
+        rule_type=upstream.ISL,
+        k=2,
+        vocab_size=4,
+        seed=555_000_000,
+        num_instances=1,
+        sample_size_times=10,
+        max_query_len=2,
+        n_demos=6,
+    )
+    instance = generated[0]
+    assert len(instance.query) == 2
+    assert instance.query not in instance.demos
+    assert instance.gold != instance.query
+    assert upstream.version_space_outputs(
+        instance.demos,
+        instance.query,
+        vocab_size=4,
+    ) == {instance.gold}
+
+
+def test_generate_raw_retries_an_emitted_public_identity() -> None:
+    def generate(
+        excluded: set[upstream.PublicPromptIdentity] | None = None,
+    ) -> upstream.RawInstance:
+        return upstream.generate_raw(
+            rule_type=upstream.ISL,
+            k=2,
+            vocab_size=4,
+            seed=555_000_000,
+            num_instances=1,
+            sample_size_times=10,
+            max_query_len=8,
+            n_demos=1,
+            excluded_public_identities=(
+                frozenset() if excluded is None else excluded
+            ),
+        )[0]
+
+    first = generate()
+    first_identity = upstream._public_prompt_identity(
+        first.demos,
+        first.query,
+    )
+
+    retried = generate({first_identity})
+    repeated = generate({first_identity})
+
+    assert retried == repeated
+    assert (
+        upstream._public_prompt_identity(retried.demos, retried.query)
+        != first_identity
+    )
+
+
+def test_generate_raw_reports_unique_selection_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    occupied = (("demos_block", "occupied"), ("query", "occupied"))
+    attempts = 0
+
+    def always_occupied(
+        _demos: dict[str, str],
+        _query: str,
+    ) -> upstream.PublicPromptIdentity:
+        nonlocal attempts
+        attempts += 1
+        return occupied
+
+    monkeypatch.setattr(
+        upstream,
+        "_public_prompt_identity",
+        always_occupied,
+    )
     with pytest.raises(
         upstream.UpstreamError,
-        match=r"max_query_len=2 leaves no held-out query",
+        match=(
+            r"ISL k=2, seed=555000000, instance_index=0.*"
+            r"otherwise valid public prompt selections were already emitted"
+        ),
     ):
         upstream.generate_raw(
             rule_type=upstream.ISL,
@@ -261,42 +396,11 @@ def test_query_length_must_leave_space_outside_full_demos() -> None:
             seed=555_000_000,
             num_instances=1,
             sample_size_times=10,
-            max_query_len=2,
-            n_demos=6,
+            max_query_len=8,
+            n_demos=1,
+            excluded_public_identities={occupied},
         )
-
-
-def test_exhaustive_fallback_survives_32_random_candidate_collisions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def colliding_candidates(
-        _vocab: object,
-        *,
-        count: int,
-        max_len: int,
-        rng: object,
-    ) -> list[list[str]]:
-        assert max_len == 3
-        assert rng is not None
-        return [["aa"] * 32 for _ in range(count)]
-
-    monkeypatch.setattr(
-        upstream,
-        "_draw_query_candidates",
-        colliding_candidates,
-    )
-    generated = upstream.generate_raw(
-        rule_type=upstream.ISL,
-        k=2,
-        vocab_size=4,
-        seed=555_000_000,
-        num_instances=2,
-        sample_size_times=10,
-        max_query_len=3,
-        n_demos=6,
-    )
-    assert all(len(instance.query) == 3 for instance in generated)
-    assert all(instance.query != "aa" for instance in generated)
+    assert attempts > 1
 
 
 def test_upstream_public_api_rejects_non_strict_integers() -> None:

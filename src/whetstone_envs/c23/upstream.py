@@ -10,6 +10,12 @@ module-global ``config.vocab`` for the duration of one call **under a
 lock** (restoring it after, so the global is never a hidden cross-call
 coupling), and projects the vendored output into plain records.
 
+Public demonstrations and the held-out query are selected jointly against
+the explicitly enumerated finite benchmark hypothesis class. Every supported
+hypothesis consistent with the demonstrations must produce the frozen gold
+on the query; the selector does not require those hypotheses to identify the
+same latent rule.
+
 Two upstream facts from the repos review drive the design:
 
 * the vendored generator reads the alphabet from a module-global
@@ -30,19 +36,22 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import random
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING
 
+from whetstone_envs.c23 import prompts
 from whetstone_envs.c23._vendor.inductionbench import config
 from whetstone_envs.c23._vendor.inductionbench import (
     synthetic_data_generation as _sdg,
 )
+from whetstone_envs.core.instance import make_instance
+from whetstone_envs.core.pool import public_prompt_identity
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Sequence, Set
 
 # The three transducer families the ISL/OSL path exposes (spec Section 1
 # secondary axis). ``L_OSL`` / ``R_OSL`` use the vendored ``_OSL`` spelling
@@ -51,8 +60,20 @@ ISL = "ISL"
 L_OSL = "L_OSL"
 R_OSL = "R_OSL"
 RULE_TYPES: tuple[str, ...] = (ISL, L_OSL, R_OSL)
-MIN_K = 2
 MIN_QUERY_LEN = 2
+
+# The benchmark's supported finite family/k surface. This is deliberately
+# the exact set represented by the four public strata, not the Cartesian
+# product of every family with every k. A hypothesis is one of these
+# configurations plus one length-k context and one non-identity replacement
+# (including deletion).
+SUPPORTED_RULE_CONFIGURATIONS: tuple[tuple[str, int], ...] = (
+    (ISL, 2),
+    (L_OSL, 2),
+    (R_OSL, 2),
+    (ISL, 3),
+)
+PublicPromptIdentity = tuple[tuple[str, str], ...]
 
 # The vendored ``config.vocab`` is a process-global read by every generator
 # function. We set it per call under this lock so concurrent generations
@@ -89,6 +110,25 @@ class RawInstance:
     gold: str
 
 
+@dataclass(frozen=True, slots=True)
+class Hypothesis:
+    """One member of the supported finite single-rule hypothesis class."""
+
+    rule_type: str
+    k: int
+    context: str
+    replacement: str
+
+    def apply(self, value: str) -> str:
+        """Apply this hypothesis through the canonical vendored transducer."""
+        return apply_rule(
+            self.rule_type,
+            self.k,
+            {self.context: self.replacement},
+            value,
+        )
+
+
 def _require_int(name: str, value: int) -> int:
     """Return a strict integer, rejecting booleans and numeric lookalikes."""
     if type(value) is not int:
@@ -104,6 +144,65 @@ def vocab_for(vocab_size: int) -> list[str]:
         msg = f"vocab_size must be in 1..{len(_ALPHABET)}, got {vocab_size}"
         raise UpstreamError(msg)
     return list(_ALPHABET[:vocab_size])
+
+
+def enumerate_supported_hypotheses(
+    vocab_size: int,
+) -> tuple[Hypothesis, ...]:
+    """Enumerate the exact supported finite one-rule hypothesis class.
+
+    For each supported family/k configuration, the rule context is every
+    length-k string over the fixed alphabet. The replacement is deletion or
+    any alphabet symbol other than the context's final symbol, exactly
+    matching the vendored one-rule generator's output domain.
+    """
+    vocab = vocab_for(vocab_size)
+    hypotheses: list[Hypothesis] = []
+    for rule_type, k in SUPPORTED_RULE_CONFIGURATIONS:
+        contexts = _strings_of_length(vocab, k)
+        for context in contexts:
+            replacements = [
+                symbol for symbol in vocab if symbol != context[-1]
+            ]
+            replacements.append("")
+            hypotheses.extend(
+                Hypothesis(rule_type, k, context, replacement)
+                for replacement in replacements
+            )
+    return tuple(hypotheses)
+
+
+def consistent_hypotheses(
+    demos: Mapping[str, str],
+    *,
+    vocab_size: int,
+) -> tuple[Hypothesis, ...]:
+    """Return every supported hypothesis consistent with public ``demos``."""
+    hypotheses = enumerate_supported_hypotheses(vocab_size)
+    return tuple(
+        hypothesis
+        for hypothesis in hypotheses
+        if all(
+            hypothesis.apply(demo_input) == demo_output
+            for demo_input, demo_output in demos.items()
+        )
+    )
+
+
+def version_space_outputs(
+    demos: Mapping[str, str],
+    query: str,
+    *,
+    vocab_size: int,
+) -> frozenset[str]:
+    """Return query outputs allowed by the demo-consistent version space."""
+    return frozenset(
+        hypothesis.apply(query)
+        for hypothesis in consistent_hypotheses(
+            demos,
+            vocab_size=vocab_size,
+        )
+    )
 
 
 def _make_args(
@@ -159,40 +258,313 @@ def apply_rule(
     raise UpstreamError(msg)
 
 
-def _held_out_query(
-    rng_pick: Iterable[str],
+def _strings_of_length(
+    vocab: Sequence[str],
+    length: int,
+) -> tuple[str, ...]:
+    """Return one finite string layer in canonical product order."""
+    return tuple(
+        "".join(chars) for chars in itertools.product(vocab, repeat=length)
+    )
+
+
+def _canonical_examples(
+    examples: Mapping[str, str],
+) -> tuple[tuple[str, str], ...]:
+    """Freeze examples in stable shortest-input-first order."""
+    return tuple(
+        sorted(
+            examples.items(),
+            key=lambda item: (len(item[0]), item[0], item[1]),
+        ),
+    )
+
+
+def _find_demo_cover(
+    hypotheses: Sequence[Hypothesis],
+    candidates: Sequence[tuple[str, str]],
+    *,
+    n_demos: int,
+) -> tuple[tuple[str, str], ...] | None:
+    """Find at most ``n_demos`` examples eliminating every hypothesis.
+
+    ``hypotheses`` contains exactly the query-wrong portion of the version
+    space. Each candidate demonstration covers the hypotheses it
+    contradicts. A query-aware greedy pass handles the common case; a
+    deterministic bounded exact-cover search prevents the heuristic from
+    freezing ambiguity or falsely declaring a feasible budget impossible.
+    """
+    if not hypotheses:
+        return ()
+
+    coverage = _demo_coverage(hypotheses, candidates)
+    target = (1 << len(hypotheses)) - 1
+    if not _coverage_is_complete(coverage, target):
+        return None
+
+    greedy = _greedy_demo_cover(coverage, target, n_demos)
+    if greedy is not None:
+        return greedy
+
+    # Examples with identical coverage are interchangeable for feasibility,
+    # so retain the first canonical representative.
+    representative: dict[int, tuple[str, str]] = {}
+    for example, mask in coverage:
+        representative.setdefault(mask, example)
+    masks = tuple(representative)
+    solution = _exact_cover_masks(masks, target, n_demos)
+    if solution is None:
+        return None
+    return tuple(representative[masks[index]] for index in solution)
+
+
+def _demo_coverage(
+    hypotheses: Sequence[Hypothesis],
+    candidates: Sequence[tuple[str, str]],
+) -> tuple[tuple[tuple[str, str], int], ...]:
+    """Encode which query-wrong hypotheses each demo contradicts."""
+    coverage: list[tuple[tuple[str, str], int]] = []
+    for example in candidates:
+        demo_input, demo_output = example
+        mask = 0
+        for index, hypothesis in enumerate(hypotheses):
+            if hypothesis.apply(demo_input) != demo_output:
+                mask |= 1 << index
+        if mask:
+            coverage.append((example, mask))
+    return tuple(coverage)
+
+
+def _coverage_is_complete(
+    coverage: Sequence[tuple[tuple[str, str], int]],
+    target: int,
+) -> bool:
+    """Return whether the candidates jointly eliminate the target set."""
+    union = 0
+    for _example, mask in coverage:
+        union |= mask
+    return union == target
+
+
+def _greedy_demo_cover(
+    coverage: Sequence[tuple[tuple[str, str], int]],
+    target: int,
+    n_demos: int,
+) -> tuple[tuple[str, str], ...] | None:
+    """Return a targeted greedy cover when it fits ``n_demos``."""
+    uncovered = target
+    greedy: list[tuple[str, str]] = []
+    unused = list(coverage)
+    while uncovered and len(greedy) < n_demos:
+        best_index = -1
+        best_count = 0
+        for index, (_example, mask) in enumerate(unused):
+            count = (mask & uncovered).bit_count()
+            if count > best_count:
+                best_index = index
+                best_count = count
+        if best_index < 0:
+            break
+        example, mask = unused.pop(best_index)
+        greedy.append(example)
+        uncovered &= ~mask
+    if not uncovered:
+        return tuple(greedy)
+    return None
+
+
+def _exact_cover_masks(
+    masks: tuple[int, ...],
+    target: int,
+    n_demos: int,
+) -> tuple[int, ...] | None:
+    """Find a bounded exact set cover over canonical coverage masks."""
+
+    @cache
+    def search(uncovered_mask: int, budget: int) -> tuple[int, ...] | None:
+        if not uncovered_mask:
+            return ()
+        if budget == 0 or not masks:
+            return None
+
+        useful = tuple(mask & uncovered_mask for mask in masks)
+        max_cover = max(mask.bit_count() for mask in useful)
+        if max_cover == 0:
+            return None
+        minimum_needed = (
+            uncovered_mask.bit_count() + max_cover - 1
+        ) // max_cover
+        if minimum_needed > budget:
+            return None
+
+        pivot_candidates: tuple[int, ...] | None = None
+        pending = uncovered_mask
+        while pending:
+            pivot = pending & -pending
+            covering = tuple(
+                index for index, mask in enumerate(masks) if mask & pivot
+            )
+            if pivot_candidates is None or len(covering) < len(
+                pivot_candidates,
+            ):
+                pivot_candidates = covering
+            pending &= ~pivot
+        assert pivot_candidates is not None
+
+        ordered = sorted(
+            pivot_candidates,
+            key=lambda index: (
+                -(masks[index] & uncovered_mask).bit_count(),
+                index,
+            ),
+        )
+        for index in ordered:
+            remainder = uncovered_mask & ~masks[index]
+            suffix = search(remainder, budget - 1)
+            if suffix is not None:
+                return (index, *suffix)
+        return None
+
+    return search(target, n_demos)
+
+
+def _public_prompt_identity(
     demos: Mapping[str, str],
+    query: str,
+) -> PublicPromptIdentity:
+    """Return the shared pool identity for one candidate public prompt."""
+    candidate = make_instance(
+        id="c23-public-identity-candidate",
+        seed=0,
+        strata="c23",
+        prompt_inputs={
+            "demos_block": prompts.render_demos_block(dict(demos)),
+            "query": query,
+        },
+    )
+    return public_prompt_identity(candidate)
+
+
+def _select_demos_and_query(
+    full_demos: Mapping[str, str],
     *,
     rule_type: str,
     k: int,
     rule: Mapping[str, str],
-) -> tuple[str, str]:
-    """Return a ``(query, gold)`` whose input is absent from ``demos``.
+    vocab_size: int,
+    n_demos: int,
+    max_query_len: int,
+    query_offset: int,
+    excluded_public_identities: Set[PublicPromptIdentity],
+    seed: int,
+    instance_index: int,
+) -> tuple[dict[str, str], str, str]:
+    """Jointly select a determinate nontrivial query and exact demos.
 
-    ``rng_pick`` is a pre-sampled, deterministic list of candidate query
-    strings (built by the caller from the seeded RNG). Among the candidates
-    absent from ``demos``, a query on which the rule **actually fires**
-    (gold != input) is preferred, so the held-out query is not trivially the
-    identity; falling back to the first held-out candidate if none of them
-    trigger the rule. Its gold is the vendored transducer applied to it.
-    Raises if every supplied candidate collides with the demos.
-    :func:`generate_raw` handles that signal from the random batch by
-    exhausting the configured finite query space before reporting failure.
+    Candidate queries and demonstrations come from the vendored
+    characteristic-sample dataset. Queries are tried deterministically in
+    shortest-input-first order and must be transformed by the latent rule.
+    For each query, demo selection eliminates every supported hypothesis
+    that would produce a different query output. Surviving hypotheses may
+    disagree about the rule as long as they all agree on the scored answer.
     """
-    first_held_out: tuple[str, str] | None = None
-    for candidate in rng_pick:
-        if candidate in demos:
+    hypotheses = enumerate_supported_hypotheses(vocab_size)
+    examples = _canonical_examples(full_demos)
+    canonical_firing_queries = tuple(
+        (query, gold)
+        for query, gold in examples
+        if MIN_QUERY_LEN <= len(query) <= max_query_len and gold != query
+    )
+    offset = (
+        query_offset % len(canonical_firing_queries)
+        if canonical_firing_queries
+        else 0
+    )
+    firing_queries = (
+        canonical_firing_queries[offset:] + canonical_firing_queries[:offset]
+    )
+
+    duplicate_selections = 0
+    for query, gold in firing_queries:
+        derived_gold = apply_rule(rule_type, k, rule, query)
+        if derived_gold != gold:
+            msg = (
+                "vendored characteristic sample disagrees with its "
+                f"{rule_type} k={k} rule for query {query!r}: "
+                f"sample={gold!r}, derived={derived_gold!r}"
+            )
+            raise UpstreamError(msg)
+
+        candidates = tuple(
+            example for example in examples if example[0] != query
+        )
+        if len(candidates) < n_demos:
             continue
-        gold = apply_rule(rule_type, k, rule, candidate)
-        if first_held_out is None:
-            first_held_out = (candidate, gold)
-        if gold != candidate:
-            return candidate, gold
-    if first_held_out is not None:
-        return first_held_out
+        wrong = tuple(
+            hypothesis
+            for hypothesis in hypotheses
+            if hypothesis.apply(query) != gold
+        )
+        informative = tuple(
+            example for example in candidates if example[0] != example[1]
+        )
+        selected = _find_demo_cover(
+            wrong,
+            informative,
+            n_demos=n_demos,
+        )
+        if selected is None:
+            selected = _find_demo_cover(
+                wrong,
+                candidates,
+                n_demos=n_demos,
+            )
+        if selected is None:
+            continue
+
+        chosen = list(selected)
+        chosen_inputs = {demo_input for demo_input, _output in chosen}
+        padding_offset = query_offset % len(candidates)
+        padding_candidates = (
+            candidates[padding_offset:] + candidates[:padding_offset]
+        )
+        for example in padding_candidates:
+            if len(chosen) == n_demos:
+                break
+            if example[0] not in chosen_inputs:
+                chosen.append(example)
+                chosen_inputs.add(example[0])
+        if len(chosen) != n_demos:
+            continue
+
+        demos = dict(sorted(chosen))
+        outputs = version_space_outputs(
+            demos,
+            query,
+            vocab_size=vocab_size,
+        )
+        if outputs != {gold}:
+            msg = (
+                "internal c23 selection error: selected demonstrations "
+                f"leave outputs {sorted(outputs)!r} for {rule_type} k={k} "
+                f"query {query!r}, expected only {gold!r}"
+            )
+            raise UpstreamError(msg)
+        if _public_prompt_identity(demos, query) in excluded_public_identities:
+            duplicate_selections += 1
+            continue
+        return demos, query, gold
+
     msg = (
-        f"could not find a held-out query outside {len(demos)} demos for "
-        f"a {rule_type} k={k} rule"
+        f"cannot select exactly {n_demos} demonstrations and a nontrivial "  # noqa: S608
+        "determinate held-out query from "
+        f"{len(full_demos)} characteristic-sample pairs for "
+        f"{rule_type} k={k}, seed={seed}, instance_index={instance_index} "
+        f"with max_query_len={max_query_len}; "
+        f"{len(firing_queries)} firing queries were available and the "
+        f"supported hypothesis class contains {len(hypotheses)} rules; "
+        f"{duplicate_selections} otherwise valid public prompt selections "
+        "were already emitted"
     )
     raise UpstreamError(msg)
 
@@ -219,8 +591,11 @@ def _validate_generate_raw_config(
     _require_int("sample_size_times", sample_size_times)
     _require_int("max_query_len", max_query_len)
     _require_int("n_demos", n_demos)
-    if k < MIN_K:
-        msg = f"k must be at least {MIN_K}, got {k}"
+    if (rule_type, k) not in SUPPORTED_RULE_CONFIGURATIONS:
+        msg = (
+            f"unsupported rule configuration {(rule_type, k)!r} "
+            f"(expected one of {SUPPORTED_RULE_CONFIGURATIONS!r})"
+        )
         raise UpstreamError(msg)
     if num_instances < 1:
         msg = f"num_instances must be positive, got {num_instances}"
@@ -249,14 +624,15 @@ def generate_raw(
     sample_size_times: int,
     max_query_len: int,
     n_demos: int,
+    excluded_public_identities: Set[PublicPromptIdentity] = frozenset(),
 ) -> list[RawInstance]:
     """Generate ``num_instances`` single-rule instances for one stratum.
 
     Reseeds the vendored generator once at ``seed`` (patch 3/4), sets the
     vendored ``config.vocab`` under a lock for the duration, and for each
-    generated rule builds the demonstration mapping plus a held-out query
-    (an input absent from the demos) whose gold is the vendored transducer
-    applied to it.
+    generated rule jointly selects an exact-size demonstration mapping and a
+    nontrivial held-out query whose output is determinate over every
+    demo-consistent supported hypothesis.
 
     Determinism: with the vendor patches the whole draw is a pure
     function of ``(rule_type, k, vocab_size, seed, num_instances,
@@ -299,46 +675,28 @@ def generate_raw(
         )
         raise UpstreamError(msg)
 
-    candidates = _draw_query_candidates(
-        vocab,
-        count=num_instances,
-        max_len=max_query_len,
-        rng=random.Random(seed),
-    )
-
+    selected_public_identities = set(excluded_public_identities)
     out: list[RawInstance] = []
     for idx in range(num_instances):
         rule = rules[idx]
         sample_dataset, _prompt = data[idx]
         full_demos = {str(i): str(o) for i, o in sample_dataset.items()}
-        try:
-            query, gold = _held_out_query(
-                candidates[idx],
-                full_demos,
-                rule_type=rule_type,
-                k=k,
-                rule=rule,
-            )
-        except UpstreamError:
-            # Random candidates are an optimization, not a correctness
-            # boundary. Exhaust the configured finite query space before
-            # deciding that max_query_len cannot yield a held-out input.
-            try:
-                query, gold = _held_out_query(
-                    _all_query_strings(vocab, max_len=max_query_len),
-                    full_demos,
-                    rule_type=rule_type,
-                    k=k,
-                    rule=rule,
-                )
-            except UpstreamError as exc:
-                msg = (
-                    f"max_query_len={max_query_len} leaves no held-out "
-                    f"query outside {len(full_demos)} demos for "
-                    f"{rule_type} k={k}"
-                )
-                raise UpstreamError(msg) from exc
-        demos = _subsample_demos(full_demos, n_demos=n_demos)
+        demos, query, gold = _select_demos_and_query(
+            full_demos,
+            rule_type=rule_type,
+            k=k,
+            rule=rule,
+            vocab_size=vocab_size,
+            n_demos=n_demos,
+            max_query_len=max_query_len,
+            query_offset=idx,
+            excluded_public_identities=selected_public_identities,
+            seed=seed,
+            instance_index=idx,
+        )
+        selected_public_identities.add(
+            _public_prompt_identity(demos, query),
+        )
         out.append(
             RawInstance(
                 rule_type=rule_type,
@@ -350,79 +708,3 @@ def generate_raw(
             ),
         )
     return out
-
-
-def _draw_query_candidates(
-    vocab: Sequence[str],
-    *,
-    count: int,
-    max_len: int,
-    rng: random.Random,
-) -> list[list[str]]:
-    """Draw ``count`` deterministic lists of candidate query strings.
-
-    One list per instance; each list holds several random strings over
-    ``vocab`` (lengths 2..``max_len``) so the caller can pick the first that
-    is not already a demonstration input. The caller supplies a dedicated
-    RNG, keeping generation independent of the embedding process's global
-    random state.
-    """
-    per_instance = 32
-    out: list[list[str]] = []
-    for _ in range(count):
-        picks: list[str] = []
-        for _ in range(per_instance):
-            length = rng.randint(2, max_len)
-            picks.append(
-                "".join(rng.choice(vocab) for _ in range(length)),
-            )
-        out.append(picks)
-    return out
-
-
-def _all_query_strings(
-    vocab: Sequence[str],
-    *,
-    max_len: int,
-) -> itertools.chain[str]:
-    """Return every allowed query string in canonical length-first order."""
-    return itertools.chain.from_iterable(
-        ("".join(chars) for chars in itertools.product(vocab, repeat=length))
-        for length in range(MIN_QUERY_LEN, max_len + 1)
-    )
-
-
-def _subsample_demos(
-    full_demos: Mapping[str, str],
-    *,
-    n_demos: int,
-) -> dict[str, str]:
-    """Pick a small, canonical, rule-revealing demo subset.
-
-    The vendored characteristic sample is large (often >100 pairs, far more
-    than the spec's few-shot block). Down-sample to ``n_demos`` pairs *purely
-    deterministically* -- no RNG, so this is safe to call outside the vocab
-    lock -- preferring pairs where the rule **fires** (output != input) so
-    the transformation is actually demonstrated, then filling with identity
-    pairs. Within each group, pairs are taken in sorted-key order so the
-    subset is reproducible and independent of dict iteration order.
-    """
-    if n_demos < 0:
-        msg = f"n_demos must be non-negative, got {n_demos}"
-        raise UpstreamError(msg)
-    if n_demos == 0:
-        return {}
-    if n_demos > len(full_demos):
-        msg = (
-            f"n_demos={n_demos} exceeds the {len(full_demos)} "
-            "available demonstrations"
-        )
-        raise UpstreamError(msg)
-    if n_demos == len(full_demos):
-        return dict(sorted(full_demos.items()))
-    firing = sorted((i, o) for i, o in full_demos.items() if o != i)
-    identity = sorted((i, o) for i, o in full_demos.items() if o == i)
-    chosen = firing[:n_demos]
-    if len(chosen) < n_demos:
-        chosen = chosen + identity[: n_demos - len(chosen)]
-    return dict(sorted(chosen))

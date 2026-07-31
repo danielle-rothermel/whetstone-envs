@@ -9,6 +9,8 @@ full 4-stratum default pool is not needed, to stay fast.
 
 from __future__ import annotations
 
+import argparse
+import itertools
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,6 +18,9 @@ import pytest
 from typer.testing import CliRunner
 
 from whetstone_envs.c23 import generate, oracle, upstream
+from whetstone_envs.c23._vendor.inductionbench import (
+    synthetic_data_generation as _test_sdg,
+)
 from whetstone_envs.c23.generate import (
     DEFAULT_HELD_OUT_PER_STRATUM,
     DEFAULT_INTERNAL_EVAL_PER_STRATUM,
@@ -33,12 +38,30 @@ from whetstone_envs.c23.generate import (
     generate_pool,
 )
 from whetstone_envs.core.manifest import Manifest, content_hash
+from whetstone_envs.core.pool import public_prompt_identity
 
 if TYPE_CHECKING:
     from whetstone_envs.core.instance import Instance
     from whetstone_envs.core.pool import TaskPool
 
 _MANIFEST_PATH = Path(generate.__file__).with_name("manifest.json")
+_KNOWN_AMBIGUOUS_IDS = {
+    "c23-S1-555000000-0012",
+    "c23-S1-555000000-0016",
+    "c23-S2-555000001-0036",
+    "c23-S2-555000001-0037",
+    "c23-S2-555000001-0038",
+    "c23-S3-555000002-0043",
+    "c23-S4-555000003-0047",
+}
+_LITERAL_SUPPORTED_CONFIGURATIONS = (
+    ("ISL", 2),
+    ("L_OSL", 2),
+    ("R_OSL", 2),
+    ("ISL", 3),
+)
+_LITERAL_VOCAB = ("a", "b", "c", "d")
+_TestHypothesis = tuple[str, int, str, str]
 
 
 def _fast_pool(
@@ -48,6 +71,72 @@ def _fast_pool(
 ) -> TaskPool:
     """A small default-shape pool for the cheap generator tests."""
     return generate_pool(n_per_stratum=n_per_stratum, seed_start=seed_start)
+
+
+def _parse_demos_block(block: str) -> dict[str, str]:
+    return dict(line.split(" -> ", 1) for line in block.splitlines())
+
+
+def _enumerate_test_hypotheses() -> frozenset[_TestHypothesis]:
+    hypotheses: set[_TestHypothesis] = set()
+    for rule_type, k in _LITERAL_SUPPORTED_CONFIGURATIONS:
+        for context_chars in itertools.product(_LITERAL_VOCAB, repeat=k):
+            context = "".join(context_chars)
+            replacements = (
+                "",
+                *(
+                    symbol
+                    for symbol in _LITERAL_VOCAB
+                    if symbol != context[-1]
+                ),
+            )
+            hypotheses.update(
+                (rule_type, k, context, replacement)
+                for replacement in replacements
+            )
+    return frozenset(hypotheses)
+
+
+_TEST_HYPOTHESES = _enumerate_test_hypotheses()
+
+
+def _apply_test_hypothesis(
+    hypothesis: _TestHypothesis,
+    value: str,
+) -> str:
+    rule_type, k, context, replacement = hypothesis
+    args = argparse.Namespace(k=k)
+    rule = {context: replacement}
+    if rule_type == "ISL":
+        return _test_sdg.apply_ISL_rule(args, rule, value)
+    if rule_type == "L_OSL":
+        return _test_sdg.apply_L_OSL_rule(args, rule, value)
+    if rule_type == "R_OSL":
+        return _test_sdg.apply_R_OSL_rule(args, rule, value)
+    raise AssertionError(f"unsupported test hypothesis family: {rule_type}")
+
+
+def _independent_consistent_hypotheses(
+    demos: dict[str, str],
+) -> tuple[_TestHypothesis, ...]:
+    return tuple(
+        hypothesis
+        for hypothesis in _TEST_HYPOTHESES
+        if all(
+            _apply_test_hypothesis(hypothesis, demo_input) == demo_output
+            for demo_input, demo_output in demos.items()
+        )
+    )
+
+
+def _independent_version_space_outputs(
+    demos: dict[str, str],
+    query: str,
+) -> frozenset[str]:
+    return frozenset(
+        _apply_test_hypothesis(hypothesis, query)
+        for hypothesis in _independent_consistent_hypotheses(demos)
+    )
 
 
 def test_regenerating_twice_is_byte_identical() -> None:
@@ -183,12 +272,31 @@ def test_n_demos_is_configurable() -> None:
         assert len(lines) == 3
 
 
-def test_zero_demos_produces_a_zero_shot_pool() -> None:
-    pool = generate_pool(n_per_stratum=1, n_demos=0)
-    assert all(
-        instance.prompt_inputs["demos_block"] == ""
-        for instance in pool.instances
-    )
+def test_one_demo_config_is_unique_and_same_process_deterministic() -> None:
+    first = generate_pool(n_per_stratum=13, n_demos=1)
+    second = generate_pool(n_per_stratum=13, n_demos=1)
+
+    first_identities = [
+        public_prompt_identity(instance) for instance in first.instances
+    ]
+    assert len(first_identities) == len(set(first_identities)) == 52
+    assert content_hash(first) == content_hash(second)
+
+    by_id = {instance.id: instance for instance in first.instances}
+    assert public_prompt_identity(
+        by_id["c23-S3-555000002-0011"]
+    ) != public_prompt_identity(by_id["c23-S3-555000002-0012"])
+
+
+def test_insufficient_demo_budget_fails_contextually() -> None:
+    with pytest.raises(
+        upstream.UpstreamError,
+        match=(
+            r"exactly 0 demonstrations.*nontrivial determinate.*"
+            r"ISL k=2.*448 rules"
+        ),
+    ):
+        generate_pool(n_per_stratum=1, n_demos=0)
 
 
 def test_negative_demo_count_is_rejected() -> None:
@@ -225,7 +333,7 @@ def test_invalid_generation_bounds_are_rejected() -> None:
         generate_pool(sample_size_times=0)
     with pytest.raises(ValueError, match="max_query_len must be at least 2"):
         generate_pool(max_query_len=1)
-    with pytest.raises(ValueError, match="must have k >= 2"):
+    with pytest.raises(ValueError, match="unsupported rule configuration"):
         generate_pool(strata=(("bad-k", upstream.ISL, 1),))
 
 
@@ -280,9 +388,9 @@ def test_typer_cli_generates_a_manifest(tmp_path: Path) -> None:
             "--n-per-stratum",
             "1",
             "--n-demos",
-            "0",
-            "--sample-size-times",
             "2",
+            "--sample-size-times",
+            "10",
             "--max-query-len",
             "4",
             "--seed-start",
@@ -337,6 +445,81 @@ def test_held_out_query_is_absent_from_the_demos() -> None:
             for line in inst.prompt_inputs["demos_block"].splitlines()
         }
         assert query not in demo_inputs, inst.id
+
+
+def test_default_pool_queries_are_determinate() -> None:
+    production = {
+        (
+            hypothesis.rule_type,
+            hypothesis.k,
+            hypothesis.context,
+            hypothesis.replacement,
+        )
+        for hypothesis in upstream.enumerate_supported_hypotheses(
+            vocab_size=FIXED_VOCAB_SIZE,
+        )
+    }
+    assert production == _TEST_HYPOTHESES
+
+    pool = generate_pool()
+    for instance in pool.instances:
+        demos = _parse_demos_block(
+            instance.prompt_inputs["demos_block"],
+        )
+        outputs = _independent_version_space_outputs(
+            demos,
+            instance.prompt_inputs["query"],
+        )
+        assert outputs == {instance.gold}, instance.id
+
+
+def test_seven_known_ambiguous_ids_are_now_determinate() -> None:
+    pool = generate_pool()
+    by_id = {instance.id: instance for instance in pool.instances}
+    assert by_id.keys() >= _KNOWN_AMBIGUOUS_IDS
+    for instance_id in sorted(_KNOWN_AMBIGUOUS_IDS):
+        instance = by_id[instance_id]
+        outputs = _independent_version_space_outputs(
+            _parse_demos_block(instance.prompt_inputs["demos_block"]),
+            instance.prompt_inputs["query"],
+        )
+        assert outputs == {instance.gold}, instance_id
+
+
+def test_determinacy_does_not_require_unique_rule_identification() -> None:
+    pool = generate_pool(n_per_stratum=1)
+    by_id = {instance.id: instance for instance in pool.instances}
+
+    cross_family = by_id["c23-S1-555000000-0000"]
+    family_version_space = _independent_consistent_hypotheses(
+        _parse_demos_block(cross_family.prompt_inputs["demos_block"]),
+    )
+    assert {
+        (rule_type, k)
+        for rule_type, k, _context, _replacement in (family_version_space)
+    } == {
+        (upstream.ISL, 2),
+        (upstream.L_OSL, 2),
+    }
+    assert {
+        _apply_test_hypothesis(
+            hypothesis,
+            cross_family.prompt_inputs["query"],
+        )
+        for hypothesis in family_version_space
+    } == {cross_family.gold}
+
+    cross_k = by_id["c23-S4-555000003-0000"]
+    k_version_space = _independent_consistent_hypotheses(
+        _parse_demos_block(cross_k.prompt_inputs["demos_block"]),
+    )
+    assert {
+        k for _rule_type, k, _context, _replacement in k_version_space
+    } == {2, 3}
+    assert {
+        _apply_test_hypothesis(hypothesis, cross_k.prompt_inputs["query"])
+        for hypothesis in k_version_space
+    } == {cross_k.gold}
 
 
 def test_gold_agrees_with_independent_oracle_reapplication() -> None:

@@ -38,7 +38,7 @@ constraints (rubric criterion 8) as checks, not comments:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Sequence, Set
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -47,12 +47,12 @@ import typer
 from whetstone_envs.c23 import oracle, prompts, upstream
 from whetstone_envs.core.instance import make_instance
 from whetstone_envs.core.manifest import Manifest
-from whetstone_envs.core.pool import TaskPool
+from whetstone_envs.core.pool import TaskPool, public_prompt_identity
 
 if TYPE_CHECKING:
     from whetstone_envs.core.instance import Instance
 
-GENERATOR_VERSION = "c23-generate-2"
+GENERATOR_VERSION = "c23-generate-3"
 
 # --- Fixed constraints (spec "Fixed constraints") -------------------------
 # Single-rule instances only; vocab held small and fixed at |Sigma|=4.
@@ -78,7 +78,8 @@ DEFAULT_N_PER_STRATUM = 50
 
 # Demonstrations shown per instance. The vendored characteristic sample is
 # large (>100 pairs); the spec's few-shot block shows a handful, so we
-# down-sample to a small demo set (rule-revealing pairs preferred). Owner-open.
+# jointly select a determinate held-out query and this exact-size demo set.
+# Owner-open.
 DEFAULT_N_DEMOS = 6
 
 # The InductionBench sample-size multiplier (vendored ``--sample_size_times``);
@@ -201,6 +202,7 @@ def _build_stratum(
     n_demos: int,
     sample_size_times: int,
     max_query_len: int,
+    excluded_public_identities: Set[upstream.PublicPromptIdentity],
 ) -> list[Instance]:
     """Generate + oracle-cross-check one stratum's instances.
 
@@ -219,6 +221,7 @@ def _build_stratum(
         sample_size_times=sample_size_times,
         max_query_len=max_query_len,
         n_demos=n_demos,
+        excluded_public_identities=excluded_public_identities,
     )
     if len(raws) != n_per_stratum:
         msg = (
@@ -334,30 +337,38 @@ def generate_pool(
                 f"(expected one of {upstream.RULE_TYPES})"
             )
             raise ValueError(msg)
-        if k < upstream.MIN_K:
-            msg = f"stratum {label!r} must have k >= {upstream.MIN_K}, got {k}"
+        if (rule_type, k) not in upstream.SUPPORTED_RULE_CONFIGURATIONS:
+            msg = (
+                f"stratum {label!r} has unsupported rule configuration "
+                f"{(rule_type, k)!r} (expected one of "
+                f"{upstream.SUPPORTED_RULE_CONFIGURATIONS!r})"
+            )
             raise ValueError(msg)
 
     consumed_seeds = [seed_start + i for i in range(len(validated_strata))]
     _assert_fresh_seeds(consumed_seeds)
 
+    seen_public_identities: set[upstream.PublicPromptIdentity] = set()
     per_stratum: list[list[Instance]] = []
     for (label, rule_type, k), seed in zip(
         validated_strata,
         consumed_seeds,
         strict=True,
     ):
-        per_stratum.append(
-            _build_stratum(
-                label,
-                rule_type,
-                k,
-                seed,
-                n_per_stratum,
-                n_demos=n_demos,
-                sample_size_times=sample_size_times,
-                max_query_len=max_query_len,
-            ),
+        block = _build_stratum(
+            label,
+            rule_type,
+            k,
+            seed,
+            n_per_stratum,
+            n_demos=n_demos,
+            sample_size_times=sample_size_times,
+            max_query_len=max_query_len,
+            excluded_public_identities=seen_public_identities,
+        )
+        per_stratum.append(block)
+        seen_public_identities.update(
+            public_prompt_identity(instance) for instance in block
         )
 
     # Interleave: row 0 = one instance from each stratum, then row 1, ...

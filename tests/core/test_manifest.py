@@ -110,7 +110,7 @@ def test_manifest_round_trips_through_json(
     manifest = Manifest.from_pool(
         _build_pool(synthetic_instance),
         generator_version="g",
-        seed_range=(0, 10),
+        seed_range=(1000, 1004),
     )
     restored = Manifest.from_dict(json.loads(manifest.to_json()))
     assert restored == manifest
@@ -123,7 +123,7 @@ def test_manifest_write_read_round_trip(
     manifest = Manifest.from_pool(
         _build_pool(synthetic_instance),
         generator_version="g",
-        seed_range=(0, 10),
+        seed_range=(1000, 1004),
     )
     path = tmp_path / "manifest.json"
     manifest.write(path)
@@ -137,7 +137,7 @@ def test_matches_regenerated_pool(
     frozen = Manifest.from_pool(
         _build_pool(synthetic_instance),
         generator_version="g",
-        seed_range=(0, 10),
+        seed_range=(1000, 1004),
     )
     # A deterministic regeneration still matches the frozen manifest.
     assert frozen.matches_pool(_build_pool(synthetic_instance)) is True
@@ -149,7 +149,7 @@ def test_detects_drifted_pool(
     frozen = Manifest.from_pool(
         _build_pool(synthetic_instance),
         generator_version="g",
-        seed_range=(0, 10),
+        seed_range=(1000, 1004),
     )
     drifted = TaskPool(
         [synthetic_instance(i, "easy") for i in range(2)]
@@ -158,6 +158,40 @@ def test_detects_drifted_pool(
     )
     assert drifted.stratum_counts() == frozen.stratum_counts
     assert frozen.matches_pool(drifted) is False
+
+
+@pytest.mark.parametrize(
+    "seed_range",
+    [(1001, 1004), (1000, 1003)],
+    ids=["below-start", "at-exclusive-end"],
+)
+def test_from_pool_rejects_retained_seed_outside_range(
+    synthetic_instance: Callable[..., Instance],
+    seed_range: tuple[int, int],
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*retained)(?=.*seed)(?=.*range)",
+    ):
+        Manifest.from_pool(
+            _build_pool(synthetic_instance),
+            generator_version="g",
+            seed_range=seed_range,
+        )
+
+
+def test_matches_pool_rejects_out_of_range_retained_seed(
+    synthetic_instance: Callable[..., Instance],
+) -> None:
+    pool = _build_pool(synthetic_instance)
+    manifest = Manifest(
+        generator_version="g",
+        seed_range=(1000, 1003),
+        stratum_counts=pool.stratum_counts(),
+        content_hash=content_hash(pool),
+    )
+
+    assert manifest.matches_pool(pool) is False
 
 
 def test_from_dict_accepts_known_valid_payload(
@@ -266,6 +300,23 @@ def test_from_dict_rejects_negative_count(
     with pytest.raises(
         ValueError,
         match=r"(?i)(?=.*stratum_counts)(?=.*non-negative)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+@pytest.mark.parametrize(
+    "stratum_counts",
+    [{}, {"easy": 0, "hard": 0}],
+    ids=["empty", "zero-total"],
+)
+def test_from_dict_rejects_zero_task_manifest(
+    valid_manifest_payload: dict[str, object],
+    stratum_counts: dict[str, int],
+) -> None:
+    valid_manifest_payload["stratum_counts"] = stratum_counts
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*stratum_counts)(?=.*positive)",
     ):
         Manifest.from_dict(valid_manifest_payload)
 

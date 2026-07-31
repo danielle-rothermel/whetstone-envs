@@ -36,6 +36,31 @@ def test_normalize_is_idempotent() -> None:
     assert normalize(once) == payload
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "````\nanswer\n```",
+        "```\nanswer\n````",
+        "```json`\nanswer\n```",
+        "```json extra\nanswer\n```",
+        "```json\nanswer\n~~~",
+    ],
+    ids=[
+        "longer-opening",
+        "longer-closing",
+        "backtick-in-language-tag",
+        "non-tag-opening-suffix",
+        "different-closing-marker",
+    ],
+)
+def test_normalize_preserves_non_exact_fence_wrappers(raw: str) -> None:
+    assert normalize(raw) == raw
+
+
+def test_normalize_accepts_exact_opening_with_language_tag() -> None:
+    assert normalize("```c++\nanswer\n```") == "answer"
+
+
 def test_normalize_preserves_internal_backticks() -> None:
     # A lone backtick inside the answer must not be eaten.
     assert normalize("a `b` c") == "a `b` c"

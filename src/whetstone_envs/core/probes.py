@@ -14,12 +14,14 @@ model, not from per-candidate string handling.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from whetstone_envs.core.instance import Instance
 
 _MIN_FENCED_LINES = 2
+_OPENING_CODE_FENCE = re.compile(r"```[^\s`]*")
 
 
 def _strip_code_fence(text: str) -> str:
@@ -35,7 +37,7 @@ def _strip_code_fence(text: str) -> str:
         return text
     first = lines[0].strip()
     last = lines[-1].strip()
-    if first.startswith("```") and last == "```":
+    if _OPENING_CODE_FENCE.fullmatch(first) and last == "```":
         return "\n".join(lines[1:-1])
     return text
 

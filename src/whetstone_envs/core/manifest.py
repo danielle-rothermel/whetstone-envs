@@ -110,6 +110,9 @@ def _validate_stratum_counts(
             msg = "manifest stratum_counts values must be non-negative"
             raise ValueError(msg)
         counts[name] = count
+    if sum(counts.values()) == 0:
+        msg = "manifest stratum_counts must have a positive total"
+        raise ValueError(msg)
     return MappingProxyType(counts)
 
 
@@ -159,6 +162,15 @@ def content_hash(pool: TaskPool) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _retained_seeds_within_range(
+    pool: TaskPool,
+    seed_range: tuple[int, int],
+) -> bool:
+    """Return whether every retained instance seed is in ``seed_range``."""
+    start, end = seed_range
+    return all(start <= instance.seed < end for instance in pool.instances)
+
+
 @dataclass(frozen=True, slots=True)
 class Manifest:
     """A pinned, diffable description of one generated pool.
@@ -169,8 +181,9 @@ class Manifest:
         The candidate generator's version/commit identity. Bumping this
         is the license to change generated content.
     seed_range:
-        The ``(start, end)`` seed pins the pool was generated from,
-        inclusive of ``start`` and exclusive of ``end`` by convention.
+        The ``(start, end)`` half-open range containing every retained
+        instance seed. It describes retained pool content, not generator
+        attempts that produced no retained instance.
     stratum_counts:
         Declared per-stratum instance counts, matched against a pool's
         own :meth:`~whetstone_envs.core.pool.TaskPool.stratum_counts`.
@@ -226,12 +239,21 @@ class Manifest:
         """Derive a manifest from a pool and its generation inputs.
 
         Per-stratum counts and the content hash are read off the pool,
-        so a manifest built this way always describes the pool it was
-        built from.
+        and every retained instance seed must lie in the declared
+        half-open range. The manifest does not reconstruct or attest to
+        generator attempts that produced no retained instance.
         """
+        validated_seed_range = _validate_seed_range(seed_range)
+        if not _retained_seeds_within_range(pool, validated_seed_range):
+            start, end = validated_seed_range
+            msg = (
+                "pool contains a retained instance seed outside declared "
+                f"seed_range [{start}, {end})"
+            )
+            raise ValueError(msg)
         return cls(
             generator_version=generator_version,
-            seed_range=seed_range,
+            seed_range=validated_seed_range,
             stratum_counts=pool.stratum_counts(),
             content_hash=content_hash(pool),
         )
@@ -307,13 +329,15 @@ class Manifest:
         return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def matches_pool(self, pool: TaskPool) -> bool:
-        """True if ``pool`` matches this manifest's counts and hash.
+        """True if ``pool`` matches this manifest's range, counts, and hash.
 
         This is the regeneration diff check: build a fresh pool, then
-        assert the frozen manifest still describes it. A drift in any
-        stratum count or in the content hash returns ``False``.
+        assert the frozen manifest still describes it. An out-of-range
+        retained seed, a drift in any stratum count, or a content-hash
+        change returns ``False``.
         """
         return (
-            self.stratum_counts == pool.stratum_counts()
+            _retained_seeds_within_range(pool, self.seed_range)
+            and self.stratum_counts == pool.stratum_counts()
             and self.content_hash == content_hash(pool)
         )

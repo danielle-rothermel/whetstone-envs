@@ -79,9 +79,7 @@ def test_d2_two_hop_chain_both_polarities() -> None:
 
 def test_d3_three_hop_chain_both_polarities() -> None:
     assert entailment_label(_D3, "True or false: Max is not rainy.") == "True"
-    assert (
-        entailment_label(_D3, "True or false: Max is rainy.") == "False"
-    )
+    assert entailment_label(_D3, "True or false: Max is rainy.") == "False"
 
 
 def test_d5_five_hop_chain_both_polarities() -> None:
@@ -112,9 +110,7 @@ def test_singular_and_plural_kinds_unify() -> None:
     # "Every jompus ..." (singular antecedent) and "Jompuses are ..."
     # (plural antecedent) must canonicalize to the same kind key, or a
     # chain crossing the two forms would silently break.
-    theory = (
-        "Fae is a wumpus. Every wumpus is a jompus. Jompuses are sunny."
-    )
+    theory = "Fae is a wumpus. Every wumpus is a jompus. Jompuses are sunny."
     assert entailment_label(theory, "True or false: Fae is sunny.") == "True"
 
 

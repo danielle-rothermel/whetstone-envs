@@ -265,9 +265,7 @@ def generate_pool(
 
     # Deterministic depth-interleaving: row 0 has one instance per depth.
     instances: list[Instance] = [
-        block[row]
-        for row in range(n_per_stratum)
-        for block in per_stratum
+        block[row] for row in range(n_per_stratum) for block in per_stratum
     ]
     return TaskPool(instances)
 
@@ -472,10 +470,7 @@ class Preset:
         )
         official_boundary = (
             n_per_stratum
-            * (
-                HARD_INTERNAL_EVAL_PER_STRATUM
-                + HARD_OFFICIAL_PER_STRATUM
-            )
+            * (HARD_INTERNAL_EVAL_PER_STRATUM + HARD_OFFICIAL_PER_STRATUM)
             // hard_total
         )
         official_per_stratum = official_boundary - internal_per_stratum

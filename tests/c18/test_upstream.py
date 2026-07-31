@@ -54,9 +54,7 @@ def test_output_filename_reconstruction() -> None:
     assert upstream._output_filename(2, 12345) == "2hop_seed12345.json"
     assert upstream._output_filename(5, 999) == "5hop_seed999.json"
     # At the (never-used) default seed there is no suffix.
-    assert (
-        upstream._output_filename(1, UPSTREAM_DEFAULT_SEED) == "1hop.json"
-    )
+    assert upstream._output_filename(1, UPSTREAM_DEFAULT_SEED) == "1hop.json"
     assert (
         upstream._output_filename(2, 12345, "none", "true")
         == "2hop_trueontology_nodistractor_seed12345.json"
@@ -86,6 +84,6 @@ def test_vendored_tree_is_not_written_to() -> None:
     generate_raw(hops=1, seed=1_000_100_050, num_trials=2)
     after = {p.name for p in upstream._VENDOR_DIR.iterdir()}
     new = after - before
-    assert not any(
-        n.endswith((".json", ".log")) for n in new
-    ), f"vendored tree gained output files: {new}"
+    assert not any(n.endswith((".json", ".log")) for n in new), (
+        f"vendored tree gained output files: {new}"
+    )

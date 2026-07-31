@@ -46,7 +46,7 @@ _EXPECTED_CEILING = (
     "Determine whether the query statement is entailed by the facts and rules under\n"
     "the closed-world assumption: a statement is True if it can be derived by\n"
     "chaining the given rules from the given facts, and False otherwise. Apply the\n"
-    "rules step by step, following each \"every X is a Y\" / \"X are (not) Z\" rule in\n"
+    'rules step by step, following each "every X is a Y" / "X are (not) Z" rule in\n'
     "order, until you reach the queried property.\n"
     "\n"
     "Facts and rules:\n"

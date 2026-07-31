@@ -225,9 +225,7 @@ def generate_pool(
 
     # Interleave: row 0 = one instance from each stratum, then row 1, ...
     instances: list[Instance] = [
-        block[row]
-        for row in range(n_per_stratum)
-        for block in per_stratum
+        block[row] for row in range(n_per_stratum) for block in per_stratum
     ]
     return TaskPool(instances)
 

@@ -70,11 +70,14 @@ def test_grid_ascii_is_the_initial_state_not_post_walk() -> None:
     # from scratch and reproduces the live post-walk facts, which would be
     # impossible if the grid were already the post-walk state.
     roll = envs.rollout("Fetch", "small", _SEED, command_length=10)
-    assert oracle.derive_fact(
-        roll.grid_ascii,
-        roll.command,
-        "coordinate",
-    ) == roll.facts["coordinate"]
+    assert (
+        oracle.derive_fact(
+            roll.grid_ascii,
+            roll.command,
+            "coordinate",
+        )
+        == roll.facts["coordinate"]
+    )
 
 
 def test_pprint_grid_uses_two_characters_for_every_cell() -> None:

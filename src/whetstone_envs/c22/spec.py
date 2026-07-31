@@ -227,7 +227,7 @@ def _validate_atom_kwargs(  # noqa: PLR0912
         if (
             not isinstance(letter, str)
             or len(letter) != 1
-            or letter.casefold() not in string.ascii_lowercase
+            or letter not in string.ascii_letters
         ):
             msg = (
                 "keywords:letter_frequency.letter must be one ASCII letter"

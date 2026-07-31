@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import pickle
+import random
 
 import pytest
 from pydantic import ValidationError
@@ -303,6 +304,59 @@ def test_prompt_description_must_match_scored_kwargs() -> None:
         match="canonical vendored description",
     ):
         ConstraintSpec.from_gold(_gold(data))
+
+
+def test_non_ascii_letter_frequency_rejected_before_checker() -> None:
+    long_s = "\N{LATIN SMALL LETTER LONG S}"
+    data: dict[str, object] = {
+        "base_task": "Name a color.",
+        "constraint_descriptions": [
+            f"In your response, the letter {long_s} should appear "
+            "less than 1 times.",
+        ],
+        "instruction_id_list": ["keywords:letter_frequency"],
+        "kwargs_list": [
+            {
+                "letter": long_s,
+                "let_frequency": 1,
+                "let_relation": "less than",
+            },
+        ],
+    }
+
+    before = random.getstate()
+    with pytest.raises(
+        ValidationError,
+        match="letter must be one ASCII letter",
+    ):
+        ConstraintSpec.from_gold(_gold(data))
+    assert random.getstate() == before
+
+
+def test_uppercase_ascii_letter_frequency_is_deterministic() -> None:
+    data: dict[str, object] = {
+        "base_task": "Name a color.",
+        "constraint_descriptions": [
+            "In your response, the letter z should appear less than 1 times.",
+        ],
+        "instruction_id_list": ["keywords:letter_frequency"],
+        "kwargs_list": [
+            {
+                "letter": "Z",
+                "let_frequency": 1,
+                "let_relation": "less than",
+            },
+        ],
+    }
+
+    before = random.getstate()
+    spec = ConstraintSpec.from_gold(_gold(data))
+
+    assert spec.kwargs_list[0]["letter"] == "Z"
+    assert ConstraintSpec.from_gold(spec.to_gold()) == spec
+    assert oracle.check(spec, "blue").score == 1
+    assert oracle.check(spec, "zebra").score == 0
+    assert random.getstate() == before
 
 
 @pytest.mark.parametrize(

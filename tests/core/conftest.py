@@ -27,9 +27,7 @@ def _synthetic_instance(
     gold: str = "yes",
 ) -> Instance:
     """Build a deterministic synthetic instance for tests."""
-    stratum_label = (
-        stratum if isinstance(stratum, str) else "/".join(stratum)
-    )
+    stratum_label = stratum if isinstance(stratum, str) else "/".join(stratum)
     return make_instance(
         id=f"{stratum_label}-{index}",
         seed=1000 + index,

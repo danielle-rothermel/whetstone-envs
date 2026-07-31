@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import TYPE_CHECKING
 
 import pytest
@@ -206,6 +207,57 @@ def test_split_coverage_respects_destination_capacity(
         ("shared", "alpha"),
         ("shared", "beta"),
         ("shared", "gamma"),
+    }
+
+
+def test_split_balances_combinations_within_each_destination(
+    synthetic_instance: Callable[..., Instance],
+) -> None:
+    combinations = [
+        [synthetic_instance(index * 9 + offset, label) for offset in range(9)]
+        for index, label in enumerate(("alpha", "beta"))
+    ]
+    split = TaskPool(
+        instance for combination in combinations for instance in combination
+    ).split(4, 7, 7)
+
+    assert Counter(instance.strata for instance in split.internal_eval) == {
+        ("alpha",): 2,
+        ("beta",): 2,
+    }
+    assert Counter(instance.strata for instance in split.official) == {
+        ("alpha",): 4,
+        ("beta",): 3,
+    }
+    assert Counter(instance.strata for instance in split.held_out) == {
+        ("alpha",): 3,
+        ("beta",): 4,
+    }
+
+
+def test_split_balances_five_uniform_strata_at_c11_default_scale(
+    synthetic_instance: Callable[..., Instance],
+) -> None:
+    labels = ("S0", "S1", "S2", "S3", "S4")
+    combinations = [
+        [
+            synthetic_instance(index * 82 + offset, label)
+            for offset in range(82)
+        ]
+        for index, label in enumerate(labels)
+    ]
+    split = TaskPool(
+        instance for combination in combinations for instance in combination
+    ).split(10, 200, 200)
+
+    assert Counter(instance.strata for instance in split.internal_eval) == {
+        (label,): 2 for label in labels
+    }
+    assert Counter(instance.strata for instance in split.official) == {
+        (label,): 40 for label in labels
+    }
+    assert Counter(instance.strata for instance in split.held_out) == {
+        (label,): 40 for label in labels
     }
 
 

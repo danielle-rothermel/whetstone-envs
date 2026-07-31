@@ -243,14 +243,10 @@ def _validate_task_strata(
         seen_strata: set[str] = set()
         for stratum in strata:
             if not isinstance(stratum, str):
-                msg = (
-                    f"stratum labels for task {task_id!r} must be strings"
-                )
+                msg = f"stratum labels for task {task_id!r} must be strings"
                 raise TypeError(msg)
             if not stratum.strip():
-                msg = (
-                    f"stratum labels for task {task_id!r} must be nonblank"
-                )
+                msg = f"stratum labels for task {task_id!r} must be nonblank"
                 raise ValueError(msg)
             if stratum in seen_strata:
                 msg = (
@@ -304,8 +300,7 @@ def aggregate(
             raise KeyError(msg)
         if ob.repeat_id not in expected_repeat_set:
             msg = (
-                f"unexpected repeat_id {ob.repeat_id} for task "
-                f"{ob.task_id!r}"
+                f"unexpected repeat_id {ob.repeat_id} for task {ob.task_id!r}"
             )
             raise ValueError(msg)
         cell = (ob.task_id, ob.repeat_id)

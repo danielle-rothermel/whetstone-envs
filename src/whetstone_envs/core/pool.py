@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from fractions import Fraction
 from typing import TYPE_CHECKING
 
 from whetstone_envs.core.instance import Instance
@@ -172,10 +171,11 @@ class TaskPool:
         Instances are grouped by their complete ``strata`` tuple.
         Round-robin selection first determines a balanced quota for each
         combination. Those quotas are then distributed across the three
-        destinations, preferring combination coverage, lower relative
-        fill, and destinations with more remaining capacity. This keeps
-        scarce combinations from being consumed by the first
-        destination when another destination can retain coverage.
+        destinations. The allocation first maximizes distinct
+        combination coverage, then fills each destination from its
+        least-represented combinations with remaining quota. This keeps
+        scarce combinations from being consumed before coverage is
+        established and balances composition within each destination.
 
         Sizes are the per-spec proposed numbers, passed in by the caller
         rather than hardcoded here. Their sum must not exceed the pool
@@ -246,30 +246,27 @@ class TaskPool:
                 destination_assigned[destination] += 1
                 destinations_by_combination[combination].append(destination)
 
-        for combination in by_combination:
-            combination_quota = selected_by_combination[combination]
-            remaining = combination_quota - len(
-                destinations_by_combination[combination]
-            )
-            for _ in range(remaining):
+        combination_order = {
+            combination: index
+            for index, combination in enumerate(by_combination)
+        }
+        for destination, size in enumerate(destination_sizes):
+            while destination_assigned[destination] < size:
                 eligible = [
-                    index
-                    for index, size in enumerate(destination_sizes)
-                    if destination_assigned[index] < size
+                    combination
+                    for combination in by_combination
+                    if len(destinations_by_combination[combination])
+                    < selected_by_combination[combination]
                 ]
-                destination = min(
+                combination = min(
                     eligible,
-                    key=lambda index: (
-                        destination_quotas[index][combination],
-                        Fraction(
-                            destination_assigned[index],
-                            destination_sizes[index],
-                        ),
+                    key=lambda candidate: (
+                        destination_quotas[destination][candidate],
                         -(
-                            destination_sizes[index]
-                            - destination_assigned[index]
+                            selected_by_combination[candidate]
+                            - len(destinations_by_combination[candidate])
                         ),
-                        index,
+                        combination_order[candidate],
                     ),
                 )
                 destination_quotas[destination][combination] += 1

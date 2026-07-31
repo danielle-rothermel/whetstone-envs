@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 from typer.testing import CliRunner
 
-from whetstone_envs.c23 import generate, oracle, upstream
+from whetstone_envs.c23 import generate, upstream
 from whetstone_envs.c23._vendor.inductionbench import (
     synthetic_data_generation as _test_sdg,
 )
@@ -522,13 +522,41 @@ def test_determinacy_does_not_require_unique_rule_identification() -> None:
     } == {cross_k.gold}
 
 
-def test_gold_agrees_with_independent_oracle_reapplication() -> None:
-    # Every instance's frozen gold equals the independent oracle re-applying
-    # the (public-at-generation) rule to the query -- the self-consistency
-    # gate. Here we re-verify via score_gold on the frozen gold (idempotent).
-    pool = _fast_pool()
-    for inst in pool.instances:
-        assert oracle.score_gold(inst.gold, inst.gold) == 1
+def test_build_stratum_rejects_gold_that_disagrees_with_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = upstream.RawInstance(
+        rule_type=upstream.ISL,
+        k=2,
+        rule={"cb": "d"},
+        demos={"cb": "cd", "bcb": "bcd"},
+        query="acb",
+        gold="wrong",
+    )
+    monkeypatch.setattr(
+        upstream,
+        "generate_raw",
+        lambda **_kwargs: [raw],
+    )
+
+    with pytest.raises(AssertionError) as exc_info:
+        generate._build_stratum(
+            label="S-guard",
+            rule_type=upstream.ISL,
+            k=2,
+            seed=555_000_123,
+            n_per_stratum=1,
+            n_demos=2,
+            sample_size_times=1,
+            max_query_len=8,
+            excluded_public_identities=set(),
+        )
+
+    assert str(exc_info.value) == (
+        "gold disagreement at S-guard seed 555000123 #0: boundary "
+        "gold='wrong' vs independent-oracle re-application 'acd' for "
+        "query 'acb' rule {'cb': 'd'}"
+    )
 
 
 def test_some_queries_actually_transform() -> None:

@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from whetstone_envs.core.instance import make_instance
-from whetstone_envs.core.pool import PoolSplit, TaskPool
+from whetstone_envs.core.pool import (
+    PoolSplit,
+    TaskPool,
+    public_prompt_identity,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -33,6 +37,27 @@ def test_duplicate_id_rejected(
     dup = synthetic_instance(0, "easy")
     with pytest.raises(ValueError, match="duplicate instance id"):
         TaskPool([dup, dup])
+
+
+def test_public_prompt_identity_uses_only_sorted_prompt_inputs() -> None:
+    first = make_instance(
+        id="first",
+        seed=1,
+        strata="alpha",
+        prompt_inputs={"z": "last", "a": "first"},
+        gold="first-gold",
+    )
+    second = make_instance(
+        id="second",
+        seed=2,
+        strata="beta",
+        prompt_inputs={"a": "first", "z": "last"},
+        gold="second-gold",
+    )
+
+    expected = (("a", "first"), ("z", "last"))
+    assert public_prompt_identity(first) == expected
+    assert public_prompt_identity(second) == expected
 
 
 @pytest.mark.parametrize(

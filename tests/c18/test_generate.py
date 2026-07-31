@@ -169,10 +169,42 @@ def test_n_per_stratum_is_configurable() -> None:
     assert set(pool.stratum_counts().values()) == {2}
 
 
+@pytest.mark.parametrize("n_per_stratum", [0, -1, True, 1.0])
+def test_n_per_stratum_must_be_a_positive_integer_before_generation(
+    n_per_stratum: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("generation must not start")
+
+    monkeypatch.setattr(generate, "_build_stratum", fail_if_called)
+    with pytest.raises(
+        ValueError,
+        match="n_per_stratum must be a positive integer",
+    ):
+        generate_pool(
+            n_per_stratum=n_per_stratum,  # ty: ignore[invalid-argument-type]
+            depths=(1,),
+        )
+
+
 def test_depths_are_configurable() -> None:
     # Owner-open (spec O2): the depth set is a constructor arg.
     pool = generate_pool(n_per_stratum=2, depths=(1, 3))
     assert set(pool.strata) == {"D1", "D3"}
+
+
+def test_empty_depths_are_rejected_before_other_generation_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("generation setup must not start")
+
+    monkeypatch.setattr(generate, "_assert_fixed_ontology", fail_if_called)
+    monkeypatch.setattr(generate, "_assert_fresh_seeds", fail_if_called)
+    monkeypatch.setattr(generate, "_build_stratum", fail_if_called)
+    with pytest.raises(ValueError, match="at least one depth stratum"):
+        generate_pool(n_per_stratum=2, depths=())
 
 
 def test_duplicate_depths_are_rejected_before_generation(

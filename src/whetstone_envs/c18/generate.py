@@ -200,11 +200,12 @@ def generate_pool(
     Parameters
     ----------
     n_per_stratum:
-        Instances per depth stratum. Default 30 (a fast wrapped-subprocess
-        default; spec Section 1 proposes 150 / Open Decision O3).
+        Positive integer number of instances per depth stratum. Default 30
+        (a fast wrapped-subprocess default; spec Section 1 proposes 150 /
+        Open Decision O3).
     depths:
-        Hop-depth levels to include (default D1, D2, D3, D5; spec Section
-        1 / Open Decision O2).
+        Nonempty sequence of distinct hop-depth levels to include (default
+        D1, D2, D3, D5; spec Section 1 / Open Decision O2).
     distractors:
         Native distractor knob (spec Open Decision O1; default
         ``relevant`` = ON to avoid the trivial shortcut). Applied uniformly
@@ -229,6 +230,19 @@ def generate_pool(
     fixed seed (repos review; verified by regenerating twice). Instances
     are ordered by deterministic depth-interleaving.
     """
+    if (
+        not isinstance(n_per_stratum, int)
+        or isinstance(n_per_stratum, bool)
+        or n_per_stratum <= 0
+    ):
+        msg = (
+            f"n_per_stratum must be a positive integer, got {n_per_stratum!r}"
+        )
+        raise ValueError(msg)
+    if not depths:
+        msg = "c18 requires at least one depth stratum"
+        raise ValueError(msg)
+
     _assert_fixed_ontology(ontology)
     if len(set(depths)) != len(depths):
         msg = f"c18 requires distinct depth strata, got {tuple(depths)!r}"

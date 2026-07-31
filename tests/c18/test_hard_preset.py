@@ -61,6 +61,7 @@ def _synthetic_hard_pool(n_per_stratum: int) -> TaskPool:
             id=f"hard-d{depth}-{index}",
             seed=HARD_SEED_START + depth,
             strata=depth_label(depth),
+            prompt_inputs={"synthetic_id": f"{depth}-{index}"},
         )
         for depth in HARD_DEPTHS
         for index in range(n_per_stratum)

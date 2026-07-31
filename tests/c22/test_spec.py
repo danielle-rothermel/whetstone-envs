@@ -221,9 +221,7 @@ def test_construction_detaches_nested_kwargs_from_mutable_input() -> None:
     kwargs: dict[str, object] = {"keywords": ["ok"]}
     spec = ConstraintSpec(
         base_task="Name a color.",
-        constraint_descriptions=(
-            "Include keywords ['ok'] in the response.",
-        ),
+        constraint_descriptions=("Include keywords ['ok'] in the response.",),
         instruction_id_list=("keywords:existence",),
         kwargs_list=(kwargs,),
     )

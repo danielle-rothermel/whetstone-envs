@@ -455,9 +455,7 @@ def main(  # noqa: PLR0913
         if constraint_counts is None
         else tuple(constraint_counts)
     )
-    selected_mixes = (
-        (MIX_EASY, MIX_MIXED) if mixes is None else tuple(mixes)
-    )
+    selected_mixes = (MIX_EASY, MIX_MIXED) if mixes is None else tuple(mixes)
     if preset not in {None, "hard"}:
         msg = f"unknown preset {preset!r}; expected 'hard'"
         raise typer.BadParameter(msg, param_hint="--preset")

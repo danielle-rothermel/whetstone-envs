@@ -52,9 +52,7 @@ def _freeze_json_value(value: object) -> object:
 
 def _thaw_json_value(value: object) -> object:
     if isinstance(value, Mapping):
-        return {
-            key: _thaw_json_value(item) for key, item in value.items()
-        }
+        return {key: _thaw_json_value(item) for key, item in value.items()}
     if isinstance(value, tuple):
         return [_thaw_json_value(item) for item in value]
     return value
@@ -123,9 +121,7 @@ def _require_single_token_literal_list(
 
 def _require_safe_regex_literal(value: str, *, field_name: str) -> None:
     if any(character in _REGEX_META_CHARACTERS for character in value):
-        msg = (
-            f"{field_name} must be a literal without regex metacharacters"
-        )
+        msg = f"{field_name} must be a literal without regex metacharacters"
         raise ValueError(msg)
 
 
@@ -229,9 +225,7 @@ def _validate_atom_kwargs(  # noqa: PLR0912
             or len(letter) != 1
             or letter not in string.ascii_letters
         ):
-            msg = (
-                "keywords:letter_frequency.letter must be one ASCII letter"
-            )
+            msg = "keywords:letter_frequency.letter must be one ASCII letter"
             raise ValueError(msg)
         if kwargs["let_frequency"] != 1 or isinstance(
             kwargs["let_frequency"],
@@ -302,10 +296,9 @@ def compatibility_error(  # noqa: PLR0912
     conflicts = instructions_registry.INSTRUCTION_CONFLICTS
     for index, instruction_id in enumerate(instruction_ids):
         for other in instruction_ids[index + 1 :]:
-            if (
-                other in conflicts.get(instruction_id, set())
-                or instruction_id in conflicts.get(other, set())
-            ):
+            if other in conflicts.get(
+                instruction_id, set()
+            ) or instruction_id in conflicts.get(other, set()):
                 return f"{instruction_id!r} conflicts with {other!r}"
 
     required_keywords: list[str] = []

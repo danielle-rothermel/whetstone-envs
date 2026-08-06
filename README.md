@@ -26,8 +26,8 @@ code:
   tasks, an independent canonicalization oracle, and naive and known-good
   probes.
 
-The task-family implementations and the adapter to Whetstone's optimizer live
-above this shared harness rather than inside its contracts.
+Task-family implementations live in their owning subpackages alongside the
+shared harness; the adapter to Whetstone's optimizer lives above this package.
 
 ## Installation
 

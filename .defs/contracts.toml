@@ -124,3 +124,17 @@ rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""
 date = "2026-08-06"
+
+[[contracts]]
+title = "C11 generation is reproducible and oracle-grounded"
+statement = """
+The C11 task family deterministically generates unique noncanonical JSON inputs \
+across the whitespace, key-order, number, Unicode, and mixed strata; every \
+task's private gold is the RFC 8785 canonical form of its public input, and the \
+default balanced pool is pinned by the committed canonical manifest."""
+rationale = """
+Oracle-derived gold keeps the benchmark independent of the input builders, \
+while deterministic balanced generation and a persisted pool identity make \
+runs reproducible and expose corpus drift."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c11"

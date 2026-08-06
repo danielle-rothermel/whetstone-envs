@@ -87,9 +87,9 @@ check = "uv run pytest -q tests/manifests"
 title = "Foundational dependencies change through releases"
 statement = """
 The dr-graph solver, dr-serialize identity format, dr-store persistence \
-capability, Pydantic schema runtime, and rfc8785 canonicalization oracle are \
-exact runtime dependency pins. A dependency change requires a new \
-whetstone-envs package version and lockfile."""
+capability, Pydantic schema runtime, rfc8785 canonicalization oracle, and C22 \
+IFEval runtime dependencies are exact runtime dependency pins. A dependency \
+change requires a new whetstone-envs package version and lockfile."""
 rationale = """
 Pool allocation, content identity, durable files, persisted validation, and \
 private gold generation are load-bearing semantics; consumer installation must \
@@ -132,7 +132,8 @@ statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
 whetstone_envs.scoring. Task-family contracts are imported from their owning \
-task-family subpackage, including whetstone_envs.c11; the root whetstone_envs \
+task-family subpackage, including whetstone_envs.c11 and whetstone_envs.c22; \
+the root whetstone_envs \
 namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
@@ -152,3 +153,16 @@ while deterministic balanced generation and a persisted pool identity make \
 runs reproducible and expose corpus drift."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/c11"
+
+[[contracts]]
+title = "C22 scores its explicit constraint stack"
+statement = """
+Every C22 task exposes only a numbered stack of deterministic constraints, \
+stores their values as a closed serialized composition in private gold, and \
+scores one only when every constraint passes after shared prediction \
+normalization. C22 presents and scores no separate semantic base task."""
+rationale = """
+The measured behavior must match the complete model-visible request without \
+claiming semantic grading that the deterministic oracle does not perform."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c22"

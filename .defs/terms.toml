@@ -129,3 +129,17 @@ The transformation of a JSON text into the single RFC 8785 representation \
 defined by recursive UTF-16 object-name ordering and canonical whitespace, \
 string, and finite binary64 number forms."""
 exported_symbols = ["whetstone_envs.c11.canonicalize"]
+
+[[terms]]
+name = "C22 task family"
+definition = """
+An evaluation task family for satisfying composed deterministic instruction \
+constraints, with fixed default and hard pools, a naive-and-known-good probe \
+pair, closed private gold, all-pass scoring, and reproducibility manifests."""
+exported_symbols = [
+    "whetstone_envs.c22.PROBES",
+    "whetstone_envs.c22.Preset",
+    "whetstone_envs.c22.generate_pool",
+    "whetstone_envs.c22.load_manifest",
+    "whetstone_envs.c22.score",
+]

@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
 import tomllib
 import zipfile
+from datetime import date
 from email.parser import BytesParser
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
@@ -22,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = PROJECT_ROOT / "dist"
 PACKAGE_DIR = PROJECT_ROOT / "src" / "whetstone_envs"
 DISTRIBUTION_NAME = "whetstone-envs"
+CHANGELOG = PROJECT_ROOT / "CHANGELOG.md"
 
 
 def _fail(message: str) -> NoReturn:
@@ -38,6 +41,52 @@ def _project_version() -> str:
     if not isinstance(version, str) or not version:
         _fail("pyproject.toml has no nonempty project version")
     return version
+
+
+def _validate_finalized_changelog(expected_version: str) -> None:
+    changelog = CHANGELOG.read_text(encoding="utf-8")
+    headings = list(
+        re.finditer(
+            r"^## \[(?P<version>[^]]+)](?: - (?P<date>\d{4}-\d{2}-\d{2}))?$",
+            changelog,
+            flags=re.MULTILINE,
+        )
+    )
+    release = next(
+        (
+            heading
+            for heading in headings
+            if heading.group("version") == expected_version
+        ),
+        None,
+    )
+    if release is None or release.group("date") is None:
+        _fail(f"CHANGELOG.md has no finalized [{expected_version}] release")
+    try:
+        date.fromisoformat(release.group("date"))
+    except ValueError as error:
+        _fail(f"CHANGELOG.md has an invalid release date: {error}")
+
+    unreleased = next(
+        (
+            heading
+            for heading in headings
+            if heading.group("version") == "Unreleased"
+        ),
+        None,
+    )
+    if unreleased is None:
+        _fail("CHANGELOG.md has no [Unreleased] section")
+    unreleased_end = next(
+        (
+            heading.start()
+            for heading in headings
+            if heading.start() > unreleased.start()
+        ),
+        len(changelog),
+    )
+    if expected_version in changelog[unreleased.end() : unreleased_end]:
+        _fail(f"CHANGELOG.md still assigns {expected_version} to [Unreleased]")
 
 
 def _one_artifact(pattern: str, expected_name: str) -> Path:
@@ -227,6 +276,8 @@ def main() -> None:
             f"expected version {expected_version!r} does not match "
             f"pyproject.toml version {project_version!r}"
         )
+    if arguments.expected_version is not None:
+        _validate_finalized_changelog(expected_version)
 
     wheel = _one_artifact(
         "*.whl",

@@ -25,6 +25,8 @@ code:
 - [**C11 JSON canonicalization**][c11-source] provides deterministic RFC 8785
   tasks, an independent canonicalization oracle, and naive and known-good
   probes.
+- [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
+  composed IFEval constraints and strict all-pass scoring.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness; the adapter to Whetstone's optimizer lives above this package.
@@ -33,28 +35,6 @@ shared harness; the adapter to Whetstone's optimizer lives above this package.
 
 ```bash
 uv add whetstone-envs
-```
-
-## C11 JSON canonicalization
-
-[`whetstone_envs.c11`][c11-source] generates balanced adversarial tasks for
-RFC 8785 whitespace removal, key ordering, number rendering, Unicode escaping,
-and mixed inputs. The exactly pinned `rfc8785` package produces private gold
-values independently from the input builders. Shared harness contracts own
-pool splitting, prompt rendering, scoring, and manifest persistence.
-
-```python
-from whetstone_envs.c11 import (
-    DEFAULT_SPLIT_SIZES,
-    PROBES,
-    build_manifest,
-    generate_pool,
-)
-
-pool = generate_pool()
-split = pool.split(*DEFAULT_SPLIT_SIZES)
-manifest = build_manifest(pool)
-prompt = PROBES.render_ceiling(split.internal_eval[0])
 ```
 
 ## Instances
@@ -213,8 +193,68 @@ class Manifest(BaseModel):
     @classmethod
     def read(cls, path: Path) -> "Manifest": ...
     def matches_pool(self, pool: TaskPool) -> bool: ...
+```
 
+```python
 def content_hash(pool: TaskPool) -> Sha256Digest: ...
+```
+
+## C11 JSON canonicalization
+
+[`whetstone_envs.c11`][c11-source] generates balanced adversarial tasks for
+RFC 8785 whitespace removal, key ordering, number rendering, Unicode escaping,
+and mixed inputs. An independent, exactly pinned oracle produces private gold;
+the shared harness owns splitting, prompting, scoring, and persistence.
+
+```python
+@verify(UNIQUE)
+class C11Stratum(StrEnum):
+    WHITESPACE = "c11/whitespace"
+    KEY_ORDER = "c11/key-order"
+    NUMBER = "c11/number"
+    UNICODE = "c11/unicode"
+    MIXED = "c11/mixed"
+```
+
+```python
+DEFAULT_SPLIT_SIZES: tuple[int, int, int]
+PROBES: ProbePair
+
+def generate_pool(
+    *,
+    n_per_stratum: int = ...,
+    seed_start: int = ...,
+) -> TaskPool: ...
+
+def build_manifest(pool: TaskPool) -> Manifest: ...
+def canonicalize(input_json: str) -> str: ...
+```
+
+## C22 instruction constraints
+
+[`whetstone_envs.c22`][c22-source] provides two fixed, seeded pools of
+composed Google Research IFEval constraints. The default preset crosses three,
+four, and five constraints with easy and mixed strata; the hard preset uses
+three, six, and eight constraints and includes every hard constraint in each
+task. C22 scores only this model-visible stack and claims no separate semantic
+task grading.
+
+```python
+@verify(UNIQUE)
+class Preset(StrEnum):
+    DEFAULT = "default"
+    HARD = "hard"
+```
+
+```python
+PROBES: ProbePair
+
+def score(gold: str, response: str) -> int: ...
+```
+
+```python
+def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool: ...
+def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest: ...
 ```
 
 ## Terms and contracts
@@ -252,6 +292,7 @@ uv run python -m whetstone_envs.c11.regenerate
 
 [c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
 [instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
+[c22-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c22
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests
 [pools-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/pools
 [probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes

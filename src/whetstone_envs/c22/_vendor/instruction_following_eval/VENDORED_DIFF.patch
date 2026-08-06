@@ -1,0 +1,45 @@
+diff --git a/instruction_following_eval/__init__.py b/instruction_following_eval/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/instruction_following_eval/evaluation_lib.py b/instruction_following_eval/evaluation_lib.py
+index 2d507c3..ea08472 100644
+--- a/instruction_following_eval/evaluation_lib.py
++++ b/instruction_following_eval/evaluation_lib.py
+@@ -23 +23 @@ from typing import Dict, Optional, Sequence, Union
+-from instruction_following_eval import instructions_registry
++from . import instructions_registry
+@@ -220 +219,0 @@ def print_report(outputs):
+-
+diff --git a/instruction_following_eval/instructions.py b/instruction_following_eval/instructions.py
+index 70aaec6..9650703 100644
+--- a/instruction_following_eval/instructions.py
++++ b/instruction_following_eval/instructions.py
+@@ -27 +27 @@ import langdetect
+-from instruction_following_eval import instructions_util
++from . import instructions_util
+@@ -823,3 +823,3 @@ class NumberOfWords(Instruction):
+-      relation: A string in (`less than`, `at least`), defining the relational
+-        operator for comparison.
+-        Two relational comparisons are supported for now:
++      relation: A string in (`less than`, `at least`, `exactly`), defining the
++        relational operator for comparison.
++        Three relational comparisons are supported for this checker:
+@@ -827,0 +828 @@ class NumberOfWords(Instruction):
++        if 'exactly', the actual number of words == num_words.
+@@ -841 +842 @@ class NumberOfWords(Instruction):
+-    elif relation not in _COMPARISON_RELATION:
++    elif relation not in (*_COMPARISON_RELATION, "exactly"):
+@@ -843 +844,2 @@ class NumberOfWords(Instruction):
+-                       f"{_COMPARISON_RELATION}, but {relation} is given.")
++                       f"{(*_COMPARISON_RELATION, 'exactly')}, but "
++                       f"{relation} is given.")
+@@ -870,0 +873,2 @@ class NumberOfWords(Instruction):
++    elif self._comparison_relation == "exactly":
++      return num_words == self._num_words
+diff --git a/instruction_following_eval/instructions_registry.py b/instruction_following_eval/instructions_registry.py
+index 6b42adc..f43e249 100644
+--- a/instruction_following_eval/instructions_registry.py
++++ b/instruction_following_eval/instructions_registry.py
+@@ -17 +17 @@
+-from instruction_following_eval import instructions
++from . import instructions

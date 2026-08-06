@@ -98,6 +98,20 @@ date = "2026-08-06"
 check = "uv lock --check"
 
 [[contracts]]
+title = "Package releases combine assigned task families"
+statement = """
+A whetstone-envs version tag is created from main only after every task-family \
+pull request assigned to that version has merged and the combined tip passes \
+the complete release gate; one tag publishes the resulting task families \
+together."""
+rationale = """
+PyPI package versions are immutable and cannot be published incrementally; \
+validating one combined tip prevents sibling task-family changes from \
+competing for a version or validating incompatible dependency sets in \
+isolation."""
+date = "2026-08-06"
+
+[[contracts]]
 title = "Manifest files use bounded atomic canonical publication"
 statement = """
 Manifest files contain the exact dr-serialize Canonical JSON Text \

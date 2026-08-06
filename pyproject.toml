@@ -1,6 +1,6 @@
 [project]
 name = "whetstone-envs"
-version = "0.2.1"
+version = "0.2.0"
 description = "Reproducible quick-test environment contracts and task families."
 readme = "README.md"
 license = "MIT"
@@ -59,7 +59,7 @@ venvPath = "."
 venv = ".venv"
 
 [tool.ruff]
-include = ["src/**/*.py", "tests/**/*.py"]
+include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
 line-length = 79
 
 [tool.ruff.lint]
@@ -113,4 +113,4 @@ ignore = ["PLR1711", "S101", "TRY003"]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["scripts", "src", "tests"]

@@ -35,6 +35,10 @@ jobs:
           enable-cache: false
       - name: Run the repository checks
         run: scripts/pre-check.sh
+      - name: Run repository safety hooks
+        env:
+          SKIP: pre-check
+        run: uv run pre-commit run --all-files
 
   build:
     name: Build distributions
@@ -72,6 +76,10 @@ jobs:
           enable-cache: false
       - name: Build distributions
         run: uv build --clear --no-sources
+      - name: Verify distribution metadata, contents, and installation
+        run: >-
+          python3 scripts/check_distributions.py
+          --expected-version "${GITHUB_REF_NAME#v}"
       - name: Check distribution rendering
         run: uvx --from twine==7.0.0 twine check --strict dist/*
       - name: Upload distributions

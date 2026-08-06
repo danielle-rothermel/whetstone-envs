@@ -2,24 +2,195 @@
 
 [![CI](https://github.com/danielle-rothermel/whetstone-envs/actions/workflows/ci.yml/badge.svg)](https://github.com/danielle-rothermel/whetstone-envs/actions/workflows/ci.yml)
 
-**whetstone-envs provides the task-family-agnostic harness for reproducible
-quick-test environments: immutable instances, deterministic pools and splits,
-probe rendering, score aggregation, and pinned manifests.**
+Task-family-agnostic contracts for reproducible quick-test environments.
 
-- `whetstone_envs.instances` defines immutable task inputs,
-  private gold data, seeds, and stratum membership.
-- `whetstone_envs.probes` pairs naive and ceiling prompts and
-  normalizes predictions for evaluation.
-- `whetstone_envs.scoring` evaluates repeated observations and
-  aggregates results through task, stratum, and overall levels.
-- `whetstone_envs.pools` validates instance collections and supplies
-  Whetstone's split policy to `dr-graph`'s exact transport solver.
-- `whetstone_envs.manifests` validates frozen manifests, derives versioned
-  pool identities through `dr-serialize`, and publishes bounded canonical
-  files through `dr-store`.
+## Scope
 
-The harness is independent of any particular task family and has no dependency
-on whetstone's optimizer or execution contracts.
+This repo owns the environment data and evaluation rules shared by Whetstone's
+quick-test task families, with no dependency on optimizer or execution-contract
+code:
+
+- [**Instances**][instances-source] define immutable task inputs,
+  private gold data, generation seeds, task strata, and public prompt identity.
+- [**Pools and splits**][pools-source] validate ordered instance
+  collections and allocate deterministic internal, official, and held-out
+  cohorts.
+- [**Probes**][probes-source] pair naive and ceiling templates,
+  render public prompt inputs, and normalize predictions for evaluation.
+- [**Scoring**][scoring-source] represents scored, failed, and
+  missing observations and aggregates complete repeat matrices through task,
+  stratum, and overall levels.
+- [**Manifests**][manifests-source] pin generated pools with
+  versioned identities and bounded canonical persistence.
+
+The task-family implementations and the adapter to Whetstone's optimizer live
+above this shared harness rather than inside its contracts.
+
+## Installation
+
+```bash
+uv add whetstone-envs
+```
+
+## Instances
+
+[`whetstone_envs.instances`][instances-source] owns the immutable
+unit passed through generation, prompting, scoring, splitting, and persistence.
+Prompt inputs are public; `gold` remains private evaluation data.
+
+```python
+@dataclass(frozen=True, slots=True)
+class Instance:
+    id: str
+    seed: int
+    strata: tuple[str, ...]
+    prompt_inputs: Mapping[str, str] = field(default_factory=lambda: ...)
+    gold: str = ""
+```
+
+```python
+def make_instance(
+    *,
+    id: str,
+    seed: int,
+    strata: tuple[str, ...] | str,
+    prompt_inputs: Mapping[str, str] | None = None,
+    gold: str = "",
+) -> Instance: ...
+
+def public_prompt_identity(
+    instance: Instance,
+) -> tuple[tuple[str, str], ...]: ...
+```
+
+## Pools and splits
+
+[`whetstone_envs.pools`][pools-source] owns validated ordered pools
+and the deterministic policy for selecting three disjoint evaluation cohorts.
+Split optimization is delegated to `dr-graph`; returned instances preserve pool
+order.
+
+```python
+@dataclass(frozen=True, slots=True)
+class PoolSplit:
+    internal_eval: tuple[Instance, ...]
+    official: tuple[Instance, ...]
+    held_out: tuple[Instance, ...]
+```
+
+```python
+@dataclass(frozen=True, slots=True)
+class TaskPool:
+    instances: tuple[Instance, ...]
+
+    @property
+    def strata(self) -> tuple[str, ...]: ...
+
+    def stratum_counts(self) -> dict[str, int]: ...
+    def in_stratum(self, label: str) -> tuple[Instance, ...]: ...
+    def split(
+        self,
+        internal_eval_n: int,
+        official_n: int,
+        held_out_n: int,
+    ) -> PoolSplit: ...
+```
+
+## Probes
+
+[`whetstone_envs.probes`][probes-source] owns the floor/ceiling
+prompt pair and the default renderer that can see only public prompt inputs.
+Normalization strips whitespace and complete outer triple-backtick fences.
+
+```python
+def render_with_prompt_inputs(template: str, instance: Instance) -> str: ...
+def normalize(prediction: str) -> str: ...
+```
+
+```python
+@dataclass(frozen=True, slots=True)
+class ProbePair:
+    naive_template: str
+    ceiling_template: str
+    render: Callable[[str, Instance], str] = render_with_prompt_inputs
+
+    def render_naive(self, instance: Instance) -> str: ...
+    def render_ceiling(self, instance: Instance) -> str: ...
+```
+
+## Scoring
+
+[`whetstone_envs.scoring`][scoring-source] keeps failures and absent
+results distinct from binary scores. Aggregation exposes a mean only when the
+complete planned task/repeat matrix is present and scored.
+
+```python
+@verify(UNIQUE)
+class Outcome(StrEnum):
+    SCORED = "scored"
+    FAILED = "failed"
+    MISSING = "missing"
+
+@dataclass(frozen=True, slots=True)
+class Observation:
+    task_id: str
+    repeat_id: int
+    outcome: Outcome = Outcome.SCORED
+    score: int | None = None
+```
+
+```python
+@dataclass(frozen=True, slots=True)
+class Aggregate:
+    mean: float | None
+    usable: int
+    failed_count: int
+    missing_count: int
+    label: str | None = None
+    children: tuple["Aggregate", ...] = field(default_factory=tuple)
+
+def aggregate(
+    observations: Iterable[Observation],
+    task_strata: Mapping[str, tuple[str, ...]],
+    *,
+    expected_repeat_ids: Iterable[int],
+) -> Aggregate: ...
+```
+
+`exact_match`, `scored`, `failed`, and `missing` provide the primary leaf-level
+constructors. `aggregate_task`, `aggregate_stratum`, and `aggregate_overall`
+expose the individual aggregation steps when callers already own the hierarchy.
+
+## Manifests
+
+[`whetstone_envs.manifests`][manifests-source] owns the serialized
+boundary for regenerated pool identity. Manifests use a closed Pydantic schema,
+`dr-serialize` identities, and `dr-store` canonical files.
+
+```python
+class Manifest(BaseModel):
+    generator_version: str
+    seed_range: tuple[int, int]
+    stratum_counts: Mapping[str, int]
+    content_hash: Sha256Digest
+    schema_version: int = MANIFEST_SCHEMA_VERSION
+
+    @classmethod
+    def from_pool(
+        cls,
+        pool: TaskPool,
+        *,
+        generator_version: str,
+        seed_range: tuple[int, int],
+    ) -> "Manifest": ...
+
+    def write(self, path: Path) -> None: ...
+    @classmethod
+    def read(cls, path: Path) -> "Manifest": ...
+    def matches_pool(self, pool: TaskPool) -> bool: ...
+
+def content_hash(pool: TaskPool) -> Sha256Digest: ...
+```
 
 ## Terms and contracts
 
@@ -31,18 +202,6 @@ and
 directly from their TOML sources. The
 [changelog](https://github.com/danielle-rothermel/whetstone-envs/blob/main/CHANGELOG.md)
 records notable changes.
-
-## Consumer entry points
-
-The public imports are organized by owning subpackage:
-
-```python
-from whetstone_envs.instances import Instance, public_prompt_identity
-from whetstone_envs.manifests import Manifest, content_hash
-from whetstone_envs.pools import PoolSplit, TaskPool
-from whetstone_envs.probes import ProbePair, render_with_prompt_inputs
-from whetstone_envs.scoring import Aggregate, Observation, aggregate
-```
 
 ## Development
 
@@ -59,3 +218,9 @@ build gate used by CI. Run it directly at any time:
 ```bash
 scripts/pre-check.sh
 ```
+
+[instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
+[manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests
+[pools-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/pools
+[probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes
+[scoring-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/scoring

@@ -9,6 +9,7 @@ from whetstone_envs.scoring import exact_match
         ("yes", "yes", 1),
         ("yes", "no", 0),
         ("Yes", "yes", 0),
+        ("```\nyes\n```", "yes", 1),
         ("yes", "```\nyes\n```", 1),
     ],
 )

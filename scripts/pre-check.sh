@@ -9,6 +9,8 @@ uv sync --locked
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check
+uv run actionlint -ignore 'label "depot-ubuntu-24.04" is unknown' \
+    .github/workflows/*.yml
 uvx tombi@1.2.5 lint --offline .defs/terms.toml .defs/contracts.toml
 uv run pytest -q
 uv build --clear --no-sources

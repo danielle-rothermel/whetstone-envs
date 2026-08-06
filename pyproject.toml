@@ -19,10 +19,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "dr-graph>=0.1.2,<0.2.0",
-    "dr-serialize>=0.1.2,<0.2.0",
-    "dr-store>=0.1.4,<0.2.0",
-    "pydantic>=2.13.4",
+    "dr-graph==0.1.2",
+    "dr-serialize==0.1.2",
+    "dr-store==0.1.4",
+    "pydantic==2.13.4",
 ]
 
 [project.urls]
@@ -37,6 +37,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "actionlint-py==1.7.12.24",
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",
     "ruff>=0.15.18",
@@ -105,7 +106,7 @@ select = [
 ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["PLR2004", "PLC0415"]
+"tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]

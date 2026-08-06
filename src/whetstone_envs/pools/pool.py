@@ -64,11 +64,9 @@ class TaskPool:
 
     @property
     def strata(self) -> tuple[str, ...]:
-        """Return the stratum labels present in first-seen order."""
         return tuple(self._by_stratum)
 
     def stratum_counts(self) -> dict[str, int]:
-        """Count multi-label instances once in each label."""
         return {key: len(value) for key, value in self._by_stratum.items()}
 
     def in_stratum(self, label: str) -> tuple[Instance, ...]:

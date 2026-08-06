@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import UNIQUE, StrEnum, verify
 
 
-class Outcome(Enum):
+@verify(UNIQUE)
+class Outcome(StrEnum):
+    # Validate membership directly; never iterate to build serialized payloads.
     SCORED = "scored"
     FAILED = "failed"
     MISSING = "missing"
@@ -22,11 +24,14 @@ class Observation:
     score: int | None = None
 
     def __post_init__(self) -> None:
+        if type(self.repeat_id) is not int:
+            msg = "repeat_id must be an int"
+            raise TypeError(msg)
         if not isinstance(self.outcome, Outcome):
             msg = f"outcome must be an Outcome, got {self.outcome!r}"
             raise TypeError(msg)
         if self.outcome is Outcome.SCORED:
-            if self.score not in (0, 1):
+            if type(self.score) is not int or self.score not in (0, 1):
                 msg = (
                     f"scored observation for task {self.task_id!r} "
                     f"repeat {self.repeat_id} must have score 0 or 1, "

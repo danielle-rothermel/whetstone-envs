@@ -152,7 +152,6 @@ class Manifest(BaseModel):
 
     @classmethod
     def from_dict(cls, data: object) -> Manifest:
-        """Parse and validate the closed persisted schema."""
         if not isinstance(data, dict):
             msg = "manifest must be a JSON object"
             raise TypeError(msg)
@@ -170,20 +169,16 @@ class Manifest(BaseModel):
         return cls.model_validate_json(canonical_json(payload), strict=True)
 
     def to_json(self) -> str:
-        """Serialize to the exact Canonical JSON Text representation."""
         return canonical_json(self.to_dict())
 
     def write(self, path: Path) -> None:
-        """Publish through dr-store's bounded canonical-file capability."""
         _manifest_document(path).publish(self.to_dict())
 
     @classmethod
     def read(cls, path: Path) -> Manifest:
-        """Read through dr-store's bounded canonical-file capability."""
         return cls.from_dict(_manifest_document(path).read())
 
     def matches_pool(self, pool: TaskPool) -> bool:
-        """Check retained seeds, stratum counts, and content hash."""
         return (
             _retained_seeds_within_range(pool, self.seed_range)
             and self.stratum_counts == pool.stratum_counts()

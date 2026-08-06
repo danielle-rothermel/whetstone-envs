@@ -13,7 +13,6 @@ _POOL_IDENTITY_SCHEMA_VERSION = 1
 
 
 def _identity_instance(instance: Instance) -> dict[str, Jsonable]:
-    """Return the task-instance facts participating in pool identity."""
     return {
         "id": instance.id,
         "seed": instance.seed,

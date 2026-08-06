@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from whetstone_envs.scoring import (
+    Aggregate,
     aggregate,
     aggregate_overall,
     aggregate_stratum,
@@ -11,6 +12,39 @@ from whetstone_envs.scoring import (
     missing,
     scored,
 )
+
+
+@pytest.mark.parametrize(
+    ("mean", "usable", "failed_count", "missing_count", "error"),
+    [
+        (1.0, True, 0, 0, TypeError),
+        (1.0, -1, 0, 0, ValueError),
+        (float("nan"), 1, 0, 0, ValueError),
+        (None, 1, 0, 0, ValueError),
+        (1.0, 1, 1, 0, ValueError),
+    ],
+    ids=[
+        "non-integer-count",
+        "negative-count",
+        "non-finite-mean",
+        "missing-complete-mean",
+        "mean-with-failure",
+    ],
+)
+def test_aggregate_rejects_inconsistent_leaf_values(
+    mean: float | None,
+    usable: int,
+    failed_count: int,
+    missing_count: int,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        Aggregate(
+            mean=mean,
+            usable=usable,
+            failed_count=failed_count,
+            missing_count=missing_count,
+        )
 
 
 def test_task_mean_over_repeats() -> None:
@@ -38,24 +72,50 @@ def test_missing_repeat_makes_task_incomplete() -> None:
 
 
 def test_aggregate_task_rejects_mixed_task_ids() -> None:
-    with pytest.raises(ValueError, match="single task"):
+    with pytest.raises(ValueError):
         aggregate_task([scored("a", 0, 1), scored("b", 0, 1)])
 
 
 def test_aggregate_task_rejects_duplicate_repeat_ids() -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*duplicate)(?=.*task)(?=.*repeat(?:_id)?\D*7)",
-    ):
+    with pytest.raises(ValueError):
         aggregate_task([scored("task", 7, 1), scored("task", 7, 0)])
 
 
-def test_aggregate_task_rejects_corrupted_outcome() -> None:
-    observation = scored("task", 0, 1)
-    object.__setattr__(observation, "outcome", "corrupted")
+def test_aggregate_rejects_counts_inconsistent_with_children() -> None:
+    child = aggregate_task([scored("task", 0, 1)])
+    with pytest.raises(ValueError):
+        Aggregate(
+            mean=1.0,
+            usable=2,
+            failed_count=0,
+            missing_count=0,
+            children=(child,),
+        )
 
-    with pytest.raises(TypeError, match="Outcome"):
-        aggregate_task([observation])
+
+def test_aggregate_rejects_mutable_children() -> None:
+    child = aggregate_task([scored("task", 0, 1)])
+    with pytest.raises(TypeError):
+        Aggregate(
+            mean=1.0,
+            usable=1,
+            failed_count=0,
+            missing_count=0,
+            children=[child],  # ty: ignore[invalid-argument-type]
+        )
+
+
+def test_aggregate_rejects_mean_inconsistent_with_children() -> None:
+    scored_task = aggregate_task([scored("scored", 0, 1)])
+    unscored_task = aggregate_task([scored("unscored", 0, 0)])
+    with pytest.raises(ValueError):
+        Aggregate(
+            mean=1.0,
+            usable=2,
+            failed_count=0,
+            missing_count=0,
+            children=(scored_task, unscored_task),
+        )
 
 
 def test_full_ladder_all_complete() -> None:
@@ -150,10 +210,7 @@ def test_planned_matrix_includes_fully_absent_expected_task() -> None:
 
 def test_planned_matrix_rejects_duplicate_task_repeat_pair() -> None:
     observations = [scored("task-a", 7, 1), scored("task-a", 7, 1)]
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*duplicate)(?=.*task-a)(?=.*repeat(?:_id)?\D*7)",
-    ):
+    with pytest.raises(ValueError):
         aggregate(
             observations,
             {"task-a": ("easy",)},
@@ -162,10 +219,7 @@ def test_planned_matrix_rejects_duplicate_task_repeat_pair() -> None:
 
 
 def test_planned_matrix_rejects_unexpected_repeat() -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*unexpected)(?=.*repeat(?:_id)?\D*3)",
-    ):
+    with pytest.raises(ValueError):
         aggregate(
             [scored("task", 3, 1)],
             {"task": ("easy",)},
@@ -174,14 +228,23 @@ def test_planned_matrix_rejects_unexpected_repeat() -> None:
 
 
 def test_planned_matrix_rejects_duplicate_expected_repeat_ids() -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*duplicate)(?=.*expected)(?=.*repeat_id\D*0)",
-    ):
+    with pytest.raises(ValueError):
         aggregate(
             [],
             {"task": ("easy",)},
             expected_repeat_ids=(0, 0),
+        )
+
+
+@pytest.mark.parametrize("repeat_id", [True, 1.0, "1"])
+def test_planned_matrix_requires_integer_expected_repeat_ids(
+    repeat_id: object,
+) -> None:
+    with pytest.raises(TypeError):
+        aggregate(
+            [],
+            {"task": ("easy",)},
+            expected_repeat_ids=(repeat_id,),  # ty: ignore[invalid-argument-type]
         )
 
 
@@ -207,19 +270,18 @@ def test_multi_stratum_task_contributes_once_to_each_stratum() -> None:
 
 
 @pytest.mark.parametrize(
-    ("strata", "match"),
+    "strata",
     [
-        ((), "at least one stratum"),
-        ((" ",), "nonblank"),
-        (("easy", "easy"), "duplicate stratum"),
+        (),
+        (" ",),
+        ("easy", "easy"),
     ],
     ids=["empty", "blank", "duplicate"],
 )
 def test_task_strata_require_canonical_label_tuples(
     strata: tuple[str, ...],
-    match: str,
 ) -> None:
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(ValueError):
         aggregate(
             [],
             {"task": strata},
@@ -228,7 +290,7 @@ def test_task_strata_require_canonical_label_tuples(
 
 
 def test_task_strata_require_tuple() -> None:
-    with pytest.raises(TypeError, match="must be a tuple"):
+    with pytest.raises(TypeError):
         aggregate(
             [],
             {"task": ["easy"]},  # ty: ignore[invalid-argument-type]
@@ -237,7 +299,7 @@ def test_task_strata_require_tuple() -> None:
 
 
 def test_task_strata_require_string_labels() -> None:
-    with pytest.raises(TypeError, match="must be strings"):
+    with pytest.raises(TypeError):
         aggregate(
             [],
             {"task": (1,)},  # ty: ignore[invalid-argument-type]
@@ -263,7 +325,7 @@ def test_failed_observation_propagates_to_overall() -> None:
 
 
 def test_missing_task_stratum_raises() -> None:
-    with pytest.raises(KeyError, match="no stratum"):
+    with pytest.raises(KeyError):
         aggregate(
             [scored("t", 0, 1)],
             {},

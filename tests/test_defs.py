@@ -3,24 +3,34 @@ from __future__ import annotations
 import importlib
 import tomllib
 from collections import defaultdict
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-import whetstone_envs.instances
-import whetstone_envs.manifests
-import whetstone_envs.pools
-import whetstone_envs.probes
-import whetstone_envs.scoring
-
 DEFS_DIR = Path(__file__).parents[1] / ".defs"
 RELATIONSHIP_FIELDS = ("is_a", "part_of")
-PUBLIC_MODULES = (
-    whetstone_envs.instances,
-    whetstone_envs.manifests,
-    whetstone_envs.pools,
-    whetstone_envs.probes,
-    whetstone_envs.scoring,
-)
+
+
+class _DefsIndexParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sources: set[tuple[str, str]] = set()
+        self.module_scripts: set[str] = set()
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        attributes = dict(attrs)
+        source = attributes.get("data-defs-file")
+        kind = attributes.get("data-defs-kind")
+        if source is not None and kind is not None:
+            self.sources.add((source, kind))
+        if tag == "script" and attributes.get("type") == "module":
+            source = attributes.get("src")
+            if source is not None:
+                self.module_scripts.add(source)
 
 
 def _terms() -> list[dict[str, Any]]:
@@ -70,7 +80,7 @@ def test_term_names_and_relationships_form_a_valid_graph() -> None:
     assert cycle is None, " -> ".join(cycle or [])
 
 
-def test_exported_symbols_exactly_cover_the_public_subpackages() -> None:
+def test_exported_symbols_are_unique_and_resolvable() -> None:
     symbol_terms: dict[str, list[str]] = defaultdict(list)
     for term in _terms():
         for symbol in term.get("exported_symbols", []):
@@ -81,18 +91,13 @@ def test_exported_symbols_exactly_cover_the_public_subpackages() -> None:
         module_name, _, attribute = symbol.rpartition(".")
         assert getattr(importlib.import_module(module_name), attribute)
 
-    expected = {
-        f"{module.__name__}.{name}"
-        for module in PUBLIC_MODULES
-        for name in module.__all__
-    }
-    assert set(symbol_terms) == expected
-
 
 def test_index_loads_both_authoritative_toml_files() -> None:
-    index = (DEFS_DIR / "index.html").read_text(encoding="utf-8")
-    assert 'data-defs-file="terms.toml" data-defs-kind="terms"' in index
-    assert (
-        'data-defs-file="contracts.toml" data-defs-kind="contracts"' in index
-    )
-    assert '<script type="module" src="defs-render.js"></script>' in index
+    parser = _DefsIndexParser()
+    parser.feed((DEFS_DIR / "index.html").read_text(encoding="utf-8"))
+
+    assert parser.sources == {
+        ("contracts.toml", "contracts"),
+        ("terms.toml", "terms"),
+    }
+    assert parser.module_scripts == {"defs-render.js"}

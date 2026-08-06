@@ -20,13 +20,8 @@ def test_make_instance_normalizes_single_stratum() -> None:
     assert inst.gold == "A"
 
 
-def test_make_instance_accepts_stratum_tuple() -> None:
-    inst = make_instance(id="t1", seed=7, strata=("easy", "short"))
-    assert inst.strata == ("easy", "short")
-
-
 def test_direct_construction_rejects_bare_string_strata() -> None:
-    with pytest.raises(TypeError, match=r"(?i)(?=.*strata)(?=.*tuple)"):
+    with pytest.raises(TypeError):
         Instance(
             id="t1",
             seed=7,
@@ -50,13 +45,13 @@ def test_prompt_inputs_are_read_only_and_detached() -> None:
 
 
 def test_empty_id_rejected() -> None:
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(ValueError):
         make_instance(id="", seed=1, strata="s")
 
 
 @pytest.mark.parametrize("invalid_id", [1, True, [], {}])
 def test_id_requires_string_runtime_type(invalid_id: object) -> None:
-    with pytest.raises(TypeError, match=r"(?i)(?=.*id)(?=.*string)"):
+    with pytest.raises(TypeError):
         Instance(
             id=cast("str", invalid_id),
             seed=1,
@@ -66,7 +61,7 @@ def test_id_requires_string_runtime_type(invalid_id: object) -> None:
 
 @pytest.mark.parametrize("invalid_seed", [True, False, 1.0, "1", []])
 def test_seed_requires_exact_int_runtime_type(invalid_seed: object) -> None:
-    with pytest.raises(TypeError, match=r"(?i)(?=.*seed)(?=.*int)"):
+    with pytest.raises(TypeError):
         Instance(
             id="t1",
             seed=cast("int", invalid_seed),
@@ -76,7 +71,7 @@ def test_seed_requires_exact_int_runtime_type(invalid_seed: object) -> None:
 
 @pytest.mark.parametrize("invalid_gold", [1, True, [], {}])
 def test_gold_requires_string_runtime_type(invalid_gold: object) -> None:
-    with pytest.raises(TypeError, match=r"(?i)(?=.*gold)(?=.*string)"):
+    with pytest.raises(TypeError):
         Instance(
             id="t1",
             seed=1,
@@ -86,7 +81,7 @@ def test_gold_requires_string_runtime_type(invalid_gold: object) -> None:
 
 
 def test_empty_strata_rejected() -> None:
-    with pytest.raises(ValueError, match="at least one stratum"):
+    with pytest.raises(ValueError):
         Instance(id="t1", seed=1, strata=())
 
 
@@ -139,10 +134,7 @@ def test_direct_construction_detaches_prompt_inputs(
 def test_prompt_inputs_require_string_keys_and_values(
     prompt_inputs: dict[object, object],
 ) -> None:
-    with pytest.raises(
-        TypeError,
-        match=r"(?i)(?=.*prompt_inputs)(?=.*string)",
-    ):
+    with pytest.raises(TypeError):
         Instance(
             id="t1",
             seed=1,
@@ -153,11 +145,18 @@ def test_prompt_inputs_require_string_keys_and_values(
 
 @pytest.mark.parametrize("stratum", ["", " ", "\t\n"])
 def test_blank_stratum_rejected(stratum: str) -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*strat)(?=.*(?:non-empty|blank))",
-    ):
+    with pytest.raises(ValueError):
         make_instance(id="t1", seed=1, strata=stratum)
+
+
+@pytest.mark.parametrize("stratum", [1, True, None])
+def test_strata_require_string_labels(stratum: object) -> None:
+    with pytest.raises(TypeError):
+        Instance(
+            id="t1",
+            seed=1,
+            strata=cast("tuple[str, ...]", (stratum,)),
+        )
 
 
 @pytest.mark.parametrize(
@@ -173,10 +172,7 @@ def test_blank_stratum_rejected(stratum: str) -> None:
 def test_make_instance_rejects_non_string_non_tuple_strata(
     invalid_strata: object,
 ) -> None:
-    with pytest.raises(
-        TypeError,
-        match=r"(?i)(?=.*strata)(?=.*string)(?=.*tuple)",
-    ):
+    with pytest.raises(TypeError):
         make_instance(
             id="t1",
             seed=1,

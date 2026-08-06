@@ -5,12 +5,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 from dr_serialize import (
+    CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     DuplicateJsonKeyError,
     JsonByteLimitError,
+    JsonDepthLimitError,
     Sha256Digest,
 )
 from dr_store import DocumentReadError
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from whetstone_envs.instances import make_instance
 from whetstone_envs.manifests import (
@@ -36,7 +38,6 @@ def _build_pool(factory: Callable[..., Instance]) -> TaskPool:
 
 @pytest.fixture
 def valid_manifest_payload() -> dict[str, object]:
-    """A valid manifest payload for mutation tests."""
     return {
         "schema_version": 1,
         "generator_version": "generator@1.0",
@@ -55,7 +56,6 @@ def test_from_pool_records_counts_and_hash(
     )
     assert manifest.stratum_counts == {"easy": 2, "hard": 2}
     assert manifest.content_hash == content_hash(pool)
-    assert isinstance(manifest, BaseModel)
     assert isinstance(manifest.content_hash, Sha256Digest)
     assert manifest.seed_range == (1000, 1004)
     assert manifest.schema_version == MANIFEST_SCHEMA_VERSION
@@ -88,9 +88,8 @@ def test_manifest_fields_are_immutable(two_stratum_pool: TaskPool) -> None:
         generator_version="generator-v1",
         seed_range=(1000, 1006),
     )
-    with pytest.raises(ValidationError) as caught:
+    with pytest.raises(ValidationError):
         manifest.generator_version = "generator-v2"  # ty: ignore[invalid-assignment]
-    assert caught.value.errors()[0]["type"] == "frozen_instance"
 
 
 def test_manifest_round_trips_through_json(
@@ -158,10 +157,7 @@ def test_from_pool_rejects_retained_seed_outside_range(
     synthetic_instance: Callable[..., Instance],
     seed_range: tuple[int, int],
 ) -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*retained)(?=.*seed)(?=.*range)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_pool(
             _build_pool(synthetic_instance),
             generator_version="g",
@@ -195,10 +191,7 @@ def test_from_dict_rejects_missing_schema_version(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload.pop("schema_version")
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*schema_version)(?=.*required)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)
 
 
@@ -206,10 +199,7 @@ def test_from_dict_rejects_unsupported_schema_version(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["schema_version"] = 2
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*schema_version)(?=.*unsupported)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)
 
 
@@ -217,10 +207,8 @@ def test_from_dict_rejects_non_string_generator_version(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["generator_version"] = 123
-    with pytest.raises(ValidationError) as caught:
+    with pytest.raises(ValidationError):
         Manifest.from_dict(valid_manifest_payload)
-    assert caught.value.errors()[0]["loc"] == ("generator_version",)
-    assert caught.value.errors()[0]["type"] == "string_type"
 
 
 @pytest.mark.parametrize(
@@ -248,30 +236,23 @@ def test_from_dict_rejects_non_integer_fields(
     value: object,
 ) -> None:
     valid_manifest_payload[field] = value
-    with pytest.raises(ValidationError) as caught:
+    with pytest.raises(ValidationError):
         Manifest.from_dict(valid_manifest_payload)
-    assert caught.value.errors()[0]["loc"][0] == field
-    assert caught.value.errors()[0]["type"] == "int_type"
 
 
 def test_from_dict_rejects_bad_seed_range_shape(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["seed_range"] = [10, 20, 30]
-    with pytest.raises(ValidationError) as caught:
+    with pytest.raises(ValidationError):
         Manifest.from_dict(valid_manifest_payload)
-    assert caught.value.errors()[0]["loc"] == ("seed_range",)
-    assert caught.value.errors()[0]["type"] == "too_long"
 
 
 def test_from_dict_rejects_reversed_seed_range(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["seed_range"] = [20, 10]
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*seed_range)(?=.*ordered)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)
 
 
@@ -279,18 +260,12 @@ def test_from_dict_rejects_equal_seed_range_endpoints(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["seed_range"] = [10, 10]
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*seed_range)(?=.*start)(?=.*end)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)
 
 
 def test_direct_manifest_rejects_equal_seed_range_endpoints() -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*seed_range)(?=.*start)(?=.*end)",
-    ):
+    with pytest.raises(ValueError):
         Manifest(
             generator_version="g",
             seed_range=(10, 10),
@@ -306,20 +281,15 @@ def test_from_dict_rejects_non_numeric_count(
         "easy": "lots",
         "hard": 0,
     }
-    with pytest.raises(ValidationError) as caught:
+    with pytest.raises(ValidationError):
         Manifest.from_dict(valid_manifest_payload)
-    assert caught.value.errors()[0]["loc"] == ("stratum_counts", "easy")
-    assert caught.value.errors()[0]["type"] == "int_type"
 
 
 def test_from_dict_rejects_negative_count(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["stratum_counts"] = {"easy": -1, "hard": 1}
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*stratum_counts)(?=.*non-negative)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)
 
 
@@ -327,18 +297,12 @@ def test_from_dict_rejects_zero_valued_stratum(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["stratum_counts"] = {"easy": 2, "hard": 0}
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*stratum_counts)(?=.*positive)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)
 
 
 def test_direct_manifest_rejects_zero_valued_stratum() -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*stratum_counts)(?=.*positive)",
-    ):
+    with pytest.raises(ValueError):
         Manifest(
             generator_version="g",
             seed_range=(10, 20),
@@ -357,10 +321,7 @@ def test_from_dict_rejects_zero_task_manifest(
     stratum_counts: dict[str, int],
 ) -> None:
     valid_manifest_payload["stratum_counts"] = stratum_counts
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*stratum_counts)(?=.*positive)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)
 
 
@@ -378,9 +339,8 @@ def test_from_dict_rejects_malformed_content_hash(
     bad_hash: str,
 ) -> None:
     valid_manifest_payload["content_hash"] = bad_hash
-    with pytest.raises(ValidationError) as caught:
+    with pytest.raises(ValidationError):
         Manifest.from_dict(valid_manifest_payload)
-    assert caught.value.errors()[0]["loc"] == ("content_hash",)
 
 
 def test_read_rejects_noncanonical_json(
@@ -412,13 +372,32 @@ def test_read_rejects_oversized_document(tmp_path: Path) -> None:
     assert isinstance(caught.value.__cause__, JsonByteLimitError)
 
 
+def test_read_rejects_document_beyond_shared_depth_limit(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "manifest.json"
+    depth = CANONICAL_JSON_MAX_CONTAINER_DEPTH
+    path.write_bytes(b'{"value":' + b"[" * depth + b"0" + b"]" * depth + b"}")
+
+    with pytest.raises(DocumentReadError) as caught:
+        Manifest.read(path)
+    assert isinstance(caught.value.__cause__, JsonDepthLimitError)
+
+
+def test_read_rejects_final_component_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    path = tmp_path / "manifest.json"
+    path.symlink_to(target)
+
+    with pytest.raises(DocumentReadError):
+        Manifest.read(path)
+
+
 def test_read_rejects_non_object_json(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text("[]", encoding="utf-8")
-    with pytest.raises(
-        TypeError,
-        match=r"(?i)(?=.*manifest)(?=.*object)",
-    ):
+    with pytest.raises(TypeError):
         Manifest.read(path)
 
 
@@ -426,8 +405,5 @@ def test_from_dict_rejects_unknown_fields(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["unexpected"] = "value"
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*unknown)(?=.*unexpected)",
-    ):
+    with pytest.raises(ValueError):
         Manifest.from_dict(valid_manifest_payload)

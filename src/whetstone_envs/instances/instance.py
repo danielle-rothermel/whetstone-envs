@@ -8,7 +8,6 @@ from types import MappingProxyType
 def _freeze_inputs(
     inputs: Mapping[str, str],
 ) -> MappingProxyType[str, str]:
-    """Validate, detach, and expose inputs as read-only."""
     detached = dict(inputs)
     for key, value in detached.items():
         if not isinstance(key, str) or not isinstance(value, str):

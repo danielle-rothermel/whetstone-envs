@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isclose, isfinite
 from typing import TYPE_CHECKING
 
 from whetstone_envs.scoring.observations import (
@@ -30,14 +31,68 @@ class Aggregate:
     label: str | None = None
     children: tuple[Aggregate, ...] = field(default_factory=tuple)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.children, tuple) or any(
+            not isinstance(child, Aggregate) for child in self.children
+        ):
+            msg = "aggregate children must be a tuple of Aggregate values"
+            raise TypeError(msg)
+        counts = (self.usable, self.failed_count, self.missing_count)
+        if any(type(count) is not int for count in counts):
+            msg = "aggregate contribution counts must be integers"
+            raise TypeError(msg)
+        if any(count < 0 for count in counts):
+            msg = "aggregate contribution counts must be non-negative"
+            raise ValueError(msg)
+        if self.mean is not None and (
+            isinstance(self.mean, bool)
+            or not isinstance(self.mean, (int, float))
+            or not isfinite(self.mean)
+            or not 0 <= self.mean <= 1
+        ):
+            msg = "aggregate mean must be a finite value from zero to one"
+            raise ValueError(msg)
+
+        if self.children:
+            expected_counts = (
+                sum(child.usable for child in self.children),
+                sum(child.failed_count for child in self.children),
+                sum(child.missing_count for child in self.children),
+            )
+            if counts != expected_counts:
+                msg = (
+                    "aggregate counts must equal its child contribution counts"
+                )
+                raise ValueError(msg)
+            child_means = [
+                child.mean for child in self.children if child.mean is not None
+            ]
+            expected_mean = (
+                sum(child_means) / len(child_means)
+                if len(child_means) == len(self.children)
+                else None
+            )
+            if (self.mean is None) != (expected_mean is None) or (
+                self.mean is not None
+                and expected_mean is not None
+                and not isclose(self.mean, expected_mean)
+            ):
+                msg = "aggregate mean must equal its complete child mean"
+                raise ValueError(msg)
+        elif (self.mean is None) == (
+            self.usable > 0
+            and self.failed_count == 0
+            and self.missing_count == 0
+        ):
+            msg = "aggregate mean must reflect complete usable contributions"
+            raise ValueError(msg)
+
     @property
     def total(self) -> int:
-        """Return the summed leaf/path contribution count."""
         return self.usable + self.failed_count + self.missing_count
 
     @property
     def complete(self) -> bool:
-        """Reports whether mean is available."""
         return self.mean is not None
 
 
@@ -130,7 +185,6 @@ def aggregate_overall(stratum_aggregates: list[Aggregate]) -> Aggregate:
 def _validate_task_strata(
     task_strata: Mapping[str, tuple[str, ...]],
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """Validate and materialize task-to-strata assignments."""
     planned_tasks = tuple(task_strata.items())
     for task_id, strata in planned_tasks:
         if not isinstance(strata, tuple):
@@ -175,6 +229,9 @@ def aggregate(
     expected_repeats = tuple(expected_repeat_ids)
     expected_repeat_set: set[int] = set()
     for repeat_id in expected_repeats:
+        if type(repeat_id) is not int:
+            msg = "expected repeat IDs must be integers"
+            raise TypeError(msg)
         if repeat_id in expected_repeat_set:
             msg = f"duplicate expected repeat_id {repeat_id}"
             raise ValueError(msg)

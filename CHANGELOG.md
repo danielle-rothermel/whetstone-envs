@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `probes`, and `scoring` capability boundaries.
 - Express pool-split coverage and balance as explicit marginal-cost policy
   solved through `dr-graph`'s exact separable transport primitive.
+- Pin foundational runtime dependencies and validate workflow syntax in the
+  canonical local and CI gate.
 - Update package metadata and repository guidance for the public harness and
   its release process.
 

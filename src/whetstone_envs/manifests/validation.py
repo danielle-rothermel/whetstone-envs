@@ -6,7 +6,6 @@ _SEED_RANGE_LEN = 2
 
 
 def _require_integer(value: object, *, field_name: str) -> int:
-    """Require an integer, explicitly excluding booleans."""
     if isinstance(value, bool) or not isinstance(value, int):
         msg = f"manifest {field_name} must be an integer"
         raise TypeError(msg)

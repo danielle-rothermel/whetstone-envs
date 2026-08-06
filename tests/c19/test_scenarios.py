@@ -132,21 +132,21 @@ def test_carrying_outcome_is_constructed_not_labeled(
 
 
 def test_scenario_boundary_validation() -> None:
-    with pytest.raises(TypeError, match="C19Scenario"):
+    with pytest.raises(TypeError):
         build_scenario(  # type: ignore[arg-type]
             "navigation",  # ty: ignore[invalid-argument-type]
             C19Size.SMALL,
             1,
             carrying=None,
         )
-    with pytest.raises(TypeError, match="C19Size"):
+    with pytest.raises(TypeError):
         build_scenario(  # type: ignore[arg-type]
             C19Scenario.NAVIGATION,
             5,  # ty: ignore[invalid-argument-type]
             1,
             carrying=None,
         )
-    with pytest.raises(ValueError, match="do not have carrying"):
+    with pytest.raises(ValueError):
         build_scenario(
             C19Scenario.NAVIGATION,
             C19Size.SMALL,

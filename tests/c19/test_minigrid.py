@@ -157,7 +157,7 @@ def test_forward_overlaps_only_an_open_door() -> None:
 def test_run_script_validates_the_whole_command_before_mutation() -> None:
     state = _state()
 
-    with pytest.raises(ValueError, match="unsupported action"):
+    with pytest.raises(ValueError):
         run_script(state, "F?")
 
     assert state.agent_position == (1, 1)

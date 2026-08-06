@@ -50,22 +50,6 @@ Install C18's pinned generator dependencies when generating its pools:
 uv add 'whetstone-envs[c18]'
 ```
 
-## C19 MiniGrid state prediction
-
-[`whetstone_envs.c19`][c19-source] generates balanced tasks over navigation,
-object manipulation, and door interaction on small and medium MiniGrid worlds.
-Its independent oracle simulates complete `LRFPDT` action scripts over the
-supported answer-relevant physical state from the public grid, while the pinned
-MiniGrid adapter cross-checks generated state transitions.
-
-```python
-from whetstone_envs.c19 import DEFAULT_SPLIT_SIZES, PROBES, generate_pool
-
-pool = generate_pool()
-split = pool.split(*DEFAULT_SPLIT_SIZES)
-prompt = PROBES.render_ceiling(split.internal_eval[0])
-```
-
 ## Instances
 
 [`whetstone_envs.instances`][instances-source] owns the immutable
@@ -324,6 +308,63 @@ repository operation:
 uv run python scripts/regenerate-c18.py \
   --config default \
   --output src/whetstone_envs/c18/resources/default.manifest.json
+```
+
+## C19 MiniGrid state prediction
+
+[`whetstone_envs.c19`][c19-source] generates balanced navigation, object-
+manipulation, and door-interaction tasks on 5x5 and 8x8 MiniGrid worlds. Its
+independent oracle simulates complete `LRFPDT` scripts from the public grid and
+is checked against the pinned MiniGrid adapter after every action prefix.
+
+```python
+@verify(UNIQUE)
+class Action(StrEnum):
+    LEFT = "L"
+    RIGHT = "R"
+    FORWARD = "F"
+    PICKUP = "P"
+    DROP = "D"
+    TOGGLE = "T"
+
+@verify(UNIQUE)
+class C19Fact(StrEnum):
+    COORDINATE = "coordinate"
+    HEADING = "heading"
+    FRONT = "front"
+    CARRYING = "carrying"
+```
+
+```python
+@verify(UNIQUE)
+class C19Scenario(StrEnum):
+    NAVIGATION = "navigation"
+    MANIPULATION = "manipulation"
+    DOOR = "door"
+
+@verify(UNIQUE)
+class C19Size(IntEnum):
+    SMALL = 5
+    MEDIUM = 8
+```
+
+```python
+DEFAULT_SPLIT_SIZES: tuple[int, int, int]
+PROBES: ProbePair
+
+def generate_pool(
+    *,
+    n_per_stratum: int = ...,
+    seed_start: int = ...,
+) -> TaskPool: ...
+
+def build_manifest(
+    *,
+    n_per_stratum: int = ...,
+    seed_start: int = ...,
+) -> Manifest: ...
+
+def derive_fact(grid_text: str, command: str, fact: C19Fact) -> str: ...
 ```
 
 ## C22 instruction constraints

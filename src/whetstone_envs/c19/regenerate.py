@@ -23,6 +23,17 @@ def regenerate(
     seed_start: int = DEFAULT_SEED_START,
 ) -> Manifest:
     """Generate and atomically publish one C19 manifest."""
+    canonical_manifest_path = Path(__file__).with_name("manifest.json")
+    custom_generation = (
+        n_per_stratum != DEFAULT_N_PER_STRATUM
+        or seed_start != DEFAULT_SEED_START
+    )
+    if custom_generation and manifest_path.resolve() == (
+        canonical_manifest_path.resolve()
+    ):
+        msg = "custom generation inputs require a noncanonical manifest path"
+        raise ValueError(msg)
+
     manifest = build_manifest(
         n_per_stratum=n_per_stratum,
         seed_start=seed_start,
@@ -52,22 +63,14 @@ def _main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_SEED_START,
     )
     args = parser.parse_args(argv)
-    canonical_manifest_path = Path(__file__).with_name("manifest.json")
-    custom_generation = (
-        args.n_per_stratum != DEFAULT_N_PER_STRATUM
-        or args.seed_start != DEFAULT_SEED_START
-    )
-    if custom_generation and args.manifest.resolve() == (
-        canonical_manifest_path.resolve()
-    ):
-        parser.error(
-            "custom generation inputs require a noncanonical --manifest path",
+    try:
+        regenerate(
+            args.manifest,
+            n_per_stratum=args.n_per_stratum,
+            seed_start=args.seed_start,
         )
-    regenerate(
-        args.manifest,
-        n_per_stratum=args.n_per_stratum,
-        seed_start=args.seed_start,
-    )
+    except ValueError as error:
+        parser.error(str(error))
     return 0
 
 

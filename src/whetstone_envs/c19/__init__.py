@@ -1,5 +1,3 @@
-"""MiniGrid state-transition prediction tasks."""
-
 from whetstone_envs.c19.generation import (
     DEFAULT_SPLIT_SIZES,
     build_manifest,

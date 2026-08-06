@@ -34,7 +34,8 @@ environment PRs in the release have merged.
   manipulation, and door-interaction scenarios at two grid sizes.
 - A supported answer-relevant physical-state oracle independently
   cross-checked against live MiniGrid transitions, naive and known-good probes,
-  and a canonical persisted pool manifest.
+  bounded regeneration, and a canonical persisted pool manifest protected from
+  custom generation inputs.
 - Distribution validation that checks artifact metadata, package contents, and
   isolated installed-wheel imports before publication.
 

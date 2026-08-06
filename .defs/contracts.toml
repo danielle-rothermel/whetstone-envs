@@ -229,8 +229,9 @@ closed wall, key, ball, and door object subset. MiniGrid 3.1.0, Gymnasium \
 answer-relevant physical-state oracle parses only the public grid and script \
 and agrees with the live MiniGrid adapter after every generated action prefix. \
 Default generation is deterministic and balanced across its 22 scenario, \
-size, and fact strata, and regenerating the canonical manifest reproduces the \
-committed 352-instance pool identity."""
+size, and fact strata. The canonical manifest path accepts only those default \
+generation parameters, and regeneration reproduces the committed 352-instance \
+pool identity."""
 rationale = """
 Answer-relevant physical-state prefix agreement exposes transition drift \
 before it can corrupt private gold, while closed generated worlds, balanced \

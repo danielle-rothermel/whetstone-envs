@@ -8,7 +8,6 @@ from whetstone_envs.c19.generation import (
     DEFAULT_N_PER_STRATUM,
     DEFAULT_SEED_START,
     build_manifest,
-    generate_pool,
 )
 
 if TYPE_CHECKING:
@@ -23,12 +22,11 @@ def regenerate(
     n_per_stratum: int = DEFAULT_N_PER_STRATUM,
     seed_start: int = DEFAULT_SEED_START,
 ) -> Manifest:
-    """Regenerate C19 and atomically publish its canonical manifest."""
-    pool = generate_pool(
+    """Generate and atomically publish one C19 manifest."""
+    manifest = build_manifest(
         n_per_stratum=n_per_stratum,
         seed_start=seed_start,
     )
-    manifest = build_manifest(pool)
     manifest.write(manifest_path)
     return manifest
 
@@ -54,6 +52,17 @@ def _main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_SEED_START,
     )
     args = parser.parse_args(argv)
+    canonical_manifest_path = Path(__file__).with_name("manifest.json")
+    custom_generation = (
+        args.n_per_stratum != DEFAULT_N_PER_STRATUM
+        or args.seed_start != DEFAULT_SEED_START
+    )
+    if custom_generation and args.manifest.resolve() == (
+        canonical_manifest_path.resolve()
+    ):
+        parser.error(
+            "custom generation inputs require a noncanonical --manifest path",
+        )
     regenerate(
         args.manifest,
         n_per_stratum=args.n_per_stratum,

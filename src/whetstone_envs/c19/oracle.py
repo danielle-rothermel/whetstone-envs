@@ -278,7 +278,7 @@ def simulate(grid_text: str, command: str) -> WorldSnapshot:
 
 
 def derive_fact(grid_text: str, command: str, fact: C19Fact) -> str:
-    """Derive one answer from the oracle's complete final state."""
+    """Derive one answer from supported answer-relevant final state."""
     if not isinstance(fact, C19Fact):
         msg = f"fact must be a C19Fact, got {fact!r}"
         raise TypeError(msg)

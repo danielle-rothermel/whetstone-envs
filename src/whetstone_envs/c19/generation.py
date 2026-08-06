@@ -26,8 +26,9 @@ if TYPE_CHECKING:
     from whetstone_envs.c19._minigrid import MiniGridState
 
 
-GENERATOR_VERSION = "c19-custom-v1"
+GENERATOR_VERSION = "c19-custom-v2"
 DEFAULT_N_PER_STRATUM = 16
+MAX_N_PER_STRATUM = 128
 DEFAULT_SEED_START = 1_000_000
 DEFAULT_SPLIT_SIZES: tuple[int, int, int] = (88, 132, 132)
 
@@ -183,6 +184,12 @@ def _validate_generation_inputs(
     if n_per_stratum <= 0:
         msg = "n_per_stratum must be positive"
         raise ValueError(msg)
+    if n_per_stratum > MAX_N_PER_STRATUM:
+        msg = (
+            "n_per_stratum must be at most "
+            f"{MAX_N_PER_STRATUM}, got {n_per_stratum}"
+        )
+        raise ValueError(msg)
     if type(seed_start) is not int:
         msg = "seed_start must be an int"
         raise TypeError(msg)
@@ -194,6 +201,9 @@ def generate_pool(
     seed_start: int = DEFAULT_SEED_START,
 ) -> TaskPool:
     """Generate the deterministic 22-stratum C19 task pool.
+
+    ``n_per_stratum`` must be between 1 and ``MAX_N_PER_STRATUM`` (128),
+    inclusive.
 
     Each family-size scene seed is reused across all applicable fact
     projections. Pool order is scene-index-major so the actual TaskPool split
@@ -236,14 +246,16 @@ def generate_pool(
     return TaskPool(instances)
 
 
-def build_manifest(pool: TaskPool) -> Manifest:
-    """Build the C19 manifest from its retained shared scene-seed range."""
-    if not isinstance(pool, TaskPool):
-        msg = f"pool must be a TaskPool, got {pool!r}"
-        raise TypeError(msg)
-    if not pool.instances:
-        msg = "cannot build a C19 manifest for an empty pool"
-        raise ValueError(msg)
+def build_manifest(
+    *,
+    n_per_stratum: int = DEFAULT_N_PER_STRATUM,
+    seed_start: int = DEFAULT_SEED_START,
+) -> Manifest:
+    """Generate one C19 pool and build its manifest."""
+    pool = generate_pool(
+        n_per_stratum=n_per_stratum,
+        seed_start=seed_start,
+    )
     seeds = tuple(instance.seed for instance in pool.instances)
     return Manifest.from_pool(
         pool,

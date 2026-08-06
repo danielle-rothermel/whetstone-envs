@@ -74,7 +74,7 @@ def _snapshot_object(world_object: WorldObj) -> ObjectSnapshot:
 
 
 def snapshot(state: MiniGridState) -> WorldSnapshot:
-    """Read the complete supported state in row-major order."""
+    """Read the supported answer-relevant physical state in row-major order."""
     x, y = state.agent_position
     if not (0 <= x < state.grid.width and 0 <= y < state.grid.height):
         msg = f"agent position {(x, y)!r} is outside the grid"
@@ -185,7 +185,7 @@ def _apply_action(state: MiniGridState, action: Action) -> None:
 
 
 def run_script(state: MiniGridState, command: str) -> WorldSnapshot:
-    """Apply every action directly to state, then return its full snapshot."""
+    """Apply every action, then snapshot answer-relevant physical state."""
     actions = parse_command(command)
     snapshot(state)
     for action in actions:

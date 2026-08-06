@@ -224,7 +224,9 @@ def test_grid_parser_requires_a_wall_perimeter(grid_text: str) -> None:
         simulate(grid_text, "L")
 
 
-def test_whole_state_snapshot_preserves_all_semantics() -> None:
+def test_supported_answer_relevant_physical_state_preserves_semantics() -> (
+    None
+):
     world = "WGWGWGWGWG\nWG>>KRLBWG\nWG  AP  WG\nWGWGWGWGWG"
 
     result = simulate(world, "PFT")
@@ -267,7 +269,7 @@ def test_whole_state_snapshot_preserves_all_semantics() -> None:
         (C19Fact.FRONT, "empty"),
     ],
 )
-def test_derive_fact_reads_only_the_complete_final_snapshot(
+def test_derive_fact_reads_only_supported_answer_relevant_final_state(
     fact: C19Fact,
     expected: str,
 ) -> None:

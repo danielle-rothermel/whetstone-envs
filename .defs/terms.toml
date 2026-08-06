@@ -199,9 +199,9 @@ exported_symbols = [
 [[terms]]
 name = "C19 state transition"
 definition = """
-The evolution of a complete grid-world state under an ordered action script, \
-from which a requested final-state fact is derived after every action has been \
-applied."""
+The evolution of supported answer-relevant physical grid-world state under an \
+ordered action script, from which a requested final-state fact is derived \
+after every action has been applied."""
 exported_symbols = [
     "whetstone_envs.c19.Action",
     "whetstone_envs.c19.C19Fact",

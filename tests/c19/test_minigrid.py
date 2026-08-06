@@ -189,7 +189,7 @@ def test_transition_path_never_calls_environment_step(
     assert (result.agent_row, result.agent_column) == (2, 2)
 
 
-def test_whole_state_snapshot_preserves_pose_objects_colors_and_cells() -> (
+def test_supported_answer_relevant_physical_state_preserves_semantics() -> (
     None
 ):
     grid = Grid(4, 3)

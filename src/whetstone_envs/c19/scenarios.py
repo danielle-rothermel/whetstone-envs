@@ -154,7 +154,7 @@ def _navigation(size: C19Size, seed: int) -> BuiltScenario:
     )
     target_position, target_direction = _wall_target(
         size,
-        seed // len(poses),
+        seed + seed // len(poses),
     )
     context = _context(C19Scenario.NAVIGATION, size, seed)
     route = route_to_pose(
@@ -166,7 +166,11 @@ def _navigation(size: C19Size, seed: int) -> BuiltScenario:
     # F is blocked at the wall. R then enables a successful tangential move;
     # L faces the wall again, making the final F blocked for a second direct
     # movement-precondition witness.
-    command = _bounded_command(f"{route}FRFLF", context=context)
+    terminal_turn = "" if seed % 2 == 0 else "R"
+    command = _bounded_command(
+        f"{route}FRFLF{terminal_turn}",
+        context=context,
+    )
     return BuiltScenario(state=state, command=command)
 
 
@@ -197,7 +201,7 @@ def _manipulation(
         raise PlanningError(msg)
     target_position, target_direction = _wall_target(
         size,
-        seed // (len(edges) * len(_OBJECT_COLORS)),
+        seed + seed // (len(edges) * len(_OBJECT_COLORS)),
     )
     route = route_to_pose(
         planning_state,

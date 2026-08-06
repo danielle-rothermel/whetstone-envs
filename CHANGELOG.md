@@ -32,9 +32,9 @@ environment PRs in the release have merged.
   and an explicit script for regenerating either canonical C18 manifest.
 - Deterministic C19 MiniGrid state-prediction tasks across navigation, object
   manipulation, and door-interaction scenarios at two grid sizes.
-- A complete-state oracle independently cross-checked against live MiniGrid
-  transitions, naive and known-good probes, and a canonical persisted pool
-  manifest.
+- A supported answer-relevant physical-state oracle independently
+  cross-checked against live MiniGrid transitions, naive and known-good probes,
+  and a canonical persisted pool manifest.
 - Distribution validation that checks artifact metadata, package contents, and
   isolated installed-wheel imports before publication.
 

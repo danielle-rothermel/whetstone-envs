@@ -28,8 +28,8 @@ code:
 - [**C18 PrOntoQA**][c18-source] provides deterministic fictional-ontology
   entailment tasks with an independent forward-chaining oracle.
 - [**C19 MiniGrid state prediction**][c19-source] provides deterministic
-  grid-world tasks, a complete-state transition oracle, and naive and
-  known-good probes.
+  grid-world tasks, a supported answer-relevant physical-state transition
+  oracle, and naive and known-good probes.
 - [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
@@ -54,9 +54,9 @@ uv add 'whetstone-envs[c18]'
 
 [`whetstone_envs.c19`][c19-source] generates balanced tasks over navigation,
 object manipulation, and door interaction on small and medium MiniGrid worlds.
-Its independent oracle simulates complete `LRFPDT` action scripts from the
-public grid, while the pinned MiniGrid adapter cross-checks generated state
-transitions.
+Its independent oracle simulates complete `LRFPDT` action scripts over the
+supported answer-relevant physical state from the public grid, while the pinned
+MiniGrid adapter cross-checks generated state transitions.
 
 ```python
 from whetstone_envs.c19 import DEFAULT_SPLIT_SIZES, PROBES, generate_pool

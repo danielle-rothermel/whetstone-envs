@@ -112,5 +112,5 @@ def test_committed_manifest_matches_the_default_pool() -> None:
     pool = generate_pool()
 
     manifest = Manifest.read(manifest_path)
-    assert manifest == build_manifest(pool)
+    assert manifest == build_manifest()
     assert manifest.matches_pool(pool)

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from whetstone_envs.pools import PoolSplit, TaskPool
+from whetstone_envs.pools.splitting import _destination_cell_marginal_costs
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -21,6 +22,14 @@ def _ids_by_destination(
         {instance.id for instance in split.official},
         {instance.id for instance in split.held_out},
     )
+
+
+def test_destination_cell_costs_prioritize_coverage() -> None:
+    assert _destination_cell_marginal_costs(
+        combination_supply=4,
+        destination_demand=3,
+        total_flow=6,
+    ) == (1, 40, 42)
 
 
 def test_split_is_stratified_and_independent_of_global_layout(

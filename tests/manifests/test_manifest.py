@@ -4,6 +4,12 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from dr_serialize import (
+    DuplicateJsonKeyError,
+    JsonByteLimitError,
+    Sha256Digest,
+)
+from pydantic import BaseModel, ValidationError
 
 from whetstone_envs.instances import make_instance
 from whetstone_envs.manifests import (
@@ -48,6 +54,8 @@ def test_from_pool_records_counts_and_hash(
     )
     assert manifest.stratum_counts == {"easy": 2, "hard": 2}
     assert manifest.content_hash == content_hash(pool)
+    assert isinstance(manifest, BaseModel)
+    assert isinstance(manifest.content_hash, Sha256Digest)
     assert manifest.seed_range == (1000, 1004)
     assert manifest.schema_version == MANIFEST_SCHEMA_VERSION
 
@@ -73,6 +81,17 @@ def test_manifest_detaches_and_freezes_stratum_counts() -> None:
         manifest.stratum_counts["easy"] = 2  # ty: ignore[invalid-assignment]
 
 
+def test_manifest_fields_are_immutable(two_stratum_pool: TaskPool) -> None:
+    manifest = Manifest.from_pool(
+        two_stratum_pool,
+        generator_version="generator-v1",
+        seed_range=(1000, 1006),
+    )
+    with pytest.raises(ValidationError) as caught:
+        manifest.generator_version = "generator-v2"  # ty: ignore[invalid-assignment]
+    assert caught.value.errors()[0]["type"] == "frozen_instance"
+
+
 def test_manifest_round_trips_through_json(
     synthetic_instance: Callable[..., Instance],
 ) -> None:
@@ -96,7 +115,7 @@ def test_manifest_write_read_round_trip(
     )
     path = tmp_path / "manifest.json"
     manifest.write(path)
-    assert path.read_text(encoding="utf-8").endswith("\n")
+    assert path.read_bytes() == manifest.to_json().encode("utf-8")
     assert Manifest.read(path) == manifest
 
 
@@ -196,11 +215,10 @@ def test_from_dict_rejects_non_string_generator_version(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["generator_version"] = 123
-    with pytest.raises(
-        TypeError,
-        match=r"(?i)(?=.*generator_version)(?=.*string)",
-    ):
+    with pytest.raises(ValidationError) as caught:
         Manifest.from_dict(valid_manifest_payload)
+    assert caught.value.errors()[0]["loc"] == ("generator_version",)
+    assert caught.value.errors()[0]["type"] == "string_type"
 
 
 @pytest.mark.parametrize(
@@ -228,22 +246,20 @@ def test_from_dict_rejects_non_integer_fields(
     value: object,
 ) -> None:
     valid_manifest_payload[field] = value
-    with pytest.raises(
-        TypeError,
-        match=rf"(?i)(?=.*{field})(?=.*integer)",
-    ):
+    with pytest.raises(ValidationError) as caught:
         Manifest.from_dict(valid_manifest_payload)
+    assert caught.value.errors()[0]["loc"][0] == field
+    assert caught.value.errors()[0]["type"] == "int_type"
 
 
 def test_from_dict_rejects_bad_seed_range_shape(
     valid_manifest_payload: dict[str, object],
 ) -> None:
     valid_manifest_payload["seed_range"] = [10, 20, 30]
-    with pytest.raises(
-        TypeError,
-        match=r"(?i)(?=.*seed_range)(?=.*two-element)",
-    ):
+    with pytest.raises(ValidationError) as caught:
         Manifest.from_dict(valid_manifest_payload)
+    assert caught.value.errors()[0]["loc"] == ("seed_range",)
+    assert caught.value.errors()[0]["type"] == "too_long"
 
 
 def test_from_dict_rejects_reversed_seed_range(
@@ -277,7 +293,7 @@ def test_direct_manifest_rejects_equal_seed_range_endpoints() -> None:
             generator_version="g",
             seed_range=(10, 10),
             stratum_counts={"easy": 1},
-            content_hash="a" * 64,
+            content_hash=Sha256Digest("a" * 64),
         )
 
 
@@ -288,11 +304,10 @@ def test_from_dict_rejects_non_numeric_count(
         "easy": "lots",
         "hard": 0,
     }
-    with pytest.raises(
-        TypeError,
-        match=r"(?i)(?=.*stratum_counts)(?=.*integer)",
-    ):
+    with pytest.raises(ValidationError) as caught:
         Manifest.from_dict(valid_manifest_payload)
+    assert caught.value.errors()[0]["loc"] == ("stratum_counts", "easy")
+    assert caught.value.errors()[0]["type"] == "int_type"
 
 
 def test_from_dict_rejects_negative_count(
@@ -326,7 +341,7 @@ def test_direct_manifest_rejects_zero_valued_stratum() -> None:
             generator_version="g",
             seed_range=(10, 20),
             stratum_counts={"easy": 2, "hard": 0},
-            content_hash="a" * 64,
+            content_hash=Sha256Digest("a" * 64),
         )
 
 
@@ -361,11 +376,35 @@ def test_from_dict_rejects_malformed_content_hash(
     bad_hash: str,
 ) -> None:
     valid_manifest_payload["content_hash"] = bad_hash
-    with pytest.raises(
-        ValueError,
-        match=r"(?i)(?=.*content_hash)(?=.*sha-256)",
-    ):
+    with pytest.raises(ValidationError) as caught:
         Manifest.from_dict(valid_manifest_payload)
+    assert caught.value.errors()[0]["loc"] == ("content_hash",)
+
+
+def test_read_rejects_noncanonical_json(
+    valid_manifest_payload: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(valid_manifest_payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="exact Canonical JSON Text"):
+        Manifest.read(path)
+
+
+def test_read_rejects_duplicate_keys(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        '{"schema_version":1,"schema_version":1}', encoding="utf-8"
+    )
+    with pytest.raises(DuplicateJsonKeyError):
+        Manifest.read(path)
+
+
+def test_read_rejects_oversized_document(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_bytes(b" " * ((1 << 20) + 1))
+    with pytest.raises(JsonByteLimitError):
+        Manifest.read(path)
 
 
 def test_read_rejects_non_object_json(tmp_path: Path) -> None:

@@ -1,12 +1,19 @@
-import hashlib
-import json
+from dr_serialize import (
+    Jsonable,
+    Sha256Digest,
+    build_identity_document,
+    identity_document_hash,
+)
 
 from whetstone_envs.instances import Instance
 from whetstone_envs.pools import TaskPool
 
+_POOL_IDENTITY_SCHEMA = "whetstone_envs.task_pool"
+_POOL_IDENTITY_SCHEMA_VERSION = 1
 
-def _canonical_instance(instance: Instance) -> dict[str, object]:
-    """Return the canonical JSON-ready instance hash payload."""
+
+def _identity_instance(instance: Instance) -> dict[str, Jsonable]:
+    """Return the task-instance facts participating in pool identity."""
     return {
         "id": instance.id,
         "seed": instance.seed,
@@ -16,16 +23,19 @@ def _canonical_instance(instance: Instance) -> dict[str, object]:
     }
 
 
-def content_hash(pool: TaskPool) -> str:
-    """Hash instances in pool order using canonical JSON.
+def content_hash(pool: TaskPool) -> Sha256Digest:
+    """Return the versioned identity hash for the pool's ordered content.
 
-    Prompt-input mapping order does not affect the digest.
+    The identity schema freezes which task-instance facts participate. Pool
+    order remains significant; prompt-input mapping order does not.
     """
-    payload = [_canonical_instance(instance) for instance in pool.instances]
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    document = build_identity_document(
+        schema=_POOL_IDENTITY_SCHEMA,
+        schema_version=_POOL_IDENTITY_SCHEMA_VERSION,
+        payload={
+            "instances": [
+                _identity_instance(instance) for instance in pool.instances
+            ],
+        },
+    )
+    return identity_document_hash(document)

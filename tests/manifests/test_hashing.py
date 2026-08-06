@@ -1,3 +1,5 @@
+from dr_serialize import Sha256Digest
+
 from whetstone_envs.instances import make_instance
 from whetstone_envs.manifests import content_hash
 from whetstone_envs.pools import TaskPool
@@ -23,8 +25,9 @@ def test_content_hash_matches_pinned_vector() -> None:
         ]
     )
     assert content_hash(pool) == (
-        "3f1967dbec05232f926440c0b887c0b2acfa78ea213e645d5723c31117ca41a0"
+        "49d37d086ef79b646e718820020fa29b9e7b5a5c6be0af8d34a3d07a85554eb5"
     )
+    assert isinstance(content_hash(pool), Sha256Digest)
 
 
 def test_content_hash_independent_of_prompt_input_order() -> None:

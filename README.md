@@ -14,8 +14,8 @@ probe rendering, score aggregation, and pinned manifests.**
   aggregates results through task, stratum, and overall levels.
 - `whetstone_envs.pools` validates instance collections and splits
   them across evaluation destinations.
-- `whetstone_envs.manifests` pins generation metadata and pool
-  contents for reproducibility and drift detection.
+- `whetstone_envs.manifests` validates frozen manifests, derives versioned
+  pool identities through `dr-serialize`, and persists exact canonical JSON.
 
 The harness is independent of any particular task family and has no dependency
 on whetstone's optimizer or execution contracts.

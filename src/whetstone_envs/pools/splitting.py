@@ -108,6 +108,23 @@ def _send_min_cost_flow(
         sent += amount
 
 
+def _destination_cell_marginal_costs(
+    *,
+    combination_supply: int,
+    destination_demand: int,
+    total_flow: int,
+) -> tuple[int, ...]:
+    """Return Whetstone's coverage-first, squared-spread cell costs."""
+    coverage_penalty = total_flow * total_flow + 1
+    return tuple(
+        2 * unit - 1 + (coverage_penalty if unit > 1 else 0)
+        for unit in range(
+            1,
+            min(combination_supply, destination_demand) + 1,
+        )
+    )
+
+
 def _allocate_destination_quotas(
     selected_by_combination: dict[tuple[str, ...], int],
     destination_sizes: tuple[int, int, int],
@@ -123,9 +140,6 @@ def _allocate_destination_quotas(
     graph: list[list[_FlowEdge]] = [[] for _ in range(sink + 1)]
 
     total = sum(destination_sizes)
-    # Non-first cell units equal total minus coverage. This penalty exceeds
-    # every possible squared-count difference, so coverage wins first.
-    coverage_penalty = total * total + 1
     cell_edges: list[list[list[_FlowEdge]]] = [
         [[] for _ in destination_sizes] for _ in combinations
     ]
@@ -136,15 +150,18 @@ def _allocate_destination_quotas(
         _add_flow_edge(graph, source, combination_node, quota, 0)
         for destination, size in enumerate(destination_sizes):
             destination_node = first_destination + destination
-            for unit in range(1, min(quota, size) + 1):
-                marginal_square_cost = 2 * unit - 1
+            marginal_costs = _destination_cell_marginal_costs(
+                combination_supply=quota,
+                destination_demand=size,
+                total_flow=total,
+            )
+            for marginal_cost in marginal_costs:
                 edge = _add_flow_edge(
                     graph,
                     combination_node,
                     destination_node,
                     1,
-                    marginal_square_cost
-                    + (coverage_penalty if unit > 1 else 0),
+                    marginal_cost,
                 )
                 cell_edges[combination_index][destination].append(edge)
 

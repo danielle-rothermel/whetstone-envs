@@ -72,11 +72,25 @@ statement = """
 A pool manifest accepts exactly its closed persisted schema at the supported \
 schema version, and it matches a task pool only when every retained seed lies \
 in the declared half-open seed range and both per-stratum counts and the \
-canonical content hash match."""
+versioned dr-serialize identity-document hash match."""
 rationale = """
 Generator metadata alone cannot detect retained-content drift; seed \
-containment, counts, and an ordered canonical hash jointly pin the generated \
-task pool without claiming anything about rejected generator attempts."""
+containment, counts, and an ordered versioned identity jointly pin the \
+generated task pool without claiming anything about rejected generator \
+attempts."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/manifests"
+
+[[contracts]]
+title = "Manifest files use bounded canonical JSON"
+statement = """
+Manifest files contain the exact dr-serialize Canonical JSON Text \
+representation, reject duplicate keys and noncanonical encodings, and accept \
+at most 1 MiB at the shared canonical-JSON depth bound. Local file writes do \
+not claim atomic visibility or durable persistence."""
+rationale = """
+One bounded representation prevents equivalent persisted forms from drifting \
+while keeping storage guarantees explicit at the current ownership boundary."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/manifests"
 

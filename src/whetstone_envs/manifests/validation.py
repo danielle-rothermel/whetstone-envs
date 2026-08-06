@@ -1,19 +1,8 @@
-import re
 from collections.abc import Mapping
 from types import MappingProxyType
 
 MANIFEST_SCHEMA_VERSION = 1
 _SEED_RANGE_LEN = 2
-_PERSISTED_FIELDS = frozenset(
-    {
-        "schema_version",
-        "generator_version",
-        "seed_range",
-        "stratum_counts",
-        "content_hash",
-    },
-)
-_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def _require_integer(value: object, *, field_name: str) -> int:
@@ -91,16 +80,3 @@ def validate_stratum_counts(
         msg = "manifest stratum_counts must have a positive total"
         raise ValueError(msg)
     return MappingProxyType(counts)
-
-
-def validate_content_hash(value: object) -> str:
-    if not isinstance(value, str):
-        msg = "manifest content_hash must be a string"
-        raise TypeError(msg)
-    if _SHA256_HEX.fullmatch(value) is None:
-        msg = (
-            "manifest content_hash must be a canonical lowercase "
-            "SHA-256 hex digest"
-        )
-        raise ValueError(msg)
-    return value

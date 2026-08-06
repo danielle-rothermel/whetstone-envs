@@ -99,8 +99,8 @@ exported_symbols = ["whetstone_envs.scoring.exact_match"]
 name = "pool manifest"
 definition = """
 A persisted description of a generated task pool recording its generator \
-version, retained seed range, per-stratum counts, canonical content hash, and \
-schema version for reproducibility and drift detection."""
+version, retained seed range, per-stratum counts, versioned canonical pool \
+identity, and schema version for reproducibility and drift detection."""
 exported_symbols = [
     "whetstone_envs.manifests.Manifest",
     "whetstone_envs.manifests.content_hash",

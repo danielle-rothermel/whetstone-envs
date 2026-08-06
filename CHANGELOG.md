@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   splits.
 - Probe rendering, idempotent prediction normalization, explicit evaluation
   observations, exact-match scoring, and complete-matrix aggregation.
-- Strict persisted pool manifests with canonical content hashing and explicit
-  retained-pool matching.
+- Frozen persisted pool manifests with versioned `dr-serialize` identities,
+  bounded canonical JSON reads, and explicit retained-pool matching.
 - The authoritative `.defs` vocabulary and contracts reference, published by
   GitHub Pages from the current TOML sources.
 - Locked, multi-version Depot CI, a canonical local pre-check hook, and
@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Organize the package and test suite by the `instances`, `manifests`, `pools`,
   `probes`, and `scoring` capability boundaries.
+- Express pool-split coverage and balance as explicit marginal-cost policy
+  separate from residual solver mechanics.
 - Update package metadata and repository guidance for the public harness and
   its release process.
 

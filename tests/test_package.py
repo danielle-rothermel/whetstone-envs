@@ -1,7 +1,6 @@
 from types import ModuleType
 
 import whetstone_envs
-import whetstone_envs.core
 import whetstone_envs.instances
 import whetstone_envs.manifests
 import whetstone_envs.pools
@@ -18,10 +17,6 @@ def assert_exports(module: ModuleType, expected: list[str]) -> None:
 
 def test_root_namespace_is_empty() -> None:
     assert whetstone_envs.__all__ == []
-
-
-def test_core_namespace_is_empty() -> None:
-    assert whetstone_envs.core.__all__ == []
 
 
 def test_instances_public_exports() -> None:

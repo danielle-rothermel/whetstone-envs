@@ -3,12 +3,16 @@ from __future__ import annotations
 import importlib
 import tomllib
 from collections import defaultdict
+from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
 DEFS_DIR = Path(__file__).parents[1] / ".defs"
+PACKAGE_DIR = Path(__file__).parents[1] / "src" / "whetstone_envs"
 RELATIONSHIP_FIELDS = ("is_a", "part_of")
+REQUIRED_CONTRACT_FIELDS = {"date", "rationale", "statement", "title"}
+OPTIONAL_CONTRACT_FIELDS = {"check"}
 
 
 class _DefsIndexParser(HTMLParser):
@@ -36,6 +40,11 @@ class _DefsIndexParser(HTMLParser):
 def _terms() -> list[dict[str, Any]]:
     with (DEFS_DIR / "terms.toml").open("rb") as file:
         return tomllib.load(file)["terms"]
+
+
+def _contracts() -> list[dict[str, Any]]:
+    with (DEFS_DIR / "contracts.toml").open("rb") as file:
+        return tomllib.load(file)["contracts"]
 
 
 def _find_cycle(graph: dict[str, list[str]]) -> list[str] | None:
@@ -90,6 +99,47 @@ def test_exported_symbols_are_unique_and_resolvable() -> None:
     for symbol in symbol_terms:
         module_name, _, attribute = symbol.rpartition(".")
         assert getattr(importlib.import_module(module_name), attribute)
+
+
+def test_exported_symbols_cover_owning_package_apis() -> None:
+    expected_symbols: set[str] = set()
+    package_names = sorted(
+        path.name
+        for path in PACKAGE_DIR.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    )
+    for package_name in package_names:
+        module_name = f"whetstone_envs.{package_name}"
+        module_exports = importlib.import_module(module_name).__all__
+        assert isinstance(module_exports, list)
+        assert all(isinstance(name, str) for name in module_exports)
+        expected_symbols.update(
+            f"{module_name}.{name}" for name in module_exports
+        )
+
+    documented_symbols = {
+        symbol
+        for term in _terms()
+        for symbol in term.get("exported_symbols", [])
+    }
+    assert documented_symbols == expected_symbols
+
+
+def test_contracts_have_complete_unique_records() -> None:
+    contracts = _contracts()
+    titles = [contract["title"] for contract in contracts]
+    assert len(titles) == len(set(titles))
+
+    for contract in contracts:
+        assert contract.keys() >= REQUIRED_CONTRACT_FIELDS
+        assert contract.keys() <= (
+            REQUIRED_CONTRACT_FIELDS | OPTIONAL_CONTRACT_FIELDS
+        )
+        for field in contract:
+            value = contract[field]
+            assert isinstance(value, str)
+            assert value.strip()
+        date.fromisoformat(contract["date"])
 
 
 def test_index_loads_both_authoritative_toml_files() -> None:

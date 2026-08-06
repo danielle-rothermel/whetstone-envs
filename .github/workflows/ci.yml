@@ -31,7 +31,14 @@ jobs:
           version-file: pyproject.toml
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          save-cache: ${{ github.event_name == 'push' }}
+          cache-suffix: trusted-main-v1
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - run: scripts/pre-check.sh
+      - name: Run the repository checks
+        run: scripts/pre-check.sh
+      - name: Run repository safety hooks
+        env:
+          SKIP: pre-check
+        run: uv run pre-commit run --all-files

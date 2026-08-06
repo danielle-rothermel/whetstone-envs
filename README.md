@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/danielle-rothermel/whetstone-envs/actions/workflows/ci.yml/badge.svg)](https://github.com/danielle-rothermel/whetstone-envs/actions/workflows/ci.yml)
 
-Task-family-agnostic contracts for reproducible quick-test environments.
+Reproducible quick-test environment contracts and task families.
 
 ## Scope
 
@@ -22,14 +22,39 @@ code:
   stratum, and overall levels.
 - [**Manifests**][manifests-source] pin generated pools with
   versioned identities and bounded canonical persistence.
+- [**C11 JSON canonicalization**][c11-source] provides deterministic RFC 8785
+  tasks, an independent canonicalization oracle, and naive and known-good
+  probes.
 
-The task-family implementations and the adapter to Whetstone's optimizer live
-above this shared harness rather than inside its contracts.
+Task-family implementations live in their owning subpackages alongside the
+shared harness; the adapter to Whetstone's optimizer lives above this package.
 
 ## Installation
 
 ```bash
 uv add whetstone-envs
+```
+
+## C11 JSON canonicalization
+
+[`whetstone_envs.c11`][c11-source] generates balanced adversarial tasks for
+RFC 8785 whitespace removal, key ordering, number rendering, Unicode escaping,
+and mixed inputs. The exactly pinned `rfc8785` package produces private gold
+values independently from the input builders. Shared harness contracts own
+pool splitting, prompt rendering, scoring, and manifest persistence.
+
+```python
+from whetstone_envs.c11 import (
+    DEFAULT_SPLIT_SIZES,
+    PROBES,
+    build_manifest,
+    generate_pool,
+)
+
+pool = generate_pool()
+split = pool.split(*DEFAULT_SPLIT_SIZES)
+manifest = build_manifest(pool)
+prompt = PROBES.render_ceiling(split.internal_eval[0])
 ```
 
 ## Instances
@@ -219,6 +244,13 @@ build gate used by CI. Run it directly at any time:
 scripts/pre-check.sh
 ```
 
+Regenerate the canonical C11 manifest after an intentional generator change:
+
+```bash
+uv run python -m whetstone_envs.c11.regenerate
+```
+
+[c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
 [instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests
 [pools-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/pools

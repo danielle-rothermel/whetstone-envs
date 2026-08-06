@@ -106,3 +106,26 @@ exported_symbols = [
     "whetstone_envs.manifests.content_hash",
     "whetstone_envs.manifests.MANIFEST_SCHEMA_VERSION",
 ]
+
+[[terms]]
+name = "C11 task family"
+definition = """
+An evaluation task family for RFC 8785 JSON canonicalization spanning \
+whitespace, key ordering, number rendering, Unicode escaping, and mixed cases, \
+with deterministic generation, standard cohort sizes, a naive-and-known-good \
+probe pair, and a reproducibility manifest."""
+exported_symbols = [
+    "whetstone_envs.c11.C11Stratum",
+    "whetstone_envs.c11.DEFAULT_SPLIT_SIZES",
+    "whetstone_envs.c11.PROBES",
+    "whetstone_envs.c11.build_manifest",
+    "whetstone_envs.c11.generate_pool",
+]
+
+[[terms]]
+name = "RFC 8785 canonicalization"
+definition = """
+The transformation of a JSON text into the single RFC 8785 representation \
+defined by recursive UTF-16 object-name ordering and canonical whitespace, \
+string, and finite binary64 number forms."""
+exported_symbols = ["whetstone_envs.c11.canonicalize"]

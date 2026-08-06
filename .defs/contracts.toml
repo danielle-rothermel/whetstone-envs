@@ -87,14 +87,29 @@ check = "uv run pytest -q tests/manifests"
 title = "Foundational dependencies change through releases"
 statement = """
 The dr-graph solver, dr-serialize identity format, dr-store persistence \
-capability, and Pydantic schema runtime are exact runtime dependency pins. A \
-dependency change requires a new whetstone-envs package version and lockfile."""
+capability, Pydantic schema runtime, and rfc8785 canonicalization oracle are \
+exact runtime dependency pins. A dependency change requires a new \
+whetstone-envs package version and lockfile."""
 rationale = """
-Pool allocation, content identity, durable files, and persisted validation are \
-load-bearing semantics; consumer installation must not select a different \
-implementation than the release validated."""
+Pool allocation, content identity, durable files, persisted validation, and \
+private gold generation are load-bearing semantics; consumer installation must \
+not select a different implementation than the release validated."""
 date = "2026-08-06"
 check = "uv lock --check"
+
+[[contracts]]
+title = "Package releases combine assigned task families"
+statement = """
+A whetstone-envs version tag is created from main only after every task-family \
+pull request assigned to that version has merged and the combined tip passes \
+the complete release gate; one tag publishes the resulting task families \
+together."""
+rationale = """
+PyPI package versions are immutable and cannot be published incrementally; \
+validating one combined tip prevents sibling task-family changes from \
+competing for a version or validating incompatible dependency sets in \
+isolation."""
+date = "2026-08-06"
 
 [[contracts]]
 title = "Manifest files use bounded atomic canonical publication"
@@ -116,8 +131,24 @@ title = "Owning subpackages define the public API"
 statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
-whetstone_envs.scoring; the root whetstone_envs namespace exports no API."""
+whetstone_envs.scoring. Task-family contracts are imported from their owning \
+task-family subpackage, including whetstone_envs.c11; the root whetstone_envs \
+namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""
 date = "2026-08-06"
+
+[[contracts]]
+title = "C11 generation is reproducible and oracle-grounded"
+statement = """
+The C11 task family deterministically generates unique noncanonical JSON inputs \
+across the whitespace, key-order, number, Unicode, and mixed strata; every \
+task's private gold is the RFC 8785 canonical form of its public input, and the \
+default balanced pool is pinned by the committed canonical manifest."""
+rationale = """
+Oracle-derived gold keeps the benchmark independent of the input builders, \
+while deterministic balanced generation and a persisted pool identity make \
+runs reproducible and expose corpus drift."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c11"

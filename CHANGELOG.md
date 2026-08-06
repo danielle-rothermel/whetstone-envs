@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+These changes are assigned to version 0.2.0, which is published only after all
+environment PRs in the release have merged.
+
+### Added
+
+- Deterministic C11 RFC 8785 task generation across five adversarial strata.
+- An exactly pinned independent canonicalization oracle, naive and known-good
+  probes, and a canonical persisted pool manifest.
+- Distribution validation that checks artifact metadata, package contents, and
+  isolated installed-wheel imports before publication.
+
+### Changed
+
+- Restrict Depot cache writes to trusted `main` pushes while allowing pull
+  requests to restore the rotated cache namespace.
+- Run repository safety hooks in CI and release validation in addition to the
+  canonical format, lint, type, definition, test, and build gate.
+- Validate binding-contract structure and require `.defs` mappings for every
+  symbol exported by an owning public package.
+- Cut one package release from the combined `main` tip after all task families
+  assigned to that version have merged and passed the release gate.
+
 ## [0.1.1] - 2026-08-06
 
 ### Added

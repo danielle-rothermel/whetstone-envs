@@ -1,4 +1,4 @@
-"""Tests for the :class:`TaskPool` container and its disjoint split."""
+"""Tests for deterministic, disjoint task-pool splitting."""
 
 from __future__ import annotations
 
@@ -7,90 +7,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from whetstone_envs.core.instance import make_instance
-from whetstone_envs.core.pool import (
-    PoolSplit,
-    TaskPool,
-    public_prompt_identity,
-)
+from whetstone_envs.pools import PoolSplit, TaskPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from whetstone_envs.core.instance import Instance
-
-
-def test_stratum_counts_match_membership(two_stratum_pool: TaskPool) -> None:
-    assert len(two_stratum_pool) == 6
-    assert two_stratum_pool.stratum_counts() == {"easy": 3, "hard": 3}
-    assert two_stratum_pool.strata == ("easy", "hard")
-
-
-def test_in_stratum_returns_members(two_stratum_pool: TaskPool) -> None:
-    easy = two_stratum_pool.in_stratum("easy")
-    assert [i.id for i in easy] == ["easy-0", "easy-1", "easy-2"]
-    assert two_stratum_pool.in_stratum("absent") == ()
-
-
-def test_duplicate_id_rejected(
-    synthetic_instance: Callable[..., Instance],
-) -> None:
-    dup = synthetic_instance(0, "easy")
-    with pytest.raises(ValueError, match="duplicate instance id"):
-        TaskPool([dup, dup])
-
-
-def test_public_prompt_identity_uses_only_sorted_prompt_inputs() -> None:
-    first = make_instance(
-        id="first",
-        seed=1,
-        strata="alpha",
-        prompt_inputs={"z": "last", "a": "first"},
-        gold="first-gold",
-    )
-    second = make_instance(
-        id="second",
-        seed=2,
-        strata="beta",
-        prompt_inputs={"a": "first", "z": "last"},
-        gold="second-gold",
-    )
-
-    expected = (("a", "first"), ("z", "last"))
-    assert public_prompt_identity(first) == expected
-    assert public_prompt_identity(second) == expected
-
-
-@pytest.mark.parametrize(
-    ("first_gold", "second_gold"),
-    [("same", "same"), ("first", "second")],
-    ids=["same-gold", "different-gold"],
-)
-def test_duplicate_public_prompt_identity_rejected(
-    first_gold: str,
-    second_gold: str,
-) -> None:
-    first = make_instance(
-        id="first",
-        seed=1,
-        strata="alpha",
-        prompt_inputs={"question": "Q", "context": "C"},
-        gold=first_gold,
-    )
-    second = make_instance(
-        id="second",
-        seed=2,
-        strata="beta",
-        prompt_inputs={"context": "C", "question": "Q"},
-        gold=second_gold,
-    )
-
-    with pytest.raises(ValueError, match="duplicate public prompt identity"):
-        TaskPool([first, second])
-
-
-def test_empty_pool_is_valid() -> None:
-    assert TaskPool([]).instances == ()
+    from whetstone_envs.instances import Instance
 
 
 def test_split_is_stratified_and_independent_of_global_layout(

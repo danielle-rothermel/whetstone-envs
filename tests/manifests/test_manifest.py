@@ -7,19 +7,19 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from whetstone_envs.core.instance import make_instance
-from whetstone_envs.core.manifest import (
+from whetstone_envs.instances import make_instance
+from whetstone_envs.manifests import (
     MANIFEST_SCHEMA_VERSION,
     Manifest,
     content_hash,
 )
-from whetstone_envs.core.pool import TaskPool
+from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from whetstone_envs.core.instance import Instance
+    from whetstone_envs.instances import Instance
 
 
 def _build_pool(factory: Callable[..., Instance]) -> TaskPool:
@@ -39,35 +39,6 @@ def valid_manifest_payload() -> dict[str, object]:
         "stratum_counts": {"easy": 2, "hard": 0},
         "content_hash": "a" * 64,
     }
-
-
-def test_content_hash_matches_pinned_vector() -> None:
-    inst = make_instance(
-        id="vector-1",
-        seed=7,
-        strata=("easy", "short"),
-        prompt_inputs={"b": "2", "a": "1"},
-        gold="yes",
-    )
-    assert content_hash(TaskPool([inst])) == (
-        "765870a223a64fdd2d4cd0f00351b8d683a864e10b78b5906da05e3058988353"
-    )
-
-
-def test_content_hash_independent_of_prompt_input_order() -> None:
-    a = make_instance(
-        id="t", seed=1, strata="s", prompt_inputs={"a": "1", "b": "2"}
-    )
-    b = make_instance(
-        id="t", seed=1, strata="s", prompt_inputs={"b": "2", "a": "1"}
-    )
-    assert content_hash(TaskPool([a])) == content_hash(TaskPool([b]))
-
-
-def test_content_hash_changes_with_gold() -> None:
-    a = TaskPool([make_instance(id="t", seed=1, strata="s", gold="A")])
-    b = TaskPool([make_instance(id="t", seed=1, strata="s", gold="B")])
-    assert content_hash(a) != content_hash(b)
 
 
 def test_from_pool_records_counts_and_hash(

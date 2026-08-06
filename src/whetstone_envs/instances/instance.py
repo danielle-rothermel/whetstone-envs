@@ -1,11 +1,10 @@
-"""The frozen :class:`Instance` type shared by every candidate.
+"""The frozen :class:`Instance` type shared by every task environment.
 
-Every candidate generator produces a ``list[Instance]``: a minimal,
-immutable record carrying a stable task identity (``id`` / ``seed``),
-one or more stratum labels, the rendered prompt inputs a probe template
-consumes, and the gold/oracle-checkable state used for exact-match
-scoring. It has no model-call dependency and no candidate-specific
-logic, so it lives in :mod:`whetstone_envs.core`.
+Every task generator produces a ``list[Instance]``: a minimal, immutable
+record carrying a stable task identity (``id`` / ``seed``), one or more
+stratum labels, the rendered prompt inputs a probe template consumes, and the
+gold/oracle-checkable state used for exact-match scoring. It has no model-call
+dependency and no task-family-specific logic.
 """
 
 from __future__ import annotations
@@ -20,9 +19,9 @@ def _freeze_inputs(
 ) -> MappingProxyType[str, str]:
     """Validate and return a detached, read-only copy of ``inputs``.
 
-    Copying into a fresh ``dict`` first detaches the view from the
-    caller's mutable mapping, so a frozen instance cannot be mutated
-    through the reference the caller still holds.
+    Copying into a fresh ``dict`` first detaches the view from the caller's
+    mutable mapping, so a frozen instance cannot be mutated through the
+    reference the caller still holds.
     """
     detached = dict(inputs)
     for key, value in detached.items():
@@ -39,24 +38,22 @@ class Instance:
     Parameters
     ----------
     id:
-        Stable task identity, unique within a pool. Used as the task
-        key when aggregating scores.
+        Stable task identity, unique within a pool. Used as the task key when
+        aggregating scores.
     seed:
         The generator seed that produced this instance. Recorded for
-        determinism and contamination auditing; distinct from ``id`` so
-        a generator may derive several instances from one seed if a
-        candidate ever needs to.
+        determinism and contamination auditing; distinct from ``id`` so a
+        generator may derive several instances from one seed if a task family
+        ever needs to.
     strata:
-        One or more stratum labels this instance belongs to (the
-        latent-rule / difficulty strata from a spec's Section 1). Kept
-        as an ordered, deduplicated tuple so membership is hashable and
-        stable.
+        One or more stratum labels this instance belongs to. Kept as an
+        ordered, deduplicated tuple so membership is hashable and stable.
     prompt_inputs:
         The rendered fields a probe template consumes. Read-only; never
         includes gold/oracle-only state.
     gold:
-        The exact string the oracle expects an extracted prediction to
-        equal for a score of 1.
+        The exact string the oracle expects an extracted prediction to equal
+        for a score of 1.
     """
 
     id: str
@@ -95,9 +92,9 @@ class Instance:
         )
 
     def __hash__(self) -> int:
-        # The dataclass-generated __hash__ would try to hash the
-        # unhashable MappingProxyType; hash its sorted items instead so
-        # value-equal instances still hash equal.
+        # The dataclass-generated __hash__ would try to hash the unhashable
+        # MappingProxyType; hash its sorted items instead so value-equal
+        # instances still hash equal.
         return hash(
             (
                 self.id,
@@ -120,9 +117,8 @@ def make_instance(
     """Construct an :class:`Instance`, normalizing convenience inputs.
 
     A single stratum may be passed as a bare string; ``prompt_inputs``
-    defaults to an empty read-only mapping. This is the constructor
-    candidate generators should call so the freezing convention stays
-    in one place.
+    defaults to an empty read-only mapping. Task generators should use this
+    constructor so the freezing convention stays in one place.
     """
     labels = (strata,) if isinstance(strata, str) else tuple(strata)
     return Instance(

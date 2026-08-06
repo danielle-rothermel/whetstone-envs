@@ -84,7 +84,7 @@ tr:last-child td { border-bottom: 0; }
     </div>
     <div class="card">
       <h3><span class="status pending">Phase 2</span>Agreed test implementation</h3>
-      <p>A different implementation agent receives only the accepted audit items. It owns <a href="tests/core/">tests/core/</a> and may adjust shared fixtures there.</p>
+      <p>A different implementation agent receives only the accepted audit items. It owns the mirrored functional test packages under <a href="tests/">tests/</a> and may adjust shared fixtures there.</p>
       <span class="aside">Gate: tests must fail for the intended pre-fix reason, not for incidental implementation details.</span>
     </div>
     <div class="card">
@@ -98,11 +98,11 @@ tr:last-child td { border-bottom: 0; }
     <div class="section-head"><h2>Who owns each reviewed finding?</h2><span class="tag">phase 3</span></div>
     <table>
       <tr><th>Finding</th><th>Owner</th><th>Primary paths</th></tr>
-      <tr><td>Incomplete task/repeat matrices</td><td>Scoring agent</td><td><a href="src/whetstone_envs/core/scoring.py">scoring.py</a></td></tr>
-      <tr><td>Ordering-dependent pool splits</td><td>Pool agent</td><td><a href="src/whetstone_envs/core/pool.py">pool.py</a></td></tr>
-      <tr><td>Permissive persisted manifests</td><td>Manifest agent</td><td><a href="src/whetstone_envs/core/manifest.py">manifest.py</a></td></tr>
-      <tr><td>Mutable hashes + stratum mismatch</td><td>Instance agent</td><td><a href="src/whetstone_envs/core/instance.py">instance.py</a></td></tr>
-      <tr><td>Non-idempotent normalization</td><td>Probes agent</td><td><a href="src/whetstone_envs/core/probes.py">probes.py</a></td></tr>
+      <tr><td>Incomplete task/repeat matrices</td><td>Scoring agent</td><td><a href="src/whetstone_envs/scoring/aggregation.py">aggregation.py</a></td></tr>
+      <tr><td>Ordering-dependent pool splits</td><td>Pool agent</td><td><a href="src/whetstone_envs/pools/splitting.py">splitting.py</a></td></tr>
+      <tr><td>Permissive persisted manifests</td><td>Manifest agent</td><td><a href="src/whetstone_envs/manifests/manifest.py">manifest.py</a></td></tr>
+      <tr><td>Mutable hashes + stratum mismatch</td><td>Instance agent</td><td><a href="src/whetstone_envs/instances/instance.py">instance.py</a></td></tr>
+      <tr><td>Non-idempotent normalization</td><td>Probes agent</td><td><a href="src/whetstone_envs/probes/normalization.py">normalization.py</a></td></tr>
     </table>
     <div class="callout">
       Each owner starts from the freshly integrated test commit and the refreshed PR-comment ledger, reproduces its assigned failure, fixes the root cause, and runs its focused module checks. Cross-module API changes require affected caller checks before integration.

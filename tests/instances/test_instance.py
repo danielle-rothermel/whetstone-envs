@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from whetstone_envs.core.instance import Instance, make_instance
-from whetstone_envs.core.pool import TaskPool
+from whetstone_envs.instances import Instance, make_instance
+from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

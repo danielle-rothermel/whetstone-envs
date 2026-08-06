@@ -65,26 +65,26 @@ in whetstone-ai) one LLM call → score 0/1 against an independent oracle
 model-call dependency belong here and should be built once, shared
 across all five candidate modules, not duplicated per-candidate:
 
-- **`whetstone_envs.core.instance`** — a minimal frozen `Instance` type:
+- **`whetstone_envs.instances`** — a minimal frozen `Instance` type:
   stable task identity (id/seed), stratum label(s), rendered prompt
   inputs, and gold/oracle-checkable state. Every candidate module
   produces a `list[Instance]` of this shape.
-- **`whetstone_envs.core.probes`** — a `ProbePair` type (naive prompt
+- **`whetstone_envs.probes`** — a `ProbePair` type (naive prompt
   template + ceiling prompt template + a render function) and a
   standard normalization step (strip surrounding whitespace/code
   fences) shared by every candidate's exact-match scoring.
-- **`whetstone_envs.core.scoring`** — `exact_match(prediction, gold) ->
+- **`whetstone_envs.scoring`** — `exact_match(prediction, gold) ->
   int` (0/1) plus the aggregation helpers: mean-by-repeat-within-task,
   then across tasks within stratum, then across strata (never partial
   credit inside an instance, per the rubric's aggregation-crosses-strata
   callout).
-- **`whetstone_envs.core.pool`** — a `TaskPool` container: pinned
+- **`whetstone_envs.pools`** — a `TaskPool` container: pinned
   instances plus stratum membership, with `.split(internal_eval_n,
   official_n, held_out_n)` producing disjoint subsets and asserting no
   overlap. Each candidate's generator returns a `TaskPool`; the split
   sizes are the per-spec proposed numbers (owner-adjustable, not
   hardcoded assumptions).
-- **`whetstone_envs.core.manifest`** — a small manifest writer/reader
+- **`whetstone_envs.manifests`** — a small manifest writer/reader
   (JSON) recording: generator version/commit, schema/seed-range pin,
   per-stratum counts, and a content hash of the instance pool. Every
   candidate's generation script writes one of these alongside the
@@ -106,7 +106,7 @@ PR is independent of the others once PR 0 lands — they can be built and
 reviewed in parallel — but are listed here in the recommended landing
 order to keep the stack shallow and reviewable.
 
-1. **PR 0 — shared harness** (`core/`): instance/pool/probe/scoring/manifest primitives, fully unit-tested against synthetic fixtures (no real task logic yet).
+1. **PR 0 — shared harness** (`instances/`, `pools/`, `probes/`, `scoring/`, and `manifests/`): shared contracts, fully unit-tested against synthetic fixtures (no real task logic yet).
 2. **PR 1 — c22** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c22-baseline-spec.html), stacked IFEval constraints): cheapest build — reuses the `google-research` IFEval checker library verbatim for both generation and oracle. Best candidate to prove the shared harness's shape is right before other candidates build on it.
 3. **PR 2 — c11** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c11-baseline-spec.html), JSON canonicalization / RFC 8785 JCS): reuses `json-schema-faker` + `trailofbits/rfc8785-py` unmodified. Self-contained, no vendored/patched upstream code.
 4. **PR 3 — c19** ([baseline spec](https://github.com/danielle-rothermel/whetstone-ai/blob/main/research/quick-test-tasks/related-work/c19-baseline-spec.html), Minigrid state prediction): depends on the `minigrid` package as a real runtime (not just a checker library) — env instantiation, seeded rollout execution, object-model introspection for the oracle.
@@ -125,7 +125,7 @@ Every candidate PR (1–5 above) must include, in this order:
 
 1. **Generator module** (`whetstone_envs.<candidate>.generate`)
    - Wraps or reimplements the spec's §1 strata design and produces a
-     `TaskPool` via the shared `core.pool` container.
+     `TaskPool` via the shared `whetstone_envs.pools` package.
    - Fresh-seed only: assert at construction time that no generated
      instance's seed coincides with any seed reserved/published by the
      upstream paper or dataset the candidate is adjacent to (rubric
@@ -217,7 +217,7 @@ the owner wants to unblock review sooner).
       pool composition matches the manifest's declared per-stratum
       counts, not just the total.
 - [ ] **Aggregation-crosses-strata**: a synthetic test confirms the
-      shared `core.scoring` aggregation reduces repeat → task → stratum
+      shared `whetstone_envs.scoring` aggregation reduces repeat → task → stratum
       → overall correctly on constructed scores, including the
       exhausted/failed-observation case from rubric criterion 13
       (a missing/failed result must make the aggregate visibly

@@ -68,35 +68,35 @@ tr:last-child td { border-bottom: 0; }
     <div class="card">
       <h3><span class="status resolved">Resolved</span>Scoring</h3>
       <ul>
-        <li><a href="src/whetstone_envs/core/scoring.py">Aggregation</a> now requires the planned repeat identities, materializes absent task/repeat cells, and rejects duplicate or unexpected cells.</li>
+        <li><a href="src/whetstone_envs/scoring/aggregation.py">Aggregation</a> now requires the planned repeat identities, materializes absent task/repeat cells, and rejects duplicate or unexpected cells.</li>
         <li>Task and stratum children are labeled. A task with multiple canonical strata contributes its complete repeat aggregate once to each named stratum.</li>
       </ul>
     </div>
     <div class="card">
       <h3><span class="status resolved">Resolved</span>Pool splitting</h3>
       <ul>
-        <li><a href="src/whetstone_envs/core/pool.py">Splits</a> group by the complete strata tuple and draw combinations round-robin in first-seen order.</li>
+        <li><a href="src/whetstone_envs/pools/splitting.py">Splits</a> group by the complete strata tuple and draw combinations round-robin in first-seen order.</li>
         <li>Within-combination order, exact role sizes, disjointness, and allowed unassigned tails remain explicit.</li>
       </ul>
     </div>
     <div class="card">
       <h3><span class="status resolved">Resolved</span>Manifest boundaries</h3>
       <ul>
-        <li><a href="src/whetstone_envs/core/manifest.py">Persisted manifests</a> require the exact five-field current schema and reject coercible, malformed, unknown, or future-version data.</li>
+        <li><a href="src/whetstone_envs/manifests/manifest.py">Persisted manifests</a> require the exact five-field current schema and reject coercible, malformed, unknown, or future-version data.</li>
         <li>All construction paths share one invariant validator; stratum counts are detached into a read-only mapping.</li>
       </ul>
     </div>
     <div class="card">
       <h3><span class="status resolved">Resolved</span>Instance immutability</h3>
       <ul>
-        <li><a href="src/whetstone_envs/core/instance.py">Instances</a> always snapshot prompt inputs, validate string keys and values, and remain hash-stable after caller mutation.</li>
+        <li><a href="src/whetstone_envs/instances/instance.py">Instances</a> always snapshot prompt inputs, validate string keys and values, and remain hash-stable after caller mutation.</li>
         <li>Direct strata must be a tuple; blank labels are rejected; repeated labels are deduplicated in first-seen order.</li>
       </ul>
     </div>
     <div class="card">
       <h3><span class="status resolved">Resolved</span>Probe behavior</h3>
       <ul>
-        <li><a href="src/whetstone_envs/core/probes.py">Normalization</a> removes complete nested fence wrappers to a fixed point while preserving unmatched fences and internal backticks.</li>
+        <li><a href="src/whetstone_envs/probes/normalization.py">Normalization</a> removes complete nested fence wrappers to a fixed point while preserving unmatched fences and internal backticks.</li>
         <li><code>ProbePair</code> now supplies its documented prompt-input-only renderer by default.</li>
       </ul>
     </div>

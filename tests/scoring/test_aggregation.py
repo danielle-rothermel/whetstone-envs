@@ -1,4 +1,4 @@
-"""Tests for exact-match scoring and the aggregation ladder.
+"""Tests for the complete aggregation ladder.
 
 The failed/missing cases here are the rubric-criterion-13 guard: a
 non-scored observation must make every aggregate that depends on it
@@ -10,45 +10,15 @@ from __future__ import annotations
 
 import pytest
 
-from whetstone_envs.core.scoring import (
-    Observation,
-    Outcome,
+from whetstone_envs.scoring import (
     aggregate,
     aggregate_overall,
     aggregate_stratum,
     aggregate_task,
-    exact_match,
     failed,
     missing,
     scored,
 )
-
-
-@pytest.mark.parametrize(
-    ("pred", "gold", "expected"),
-    [
-        ("yes", "yes", 1),
-        ("  yes  ", "yes", 1),
-        ("```\nyes\n```", "yes", 1),
-        ("yes", "no", 0),
-        ("Yes", "yes", 0),
-    ],
-)
-def test_exact_match(pred: str, gold: str, expected: int) -> None:
-    result = exact_match(pred, gold)
-    assert result == expected
-    assert result in (0, 1)
-
-
-def test_scored_requires_binary_score() -> None:
-    with pytest.raises(ValueError, match="score 0 or 1"):
-        scored("t", 0, 2)
-
-
-def test_non_scored_must_not_carry_score() -> None:
-    with pytest.raises(ValueError, match="must not"):
-        Observation("t", 0, Outcome.FAILED, 1)
-
 
 # --- repeat -> task level ------------------------------------------------
 

@@ -1,7 +1,7 @@
 [project]
 name = "whetstone-envs"
 version = "0.1.0"
-description = "Task generators, independent oracles, and probe prompts for whetstone's quick-test optimizer benchmarks."
+description = "Task-family-agnostic harness for reproducible quick-test environments."
 readme = "README.md"
 license = "MIT"
 authors = [

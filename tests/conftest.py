@@ -11,13 +11,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from whetstone_envs.core.instance import make_instance
-from whetstone_envs.core.pool import TaskPool
+from whetstone_envs.instances import make_instance
+from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from whetstone_envs.core.instance import Instance
+    from whetstone_envs.instances import Instance
 
 
 def _synthetic_instance(

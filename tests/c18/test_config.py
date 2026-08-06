@@ -43,6 +43,15 @@ def test_hard_configuration_is_deep_and_explicit() -> None:
     assert HARD_CONFIG.seed_start > DEFAULT_CONFIG.seed_range[1]
 
 
+def test_only_operational_distractor_modes_are_exposed() -> None:
+    assert tuple(DistractorMode) == (
+        DistractorMode.NONE,
+        DistractorMode.RELEVANT,
+    )
+    with pytest.raises(ValueError):
+        DistractorMode("irrelevant")
+
+
 def test_configuration_is_deeply_immutable() -> None:
     with pytest.raises(FrozenInstanceError):
         DEFAULT_CONFIG.seed_start = 1  # ty: ignore[invalid-assignment]

@@ -332,6 +332,8 @@ manifest = build_manifest(pool, DEFAULT_CONFIG)
 ```
 
 Checked-in default and hard manifests pin the complete generated pool content.
+Other immutable validated configurations produce explicit custom cohorts but
+are not canonical manifest-pinned pools.
 Regeneration is an explicit repository operation:
 
 ```bash

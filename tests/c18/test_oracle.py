@@ -209,6 +209,24 @@ def test_rationale_boolean_does_not_override_leading_verdict() -> None:
     assert score_gold(prediction, "True") == 1
 
 
+@pytest.mark.parametrize(
+    "prediction",
+    [
+        "True or False",
+        "True/False",
+        "True but I cannot determine which",
+        "True or false: the statement is not entailed; therefore False.",
+        "True, or False",
+        "False. Or True.",
+        "True, but either answer could be correct",
+    ],
+)
+def test_ambiguous_prefix_is_not_a_verdict(prediction: str) -> None:
+    assert extract_verdict(prediction) == prediction
+    assert score_gold(prediction, "True") == 0
+    assert score_gold(prediction, "False") == 0
+
+
 def test_extract_verdict_no_token_returned_unchanged() -> None:
     # No verdict token -> unchanged, so it still fails exact match (0).
     assert extract_verdict("I cannot determine the answer.") == (

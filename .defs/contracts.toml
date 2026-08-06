@@ -200,15 +200,18 @@ check = "uv run pytest -q --run-integration tests/c23/test_generation.py"
 [[contracts]]
 title = "C18 generation is pinned and independently checked"
 statement = """
-C18 generates only fictional-ontology PrOntoQA instances from its frozen \
-default or hard configuration. Each depth consumes one seed above the reserved \
-seed range, the vendored generator runs from copied runtime files in a \
-temporary directory, its JSON crosses a strict validated boundary, and an \
-independent forward-chaining oracle must derive the generated label from the \
-public question and query before the instance enters a task pool."""
+C18 generates fictional-ontology PrOntoQA instances from immutable validated \
+configurations; its default and hard configurations are the canonical \
+manifest-pinned pools. Each depth consumes one seed above the reserved seed \
+range, the vendored generator runs from copied runtime files in a temporary \
+directory, its JSON crosses a strict 16 MiB and depth-bounded validated \
+boundary, and an independent forward-chaining oracle must derive the generated \
+label from the public question and query before the instance enters a task \
+pool."""
 rationale = """
-Pinned generation inputs and manifests make pool identity reproducible, while \
-surface-text label derivation prevents the generator's own answer from being \
-the sole evidence for correctness."""
+Validated generation inputs support explicit custom cohorts, canonical \
+manifests make the published pool identities reproducible, and surface-text \
+label derivation prevents the generator's own answer from being the sole \
+evidence for correctness."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/c18"

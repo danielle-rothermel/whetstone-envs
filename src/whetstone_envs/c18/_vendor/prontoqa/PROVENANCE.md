@@ -11,13 +11,13 @@
 
 C18 reseeds instances directly from
 `asaparov/prontoqa`'s `run_experiment.py --model-name json` (fresh
-`--seed` per split, `--ontology fictional` nonce ontologies) and must
-never reuse a published instance. Vendoring pins the exact generator
-version so a regenerated pool is byte-reproducible against a frozen
-manifest, and so the `--model-name json` generation path has no network
-or upstream-checkout dependency. The generator is driven as a subprocess
-behind `whetstone_envs.c18.upstream` (the boundary), never imported into
-the c18 Python package.
+`--seed` per configured depth stratum, `--ontology fictional` nonce
+ontologies) and must never reuse a published instance. Vendoring pins the
+exact generator version so a regenerated pool is byte-reproducible against
+a frozen manifest, and so the `--model-name json` generation path has no
+network or upstream-checkout dependency. The generator is driven as a
+subprocess behind `whetstone_envs.c18.upstream` (the boundary), never
+imported into the c18 Python package.
 
 ## What was and was not changed
 

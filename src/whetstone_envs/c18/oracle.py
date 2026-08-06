@@ -264,7 +264,10 @@ def entailment_label(question: str, query: str) -> str:
 # The two C18 probes request either a bare verdict or a reasoned response with
 # a terminal verdict. Extraction accepts those two shapes without scanning a
 # rationale for a later boolean word that could overwrite the actual verdict.
-_VERDICT_RE = re.compile(r"(true|false)\b", re.IGNORECASE)
+_LEADING_VERDICT_RE = re.compile(
+    r"(true|false)(?:,\s+(?:because|since)\b|\.\s+(?:it|the|this|that)\b)",
+    re.IGNORECASE,
+)
 _FINAL_VERDICT_RE = re.compile(r"(true|false)\.?", re.IGNORECASE)
 
 
@@ -285,7 +288,7 @@ def extract_verdict(text: str) -> str:
         final_match = _FINAL_VERDICT_RE.fullmatch(non_empty_lines[-1])
         if final_match is not None:
             return final_match.group(1).capitalize()
-    leading_match = _VERDICT_RE.match(text.lstrip())
+    leading_match = _LEADING_VERDICT_RE.match(text.lstrip())
     if leading_match is not None:
         return leading_match.group(1).capitalize()
     return text

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-import json
+import math
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
-from json import JSONDecodeError
 from pathlib import Path
+from typing import BinaryIO
 
+from dr_serialize import (
+    CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    StrictJsonDecodeError,
+    decode_strict_json_bytes,
+)
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from whetstone_envs.c18.config import DistractorMode
@@ -24,6 +30,8 @@ _VENDOR_FILES = (
     "bad_patterns.txt",
 )
 _FIXED_ONTOLOGY = "fictional"
+_MAX_DIAGNOSTIC_BYTES = 1 << 20
+_MAX_OUTPUT_BYTES = 16 << 20
 
 
 class UpstreamError(RuntimeError):
@@ -90,9 +98,14 @@ def _validate_generation_request(request: _GenerationRequest) -> None:
     ):
         msg = "C18 upstream timeout_s must be a number"
         raise TypeError(msg)
-    if request.timeout_s <= 0:
+    try:
+        timeout_is_finite = math.isfinite(request.timeout_s)
+    except OverflowError:
+        timeout_is_finite = False
+    if not timeout_is_finite or request.timeout_s <= 0:
         msg = (
-            f"C18 upstream timeout_s must be positive, got {request.timeout_s}"
+            "C18 upstream timeout_s must be finite and positive, "
+            f"got {request.timeout_s}"
         )
         raise ValueError(msg)
 
@@ -133,21 +146,16 @@ def _run_generator(
         "--seed",
         str(request.seed),
     )
+    diagnostic = bytearray()
+    diagnostic_exceeded = threading.Event()
+
     try:
-        completed = subprocess.run(  # noqa: S603 - fixed executable and argv
+        process = subprocess.Popen(  # noqa: S603 - fixed executable and argv
             command,
             cwd=work,
-            capture_output=True,
-            text=True,
-            timeout=request.timeout_s,
-            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-    except subprocess.TimeoutExpired as error:
-        msg = (
-            f"C18 vendored generator timed out after {request.timeout_s}s "
-            f"for D{request.hops} seed {request.seed}"
-        )
-        raise UpstreamError(msg) from error
     except OSError as error:
         msg = (
             "C18 vendored generator could not start for "
@@ -155,10 +163,46 @@ def _run_generator(
         )
         raise UpstreamError(msg) from error
 
-    if completed.returncode != 0:
-        stderr = completed.stderr[-500:]
+    def drain_diagnostics(stream: BinaryIO) -> None:
+        while chunk := stream.read(8192):
+            remaining = _MAX_DIAGNOSTIC_BYTES - len(diagnostic)
+            diagnostic.extend(chunk[:remaining])
+            if len(chunk) > remaining:
+                diagnostic_exceeded.set()
+                process.kill()
+                return
+
+    assert process.stderr is not None
+    diagnostic_thread = threading.Thread(
+        target=drain_diagnostics,
+        args=(process.stderr,),
+        daemon=True,
+    )
+    diagnostic_thread.start()
+    try:
+        returncode = process.wait(timeout=request.timeout_s)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        process.wait()
+        diagnostic_thread.join()
         msg = (
-            f"C18 vendored generator exited {completed.returncode} "
+            f"C18 vendored generator timed out after {request.timeout_s}s "
+            f"D{request.hops} seed {request.seed}"
+        )
+        raise UpstreamError(msg) from error
+    diagnostic_thread.join()
+
+    if diagnostic_exceeded.is_set():
+        msg = (
+            "C18 vendored generator exceeded the diagnostic output limit "
+            f"of {_MAX_DIAGNOSTIC_BYTES} bytes for D{request.hops} "
+            f"seed {request.seed}"
+        )
+        raise UpstreamError(msg)
+    if returncode != 0:
+        stderr = diagnostic[-500:].decode("utf-8", errors="replace")
+        msg = (
+            f"C18 vendored generator exited {returncode} "
             f"for D{request.hops} seed {request.seed}: {stderr}"
         )
         raise UpstreamError(msg)
@@ -172,6 +216,24 @@ def _run_generator(
         )
         raise UpstreamError(msg)
     return outputs[0]
+
+
+def _read_output(output: Path) -> object:
+    try:
+        with output.open("rb") as stream:
+            data = stream.read(_MAX_OUTPUT_BYTES + 1)
+    except OSError as error:
+        msg = f"C18 upstream output {output.name!r} is unreadable"
+        raise UpstreamError(msg) from error
+    try:
+        return decode_strict_json_bytes(
+            data,
+            max_bytes=_MAX_OUTPUT_BYTES,
+            max_depth=CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+        )
+    except StrictJsonDecodeError as error:
+        msg = f"C18 upstream output {output.name!r} is invalid strict JSON"
+        raise UpstreamError(msg) from error
 
 
 def _example_index(key: str) -> int:
@@ -240,11 +302,7 @@ def generate_raw(
             work,
             request=request,
         )
-        try:
-            payload: object = json.loads(output.read_text(encoding="utf-8"))
-        except (OSError, JSONDecodeError) as error:
-            msg = f"C18 upstream output {output.name!r} is unreadable"
-            raise UpstreamError(msg) from error
+        payload = _read_output(output)
         return _parse_examples(payload, hops=hops)
 
 

@@ -12,7 +12,6 @@ class DistractorMode(StrEnum):
 
     NONE = "none"
     RELEVANT = "relevant"
-    IRRELEVANT = "irrelevant"
 
 
 @dataclass(frozen=True, slots=True)

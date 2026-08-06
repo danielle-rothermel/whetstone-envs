@@ -216,4 +216,4 @@ manifests make the published pool identities reproducible, and surface-text \
 label derivation prevents the generator's own answer from being the sole \
 evidence for correctness."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c18"
+check = "uv run --extra c18 pytest -q --run-integration tests/c18"

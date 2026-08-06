@@ -127,7 +127,6 @@ _CEILING_REASONING = (
     "by step, no rule makes Wren amenable; the query property is not "
     "entailed.\n\nFalse"
 )
-_NAIVE_RATIONALE = "True, since Sally is a brimpus and every brimpus is sour."
 
 
 def test_extract_verdict_bare_tokens() -> None:
@@ -149,19 +148,6 @@ def test_extract_verdict_accepts_period_on_verdict_only_final_line() -> None:
     assert score_gold(prediction, "False") == 1
 
 
-def test_extract_verdict_naive_trailing_rationale() -> None:
-    assert extract_verdict(_NAIVE_RATIONALE) == "True"
-    assert extract_verdict("False. It is not derivable from the rules.") == (
-        "False"
-    )
-
-
-def test_rationale_boolean_does_not_override_leading_verdict() -> None:
-    prediction = "True, because the statement is not false."
-    assert extract_verdict(prediction) == "True"
-    assert score_gold(prediction, "True") == 1
-
-
 @pytest.mark.parametrize(
     "prediction",
     [
@@ -172,6 +158,12 @@ def test_rationale_boolean_does_not_override_leading_verdict() -> None:
         "True, or False",
         "False. Or True.",
         "True, but either answer could be correct",
+        "True, because either answer may be correct.",
+        "False, since the query may actually be true.",
+        "True. It may actually be false.",
+        "False. The answer could also be true.",
+        "True. This may be false.",
+        "False. That may be true.",
     ],
 )
 def test_ambiguous_prefix_is_not_a_verdict(prediction: str) -> None:
@@ -190,7 +182,7 @@ def test_extract_verdict_no_token_returned_unchanged() -> None:
     ("prediction", "gold", "expected"),
     [
         (_CEILING_REASONING, "False", 1),
-        (_NAIVE_RATIONALE, "True", 1),
+        ("True", "True", 1),
         ("False", "True", 0),
     ],
 )

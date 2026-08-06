@@ -31,6 +31,8 @@ environment PRs in the release have merged.
   canonical format, lint, type, definition, test, and build gate.
 - Validate binding-contract structure and require `.defs` mappings for every
   symbol exported by an owning public package.
+- Require a finalized dated changelog entry before a version tag can publish
+  distributions.
 - Model C22 gold as a closed composition of concrete constraint variants and
   derive checker descriptions and arguments through one vendor adapter.
 - Cut one package release from the combined `main` tip after all task families

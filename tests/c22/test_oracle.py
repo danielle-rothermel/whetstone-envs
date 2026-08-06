@@ -90,6 +90,16 @@ def test_title_and_quotation_form_a_valid_composition() -> None:
     assert evaluate(stack, '"inside <<A title>>"').score == 1
 
 
+def test_unicode_keyword_uses_the_vendor_letter_semantics() -> None:
+    stack = ConstraintStack(
+        constraints=(
+            RequiredKeyword(keyword="\u017f"),
+            ForbiddenLetter(letter="s"),
+        )
+    )
+    assert evaluate(stack, "\u017f").score == 1
+
+
 def test_score_parses_gold_and_normalizes_outer_fences() -> None:
     stack = ConstraintStack(constraints=(EndPhrase(phrase="END"),))
     assert score(stack.to_gold(), "```\nfinal words END\n```") == 1

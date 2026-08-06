@@ -196,7 +196,7 @@ def _literal_compatibility_error(
     forbidden_letter = by_kind.get("forbidden_letter")
     if isinstance(forbidden_letter, ForbiddenLetter):
         for literal in required_literals:
-            if forbidden_letter.letter.casefold() in literal.casefold():
+            if forbidden_letter.letter.lower() in literal.lower():
                 return (
                     f"required literal {literal!r} contains forbidden letter "
                     f"{forbidden_letter.letter!r}"

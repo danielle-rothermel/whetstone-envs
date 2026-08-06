@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from whetstone_envs.c22 import Preset, generate_pool, load_manifest
+from whetstone_envs.c22._ifeval_adapter import describe
 from whetstone_envs.c22.constraints import (
     HARD_CONSTRAINT_KINDS,
     ConstraintStack,
@@ -82,13 +83,19 @@ def test_generation_is_deterministic_and_preserves_global_random_state(
     assert first.instances == second.instances
 
 
-def test_generated_gold_matches_each_stratum_and_stays_private() -> None:
+def test_generated_public_and_private_contracts_align() -> None:
     pool = _generate_pool(Preset.DEFAULT, instances_per_stratum=2)
     for instance in pool.instances:
         stack = ConstraintStack.from_gold(instance.gold)
         count = int(instance.strata[0].split("_", maxsplit=1)[0][1:])
         assert len(stack.constraints) == count
         assert set(instance.prompt_inputs) == {"constraints"}
+        public_block = instance.prompt_inputs["constraints"]
+        assert public_block.splitlines() == [
+            f"{index}. {describe(constraint)}"
+            for index, constraint in enumerate(stack.constraints, start=1)
+        ]
+        assert instance.gold not in public_block
 
 
 def test_hard_instances_contain_every_hard_constraint() -> None:

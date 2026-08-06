@@ -247,21 +247,14 @@ class Preset(StrEnum):
 ```
 
 ```python
-class ConstraintStack(BaseModel):
-    constraints: tuple[Constraint, ...]
+PROBES: ProbePair
 
-    def to_gold(self) -> str: ...
-
-    @classmethod
-    def from_gold(cls, gold: str) -> "ConstraintStack": ...
+def score(gold: str, response: str) -> int: ...
 ```
 
 ```python
-PROBES: ProbePair
-
 def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool: ...
 def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest: ...
-def score(gold: str, response: str) -> int: ...
 ```
 
 ## Terms and contracts

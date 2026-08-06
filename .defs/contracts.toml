@@ -129,10 +129,16 @@ check = "uv run pytest -q tests/manifests"
 [[contracts]]
 title = "Owning subpackages define the public API"
 statement = """
+<<<<<<< HEAD
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
 whetstone_envs.scoring. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11; the root whetstone_envs \
+=======
+Consumers import public contracts from whetstone_envs.c22, \
+whetstone_envs.instances, whetstone_envs.manifests, whetstone_envs.pools, \
+whetstone_envs.probes, and whetstone_envs.scoring; the root whetstone_envs \
+>>>>>>> 4119a71 (Fix C22 composition and API contracts)
 namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \

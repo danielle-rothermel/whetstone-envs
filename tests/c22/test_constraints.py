@@ -11,7 +11,6 @@ from whetstone_envs.c22.constraints import (
     ForbiddenLetter,
     ForbiddenWord,
     NoComma,
-    Quotation,
     RequiredKeyword,
     Title,
 )
@@ -36,7 +35,6 @@ def test_gold_is_canonical_closed_and_composed() -> None:
     [
         (),
         (Title(), Title()),
-        (Title(), Quotation()),
         (
             RequiredKeyword(keyword="quarnex"),
             ForbiddenWord(word="quarnex"),

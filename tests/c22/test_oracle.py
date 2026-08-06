@@ -87,6 +87,11 @@ def test_strict_all_pass_and_diagnostics_follow_stack_order() -> None:
     assert failing.per_constraint[-1] == ("end_phrase", False)
 
 
+def test_title_and_quotation_form_a_valid_composition() -> None:
+    stack = ConstraintStack(constraints=(Title(), Quotation()))
+    assert evaluate(stack, '"inside <<A title>>"').score == 1
+
+
 def test_score_parses_gold_and_normalizes_outer_fences() -> None:
     stack = ConstraintStack(constraints=(EndPhrase(phrase="END"),))
     assert score(stack.to_gold(), "```\nfinal words END\n```") == 1

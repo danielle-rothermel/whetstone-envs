@@ -236,8 +236,6 @@ def _compatibility_error(constraints: tuple[Constraint, ...]) -> str | None:
     by_kind: dict[str, Constraint] = {}
     for constraint in constraints:
         by_kind[constraint.kind] = constraint
-    if "title" in by_kind and "quotation" in by_kind:
-        return "title conflicts with quotation"
     (
         required_literals,
         required_keywords,

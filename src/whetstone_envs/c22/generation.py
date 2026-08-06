@@ -171,10 +171,11 @@ def _config_for(preset: Preset) -> _GenerationConfig:
     return _HARD_CONFIG
 
 
-def _factories_conflict(
+def _preset_excludes_pair(
     chosen: list[_ConstraintFactory],
     candidate: _ConstraintFactory,
 ) -> bool:
+    """Keep each preset task to one whole-response framing constraint."""
     return {candidate, *chosen} >= {_title, _quotation}
 
 
@@ -199,7 +200,7 @@ def _sample_factories(
     for candidate in candidates:
         if len(chosen) >= count:
             break
-        if candidate in chosen or _factories_conflict(chosen, candidate):
+        if candidate in chosen or _preset_excludes_pair(chosen, candidate):
             continue
         chosen.append(candidate)
     if len(chosen) != count:

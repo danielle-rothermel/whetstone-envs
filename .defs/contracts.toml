@@ -1,0 +1,123 @@
+# Binding contracts for whetstone-envs. Statements are present-tense rules;
+# rationales explain why each rule holds.
+
+[[contracts]]
+title = "Task instances are immutable value objects"
+statement = """
+Every task instance has a nonempty string identifier, an integer seed, at least \
+one nonblank task stratum, string prompt-input keys and values, and string gold \
+data; its task strata are deduplicated in first-seen order, and its prompt \
+inputs are detached from caller-owned state and exposed read-only."""
+rationale = """
+Caller mutation must not change a task instance's equality, hash, public prompt \
+identity, or persisted content."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/instances"
+
+[[contracts]]
+title = "Public prompt identity excludes private data"
+statement = """
+Public prompt identity is the sorted tuple of a task instance's prompt-input \
+items; identifier, seed, task strata, and gold do not participate, and every \
+task pool rejects duplicate public prompt identities while leaving \
+rendered-prompt uniqueness to its renderer and template."""
+rationale = """
+Task pools reject duplicate public tasks without claiming that input identity \
+uniquely determines rendered text."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/instances/test_identity.py tests/pools/test_pool.py"
+
+[[contracts]]
+title = "Default rendering does not expose private fields"
+statement = """
+The default probe renderer formats only from a task instance's prompt inputs \
+and propagates missing-field errors; a custom probe renderer receives the full \
+task instance, and its caller owns protection of private fields."""
+rationale = """
+The standard rendering path protects private fields while custom rendering \
+remains an explicit escalation boundary."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/probes/test_rendering.py"
+
+[[contracts]]
+title = "Aggregation requires a complete planned matrix"
+statement = """
+Aggregation materializes every planned task-repeat cell, marks unobserved cells \
+missing, gives equal weight to repeats within tasks, tasks within task strata, \
+and task strata overall, and exposes no mean for any empty or incomplete \
+aggregate. Expected and observed repeat identifiers are exact integers, and \
+every aggregate enforces consistency between its mean, counts, and children."""
+rationale = """
+Failed or absent results must not masquerade as zero scores or silently \
+disappear, and larger task strata must not dominate by population."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/scoring/test_aggregation.py"
+
+[[contracts]]
+title = "Pool splitting preserves deterministic cohorts"
+statement = """
+Task-pool splitting selects without replacement by each task instance's \
+complete ordered task-strata tuple, fills exactly the requested nonnegative \
+destination sizes without oversubscription, maximizes combination coverage \
+before balancing combination counts, preserves source-pool order in every \
+destination, and leaves unselected task instances unassigned. Exact separable \
+transport optimization is delegated to dr-graph."""
+rationale = """
+Repeated generation of evaluation cohorts must be reproducible while \
+representing scarce combinations as broadly as destination capacity permits."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/pools/test_splitting.py"
+
+[[contracts]]
+title = "Manifests pin retained pool content"
+statement = """
+A pool manifest accepts exactly its closed persisted schema at the supported \
+schema version, and it matches a task pool only when every retained seed lies \
+in the declared half-open seed range and both per-stratum counts and the \
+versioned dr-serialize identity-document hash match."""
+rationale = """
+Generator metadata alone cannot detect retained-content drift; seed \
+containment, counts, and an ordered versioned identity jointly pin the \
+generated task pool without claiming anything about rejected generator \
+attempts."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/manifests"
+
+[[contracts]]
+title = "Foundational dependencies change through releases"
+statement = """
+The dr-graph solver, dr-serialize identity format, dr-store persistence \
+capability, and Pydantic schema runtime are exact runtime dependency pins. A \
+dependency change requires a new whetstone-envs package version and lockfile."""
+rationale = """
+Pool allocation, content identity, durable files, and persisted validation are \
+load-bearing semantics; consumer installation must not select a different \
+implementation than the release validated."""
+date = "2026-08-06"
+check = "uv lock --check"
+
+[[contracts]]
+title = "Manifest files use bounded atomic canonical publication"
+statement = """
+Manifest files contain the exact dr-serialize Canonical JSON Text \
+representation and are published through dr-store's flushed same-directory \
+atomic replacement. Descriptor-pinned reads reject duplicate keys, \
+noncanonical encodings, final-component symlinks, and files exceeding 1 MiB \
+or the shared canonical-JSON depth bound."""
+rationale = """
+One bounded representation prevents equivalent persisted forms from drifting. \
+Atomic visibility depends on supported filesystem replacement semantics; this \
+contract does not claim locking, compare-and-set, or power-loss durability."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/manifests"
+
+[[contracts]]
+title = "Owning subpackages define the public API"
+statement = """
+Consumers import public contracts from whetstone_envs.instances, \
+whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
+whetstone_envs.scoring; the root whetstone_envs namespace exports no API."""
+rationale = """
+One owning import path per public symbol keeps capability boundaries \
+discoverable and prevents a second flattened API surface."""
+date = "2026-08-06"

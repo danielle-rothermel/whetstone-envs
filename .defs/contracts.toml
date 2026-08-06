@@ -87,12 +87,13 @@ check = "uv run pytest -q tests/manifests"
 title = "Foundational dependencies change through releases"
 statement = """
 The dr-graph solver, dr-serialize identity format, dr-store persistence \
-capability, and Pydantic schema runtime are exact runtime dependency pins. A \
-dependency change requires a new whetstone-envs package version and lockfile."""
+capability, Pydantic schema runtime, and rfc8785 canonicalization oracle are \
+exact runtime dependency pins. A dependency change requires a new \
+whetstone-envs package version and lockfile."""
 rationale = """
-Pool allocation, content identity, durable files, and persisted validation are \
-load-bearing semantics; consumer installation must not select a different \
-implementation than the release validated."""
+Pool allocation, content identity, durable files, persisted validation, and \
+private gold generation are load-bearing semantics; consumer installation must \
+not select a different implementation than the release validated."""
 date = "2026-08-06"
 check = "uv lock --check"
 

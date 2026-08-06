@@ -26,6 +26,30 @@ _EXPONENT = re.compile(r"\d(?:\.\d+)?[eE][+-]?\d+")
 _MANIFEST_PATH = Path(generation.__file__).with_name("manifest.json")
 
 
+def _incomplete_json_canonicalize(source: str) -> str:
+    """Approximate JCS while omitting UTF-16 and ECMAScript edge rules."""
+
+    def coerce_integral_floats(value: object) -> object:
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, list):
+            return [coerce_integral_floats(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: coerce_integral_floats(item)
+                for key, item in value.items()
+            }
+        return value
+
+    value = coerce_integral_floats(json.loads(source))
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def test_generation_is_deterministic() -> None:
     assert generate_pool(n_per_stratum=8) == generate_pool(n_per_stratum=8)
 
@@ -120,7 +144,7 @@ def test_each_stratum_guarantees_its_named_tension() -> None:
     for instance in by_stratum[C11Stratum.KEY_ORDER]:
         input_json = instance.prompt_inputs[generation.INPUT_JSON_FIELD]
         keys = list(json.loads(input_json))
-        assert keys != sorted(keys)
+        assert keys != sorted(keys, key=lambda key: key.encode("utf-16be"))
 
     for instance in by_stratum[C11Stratum.NUMBER]:
         input_json = instance.prompt_inputs[generation.INPUT_JSON_FIELD]
@@ -136,7 +160,20 @@ def test_each_stratum_guarantees_its_named_tension() -> None:
         input_json = instance.prompt_inputs[generation.INPUT_JSON_FIELD]
         assert _EXPONENT.search(input_json)
         keys = list(json.loads(input_json))
-        assert keys != sorted(keys)
+        assert keys != sorted(keys, key=lambda key: key.encode("utf-16be"))
+
+
+def test_rfc_specific_strata_reject_an_incomplete_canonicalizer() -> None:
+    pool = generate_pool()
+
+    for stratum in (
+        C11Stratum.KEY_ORDER,
+        C11Stratum.NUMBER,
+        C11Stratum.MIXED,
+    ):
+        for instance in pool.in_stratum(stratum.value):
+            input_json = instance.prompt_inputs[generation.INPUT_JSON_FIELD]
+            assert _incomplete_json_canonicalize(input_json) != instance.gold
 
 
 @pytest.mark.parametrize("value", [True, 1.5, "4", None])

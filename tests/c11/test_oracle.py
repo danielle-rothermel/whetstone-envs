@@ -62,9 +62,38 @@ def test_malformed_json_is_rejected() -> None:
         canonicalize("{not-json")
 
 
-def test_values_outside_the_rfc8785_domain_are_rejected() -> None:
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("9007199254740992", "9007199254740992"),
+        ("9007199254740993", "9007199254740992"),
+        ("295147905179352825856", "295147905179352830000"),
+    ],
+)
+def test_integer_tokens_use_binary64_semantics(
+    source: str,
+    expected: str,
+) -> None:
+    assert canonicalize(source) == expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '{"a": 1, "a": 2}',
+        '{"outer": {"a": 1, "a": 2}}',
+        '{"\\u0061": 1, "a": 2}',
+    ],
+)
+def test_duplicate_decoded_property_names_are_rejected(source: str) -> None:
+    with pytest.raises(ValueError, match="duplicate JSON property name 'a'"):
+        canonicalize(source)
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_nonfinite_values_are_rejected(value: str) -> None:
     with pytest.raises(rfc8785.CanonicalizationError):
-        canonicalize('{"too_large": 9007199254740992}')
+        canonicalize(f'{{"value": {value}}}')
 
 
 def test_input_must_be_a_string() -> None:

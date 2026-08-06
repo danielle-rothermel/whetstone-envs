@@ -17,7 +17,7 @@ from whetstone_envs.instances import (
 from whetstone_envs.manifests import Manifest
 from whetstone_envs.pools import TaskPool
 
-GENERATOR_VERSION = "c11-generation-1"
+GENERATOR_VERSION = "c11-generation-2"
 INPUT_JSON_FIELD = "input_json"
 DEFAULT_SEED_START = 1_000_000
 DEFAULT_N_PER_STRATUM = 82
@@ -60,12 +60,20 @@ _UNICODE_STRINGS = (
     "emoji-\U0001f600-astral",
     "mix\tü\\end",
 )
+_UTF16_ORDER_WITNESSES = ("\ue000", "\U0001f600")
 _NONCANONICAL_NUMBER_LEXEMES = (
     "1e2",
     "1E+2",
     "1.00e+2",
     "100e-2",
     "15e+1",
+)
+_RFC8785_NUMBER_LEXEMES = (
+    "1E-6",
+    "10e-7",
+    "1.0e-6",
+    "1E-7",
+    "1e-07",
 )
 
 
@@ -103,7 +111,7 @@ def _messy_dumps(value: object, *, escape_non_ascii: bool = False) -> str:
 
 def _force_unsorted(keys: list[str], rng: random.Random) -> list[str]:
     rng.shuffle(keys)
-    if keys == sorted(keys):
+    if keys == sorted(keys, key=lambda key: key.encode("utf-16be")):
         keys[0], keys[1] = keys[1], keys[0]
     return keys
 
@@ -115,7 +123,10 @@ def _build_whitespace(rng: random.Random) -> str:
 
 def _build_key_order(rng: random.Random) -> str:
     keys = _force_unsorted(
-        rng.sample(_ASCII_KEYS, rng.randint(4, 7)),
+        [
+            *_UTF16_ORDER_WITNESSES,
+            *rng.sample(_ASCII_KEYS, rng.randint(2, 5)),
+        ],
         rng,
     )
     return _messy_dumps({key: rng.choice(_ASCII_WORDS) for key in keys})
@@ -129,11 +140,12 @@ def _build_number(rng: random.Random) -> str:
         "100.0",
         "-0.0",
         *_NONCANONICAL_NUMBER_LEXEMES,
+        *_RFC8785_NUMBER_LEXEMES,
     )
     members = (
         f"{json.dumps(key)}: "
         + (
-            rng.choice(_NONCANONICAL_NUMBER_LEXEMES)
+            rng.choice(_RFC8785_NUMBER_LEXEMES)
             if key == exponent_key
             else rng.choice(other_lexemes)
         )
@@ -149,7 +161,10 @@ def _build_unicode(rng: random.Random) -> str:
 
 
 def _build_mixed(rng: random.Random) -> str:
-    outer_keys = _force_unsorted(rng.sample(_ASCII_KEYS, 3), rng)
+    outer_keys = _force_unsorted(
+        [*_UTF16_ORDER_WITNESSES, rng.choice(_ASCII_KEYS)],
+        rng,
+    )
     nested_keys = sorted(rng.sample(_ASCII_KEYS, 2))
     nested = {key: rng.choice(_UNICODE_STRINGS) for key in nested_keys}
     values = {
@@ -161,7 +176,7 @@ def _build_mixed(rng: random.Random) -> str:
             "["
             + ", ".join(
                 (
-                    rng.choice(_NONCANONICAL_NUMBER_LEXEMES),
+                    rng.choice(_RFC8785_NUMBER_LEXEMES),
                     "-0.0",
                     str(rng.randint(1, 1000)),
                 )

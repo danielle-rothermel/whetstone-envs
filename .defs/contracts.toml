@@ -181,7 +181,7 @@ Exact-match evaluation is interpretable only when the public evidence fixes \
 the expected answer rather than relying on an unobserved choice among \
 demo-consistent rules."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c23/test_generation.py"
+check = "uv run pytest -q --run-integration tests/c23/test_generation.py"
 
 [[contracts]]
 title = "C23 generation is deterministic and RNG-isolated"
@@ -195,4 +195,4 @@ rationale = """
 Regenerated experiment cohorts must not depend on ambient application state \
 or randomized set iteration."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c23/test_generation.py"
+check = "uv run pytest -q --run-integration tests/c23/test_generation.py"

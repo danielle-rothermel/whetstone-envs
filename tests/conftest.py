@@ -13,6 +13,29 @@ if TYPE_CHECKING:
     from whetstone_envs.instances import Instance
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--run-integration",
+        action="store_true",
+        default=False,
+        help="run opt-in integration tests",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    if config.getoption("--run-integration"):
+        return
+    skip_integration = pytest.mark.skip(
+        reason="requires --run-integration outside CI",
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
+
+
 def _synthetic_instance(
     index: int,
     stratum: str | tuple[str, ...],

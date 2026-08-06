@@ -8,6 +8,7 @@ import random
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -21,6 +22,9 @@ from whetstone_envs.c23._domain import (
     RuleConfiguration,
     RuleFamily,
 )
+
+if TYPE_CHECKING:
+    from whetstone_envs.pools import TaskPool
 
 VOCAB = ("a", "b", "c", "d")
 
@@ -96,10 +100,8 @@ def _pool_projection(n_per_stratum: int) -> str:
     ).hexdigest()
 
 
-def test_small_pool_is_determinate_nontrivial_and_immutable() -> None:
-    pool = generate_pool(n_per_stratum=1)
+def _assert_pool_is_determinate_and_nontrivial(pool: TaskPool) -> None:
     hypotheses = _independent_hypotheses()
-
     for instance in pool.instances:
         demos = _parse_demos(instance.prompt_inputs["demos_block"])
         query = instance.prompt_inputs["query"]
@@ -117,18 +119,35 @@ def test_small_pool_is_determinate_nontrivial_and_immutable() -> None:
         )
         assert {_apply(rule, query) for rule in consistent} == {instance.gold}
 
+
+def test_small_pool_is_determinate_nontrivial_and_immutable() -> None:
+    _assert_pool_is_determinate_and_nontrivial(
+        generate_pool(n_per_stratum=1),
+    )
+
     with pytest.raises(FrozenInstanceError):
         pool_module.DEFAULT_CONFIG.__setattr__("vocab", ("x",))
 
 
-def test_generation_is_repeatable_without_global_rng_mutation() -> None:
-    random.seed(982_451)
-    before = random.getstate()
-    first = _pool_projection(2)
-    after = random.getstate()
+@pytest.mark.integration
+def test_default_pool_is_independently_determinate() -> None:
+    _assert_pool_is_determinate_and_nontrivial(generate_pool())
 
-    assert first == _pool_projection(2)
-    assert after == before
+
+def test_generation_is_independent_of_and_preserves_global_rng() -> None:
+    random.seed(982_451)
+    first_before = random.getstate()
+    first = _pool_projection(2)
+    first_after = random.getstate()
+
+    random.seed(314_159)
+    second_before = random.getstate()
+    second = _pool_projection(2)
+    second_after = random.getstate()
+
+    assert first == second
+    assert first_after == first_before
+    assert second_after == second_before
 
 
 def test_generation_is_stable_across_process_hash_seeds() -> None:

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import random
+from functools import cache
+from typing import TYPE_CHECKING
 
 from whetstone_envs.c23._domain import (
     GeneratedTask,
     GenerationConfiguration,
+    Hypothesis,
     RuleConfiguration,
     RuleFamily,
     StratumConfiguration,
@@ -15,12 +18,16 @@ from whetstone_envs.c23._inductionbench import (
 )
 from whetstone_envs.c23._prompts import render_demonstrations
 from whetstone_envs.c23._selection import select_task
+from whetstone_envs.c23._transducers import apply_reference
 from whetstone_envs.instances import (
     Instance,
     make_instance,
     public_prompt_identity,
 )
 from whetstone_envs.pools import TaskPool
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 GENERATOR_VERSION = "c23-generate-4"
 DEFAULT_N_PER_STRATUM = 50
@@ -75,6 +82,10 @@ def _generate_pool(
     *,
     n_per_stratum: int,
 ) -> TaskPool:
+    @cache
+    def apply_hypothesis(hypothesis: Hypothesis, value: str) -> str:
+        return apply_reference(hypothesis, value)
+
     inputs = characteristic_inputs(
         config.vocab,
         config.maximum_query_length,
@@ -87,7 +98,13 @@ def _generate_pool(
         attempts = 0
         attempt_limit = config.attempts_per_instance * n_per_stratum
         while len(retained) < n_per_stratum and attempts < attempt_limit:
-            task = _make_task(stratum, config, rng, inputs)
+            task = _make_task(
+                stratum,
+                config,
+                rng,
+                inputs,
+                apply_hypothesis,
+            )
             attempts += 1
             if task is None:
                 continue
@@ -120,9 +137,10 @@ def _make_task(
     config: GenerationConfiguration,
     rng: random.Random,
     inputs: tuple[str, ...],
+    apply_hypothesis: Callable[[Hypothesis, str], str],
 ) -> GeneratedTask | None:
     hypothesis = sample_hypothesis(stratum.rule, config.vocab, rng)
-    return select_task(hypothesis, config, rng, inputs)
+    return select_task(hypothesis, config, rng, inputs, apply_hypothesis)
 
 
 def _make_instance(

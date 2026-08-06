@@ -3,7 +3,12 @@ name = "whetstone-envs"
 version = "0.2.0"
 description = "Reproducible quick-test environment contracts and task families."
 readme = "README.md"
-license = "MIT"
+license = "MIT AND Apache-2.0"
+license-files = [
+    "LICENSE",
+    "src/whetstone_envs/c23/attribution/LICENSE",
+    "src/whetstone_envs/c23/attribution/PROVENANCE.md",
+]
 authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
 ]
@@ -11,7 +16,6 @@ requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -66,6 +70,9 @@ artifacts = [
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
+markers = [
+    "integration: opt-in checks that run in CI or with --run-integration",
+]
 
 [tool.pyright]
 venvPath = "."

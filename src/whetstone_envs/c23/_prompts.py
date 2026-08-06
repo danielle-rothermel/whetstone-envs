@@ -13,11 +13,13 @@ NAIVE_TEMPLATE = """{demos_block}
 
 CEILING_TEMPLATE = """You are solving a hidden-rule string-transformation
 puzzle.
-One deterministic rule maps each input to its output. The rule examines
-individual characters in a bounded adjacent context. Its context comes from
-the input, the left-to-right partial output, or the right-to-left partial
-output. Infer the one rule that fits every demonstration, then apply it to the
-query. Do not explain your reasoning.
+One deterministic rule maps each input to its output. The hidden rule is
+exactly one of these four forms over a, b, c, and d: ISL k=2, ISL k=3,
+left-OSL k=2, or right-OSL k=2. ISL reads context from the input; OSL reads
+context from the partial output in the named direction. When the full context
+matches, its final character is deleted or replaced by a different character.
+Infer the one rule that fits every demonstration, then apply it to the query.
+Do not explain your reasoning.
 
 Demonstrations:
 {demos_block}

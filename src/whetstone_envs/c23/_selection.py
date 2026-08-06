@@ -13,19 +13,13 @@ from whetstone_envs.c23._domain import (
     RuleFamily,
 )
 from whetstone_envs.c23._inductionbench import examples_for
-from whetstone_envs.c23._transducers import apply_reference
 
 if TYPE_CHECKING:
     import random
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
 _MINIMUM_QUERY_LENGTH = 2
 _MAXIMUM_DEMONSTRATION_LENGTH = 4
-
-
-@cache
-def _apply(hypothesis: Hypothesis, value: str) -> str:
-    return apply_reference(hypothesis, value)
 
 
 @cache
@@ -61,6 +55,7 @@ def select_task(
     config: GenerationConfiguration,
     rng: random.Random,
     inputs: tuple[str, ...],
+    apply_hypothesis: Callable[[Hypothesis, str], str],
 ) -> GeneratedTask | None:
     """Select six demos and a nontrivial determinate held-out query."""
     examples = examples_for(hypothesis, inputs)
@@ -81,7 +76,7 @@ def select_task(
         wrong = tuple(
             candidate
             for candidate in hypotheses
-            if _apply(candidate, query.input) != query.output
+            if apply_hypothesis(candidate, query.input) != query.output
         )
         candidates = tuple(
             example
@@ -93,6 +88,7 @@ def select_task(
             wrong,
             candidates,
             budget=config.demonstrations_per_instance,
+            apply_hypothesis=apply_hypothesis,
         )
         if selected is None:
             continue
@@ -110,7 +106,12 @@ def select_task(
             continue
         demonstrations.sort(key=lambda item: (len(item.input), item.input))
         frozen = tuple(demonstrations)
-        if _version_space_outputs(frozen, query.input, hypotheses) != {
+        if _version_space_outputs(
+            frozen,
+            query.input,
+            hypotheses,
+            apply_hypothesis,
+        ) != {
             query.output,
         }:
             raise AssertionError("demo cover did not determine query output")
@@ -127,12 +128,13 @@ def _version_space_outputs(
     demonstrations: tuple[Demonstration, ...],
     query: str,
     hypotheses: tuple[Hypothesis, ...],
+    apply_hypothesis: Callable[[Hypothesis, str], str],
 ) -> frozenset[str]:
     return frozenset(
-        _apply(hypothesis, query)
+        apply_hypothesis(hypothesis, query)
         for hypothesis in hypotheses
         if all(
-            _apply(hypothesis, example.input) == example.output
+            apply_hypothesis(hypothesis, example.input) == example.output
             for example in demonstrations
         )
     )
@@ -143,6 +145,7 @@ def _cover_wrong_hypotheses(
     candidates: tuple[Demonstration, ...],
     *,
     budget: int,
+    apply_hypothesis: Callable[[Hypothesis, str], str],
 ) -> tuple[Demonstration, ...] | None:
     if not wrong:
         return ()
@@ -152,7 +155,8 @@ def _cover_wrong_hypotheses(
             sum(
                 1 << index
                 for index, hypothesis in enumerate(wrong)
-                if _apply(hypothesis, example.input) != example.output
+                if apply_hypothesis(hypothesis, example.input)
+                != example.output
             ),
         )
         for example in candidates

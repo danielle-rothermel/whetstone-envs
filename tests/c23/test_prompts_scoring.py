@@ -16,6 +16,10 @@ def test_prompts_render_only_public_fields() -> None:
     assert "ab -> ac" in ceiling
     assert "abab" in ceiling
     assert "private-gold" not in ceiling
+    assert (
+        "exactly one of these four forms over a, b, c, and d: ISL k=2, "
+        "ISL k=3,\nleft-OSL k=2, or right-OSL k=2"
+    ) in ceiling
 
 
 def test_score_gold_extracts_last_case_insensitive_output_line() -> None:

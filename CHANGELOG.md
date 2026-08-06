@@ -6,8 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-These changes are assigned to version 0.2.0, which is published only after all
-environment PRs in the release have merged.
+## [0.2.0] - 2026-08-06
 
 ### Added
 

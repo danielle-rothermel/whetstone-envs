@@ -116,7 +116,9 @@ title = "Owning subpackages define the public API"
 statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
-whetstone_envs.scoring; the root whetstone_envs namespace exports no API."""
+whetstone_envs.scoring. Task-family contracts are imported from their owning \
+task-family subpackage, including whetstone_envs.c11; the root whetstone_envs \
+namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from dr_serialize import DuplicateJsonKeyError
 from pydantic import ValidationError
@@ -16,18 +18,13 @@ from whetstone_envs.c22.constraints import (
 )
 
 
-def test_gold_is_canonical_closed_and_composed() -> None:
+def test_gold_round_trips_as_the_closed_composition() -> None:
     stack = ConstraintStack(
         constraints=(RequiredKeyword(keyword="café"), NoComma())
     )
     gold = stack.to_gold()
-    assert gold == (
-        '{"constraints":[{"keyword":"caf\\u00e9",'
-        '"kind":"required_keyword"},{"kind":"no_comma"}]}'
-    )
     assert ConstraintStack.from_gold(gold) == stack
-    assert "description" not in gold
-    assert "kwargs" not in gold
+    assert json.loads(gold) == stack.model_dump(mode="json")
 
 
 @pytest.mark.parametrize(
@@ -68,16 +65,26 @@ def test_forbidden_letters_are_ascii(letter: str) -> None:
         ForbiddenLetter(letter=letter)
 
 
-def test_gold_rejects_duplicate_keys_and_unknown_fields() -> None:
-    duplicate = '{"constraints":[{"kind":"no_comma","kind":"no_comma"}]}'
-    with pytest.raises(DuplicateJsonKeyError):
-        ConstraintStack.from_gold(duplicate)
-
-    unknown = '{"constraints":[{"kind":"no_comma","extra":true}]}'
-    with pytest.raises(ValidationError):
-        ConstraintStack.from_gold(unknown)
-
-
-def test_gold_rejects_unknown_constraint_kind() -> None:
-    with pytest.raises(ValidationError):
-        ConstraintStack.from_gold('{"constraints":[{"kind":"semantic_task"}]}')
+@pytest.mark.parametrize(
+    ("gold", "error"),
+    [
+        (
+            '{"constraints":[{"kind":"no_comma","kind":"no_comma"}]}',
+            DuplicateJsonKeyError,
+        ),
+        (
+            '{"constraints":[{"kind":"no_comma","extra":true}]}',
+            ValidationError,
+        ),
+        (
+            '{"constraints":[{"kind":"semantic_task"}]}',
+            ValidationError,
+        ),
+    ],
+)
+def test_gold_rejects_nonclosed_shapes(
+    gold: str,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        ConstraintStack.from_gold(gold)

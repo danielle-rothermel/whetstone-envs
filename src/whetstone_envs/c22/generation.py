@@ -6,7 +6,7 @@ from enum import UNIQUE, StrEnum, verify
 from importlib.resources import as_file, files
 from random import Random
 
-from whetstone_envs.c22._ifeval import render_constraint_block
+from whetstone_envs.c22._ifeval_adapter import render_constraint_block
 from whetstone_envs.c22.constraints import (
     Constraint,
     ConstraintStack,
@@ -288,7 +288,7 @@ def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool:
 
 def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest:
     _config_for(preset)
-    resource = files("whetstone_envs.c22.data").joinpath(
+    resource = files("whetstone_envs.c22.preset_manifests").joinpath(
         f"{preset.value}.json"
     )
     with as_file(resource) as path:

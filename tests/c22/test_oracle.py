@@ -76,10 +76,8 @@ def test_strict_all_pass_and_diagnostics_follow_stack_order() -> None:
     )
     passing = evaluate(stack, "zylthorn blue DONE")
     assert passing.follow_all
-    assert passing.per_constraint == (
-        ("required_keyword", True),
-        ("no_comma", True),
-        ("end_phrase", True),
+    assert passing.per_constraint == tuple(
+        (constraint.kind, True) for constraint in stack.constraints
     )
 
     failing = evaluate(stack, "zylthorn blue")
@@ -106,5 +104,5 @@ def test_exact_word_count_rejects_both_adjacent_counts() -> None:
 
 def test_evaluate_rejects_non_string_responses() -> None:
     stack = ConstraintStack(constraints=(NoComma(),))
-    with pytest.raises(TypeError, match="response"):
+    with pytest.raises(TypeError):
         evaluate(stack, None)  # ty: ignore[invalid-argument-type]

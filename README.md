@@ -37,28 +37,6 @@ shared harness; the adapter to Whetstone's optimizer lives above this package.
 uv add whetstone-envs
 ```
 
-## C11 JSON canonicalization
-
-[`whetstone_envs.c11`][c11-source] generates balanced adversarial tasks for
-RFC 8785 whitespace removal, key ordering, number rendering, Unicode escaping,
-and mixed inputs. The exactly pinned `rfc8785` package produces private gold
-values independently from the input builders. Shared harness contracts own
-pool splitting, prompt rendering, scoring, and manifest persistence.
-
-```python
-from whetstone_envs.c11 import (
-    DEFAULT_SPLIT_SIZES,
-    PROBES,
-    build_manifest,
-    generate_pool,
-)
-
-pool = generate_pool()
-split = pool.split(*DEFAULT_SPLIT_SIZES)
-manifest = build_manifest(pool)
-prompt = PROBES.render_ceiling(split.internal_eval[0])
-```
-
 ## Instances
 
 [`whetstone_envs.instances`][instances-source] owns the immutable
@@ -215,8 +193,41 @@ class Manifest(BaseModel):
     @classmethod
     def read(cls, path: Path) -> "Manifest": ...
     def matches_pool(self, pool: TaskPool) -> bool: ...
+```
 
+```python
 def content_hash(pool: TaskPool) -> Sha256Digest: ...
+```
+
+## C11 JSON canonicalization
+
+[`whetstone_envs.c11`][c11-source] generates balanced adversarial tasks for
+RFC 8785 whitespace removal, key ordering, number rendering, Unicode escaping,
+and mixed inputs. An independent, exactly pinned oracle produces private gold;
+the shared harness owns splitting, prompting, scoring, and persistence.
+
+```python
+@verify(UNIQUE)
+class C11Stratum(StrEnum):
+    WHITESPACE = "c11/whitespace"
+    KEY_ORDER = "c11/key-order"
+    NUMBER = "c11/number"
+    UNICODE = "c11/unicode"
+    MIXED = "c11/mixed"
+```
+
+```python
+DEFAULT_SPLIT_SIZES: tuple[int, int, int]
+PROBES: ProbePair
+
+def generate_pool(
+    *,
+    n_per_stratum: int = ...,
+    seed_start: int = ...,
+) -> TaskPool: ...
+
+def build_manifest(pool: TaskPool) -> Manifest: ...
+def canonicalize(input_json: str) -> str: ...
 ```
 
 ## C22 instruction constraints
@@ -225,20 +236,33 @@ def content_hash(pool: TaskPool) -> Sha256Digest: ...
 composed Google Research IFEval constraints. The default preset crosses three,
 four, and five constraints with easy and mixed strata; the hard preset uses
 three, six, and eight constraints and includes every hard constraint in each
-task.
+task. C22 scores only this model-visible stack and claims no separate semantic
+task grading.
 
 ```python
-from whetstone_envs.c22 import PROBES, Preset, generate_pool, score
-
-pool = generate_pool(Preset.DEFAULT)
-prompt = PROBES.render_naive(pool.instances[0])
-result = score(pool.instances[0].gold, "candidate response")
+@verify(UNIQUE)
+class Preset(StrEnum):
+    DEFAULT = "default"
+    HARD = "hard"
 ```
 
-C22 scores only the explicit model-visible constraints. Its closed serialized
-gold contains composed constraint values, while human-readable descriptions
-are derived through one namespaced, pinned IFEval adapter. It does not present
-or claim to score an additional semantic base task.
+```python
+class ConstraintStack(BaseModel):
+    constraints: tuple[Constraint, ...]
+
+    def to_gold(self) -> str: ...
+
+    @classmethod
+    def from_gold(cls, gold: str) -> "ConstraintStack": ...
+```
+
+```python
+PROBES: ProbePair
+
+def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool: ...
+def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest: ...
+def score(gold: str, response: str) -> int: ...
+```
 
 ## Terms and contracts
 

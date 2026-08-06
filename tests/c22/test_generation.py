@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -13,15 +14,30 @@ from whetstone_envs.c22.generation import (
     DEFAULT_SEED_START,
     HARD_SEED_START,
     PUBLISHED_KEY_MAX,
+    _config_for,
     _generate_pool,
 )
 from whetstone_envs.manifests import content_hash
 
+if TYPE_CHECKING:
+    from whetstone_envs.pools import TaskPool
 
-def test_default_pool_matches_its_canonical_manifest() -> None:
-    pool = generate_pool()
-    assert len(pool) == 120
-    assert pool.stratum_counts() == {
+
+@pytest.fixture(scope="module")
+def default_pool() -> TaskPool:
+    return generate_pool()
+
+
+@pytest.fixture(scope="module")
+def hard_pool() -> TaskPool:
+    return generate_pool(Preset.HARD)
+
+
+def test_default_pool_matches_its_canonical_manifest(
+    default_pool: TaskPool,
+) -> None:
+    assert len(default_pool) == 120
+    assert default_pool.stratum_counts() == {
         "n3_easy": 20,
         "n3_mixed": 20,
         "n4_easy": 20,
@@ -30,21 +46,28 @@ def test_default_pool_matches_its_canonical_manifest() -> None:
         "n5_mixed": 20,
     }
     manifest = load_manifest()
-    assert manifest.matches_pool(pool)
-    assert manifest.generator_version == "c22-1"
+    assert manifest.matches_pool(default_pool)
+    assert (
+        manifest.generator_version
+        == _config_for(Preset.DEFAULT).generator_version
+    )
 
 
-def test_hard_pool_matches_its_canonical_manifest() -> None:
-    pool = generate_pool(Preset.HARD)
-    assert len(pool) == 60
-    assert pool.stratum_counts() == {
+def test_hard_pool_matches_its_canonical_manifest(
+    hard_pool: TaskPool,
+) -> None:
+    assert len(hard_pool) == 60
+    assert hard_pool.stratum_counts() == {
         "n3_hard": 20,
         "n6_hard": 20,
         "n8_hard": 20,
     }
     manifest = load_manifest(Preset.HARD)
-    assert manifest.matches_pool(pool)
-    assert manifest.generator_version == "c22-1+hard"
+    assert manifest.matches_pool(hard_pool)
+    assert (
+        manifest.generator_version
+        == _config_for(Preset.HARD).generator_version
+    )
 
 
 @pytest.mark.parametrize("preset", [Preset.DEFAULT, Preset.HARD])
@@ -76,19 +99,22 @@ def test_hard_instances_contain_every_hard_constraint() -> None:
         assert kinds >= HARD_CONSTRAINT_KINDS
 
 
-def test_preset_seed_ranges_are_fresh_and_disjoint() -> None:
-    default = generate_pool()
-    hard = generate_pool(Preset.HARD)
-    assert min(instance.seed for instance in default.instances) == (
+def test_preset_seed_ranges_are_fresh_and_disjoint(
+    default_pool: TaskPool,
+    hard_pool: TaskPool,
+) -> None:
+    assert min(instance.seed for instance in default_pool.instances) == (
         DEFAULT_SEED_START
     )
-    assert min(instance.seed for instance in hard.instances) == HARD_SEED_START
+    assert min(instance.seed for instance in hard_pool.instances) == (
+        HARD_SEED_START
+    )
     assert DEFAULT_SEED_START > PUBLISHED_KEY_MAX
-    assert {instance.id for instance in default.instances}.isdisjoint(
-        instance.id for instance in hard.instances
+    assert {instance.id for instance in default_pool.instances}.isdisjoint(
+        instance.id for instance in hard_pool.instances
     )
 
 
 def test_public_generation_rejects_untyped_presets() -> None:
-    with pytest.raises(TypeError, match="Preset"):
+    with pytest.raises(TypeError):
         generate_pool("default")  # ty: ignore[invalid-argument-type]

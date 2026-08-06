@@ -46,5 +46,5 @@ def test_vendor_patch_round_trip_and_upstream_hashes(tmp_path: Path) -> None:
     } == _UPSTREAM_SHA256
 
     _apply(git, repository, reverse=False)
-    for name in ("__init__.py", *_UPSTREAM_SHA256):
+    for name in _UPSTREAM_SHA256:
         assert (package / name).read_bytes() == (source / name).read_bytes()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from whetstone_envs.c22 import _ifeval
+from whetstone_envs.c22 import _ifeval_adapter
 from whetstone_envs.c22.constraints import ConstraintStack
 from whetstone_envs.probes import normalize
 
@@ -21,7 +21,7 @@ def evaluate(stack: ConstraintStack, response: str) -> OracleResult:
     if not isinstance(response, str):
         msg = "response must be a string"
         raise TypeError(msg)
-    verdicts = _ifeval.check(stack.constraints, normalize(response))
+    verdicts = _ifeval_adapter.check(stack.constraints, normalize(response))
     return OracleResult(
         score=int(all(verdict for _, verdict in verdicts)),
         per_constraint=verdicts,

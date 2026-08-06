@@ -21,7 +21,7 @@ from whetstone_envs.c22.constraints import (
     Title,
 )
 
-_PROMPT_KEY = "c22"
+_RESPONSE_KEY = "c22"
 
 
 def _instruction_arguments(
@@ -125,12 +125,12 @@ def check(
     example = evaluation_lib.InputExample(
         key=0,
         instruction_id_list=[name for name, _ in instructions],
-        prompt=_PROMPT_KEY,
+        prompt=_RESPONSE_KEY,
         kwargs=arguments,
     )
     output = evaluation_lib.test_instruction_following_strict(
         example,
-        {_PROMPT_KEY: response},
+        {_RESPONSE_KEY: response},
     )
     return tuple(
         (constraint.kind, verdict)

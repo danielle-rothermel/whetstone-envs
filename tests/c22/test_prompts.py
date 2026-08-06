@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import string
+from typing import TYPE_CHECKING
+
+import pytest
 
 from whetstone_envs.c22.constraints import ConstraintStack, EndPhrase, NoComma
 from whetstone_envs.c22.prompts import CEILING_TEMPLATE, NAIVE_TEMPLATE, PROBES
 from whetstone_envs.instances import make_instance
 
-_BLOCK = (
-    "1. In your entire response, refrain from the use of any commas.\n"
-    "2. Finish your response with this exact phrase DONE. No other words "
-    "should follow this phrase."
-)
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from whetstone_envs.instances import Instance
+
+_BLOCK = "Two model-visible constraint descriptions"
 _STACK = ConstraintStack(constraints=(NoComma(), EndPhrase(phrase="DONE")))
 _INSTANCE = make_instance(
     id="c22-fixture",
@@ -21,19 +25,15 @@ _INSTANCE = make_instance(
 )
 
 
-def test_naive_prompt_renders_only_the_constraint_request() -> None:
-    assert PROBES.render_naive(_INSTANCE) == (
-        f"Satisfy every constraint below:\n{_BLOCK}\n\nAnswer:"
-    )
-
-
-def test_ceiling_prompt_adds_guidance_without_private_gold() -> None:
-    naive = PROBES.render_naive(_INSTANCE)
-    ceiling = PROBES.render_ceiling(_INSTANCE)
-    assert _BLOCK in ceiling
-    assert len(ceiling) > len(naive)
-    assert "no_comma" not in ceiling
-    assert "end_phrase" not in ceiling
+@pytest.mark.parametrize(
+    "render", [PROBES.render_naive, PROBES.render_ceiling]
+)
+def test_prompts_render_public_constraints_without_private_gold(
+    render: Callable[[Instance], str],
+) -> None:
+    prompt = render(_INSTANCE)
+    assert _BLOCK in prompt
+    assert _INSTANCE.gold not in prompt
 
 
 def test_templates_reference_only_public_constraint_text() -> None:

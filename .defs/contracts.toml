@@ -152,3 +152,16 @@ while deterministic balanced generation and a persisted pool identity make \
 runs reproducible and expose corpus drift."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/c11"
+
+[[contracts]]
+title = "C22 scores its explicit constraint stack"
+statement = """
+Every C22 task exposes only a numbered stack of deterministic constraints, \
+stores their values as a closed serialized composition in private gold, and \
+scores one only when every constraint passes after shared prediction \
+normalization. C22 presents and scores no separate semantic base task."""
+rationale = """
+The measured behavior must match the complete model-visible request without \
+claiming semantic grading that the deterministic oracle does not perform."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c22"

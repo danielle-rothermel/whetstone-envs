@@ -14,6 +14,12 @@ environment PRs in the release have merged.
 - Deterministic C11 RFC 8785 task generation across five adversarial strata.
 - An exactly pinned independent canonicalization oracle, naive and known-good
   probes, and a canonical persisted pool manifest.
+- The C22 instruction-following environment with fixed default and hard
+  presets, canonical manifests, naive and ceiling probes, and strict all-pass
+  scoring.
+- A namespaced Google Research IFEval runtime pinned with provenance,
+  reproducible patch verification, and hand-built fixtures for every supported
+  constraint.
 - Distribution validation that checks artifact metadata, package contents, and
   isolated installed-wheel imports before publication.
 
@@ -25,6 +31,8 @@ environment PRs in the release have merged.
   canonical format, lint, type, definition, test, and build gate.
 - Validate binding-contract structure and require `.defs` mappings for every
   symbol exported by an owning public package.
+- Model C22 gold as a closed composition of concrete constraint variants and
+  derive checker descriptions and arguments through one vendor adapter.
 - Cut one package release from the combined `main` tip after all task families
   assigned to that version have merged and passed the release gate.
 

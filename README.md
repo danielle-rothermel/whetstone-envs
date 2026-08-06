@@ -25,6 +25,8 @@ code:
 - [**C11 JSON canonicalization**][c11-source] provides deterministic RFC 8785
   tasks, an independent canonicalization oracle, and naive and known-good
   probes.
+- [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
+  composed IFEval constraints and strict all-pass scoring.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness; the adapter to Whetstone's optimizer lives above this package.
@@ -217,6 +219,27 @@ class Manifest(BaseModel):
 def content_hash(pool: TaskPool) -> Sha256Digest: ...
 ```
 
+## C22 instruction constraints
+
+[`whetstone_envs.c22`][c22-source] provides two fixed, seeded pools of
+composed Google Research IFEval constraints. The default preset crosses three,
+four, and five constraints with easy and mixed strata; the hard preset uses
+three, six, and eight constraints and includes every hard constraint in each
+task.
+
+```python
+from whetstone_envs.c22 import PROBES, Preset, generate_pool, score
+
+pool = generate_pool(Preset.DEFAULT)
+prompt = PROBES.render_naive(pool.instances[0])
+result = score(pool.instances[0].gold, "candidate response")
+```
+
+C22 scores only the explicit model-visible constraints. Its closed serialized
+gold contains composed constraint values, while human-readable descriptions
+are derived through one namespaced, pinned IFEval adapter. It does not present
+or claim to score an additional semantic base task.
+
 ## Terms and contracts
 
 The [published terms and contracts](https://danielle-rothermel.github.io/whetstone-envs/)
@@ -252,6 +275,7 @@ uv run python -m whetstone_envs.c11.regenerate
 
 [c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
 [instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
+[c22-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c22
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests
 [pools-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/pools
 [probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes

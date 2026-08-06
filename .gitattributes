@@ -1,2 +1,0 @@
-# Preserve byte-exact upstream whitespace inside the reviewable vendor patch.
-src/whetstone_envs/c23/_vendor/inductionbench/VENDORED_DIFF.patch whitespace=-trailing-space

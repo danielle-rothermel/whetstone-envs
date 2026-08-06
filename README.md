@@ -257,6 +257,34 @@ def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool: ...
 def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest: ...
 ```
 
+## C23 subregular induction
+
+[`whetstone_envs.c23`][c23-source] is a higher-layer environment built on the
+shared harness. It generates four balanced single-rule strata: ISL k=2,
+left-OSL k=2, right-OSL k=2, and ISL k=3 over the fixed vocabulary `abcd`.
+Every instance exposes exactly six demonstrations and a held-out nontrivial
+query whose answer is determinate across the complete supported finite
+hypothesis class.
+
+```python
+from whetstone_envs.c23 import (
+    PROBES,
+    default_split_sizes,
+    generate_pool,
+    score_gold,
+)
+
+pool = generate_pool()
+split = pool.split(*default_split_sizes(pool))
+prompt = PROBES.render_ceiling(split.official[0])
+score = score_gold("Output: candidate", split.official[0].gold)
+```
+
+Generation uses fixed fresh stratum seeds beginning at `555000000` and
+private injected random-number generators. The adapted InductionBench
+reference transducers and generation path are pinned and attributed inside
+the package; no process-global random state is read or mutated.
+
 ## Terms and contracts
 
 The [published terms and contracts](https://danielle-rothermel.github.io/whetstone-envs/)
@@ -297,3 +325,4 @@ uv run python -m whetstone_envs.c11.regenerate
 [pools-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/pools
 [probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes
 [scoring-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/scoring
+[c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23

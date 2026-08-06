@@ -58,9 +58,9 @@ only-include = ["src"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/whetstone_envs"]
 artifacts = [
-    "src/whetstone_envs/c23/_vendor/inductionbench/LICENSE",
-    "src/whetstone_envs/c23/_vendor/inductionbench/PROVENANCE.md",
-    "src/whetstone_envs/c23/_vendor/inductionbench/VENDORED_DIFF.patch",
+    "src/whetstone_envs/c23/attribution/LICENSE",
+    "src/whetstone_envs/c23/attribution/PROVENANCE.md",
+    "src/whetstone_envs/c23/manifest.json",
 ]
 
 [tool.pytest.ini_options]
@@ -73,12 +73,7 @@ venv = ".venv"
 
 [tool.ruff]
 include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
-# Vendored snapshots retain upstream formatting and are covered by their
-# provenance records and regression suites instead of first-party lint.
-extend-exclude = [
-    "src/whetstone_envs/c22/_vendor/**",
-    "src/whetstone_envs/c23/_vendor/**",
-]
+extend-exclude = ["src/whetstone_envs/c22/_vendor/**"]
 line-length = 79
 
 [tool.ruff.lint]
@@ -128,31 +123,10 @@ ignore = ["PLR1711", "S101", "TRY003"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
-# The c23 probe prompts are copied verbatim from the baseline spec's drafted
-# text (Section 2); reflowing them to <=79 cols would break the byte-for-byte
-# render test. RUF001 covers the spec's own U+2014 em dashes.
-"src/whetstone_envs/c23/prompts.py" = ["E501", "RUF001"]
-"tests/c23/test_prompts.py" = ["E501", "RUF001"]
-# The c23 boundary + generator expose every owner-open generation knob as a
-# keyword-only argument (config surface); the arg count is intentional. The
-# boundary's query/demo draw uses the stdlib ``random`` deliberately for
-# seed-pinned reproducibility, never cryptographically (S311).
-"src/whetstone_envs/c23/upstream.py" = ["PLR0913", "S311"]
-"src/whetstone_envs/c23/generate.py" = ["PLR0913"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]
 
 [tool.ty.src]
 include = ["scripts", "src", "tests"]
-# Vendored snapshots retain upstream annotations and are checked through
-# their regression suites instead of the first-party type checker.
-exclude = [
-    "src/whetstone_envs/c22/_vendor/**",
-    "src/whetstone_envs/c23/_vendor/**",
-]
-
-[tool.ty.environment]
-extra-paths = [
-    "src/whetstone_envs/c23/_vendor/inductionbench",
-]
+exclude = ["src/whetstone_envs/c22/_vendor/**"]

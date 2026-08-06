@@ -20,6 +20,11 @@ environment PRs in the release have merged.
 - A namespaced Google Research IFEval runtime pinned with provenance,
   reproducible patch verification, and hand-built fixtures for every supported
   constraint.
+- The C23 single-rule subregular induction environment with four balanced
+  ISL/OSL strata, determinate six-demonstration tasks, ceiling and naive
+  probes, exact scoring, default split sizing, and a committed pool manifest.
+- A private-RNG adaptation of the pinned InductionBench generation and
+  reference-transducer path with packaged Apache-2.0 attribution.
 - Distribution validation that checks artifact metadata, package contents, and
   isolated installed-wheel imports before publication.
 
@@ -37,6 +42,8 @@ environment PRs in the release have merged.
   derive checker descriptions and arguments through one vendor adapter.
 - Cut one package release from the combined `main` tip after all task families
   assigned to that version have merged and passed the release gate.
+- Extend the owning-subpackage API model to the higher-layer
+  `whetstone_envs.c23` environment.
 
 ## [0.1.1] - 2026-08-06
 

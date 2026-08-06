@@ -132,8 +132,8 @@ statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
 whetstone_envs.scoring. Task-family contracts are imported from their owning \
-task-family subpackage, including whetstone_envs.c11 and whetstone_envs.c22; \
-the root whetstone_envs \
+task-family subpackage, including whetstone_envs.c11, whetstone_envs.c22, and \
+whetstone_envs.c23; the root whetstone_envs \
 namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
@@ -166,3 +166,33 @@ The measured behavior must match the complete model-visible request without \
 claiming semantic grading that the deterministic oracle does not perform."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/c22"
+
+[[contracts]]
+title = "C23 public evidence determines every scored answer"
+statement = """
+Every C23 instance contains exactly six demonstrations and a distinct \
+nontrivial held-out query. Every supported single-rule hypothesis consistent \
+with those demonstrations produces the recorded gold answer for that query. \
+The supported finite class contains all ISL k=2, left-OSL k=2, right-OSL k=2, \
+and ISL k=3 hypotheses over `abcd`, for every full-length context and either \
+deletion or any replacement other than the context's final symbol."""
+rationale = """
+Exact-match evaluation is interpretable only when the public evidence fixes \
+the expected answer rather than relying on an unobserved choice among \
+demo-consistent rules."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c23/test_generation.py"
+
+[[contracts]]
+title = "C23 generation is deterministic and RNG-isolated"
+statement = """
+C23 generation uses the fixed vocabulary `abcd`, canonical finite ordering, \
+and private explicitly seeded random-number generators beginning at fresh \
+seed 555000000. It neither reads nor mutates Python's process-global random \
+state, and a fixed public configuration produces identical pools across \
+process hash seeds."""
+rationale = """
+Regenerated experiment cohorts must not depend on ambient application state \
+or randomized set iteration."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c23/test_generation.py"

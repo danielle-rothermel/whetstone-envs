@@ -1,15 +1,1 @@
-{
-  "content_hash": "3d3afbdc391984126d3acca2d57ebc1d4849c61cd58aa3f5210f2f6513a20589",
-  "generator_version": "c23-generate-3",
-  "schema_version": 1,
-  "seed_range": [
-    555000000,
-    555000004
-  ],
-  "stratum_counts": {
-    "S1": 50,
-    "S2": 50,
-    "S3": 50,
-    "S4": 50
-  }
-}
+{"content_hash":"4f372f62964ca8550baefbb2ba2f3ac61a25eec5d2b8e9b773f7553433f8b697","generator_version":"c23-generate-4","schema_version":1,"seed_range":[555000000,555000004],"stratum_counts":{"S1":50,"S2":50,"S3":50,"S4":50}}

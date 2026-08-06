@@ -1,9 +1,3 @@
-"""Tests for the complete aggregation ladder.
-
-A non-scored observation makes every dependent aggregate visibly incomplete
-(``mean is None``, non-zero failed/missing counts), never a silent zero.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -18,8 +12,6 @@ from whetstone_envs.scoring import (
     scored,
 )
 
-# --- repeat -> task level ------------------------------------------------
-
 
 def test_task_mean_over_repeats() -> None:
     obs = [scored("t", 0, 1), scored("t", 1, 0), scored("t", 2, 1)]
@@ -32,8 +24,6 @@ def test_task_mean_over_repeats() -> None:
 def test_failed_repeat_makes_task_incomplete_not_zero() -> None:
     obs = [scored("t", 0, 1), failed("t", 1), scored("t", 2, 1)]
     agg = aggregate_task(obs)
-    # Two scored 1s would naively average to 1.0; the failure must not
-    # silently drag it toward zero -- it makes the mean unavailable.
     assert agg.mean is None
     assert agg.complete is False
     assert agg.failed_count == 1
@@ -68,9 +58,6 @@ def test_aggregate_task_rejects_corrupted_outcome() -> None:
         aggregate_task([observation])
 
 
-# --- task -> stratum -> overall -----------------------------------------
-
-
 def test_full_ladder_all_complete() -> None:
     observations = [
         scored("easy-0", 0, 1),
@@ -89,8 +76,6 @@ def test_full_ladder_all_complete() -> None:
         task_strata,
         expected_repeat_ids=(0,),
     )
-    # easy stratum mean = (1 + 0)/2 = 0.5; hard = (1 + 1)/2 = 1.0;
-    # overall = mean of stratum means = 0.75.
     assert root.mean == pytest.approx(0.75)
     assert root.complete is True
     strata = {child.label: child for child in root.children}
@@ -108,9 +93,7 @@ def test_full_ladder_all_complete() -> None:
 
 
 def test_aggregation_crosses_strata_not_raw_mean() -> None:
-    # An imbalanced pool: 3 easy tasks all correct, 1 hard task wrong.
-    # Raw pooled mean would be 3/4 = 0.75; the strata-crossing mean is
-    # mean(1.0, 0.0) = 0.5.
+    # Equal-weighted stratum means yield 0.5, not the raw pooled mean of 0.75.
     observations = [
         scored("easy-0", 0, 1),
         scored("easy-1", 0, 1),
@@ -202,7 +185,7 @@ def test_planned_matrix_rejects_duplicate_expected_repeat_ids() -> None:
         )
 
 
-def test_multi_stratum_task_contributes_complete_repeats_once_each() -> None:
+def test_multi_stratum_task_contributes_once_to_each_stratum() -> None:
     root = aggregate(
         [scored("shared", 0, 1), scored("shared", 1, 0)],
         {"shared": ("easy", "hard")},
@@ -273,8 +256,6 @@ def test_failed_observation_propagates_to_overall() -> None:
         task_strata,
         expected_repeat_ids=(0,),
     )
-    # The whole run's overall aggregate is visibly incomplete even
-    # though one stratum was fully scored.
     assert root.mean is None
     assert root.complete is False
     assert root.failed_count == 1
@@ -300,8 +281,6 @@ def test_stratum_and_overall_helpers_compose() -> None:
 
 
 def test_empty_stratum_is_incomplete_not_zero() -> None:
-    # No children means nothing to average; mean is None, not 0.0, and
-    # a zero-observation aggregate is not vacuously complete.
     agg = aggregate_stratum([])
     assert agg.mean is None
     assert agg.total == 0
@@ -329,9 +308,6 @@ def test_empty_overall_is_incomplete_not_zero() -> None:
 
 
 def test_empty_task_mixed_with_scored_does_not_silently_vanish() -> None:
-    # An empty task composed alongside a scored one must not disappear
-    # from the parent mean: the empty child forces incompleteness rather
-    # than the parent averaging only the scored child to 1.0.
     empty = aggregate_task([])
     scored_task = aggregate_task([scored("a", 0, 1)])
     stratum = aggregate_stratum([empty, scored_task])

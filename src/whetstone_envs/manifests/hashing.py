@@ -1,9 +1,3 @@
-"""Canonical task-pool projection and content hashing.
-
-The hash covers a canonical serialization of the pool's instances, so it is
-independent of mapping insertion order and reproducible across runs.
-"""
-
 import hashlib
 import json
 
@@ -12,12 +6,7 @@ from whetstone_envs.pools import TaskPool
 
 
 def _canonical_instance(instance: Instance) -> dict[str, object]:
-    """Project an instance onto its content-hashable public fields.
-
-    Prompt inputs are sorted by key so serialization does not depend on
-    insertion order; every field that defines the instance's identity for a
-    downstream consumer is included.
-    """
+    """Return the canonical JSON-ready instance hash payload."""
     return {
         "id": instance.id,
         "seed": instance.seed,
@@ -28,11 +17,9 @@ def _canonical_instance(instance: Instance) -> dict[str, object]:
 
 
 def content_hash(pool: TaskPool) -> str:
-    """Return a stable SHA-256 hex digest of the pool's instances.
+    """Hash instances in pool order using canonical JSON.
 
-    Instances are serialized in pool order via canonical JSON with sorted
-    keys and no incidental whitespace. Two pools hash equal iff their
-    instances are field-for-field identical in the same order.
+    Prompt-input mapping order does not affect the digest.
     """
     payload = [_canonical_instance(instance) for instance in pool.instances]
     encoded = json.dumps(

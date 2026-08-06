@@ -1,11 +1,3 @@
-"""Complete repeat-to-task-to-stratum-to-overall aggregation.
-
-The reduction operates over the complete planned task/repeat matrix, so absent
-results remain visible and improvements only come from solving more complete
-instances across strata, never from partial credit inside one. A failed or
-missing observation makes every dependent aggregate visibly incomplete.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -23,13 +15,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class Aggregate:
-    """A mean over lower-level results, plus completeness accounting.
+    """An equal-weighted mean with leaf/path contribution counts.
 
-    ``mean`` is ``None`` whenever any contributing observation was ``FAILED``
-    or ``MISSING`` or any contributing sub-aggregate was incomplete.
-    ``usable``, ``failed_count``, and ``missing_count`` expose why an aggregate
-    is incomplete. ``label`` identifies task and stratum children returned by
-    :func:`aggregate`; helper and root aggregates may leave it unset.
+    Aggregation helpers return ``mean=None`` for empty or incomplete
+    contributions. ``label`` identifies task or stratum nodes returned by
+    :func:`aggregate`. Counters record leaf/path contributions, so a
+    task/repeat cell in multiple strata counts once per stratum at the root.
     """
 
     mean: float | None
@@ -41,20 +32,12 @@ class Aggregate:
 
     @property
     def total(self) -> int:
-        """Return the number of observations this aggregate spans."""
+        """Return the summed leaf/path contribution count."""
         return self.usable + self.failed_count + self.missing_count
 
     @property
     def complete(self) -> bool:
-        """Return whether every contributing result resolved to a score.
-
-        Equivalent to ``mean is not None``: a resolved mean is produced only
-        when there is at least one usable observation, no failed or missing
-        observation, and every contributing child is itself complete. A
-        zero-observation aggregate therefore reports ``complete=False``, and
-        an incomplete child forces its parent incomplete rather than silently
-        vanishing from the mean.
-        """
+        """Reports whether mean is available."""
         return self.mean is not None
 
 
@@ -63,11 +46,6 @@ def _mean_of_observations(
     *,
     label: str | None = None,
 ) -> Aggregate:
-    """Aggregate raw observations at the repeat level.
-
-    Any non-``SCORED`` observation makes the result incomplete: ``mean`` is
-    ``None`` and the failed or missing counts record the shortfall.
-    """
     scores: list[int] = []
     failed_count = 0
     missing_count = 0
@@ -101,11 +79,9 @@ def _mean_of_children(
     *,
     label: str | None = None,
 ) -> Aggregate:
-    """Aggregate one level up from lower-level aggregates.
+    """Average equally only when all children are complete.
 
-    A child that is itself incomplete propagates incompleteness upward: the
-    parent's ``mean`` is ``None`` unless every child is complete. Failed and
-    missing counts are summed so the root aggregate still names the shortfall.
+    Always sum counts.
     """
     usable = sum(child.usable for child in children)
     failed_count = sum(child.failed_count for child in children)
@@ -124,7 +100,7 @@ def _mean_of_children(
 
 
 def aggregate_task(observations: Iterable[Observation]) -> Aggregate:
-    """Mean unique repeats within one task."""
+    """Aggregate unique repeat IDs for one task."""
     materialized = list(observations)
     task_ids = {observation.task_id for observation in materialized}
     if len(task_ids) > 1:
@@ -144,19 +120,17 @@ def aggregate_task(observations: Iterable[Observation]) -> Aggregate:
 
 
 def aggregate_stratum(task_aggregates: list[Aggregate]) -> Aggregate:
-    """Mean the per-task aggregates within one stratum."""
     return _mean_of_children(task_aggregates)
 
 
 def aggregate_overall(stratum_aggregates: list[Aggregate]) -> Aggregate:
-    """Mean the per-stratum aggregates across all strata."""
     return _mean_of_children(stratum_aggregates)
 
 
 def _validate_task_strata(
     task_strata: Mapping[str, tuple[str, ...]],
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """Materialize canonical task-to-strata assignments."""
+    """Validate and materialize task-to-strata assignments."""
     planned_tasks = tuple(task_strata.items())
     for task_id, strata in planned_tasks:
         if not isinstance(strata, tuple):
@@ -192,22 +166,11 @@ def aggregate(
     *,
     expected_repeat_ids: Iterable[int],
 ) -> Aggregate:
-    """Run the complete repeat-to-task-to-stratum-to-overall reduction.
+    """Aggregate the complete planned task/repeat matrix.
 
-    Every key in ``task_strata`` and every unique ID in
-    ``expected_repeat_ids`` defines one planned task/repeat cell. Each task
-    maps to a non-empty, ordered tuple of unique, nonblank stratum labels and
-    contributes its complete repeat aggregate once to every named stratum.
-    Absent cells are materialized as ``MISSING`` observations before repeats
-    collapse into tasks, tasks into strata, and strata into the overall
-    aggregate. The returned root :class:`Aggregate` exposes labeled stratum
-    children, each of which exposes labeled task children, so the whole
-    reduction is inspectable.
-
-    Every observed task must have an entry in ``task_strata``. Duplicate
-    expected repeat IDs, unexpected observed repeats, and duplicate observed
-    task/repeat cells raise rather than changing or silently shrinking the
-    planned reduction.
+    Missing cells become ``MISSING``. Repeats within tasks, tasks within
+    strata, and strata into the root are equally weighted. Unknown task or
+    repeat IDs and duplicate expected or observed cells raise.
     """
     expected_repeats = tuple(expected_repeat_ids)
     expected_repeat_set: set[int] = set()

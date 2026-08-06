@@ -1,5 +1,3 @@
-"""Tests for binary exact-match scoring."""
-
 import pytest
 
 from whetstone_envs.scoring import exact_match

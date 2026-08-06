@@ -1,5 +1,3 @@
-"""Tests for probe-prompt pairing and rendering."""
-
 import pytest
 
 from whetstone_envs.instances import Instance, make_instance

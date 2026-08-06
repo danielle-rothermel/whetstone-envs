@@ -1,5 +1,3 @@
-"""Tests for repeat-level scoring observations."""
-
 from typing import cast
 
 import pytest

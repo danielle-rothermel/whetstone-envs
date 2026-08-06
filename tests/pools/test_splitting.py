@@ -1,5 +1,3 @@
-"""Tests for deterministic, disjoint task-pool splitting."""
-
 from __future__ import annotations
 
 from collections import Counter

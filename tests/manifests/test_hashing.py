@@ -1,5 +1,3 @@
-"""Tests for canonical task-pool content hashing."""
-
 from whetstone_envs.instances import make_instance
 from whetstone_envs.manifests import content_hash
 from whetstone_envs.pools import TaskPool

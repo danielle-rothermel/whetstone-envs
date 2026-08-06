@@ -1,5 +1,3 @@
-"""Manifest schema constants and field validation."""
-
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -19,7 +17,7 @@ _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def _require_integer(value: object, *, field_name: str) -> int:
-    """Return an integer field without coercing JSON scalar values."""
+    """Require an integer, explicitly excluding booleans."""
     if isinstance(value, bool) or not isinstance(value, int):
         msg = f"manifest {field_name} must be an integer"
         raise TypeError(msg)
@@ -27,7 +25,6 @@ def _require_integer(value: object, *, field_name: str) -> int:
 
 
 def validate_schema_version(value: object) -> int:
-    """Validate the closed manifest schema version."""
     schema_version = _require_integer(
         value,
         field_name="schema_version",
@@ -42,7 +39,6 @@ def validate_schema_version(value: object) -> int:
 
 
 def validate_generator_version(value: object) -> str:
-    """Validate a nonempty generator version string."""
     if not isinstance(value, str):
         msg = "manifest generator_version must be a string"
         raise TypeError(msg)
@@ -53,7 +49,6 @@ def validate_generator_version(value: object) -> str:
 
 
 def validate_seed_range(value: object) -> tuple[int, int]:
-    """Validate an ordered two-integer seed range."""
     if not isinstance(value, tuple) or len(value) != _SEED_RANGE_LEN:
         msg = "manifest seed_range must be a two-element tuple"
         raise TypeError(msg)
@@ -68,7 +63,7 @@ def validate_seed_range(value: object) -> tuple[int, int]:
 def validate_stratum_counts(
     value: object,
 ) -> MappingProxyType[str, int]:
-    """Validate and freeze manifest stratum counts."""
+    """Validate positive counts and return a detached, read-only mapping."""
     if not isinstance(value, Mapping):
         msg = "manifest stratum_counts must be an object"
         raise TypeError(msg)
@@ -99,7 +94,6 @@ def validate_stratum_counts(
 
 
 def validate_content_hash(value: object) -> str:
-    """Validate a canonical lowercase SHA-256 digest."""
     if not isinstance(value, str):
         msg = "manifest content_hash must be a string"
         raise TypeError(msg)

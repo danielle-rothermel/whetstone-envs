@@ -1,5 +1,3 @@
-"""Tests for the diffable pool manifest."""
-
 from __future__ import annotations
 
 import json
@@ -31,7 +29,7 @@ def _build_pool(factory: Callable[..., Instance]) -> TaskPool:
 
 @pytest.fixture
 def valid_manifest_payload() -> dict[str, object]:
-    """Return one known-valid payload for single-field mutation tests."""
+    """A valid manifest payload for mutation tests."""
     return {
         "schema_version": 1,
         "generator_version": "generator@1.0",
@@ -110,7 +108,6 @@ def test_matches_regenerated_pool(
         generator_version="g",
         seed_range=(1000, 1004),
     )
-    # A deterministic regeneration still matches the frozen manifest.
     assert frozen.matches_pool(_build_pool(synthetic_instance)) is True
 
 

@@ -1,5 +1,3 @@
-"""Tests for the frozen :class:`Instance` type."""
-
 from __future__ import annotations
 
 import dataclasses
@@ -45,7 +43,6 @@ def test_instance_is_frozen() -> None:
 def test_prompt_inputs_are_read_only_and_detached() -> None:
     source = {"a": "1"}
     inst = make_instance(id="t1", seed=1, strata="s", prompt_inputs=source)
-    # Mutating the caller's dict must not change the frozen instance.
     source["a"] = "mutated"
     assert inst.prompt_inputs["a"] == "1"
     with pytest.raises(TypeError):

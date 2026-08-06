@@ -1,11 +1,3 @@
-"""Validated, serialized manifest model for one generated task pool.
-
-Every task generator writes a :class:`Manifest` alongside its pool. The
-manifest pins the generator version and seed range, then records per-stratum
-counts and a content hash so regenerated content can be compared with a frozen
-pool.
-"""
-
 from __future__ import annotations
 
 import json
@@ -35,33 +27,17 @@ def _retained_seeds_within_range(
     pool: TaskPool,
     seed_range: tuple[int, int],
 ) -> bool:
-    """Return whether every retained instance seed is in ``seed_range``."""
     start, end = seed_range
     return all(start <= instance.seed < end for instance in pool.instances)
 
 
 @dataclass(frozen=True, slots=True)
 class Manifest:
-    """A pinned, diffable description of one generated pool.
+    """A validated, read-only description of a generated pool.
 
-    Parameters
-    ----------
-    generator_version:
-        The task generator's version or commit identity. Bumping this is the
-        license to change generated content.
-    seed_range:
-        The ``(start, end)`` half-open range containing every retained
-        instance seed. It describes retained pool content, not generator
-        attempts that produced no retained instance.
-    stratum_counts:
-        Declared per-stratum instance counts, matched against a pool's own
-        :meth:`~whetstone_envs.pools.TaskPool.stratum_counts`. Copied into a
-        read-only mapping at construction.
-    content_hash:
-        SHA-256 of the pool's instances (see
-        :func:`whetstone_envs.manifests.content_hash`).
-    schema_version:
-        Current manifest format identifier. Other versions are rejected.
+    ``seed_range`` covers retained instances only, and ``stratum_counts`` is
+    detached and frozen. Matching retained seeds, counts, and the content hash
+    to a pool is explicit via :meth:`matches_pool`.
     """
 
     generator_version: str
@@ -71,7 +47,6 @@ class Manifest:
     schema_version: int = MANIFEST_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        """Validate and canonicalize every construction path."""
         object.__setattr__(
             self,
             "schema_version",
@@ -108,10 +83,8 @@ class Manifest:
     ) -> Manifest:
         """Derive a manifest from a pool and its generation inputs.
 
-        Per-stratum counts and the content hash are read from the pool, and
-        every retained instance seed must lie in the declared half-open range.
-        The manifest does not reconstruct or attest to generator attempts that
-        produced no retained instance.
+        Retained seeds must lie in the declared half-open range. The manifest
+        says nothing about generator attempts producing no retained instance.
         """
         validated_seed_range = validate_seed_range(seed_range)
         if not _retained_seeds_within_range(pool, validated_seed_range):
@@ -129,7 +102,6 @@ class Manifest:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return the JSON-ready mapping form of the manifest."""
         return {
             "schema_version": self.schema_version,
             "generator_version": self.generator_version,
@@ -140,7 +112,7 @@ class Manifest:
 
     @classmethod
     def from_dict(cls, data: object) -> Manifest:
-        """Reconstruct a manifest from its :meth:`to_dict` form."""
+        """Parse and validate the closed persisted schema."""
         if not isinstance(data, dict):
             msg = "manifest must be a JSON object"
             raise TypeError(msg)
@@ -195,17 +167,10 @@ class Manifest:
 
     @classmethod
     def read(cls, path: Path) -> Manifest:
-        """Read a manifest previously written by :meth:`write`."""
         return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def matches_pool(self, pool: TaskPool) -> bool:
-        """Return whether ``pool`` matches this manifest.
-
-        This is the regeneration diff check: build a fresh pool, then assert
-        the frozen manifest still describes it. An out-of-range retained seed,
-        a drift in any stratum count, or a content-hash change returns
-        ``False``.
-        """
+        """Check retained seeds, stratum counts, and content hash."""
         return (
             _retained_seeds_within_range(pool, self.seed_range)
             and self.stratum_counts == pool.stratum_counts()

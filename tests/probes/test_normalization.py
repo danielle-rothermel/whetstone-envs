@@ -1,5 +1,3 @@
-"""Tests for shared prediction normalization."""
-
 import pytest
 
 from whetstone_envs.probes import normalize
@@ -72,7 +70,6 @@ def test_normalize_accepts_exact_opening_with_language_tag() -> None:
 
 
 def test_normalize_preserves_internal_backticks() -> None:
-    # A lone backtick inside the answer must not be eaten.
     assert normalize("a `b` c") == "a `b` c"
 
 

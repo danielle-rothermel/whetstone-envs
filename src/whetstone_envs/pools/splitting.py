@@ -1,5 +1,3 @@
-"""Deterministic, destination-balanced task-pool splitting."""
-
 from __future__ import annotations
 
 from collections import deque
@@ -16,7 +14,7 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class _FlowEdge:
     destination: int
-    reverse: int
+    reverse_edge_index: int
     capacity: int
     cost: int
 
@@ -28,7 +26,6 @@ def _add_flow_edge(
     capacity: int,
     cost: int,
 ) -> _FlowEdge:
-    """Add a residual edge pair and return the forward edge."""
     forward = _FlowEdge(destination, len(graph[destination]), capacity, cost)
     reverse = _FlowEdge(source, len(graph[source]), 0, -cost)
     graph[source].append(forward)
@@ -36,12 +33,11 @@ def _add_flow_edge(
     return forward
 
 
-def _flow_step(
-    previous: list[tuple[int, int] | None],
+def _require_predecessor_step(
+    predecessors: list[tuple[int, int] | None],
     node: int,
 ) -> tuple[int, int]:
-    """Return one predecessor step from a complete residual path."""
-    step = previous[node]
+    step = predecessors[node]
     if step is None:
         msg = "destination quota path is incomplete"
         raise AssertionError(msg)
@@ -54,14 +50,13 @@ def _send_min_cost_flow(
     sink: int,
     required_flow: int,
 ) -> None:
-    """Send exact flow using successive shortest residual paths."""
     node_count = len(graph)
     potentials = [0] * node_count
     sent = 0
 
     while sent < required_flow:
         distances: list[int | None] = [None] * node_count
-        previous: list[tuple[int, int] | None] = [None] * node_count
+        predecessors: list[tuple[int, int] | None] = [None] * node_count
         distances[source] = 0
         queue = [(0, source)]
 
@@ -82,7 +77,7 @@ def _send_min_cost_flow(
                 if known is not None and candidate >= known:
                     continue
                 distances[edge.destination] = candidate
-                previous[edge.destination] = (node, edge_index)
+                predecessors[edge.destination] = (node, edge_index)
                 heappush(queue, (candidate, edge.destination))
 
         if distances[sink] is None:
@@ -95,16 +90,20 @@ def _send_min_cost_flow(
         amount = required_flow - sent
         node = sink
         while node != source:
-            previous_node, edge_index = _flow_step(previous, node)
+            previous_node, edge_index = _require_predecessor_step(
+                predecessors, node
+            )
             amount = min(amount, graph[previous_node][edge_index].capacity)
             node = previous_node
 
         node = sink
         while node != source:
-            previous_node, edge_index = _flow_step(previous, node)
+            previous_node, edge_index = _require_predecessor_step(
+                predecessors, node
+            )
             edge = graph[previous_node][edge_index]
             edge.capacity -= amount
-            graph[node][edge.reverse].capacity += amount
+            graph[node][edge.reverse_edge_index].capacity += amount
             node = previous_node
         sent += amount
 
@@ -113,7 +112,7 @@ def _allocate_destination_quotas(
     selected_by_combination: dict[tuple[str, ...], int],
     destination_sizes: tuple[int, int, int],
 ) -> list[dict[tuple[str, ...], int]]:
-    """Globally optimize coverage, then squared quota spread."""
+    """Set global quotas maximizing coverage before squared-count balance."""
     combinations = tuple(selected_by_combination)
     combination_count = len(combinations)
     destination_count = len(destination_sizes)
@@ -124,9 +123,8 @@ def _allocate_destination_quotas(
     graph: list[list[_FlowEdge]] = [[] for _ in range(sink + 1)]
 
     total = sum(destination_sizes)
-    # With fixed total flow, non-first cell units equal total - coverage. The
-    # penalty exceeds the full possible range of the squared-count objective,
-    # so coverage is optimized first without needing a separate greedy pass.
+    # Non-first cell units equal total minus coverage. This penalty exceeds
+    # every possible squared-count difference, so coverage wins first.
     coverage_penalty = total * total + 1
     cell_edges: list[list[list[_FlowEdge]]] = [
         [[] for _ in destination_sizes] for _ in combinations
@@ -177,7 +175,6 @@ def _validate_split_sizes(
     *,
     pool_size: int,
 ) -> int:
-    """Validate destination capacities and return their total."""
     for name, size in zip(
         ("internal_eval_n", "official_n", "held_out_n"),
         destination_sizes,
@@ -201,11 +198,7 @@ def _validate_split_sizes(
 
 @dataclass(frozen=True, slots=True)
 class PoolSplit:
-    """Three disjoint instance subsets carved from a :class:`TaskPool`.
-
-    The constructor asserts the subsets share no instance ``id`` -- the
-    guarantee the optimizer relies on to keep held-out tasks unseen.
-    """
+    """Three subsets whose instance IDs must be pairwise disjoint."""
 
     internal_eval: tuple[Instance, ...]
     official: tuple[Instance, ...]
@@ -236,12 +229,6 @@ def split_pool(
     official_n: int,
     held_out_n: int,
 ) -> PoolSplit:
-    """Carve ``pool`` into three disjoint stratified subsets.
-
-    This function implements the algorithm documented by
-    :meth:`whetstone_envs.pools.TaskPool.split`; callers normally use that
-    method rather than invoking this internal implementation directly.
-    """
     destination_sizes = (
         internal_eval_n,
         official_n,

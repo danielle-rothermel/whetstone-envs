@@ -1,10 +1,3 @@
-"""Validated task-pool membership and stratum indexes.
-
-A task generator returns one :class:`TaskPool`: the pinned list of instances
-plus derived per-stratum membership. :meth:`TaskPool.split` carves the pool
-into the internal-eval, official, and held-out subsets the optimizer consumes.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -19,15 +12,9 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class TaskPool:
-    """A pinned pool of instances with derived stratum membership.
+    """An ordered pool with unique instance IDs and prompt-input identities.
 
-    Parameters
-    ----------
-    instances:
-        The pinned instances, in generation order. Instance ``id`` must be
-        unique within the pool. The canonical public task identity, defined
-        solely by sorted ``prompt_inputs``, must also be unique. Either kind
-        of duplicate raises at construction.
+    Rendered-prompt uniqueness depends on each renderer and template.
     """
 
     instances: tuple[Instance, ...]
@@ -81,16 +68,10 @@ class TaskPool:
         return tuple(self._by_stratum)
 
     def stratum_counts(self) -> dict[str, int]:
-        """Map each stratum label to its instance count.
-
-        An instance in multiple strata counts once per label, so these counts
-        sum to at least ``len(self)`` and match the manifest's declared
-        per-stratum counts.
-        """
+        """Count multi-label instances once in each label."""
         return {key: len(value) for key, value in self._by_stratum.items()}
 
     def in_stratum(self, label: str) -> tuple[Instance, ...]:
-        """Return the instances carrying ``label`` or an empty tuple."""
         return self._by_stratum.get(label, ())
 
     def split(
@@ -99,20 +80,12 @@ class TaskPool:
         official_n: int,
         held_out_n: int,
     ) -> PoolSplit:
-        """Carve the pool into three disjoint stratified subsets.
+        """Split by complete strata tuples without oversubscription.
 
-        Instances are grouped by their complete ``strata`` tuple.
-        Round-robin selection first determines a balanced quota for each
-        combination. Those quotas are then distributed across the three
-        destinations by a global allocation that first maximizes distinct
-        combination coverage, then minimizes the sum of squared destination
-        counts. Equal objectives are resolved deterministically in first-seen
-        combination and destination order.
-
-        Sizes are supplied by the caller rather than hardcoded here. Their
-        sum must not exceed the pool size. Selected instances retain pool
-        order within each destination, unused per-combination tails remain
-        unassigned, and the result asserts the subsets are disjoint.
+        First-seen combinations are selected round-robin in pool order. Global
+        destination allocation maximizes combination coverage, then minimizes
+        squared counts. Selected instances retain pool order, and an unused
+        pool tail may remain unassigned.
         """
         return split_pool(
             self,
@@ -122,5 +95,4 @@ class TaskPool:
         )
 
     def as_sequence(self) -> Sequence[Instance]:
-        """Return the instances as a read-only sequence."""
         return self.instances

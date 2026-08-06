@@ -1,12 +1,3 @@
-"""The frozen :class:`Instance` type shared by every task environment.
-
-Every task generator produces a ``list[Instance]``: a minimal, immutable
-record carrying a stable task identity (``id`` / ``seed``), one or more
-stratum labels, the rendered prompt inputs a probe template consumes, and the
-gold/oracle-checkable state used for exact-match scoring. It has no model-call
-dependency and no task-family-specific logic.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -17,12 +8,7 @@ from types import MappingProxyType
 def _freeze_inputs(
     inputs: Mapping[str, str],
 ) -> MappingProxyType[str, str]:
-    """Validate and return a detached, read-only copy of ``inputs``.
-
-    Copying into a fresh ``dict`` first detaches the view from the caller's
-    mutable mapping, so a frozen instance cannot be mutated through the
-    reference the caller still holds.
-    """
+    """Validate, detach, and expose inputs as read-only."""
     detached = dict(inputs)
     for key, value in detached.items():
         if not isinstance(key, str) or not isinstance(value, str):
@@ -33,27 +19,10 @@ def _freeze_inputs(
 
 @dataclass(frozen=True, slots=True)
 class Instance:
-    """One pinned, oracle-checkable task instance.
+    """An immutable task instance.
 
-    Parameters
-    ----------
-    id:
-        Stable task identity, unique within a pool. Used as the task key when
-        aggregating scores.
-    seed:
-        The generator seed that produced this instance. Recorded for
-        determinism and contamination auditing; distinct from ``id`` so a
-        generator may derive several instances from one seed if a task family
-        ever needs to.
-    strata:
-        One or more stratum labels this instance belongs to. Kept as an
-        ordered, deduplicated tuple so membership is hashable and stable.
-    prompt_inputs:
-        The rendered fields a probe template consumes. Read-only; never
-        includes gold/oracle-only state.
-    gold:
-        The exact string the oracle expects an extracted prediction to equal
-        for a score of 1.
+    ``strata`` is deduplicated in first-seen order. ``prompt_inputs`` is
+    detached from caller-owned mappings and exposed read-only.
     """
 
     id: str
@@ -101,9 +70,7 @@ class Instance:
         )
 
     def __hash__(self) -> int:
-        # The dataclass-generated __hash__ would try to hash the unhashable
-        # MappingProxyType; hash its sorted items instead so value-equal
-        # instances still hash equal.
+        # MappingProxyType is unhashable, so hash a sorted item tuple instead.
         return hash(
             (
                 self.id,
@@ -123,12 +90,7 @@ def make_instance(
     prompt_inputs: Mapping[str, str] | None = None,
     gold: str = "",
 ) -> Instance:
-    """Construct an :class:`Instance`, normalizing convenience inputs.
-
-    A single stratum may be passed as a bare string; ``prompt_inputs``
-    defaults to an empty read-only mapping. Task generators should use this
-    constructor so the freezing convention stays in one place.
-    """
+    """Accept one stratum string and omitted prompt inputs as conveniences."""
     if isinstance(strata, str):
         labels = (strata,)
     elif isinstance(strata, tuple):

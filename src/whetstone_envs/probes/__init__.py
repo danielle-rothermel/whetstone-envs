@@ -1,5 +1,3 @@
-"""Probe rendering and prediction normalization."""
-
 from whetstone_envs.probes.normalization import normalize
 from whetstone_envs.probes.rendering import (
     ProbePair,

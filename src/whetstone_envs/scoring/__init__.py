@@ -1,5 +1,3 @@
-"""Exact-match scoring, observations, and aggregate reductions."""
-
 from whetstone_envs.scoring.aggregation import (
     Aggregate,
     aggregate,

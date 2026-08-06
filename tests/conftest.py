@@ -1,10 +1,3 @@
-"""Synthetic fixtures shared by the core-harness tests.
-
-None of these carry real task logic: they are hand-built instances and
-pools whose gold labels and stratum membership are stated directly, so
-the harness primitives can be exercised in isolation.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -26,7 +19,6 @@ def _synthetic_instance(
     *,
     gold: str = "yes",
 ) -> Instance:
-    """Build a deterministic synthetic instance for tests."""
     stratum_label = stratum if isinstance(stratum, str) else "/".join(stratum)
     return make_instance(
         id=f"{stratum_label}-{index}",
@@ -39,7 +31,6 @@ def _synthetic_instance(
 
 @pytest.fixture
 def synthetic_instance() -> Callable[..., Instance]:
-    """Return the synthetic-instance factory as a fixture."""
     return _synthetic_instance
 
 

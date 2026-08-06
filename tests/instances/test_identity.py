@@ -1,5 +1,3 @@
-"""Tests for public task-instance identity."""
-
 from whetstone_envs.instances import make_instance, public_prompt_identity
 
 

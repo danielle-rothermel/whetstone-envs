@@ -1,0 +1,108 @@
+#:schema ./terms.schema.json
+
+# Shared vocabulary for whetstone-envs. Definitions remain conceptual; public
+# implementation mappings belong only in exported_symbols.
+
+[[terms]]
+name = "task instance"
+definition = """
+A single generated evaluation task carrying a stable identifier, generation \
+seed, one or more task strata, public prompt inputs, and private gold data."""
+exported_symbols = [
+    "whetstone_envs.instances.Instance",
+    "whetstone_envs.instances.make_instance",
+]
+
+[[terms]]
+name = "task stratum"
+definition = """
+A nonblank label grouping task instances for split allocation and score \
+reporting. One task instance may belong to several task strata."""
+
+[[terms]]
+name = "public prompt identity"
+definition = """
+The canonical identity of the information exposed by the default prompt \
+boundary: the sorted key-value pairs in a task instance's prompt inputs. It \
+excludes identifier, seed, task strata, and gold, and it is not rendered-prompt \
+identity."""
+exported_symbols = ["whetstone_envs.instances.public_prompt_identity"]
+
+[[terms]]
+name = "task pool"
+definition = """
+An ordered collection of task instances with unique identifiers and unique \
+public prompt identities, used as the source for evaluation splits."""
+exported_symbols = ["whetstone_envs.pools.TaskPool"]
+
+[[terms]]
+name = "pool split"
+definition = """
+The internal-evaluation, official, and held-out subsets selected from a task \
+pool. Task-instance identifiers are disjoint across the three destinations."""
+exported_symbols = ["whetstone_envs.pools.PoolSplit"]
+
+[[terms]]
+name = "probe pair"
+definition = """
+A naive floor template and a known-good ceiling template applied to the same \
+task instance through one renderer."""
+exported_symbols = [
+    "whetstone_envs.probes.ProbePair",
+    "whetstone_envs.probes.render_with_prompt_inputs",
+]
+
+[[terms]]
+name = "prediction normalization"
+definition = """
+The idempotent removal of surrounding whitespace and complete outer \
+triple-backtick fences from evaluation text before exact-match comparison. \
+Unmatched fences and internal backticks remain part of the text."""
+exported_symbols = ["whetstone_envs.probes.normalize"]
+
+[[terms]]
+name = "evaluation observation"
+definition = """
+One task-repeat result classified as scored, failed, or missing. A scored \
+observation carries a binary score; failed and missing observations carry no \
+score."""
+exported_symbols = [
+    "whetstone_envs.scoring.Observation",
+    "whetstone_envs.scoring.Outcome",
+    "whetstone_envs.scoring.scored",
+    "whetstone_envs.scoring.failed",
+    "whetstone_envs.scoring.missing",
+]
+
+[[terms]]
+name = "score aggregate"
+definition = """
+A task, task-stratum, or overall result containing an equal-weighted mean when \
+complete, contribution counts, and any child aggregates."""
+exported_symbols = [
+    "whetstone_envs.scoring.Aggregate",
+    "whetstone_envs.scoring.aggregate",
+    "whetstone_envs.scoring.aggregate_task",
+    "whetstone_envs.scoring.aggregate_stratum",
+    "whetstone_envs.scoring.aggregate_overall",
+]
+
+[[terms]]
+name = "exact-match score"
+definition = """
+A binary score that is one only when a prediction and the private gold value \
+are exactly equal after prediction normalization is applied independently to \
+both, and zero otherwise."""
+exported_symbols = ["whetstone_envs.scoring.exact_match"]
+
+[[terms]]
+name = "pool manifest"
+definition = """
+A persisted description of a generated task pool recording its generator \
+version, retained seed range, per-stratum counts, canonical content hash, and \
+schema version for reproducibility and drift detection."""
+exported_symbols = [
+    "whetstone_envs.manifests.Manifest",
+    "whetstone_envs.manifests.content_hash",
+    "whetstone_envs.manifests.MANIFEST_SCHEMA_VERSION",
+]

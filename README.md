@@ -20,26 +20,20 @@ probe rendering, score aggregation, and pinned manifests.**
 The harness is independent of any particular task family and has no dependency
 on whetstone's optimizer or execution contracts.
 
-## Behavioral boundaries
+## Terms and contracts
 
-- Public prompt identity is the canonical identity of sorted `prompt_inputs`;
-  private fields do not participate, and rendered-prompt uniqueness is owned
-  by each renderer/template.
-- The default probe renderer formats only against `prompt_inputs`. Custom
-  renderers receive the full `Instance`, so their callers own that access
-  boundary.
-- Aggregation covers the complete planned task/repeat matrix. A failed or
-  missing observation, or any incomplete child aggregate, yields no mean.
-- Pool splitting is deterministic, disjoint, and stratified by each
-  instance's complete strata tuple. Every destination preserves the original
-  pool order.
-- Manifests strictly validate their persisted schema. Pool matching explicitly
-  checks retained seeds, stratum counts, and the canonical content hash.
+The [published terms and contracts](https://danielle-rothermel.github.io/whetstone-envs/)
+render the authoritative
+[vocabulary](https://github.com/danielle-rothermel/whetstone-envs/blob/main/.defs/terms.toml)
+and
+[binding contracts](https://github.com/danielle-rothermel/whetstone-envs/blob/main/.defs/contracts.toml)
+directly from their TOML sources. The
+[changelog](https://github.com/danielle-rothermel/whetstone-envs/blob/main/CHANGELOG.md)
+records notable changes.
 
 ## Consumer entry points
 
-Import public contracts from their owning subpackages. The root
-`whetstone_envs` package intentionally exports no API.
+The public imports are organized by owning subpackage:
 
 ```python
 from whetstone_envs.instances import Instance, public_prompt_identity
@@ -51,10 +45,16 @@ from whetstone_envs.scoring import Aggregate, Observation, aggregate
 
 ## Development
 
-```sh
-uv sync
-uv run ruff format --check .
-uv run ruff check .
-uv run ty check
-uv run pytest
+Install the locked development environment and commit hook once per clone:
+
+```bash
+uv sync --locked
+uv run pre-commit install
+```
+
+The hook runs the same formatting, lint, type, definitions, test, and package
+build gate used by CI. Run it directly at any time:
+
+```bash
+scripts/pre-check.sh
 ```

@@ -1,6 +1,6 @@
 [project]
 name = "whetstone-envs"
-version = "0.1.0"
+version = "0.1.1"
 description = "Task-family-agnostic harness for reproducible quick-test environments."
 readme = "README.md"
 license = "MIT"
@@ -15,6 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 dependencies = []
@@ -22,9 +23,11 @@ dependencies = []
 [project.urls]
 Repository = "https://github.com/danielle-rothermel/whetstone-envs"
 Issues = "https://github.com/danielle-rothermel/whetstone-envs/issues"
+Documentation = "https://danielle-rothermel.github.io/whetstone-envs/"
+Changelog = "https://github.com/danielle-rothermel/whetstone-envs/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
@@ -34,6 +37,9 @@ dev = [
     "ruff>=0.15.18",
     "ty>=0.0.51",
 ]
+
+[tool.uv]
+required-version = "==0.11.25"
 
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]

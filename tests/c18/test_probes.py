@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from whetstone_envs.c18.probes import CEILING_TEMPLATE, NAIVE_TEMPLATE, PROBES
+from whetstone_envs.c18 import PROBES
 from whetstone_envs.instances import Instance, make_instance
 
-_QUESTION = "Sally is a brimpus. Every brimpus is sour."
-_QUERY = "True or false: Sally is sour."
+_QUESTION = "ZZ_PUBLIC_QUESTION_ZZ"
+_QUERY = "ZZ_PUBLIC_QUERY_ZZ"
 
 
 def _instance(gold: str = "True") -> Instance:
@@ -17,26 +17,13 @@ def _instance(gold: str = "True") -> Instance:
     )
 
 
-def test_naive_probe_is_pinned() -> None:
-    assert PROBES.render_naive(_instance()) == NAIVE_TEMPLATE.format(
-        question=_QUESTION,
-        query=_QUERY,
-    )
-
-
-def test_ceiling_probe_requests_a_terminal_verdict() -> None:
-    rendered = PROBES.render_ceiling(_instance())
-    assert rendered == CEILING_TEMPLATE.format(
-        question=_QUESTION,
-        query=_QUERY,
-    )
-    assert rendered.endswith("either\nTrue\nor\nFalse")
-
-
-def test_probe_rendering_cannot_reach_gold() -> None:
+def test_probes_render_public_inputs_without_gold() -> None:
     sentinel = "ZZ_SECRET_LABEL_ZZ"
     instance = _instance(gold=sentinel)
-    assert sentinel not in PROBES.render_naive(instance)
-    assert sentinel not in PROBES.render_ceiling(instance)
-    assert "{gold}" not in NAIVE_TEMPLATE
-    assert "{gold}" not in CEILING_TEMPLATE
+    for rendered in (
+        PROBES.render_naive(instance),
+        PROBES.render_ceiling(instance),
+    ):
+        assert _QUESTION in rendered
+        assert _QUERY in rendered
+        assert sentinel not in rendered

@@ -1,5 +1,3 @@
-"""PrOntoQA deductive-entailment task environments."""
-
 from whetstone_envs.c18.config import (
     DEFAULT_CONFIG,
     HARD_CONFIG,

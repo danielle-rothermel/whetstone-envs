@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import UNIQUE, StrEnum, verify
 
 RESERVED_SEED_MAX = 100_000_000
+PRONTOQA_SEED_MAX = (1 << 32) - 1
 
 
 @verify(UNIQUE)
@@ -116,6 +117,13 @@ class GenerationConfig:
         depths = tuple(stratum.hops for stratum in self.strata)
         if len(depths) != len(set(depths)):
             msg = f"C18 requires distinct depth strata, got {depths!r}"
+            raise ValueError(msg)
+        final_seed = self.seed_start + len(self.strata) - 1
+        if final_seed > PRONTOQA_SEED_MAX:
+            msg = (
+                f"C18 allocated seeds must not exceed {PRONTOQA_SEED_MAX}, "
+                f"got final seed {final_seed}"
+            )
             raise ValueError(msg)
         if not isinstance(self.split, SplitPlan):
             msg = "C18 split must be a SplitPlan"

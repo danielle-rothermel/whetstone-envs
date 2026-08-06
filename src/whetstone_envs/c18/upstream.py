@@ -6,18 +6,19 @@ import subprocess
 import sys
 import tempfile
 import threading
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from dr_serialize import (
     CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     StrictJsonDecodeError,
     decode_strict_json_bytes,
 )
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from whetstone_envs.c18.config import DistractorMode
+from whetstone_envs.c18.config import PRONTOQA_SEED_MAX, DistractorMode
 
 _VENDOR_DIR = Path(__file__).parent / "_vendor" / "prontoqa"
 _VENDOR_FILES = (
@@ -32,6 +33,11 @@ _VENDOR_FILES = (
 _FIXED_ONTOLOGY = "fictional"
 _MAX_DIAGNOSTIC_BYTES = 1 << 20
 _MAX_OUTPUT_BYTES = 16 << 20
+_ISOLATED_RUNNER = (
+    "import runpy, sys; "
+    "sys.path.insert(0, '.'); "
+    "runpy.run_path('run_experiment.py', run_name='__main__')"
+)
 
 
 class UpstreamError(RuntimeError):
@@ -41,9 +47,9 @@ class UpstreamError(RuntimeError):
 class _TestExample(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
-    question: str
-    query: str
-    answer: str
+    question: str = Field(min_length=1)
+    query: str = Field(min_length=1)
+    answer: Literal["True", "False"]
 
 
 class _ExampleBlock(BaseModel):
@@ -59,7 +65,6 @@ class RawInstance:
     question: str
     query: str
     answer: str
-    hops: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +92,12 @@ def _validate_generation_request(request: _GenerationRequest) -> None:
         msg = (
             "C18 upstream num_trials must be positive, "
             f"got {request.num_trials}"
+        )
+        raise ValueError(msg)
+    if not 0 <= request.seed <= PRONTOQA_SEED_MAX:
+        msg = (
+            f"C18 upstream seed must be between 0 and {PRONTOQA_SEED_MAX}, "
+            f"got {request.seed}"
         )
         raise ValueError(msg)
     if not isinstance(request.distractors, DistractorMode):
@@ -126,7 +137,9 @@ def _run_generator(
 ) -> Path:
     command = (
         sys.executable,
-        "run_experiment.py",
+        "-I",
+        "-c",
+        _ISOLATED_RUNNER,
         "--model-name",
         "json",
         "--model-size",
@@ -180,17 +193,20 @@ def _run_generator(
     )
     diagnostic_thread.start()
     try:
-        returncode = process.wait(timeout=request.timeout_s)
-    except subprocess.TimeoutExpired as error:
-        process.kill()
+        try:
+            returncode = process.wait(timeout=request.timeout_s)
+        except subprocess.TimeoutExpired as error:
+            msg = (
+                f"C18 vendored generator timed out after {request.timeout_s}s "
+                f"D{request.hops} seed {request.seed}"
+            )
+            raise UpstreamError(msg) from error
+    finally:
+        if process.poll() is None:
+            with suppress(ProcessLookupError):
+                process.kill()
         process.wait()
         diagnostic_thread.join()
-        msg = (
-            f"C18 vendored generator timed out after {request.timeout_s}s "
-            f"D{request.hops} seed {request.seed}"
-        )
-        raise UpstreamError(msg) from error
-    diagnostic_thread.join()
 
     if diagnostic_exceeded.is_set():
         msg = (
@@ -244,7 +260,7 @@ def _example_index(key: str) -> int:
     return int(key[len(prefix) :])
 
 
-def _parse_examples(payload: object, *, hops: int) -> tuple[RawInstance, ...]:
+def _parse_examples(payload: object) -> tuple[RawInstance, ...]:
     if not isinstance(payload, dict):
         msg = "C18 upstream output must be a JSON object"
         raise UpstreamError(msg)
@@ -269,7 +285,6 @@ def _parse_examples(payload: object, *, hops: int) -> tuple[RawInstance, ...]:
                 question=example.question,
                 query=example.query,
                 answer=example.answer,
-                hops=hops,
             )
         )
     if not rows:
@@ -303,7 +318,7 @@ def generate_raw(
             request=request,
         )
         payload = _read_output(output)
-        return _parse_examples(payload, hops=hops)
+        return _parse_examples(payload)
 
 
 __all__ = ["RawInstance", "UpstreamError", "generate_raw"]

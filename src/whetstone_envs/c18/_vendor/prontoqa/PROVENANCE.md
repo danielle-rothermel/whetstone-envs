@@ -4,7 +4,7 @@
 - **Vendored commit:** `0a6412b6fddf46324a1cb96e066dd7b3d89b87d6`
   ("Simplified the bibtex for the NeurIPS paper.")
 - **License:** Apache-2.0 (see `LICENSE` in this directory).
-- **Vendored on:** 2026-07-22, for whetstone-envs candidate **c18**
+- **Vendored on:** 2026-07-22, for the whetstone-envs **C18 task family**
   (PrOntoQA deductive entailment).
 
 ## Why vendored
@@ -36,13 +36,7 @@ never reached in `--model-name json` mode): `analyze_results.py`,
 `make_plots.py`, `gpt3.py`, `opt.py`, `unifiedqa.py`, the bundled
 `*.zip` result archives, and the upstream `README.md`.
 
-Added by this vendor (not present upstream):
-
-- `PROVENANCE.md` -- this file.
-- `.gitignore` -- ignores the generator's json/log output files, which
-  are written to the process cwd. The boundary copies the required runtime
-  files into a throwaway temp directory, so output never lands here; the
-  ignore is defensive.
+`PROVENANCE.md` is the only added file in this directory.
 
 No line of upstream generator logic was edited. The two upstream
 integration gotchas (the relative `bad_patterns.txt` open and the

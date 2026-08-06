@@ -131,6 +131,27 @@ string, and finite binary64 number forms."""
 exported_symbols = ["whetstone_envs.c11.canonicalize"]
 
 [[terms]]
+name = "C18 task family"
+definition = """
+An evaluation task family for fictional-ontology deductive entailment across \
+multiple reasoning depths and distractor policies, with independently checked \
+labels, naive-and-known-good probes, standard cohort sizes, and reproducibility \
+manifests."""
+exported_symbols = [
+    "whetstone_envs.c18.DEFAULT_CONFIG",
+    "whetstone_envs.c18.HARD_CONFIG",
+    "whetstone_envs.c18.PROBES",
+    "whetstone_envs.c18.DepthStratum",
+    "whetstone_envs.c18.DistractorMode",
+    "whetstone_envs.c18.GenerationConfig",
+    "whetstone_envs.c18.SplitPlan",
+    "whetstone_envs.c18.build_manifest",
+    "whetstone_envs.c18.default_split_sizes",
+    "whetstone_envs.c18.generate_pool",
+    "whetstone_envs.c18.score_gold",
+]
+
+[[terms]]
 name = "C22 task family"
 definition = """
 An evaluation task family for satisfying composed deterministic instruction \

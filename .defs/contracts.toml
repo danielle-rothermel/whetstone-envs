@@ -132,9 +132,9 @@ statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
 whetstone_envs.scoring. Task-family contracts are imported from their owning \
-task-family subpackage, including whetstone_envs.c11, whetstone_envs.c22, and \
-whetstone_envs.c23; the root whetstone_envs \
-namespace exports no API."""
+task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
+whetstone_envs.c22, and whetstone_envs.c23; the root whetstone_envs namespace \
+exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""
@@ -196,3 +196,19 @@ Regenerated experiment cohorts must not depend on ambient application state \
 or randomized set iteration."""
 date = "2026-08-06"
 check = "uv run pytest -q --run-integration tests/c23/test_generation.py"
+
+[[contracts]]
+title = "C18 generation is pinned and independently checked"
+statement = """
+C18 generates only fictional-ontology PrOntoQA instances from its frozen \
+default or hard configuration. Each depth consumes one seed above the reserved \
+seed range, the vendored generator runs from copied runtime files in a \
+temporary directory, its JSON crosses a strict validated boundary, and an \
+independent forward-chaining oracle must derive the generated label from the \
+public question and query before the instance enters a task pool."""
+rationale = """
+Pinned generation inputs and manifests make pool identity reproducible, while \
+surface-text label derivation prevents the generator's own answer from being \
+the sole evidence for correctness."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c18"

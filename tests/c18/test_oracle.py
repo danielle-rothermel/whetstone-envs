@@ -1,13 +1,11 @@
-"""Forward-chaining oracle correctness on HAND-TRACED fixtures (checklist A).
+"""Forward-chaining oracle correctness on hand-traced fixtures.
 
 Every theory below is hand-constructed and hand-traced -- none is
 generator-produced -- so this file catches an oracle that is silently a
 re-derivation of generator internals rather than a true independent
-forward-chaining fixpoint over the public text (rubric criteria 2, 8;
-PLAN Verification checklist A, which for c18 requires "at least one
-hand-traced multi-hop chain per stratum depth").
+forward-chaining fixpoint over the public text.
 
-The four multi-hop chains mirror the spec Section 1 depth strata D1, D2,
+The four multi-hop chains cover the default depth strata D1, D2,
 D3, D5. Each chain is worked out step by step in the comment beside it,
 and each is exercised in both polarities (a derivable query -> True, and
 the opposite/undrivable query -> False), so the fixtures pin both label
@@ -162,29 +160,18 @@ def test_score_exact_match_and_normalization() -> None:
     assert score("False", q, query) == 0
 
 
-# --- Verdict extraction (spec Section 3 decision rule) --------------------
-# A chain-of-thought ceiling reply ends with the verdict on its own final
-# line (spec Section 2.2); a naive reply may append a trailing rationale.
+# A reasoned ceiling reply ends with the verdict on its own final line; a
+# naive reply may append a trailing rationale.
 # Scoring the whole reply against the gold token scores every such reply 0.
-# These fixtures pin the prescribed extraction of the final True/False
-# verdict. The two multi-line replies below are the LIVE responses captured
-# in the pilot that exposed the bug (instance c18-D5-1000000003-0001 and a
-# naive rationale-trailing sibling), quoted verbatim.
-
-# Verbatim live ceiling (chain-of-thought) reply: ends "...not entailed."
-# then the verdict "False" on its own final line. Gold was False; the
-# whole-text match scored this 0 before the fix.
-_LIVE_CEILING_COT = (
+# These fixtures pin extraction of the final True/False verdict for each
+# response shape.
+_CEILING_REASONING = (
     "Wren is an impus. Impuses are vumpuses, so Wren is a vumpus. "
     "Vumpuses are gorpuses, so Wren is a gorpus. Following the rules step "
     "by step, no rule makes Wren amenable; the query property is not "
     "entailed.\n\nFalse"
 )
-# Verbatim live naive reply: the verdict leads, then a rationale clause is
-# appended (the shape that cost the naive probe 3 calls).
-_LIVE_NAIVE_TRAILING = (
-    "True, since Sally is a brimpus and every brimpus is sour."
-)
+_NAIVE_RATIONALE = "True, since Sally is a brimpus and every brimpus is sour."
 
 
 def test_extract_verdict_bare_tokens() -> None:
@@ -195,8 +182,8 @@ def test_extract_verdict_bare_tokens() -> None:
 
 
 def test_extract_verdict_cot_takes_final_line_token() -> None:
-    # Spec 2.2: the verdict is the last standalone token after reasoning.
-    assert extract_verdict(_LIVE_CEILING_COT) == "False"
+    # The ceiling protocol makes the verdict the final standalone token.
+    assert extract_verdict(_CEILING_REASONING) == "False"
 
 
 def test_extract_verdict_accepts_period_on_verdict_only_final_line() -> None:
@@ -210,7 +197,7 @@ def test_extract_verdict_accepts_period_on_verdict_only_final_line() -> None:
 def test_extract_verdict_naive_trailing_rationale() -> None:
     # A verdict followed by an appended rationale still resolves to the
     # verdict (the rationale here restates no verdict token).
-    assert extract_verdict(_LIVE_NAIVE_TRAILING) == "True"
+    assert extract_verdict(_NAIVE_RATIONALE) == "True"
     assert extract_verdict("False. It is not derivable from the rules.") == (
         "False"
     )
@@ -229,17 +216,14 @@ def test_extract_verdict_no_token_returned_unchanged() -> None:
     )
 
 
-def test_score_live_ceiling_cot_response_scores_correctly() -> None:
-    # The regression: the verbatim live D5 CoT reply, gold False, must now
-    # score 1 (it scored 0 before the extraction fix).
-    assert score_gold(_LIVE_CEILING_COT, "False") == 1
-    assert score_gold(_LIVE_CEILING_COT, "True") == 0
+def test_score_ceiling_reasoning_response_scores_correctly() -> None:
+    assert score_gold(_CEILING_REASONING, "False") == 1
+    assert score_gold(_CEILING_REASONING, "True") == 0
 
 
-def test_score_live_naive_trailing_rationale_scores_correctly() -> None:
-    # The naive verdict-with-trailing-rationale reply, gold True, scores 1.
-    assert score_gold(_LIVE_NAIVE_TRAILING, "True") == 1
-    assert score_gold(_LIVE_NAIVE_TRAILING, "False") == 0
+def test_score_naive_trailing_rationale_scores_correctly() -> None:
+    assert score_gold(_NAIVE_RATIONALE, "True") == 1
+    assert score_gold(_NAIVE_RATIONALE, "False") == 0
 
 
 def test_score_cot_response_via_reredive_path() -> None:
@@ -250,7 +234,7 @@ def test_score_cot_response_via_reredive_path() -> None:
         "Every shumpus is amenable. Each lorpus is not amenable."
     )
     query = "True or false: Wren is not amenable."  # gold False
-    assert score(_LIVE_CEILING_COT, q, query) == 1
+    assert score(_CEILING_REASONING, q, query) == 1
 
 
 def test_score_unparsable_input_is_zero_not_raise() -> None:

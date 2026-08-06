@@ -34,6 +34,12 @@ dependencies = [
     "rfc8785==0.1.4",
 ]
 
+[project.optional-dependencies]
+c18 = [
+    "numpy==2.5.1",
+    "scipy==1.18.0",
+]
+
 [project.urls]
 Repository = "https://github.com/danielle-rothermel/whetstone-envs"
 Issues = "https://github.com/danielle-rothermel/whetstone-envs/issues"
@@ -80,7 +86,10 @@ venv = ".venv"
 
 [tool.ruff]
 include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
-extend-exclude = ["src/whetstone_envs/c22/_vendor/**"]
+extend-exclude = [
+    "src/whetstone_envs/c18/_vendor/**",
+    "src/whetstone_envs/c22/_vendor/**",
+]
 line-length = 79
 
 [tool.ruff.lint]
@@ -128,6 +137,7 @@ select = [
 ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
+"src/whetstone_envs/c18/probes.py" = ["E501"]
 "tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
 
@@ -136,4 +146,7 @@ runtime-evaluated-decorators = ["dataclasses.dataclass"]
 
 [tool.ty.src]
 include = ["scripts", "src", "tests"]
-exclude = ["src/whetstone_envs/c22/_vendor/**"]
+exclude = [
+    "src/whetstone_envs/c18/_vendor/**",
+    "src/whetstone_envs/c22/_vendor/**",
+]

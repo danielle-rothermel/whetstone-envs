@@ -1,49 +1,20 @@
-r"""The subprocess/import boundary around the vendored PrOntoQA generator.
-
-The c18 baseline spec (fixed-constraints callout) reseeds instances
-directly from ``asaparov/prontoqa``'s ``run_experiment.py --model-name
-json`` -- never reusing a published instance. This module is the thin
-boundary that drives the *vendored* generator (see
-``_vendor/prontoqa/PROVENANCE.md``) as a subprocess and parses its JSON
-output into plain records, so nothing about the generator's internal
-proof object leaks into the rest of c18 (the oracle re-derives the label
-independently from the public text).
-
-Two upstream integration facts from the repos review drive the design:
-
-* ``run_experiment.py`` opens ``bad_patterns.txt`` with a **relative**
-  path at import time and writes its output file to the process **cwd**,
-  so the subprocess must run from a directory that holds both. We run in
-  a fresh temp dir populated with symlinks to the vendored source, so the
-  vendored tree stays read-only and concurrent generations never collide
-  on the output filename.
-* the output filename is derived only from the run config (e.g.
-  ``2hop_seed12345.json``); we reconstruct it from the same rules the
-  vendored ``__main__`` uses so we can read exactly the file it wrote.
-"""
-
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from json import JSONDecodeError
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from whetstone_envs.c18.config import DistractorMode
+
 _VENDOR_DIR = Path(__file__).parent / "_vendor" / "prontoqa"
-_RUN_EXPERIMENT = _VENDOR_DIR / "run_experiment.py"
-
-# The upstream default seed (``run_experiment.py`` argparse). The output
-# filename only carries a ``_seed<N>`` suffix when the seed differs from
-# this default, so we always pass a fresh non-default seed and rely on the
-# suffix being present.
-UPSTREAM_DEFAULT_SEED = 62471893
-
-# Files the vendored generator needs colocated in its working directory.
-# Every ``.py`` module (they import each other by bare name) plus the
-# relative ``bad_patterns.txt`` the module opens at import time.
-_VENDOR_FILES: tuple[str, ...] = (
+_VENDOR_FILES = (
     "run_experiment.py",
     "theory.py",
     "syntax.py",
@@ -52,21 +23,30 @@ _VENDOR_FILES: tuple[str, ...] = (
     "fol.py",
     "bad_patterns.txt",
 )
+_FIXED_ONTOLOGY = "fictional"
 
 
 class UpstreamError(RuntimeError):
-    """Raised when the vendored generator fails or emits no output file."""
+    """The pinned PrOntoQA generator failed or violated its output contract."""
+
+
+class _TestExample(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    question: str
+    query: str
+    answer: str
+
+
+class _ExampleBlock(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    test_example: _TestExample
 
 
 @dataclass(frozen=True, slots=True)
 class RawInstance:
-    """One parsed ``test_example`` from the generator's JSON output.
-
-    Only the four public fields the c18 task uses are retained; the
-    in-context demo examples and the optional ``chain_of_thought`` gold
-    trace are dropped (the spec keeps the label only, and the oracle
-    re-derives it from ``question`` + ``query`` alone).
-    """
+    """The C18 fields projected from one validated upstream example."""
 
     question: str
     query: str
@@ -74,39 +54,166 @@ class RawInstance:
     hops: int
 
 
-def _output_filename(
-    hops: int,
-    seed: int,
-    distractors: str = "relevant",
-    ontology: str = "fictional",
-) -> str:
-    """Reconstruct the vendored json output filename for this run config.
+@dataclass(frozen=True, slots=True)
+class _GenerationRequest:
+    hops: int
+    seed: int
+    num_trials: int
+    distractors: DistractorMode
+    timeout_s: float
 
-    Mirrors the ``log_suffix`` assembly in the vendored ``__main__`` for
-    the config this boundary uses: fictional ontology, ModusPonens, 8-shot,
-    COT, ``--test-distractors`` pinned equal to ``--distractors``. The
-    c18 pools pin ``fictional`` ontology, whose suffix is empty, while this
-    lower-level boundary also supports the upstream ``true`` and ``false``
-    ontologies and their corresponding filename suffixes. The vendored
-    suffix logic appends
-    ``_nodistractor`` for ``none`` / ``_irrelevantdistractor`` for
-    ``irrelevant`` while ``relevant`` (the upstream default) stays empty.
-    Both ``--distractors`` and ``--test-distractors`` are set equal here, so
-    the ``_testdistractor`` mismatch suffixes never appear. Kept in lockstep
-    with that code so we read exactly the file the generator wrote.
-    """
-    suffix = f"{hops}hop"
-    if ontology == "true":
-        suffix += "_trueontology"
-    elif ontology == "false":
-        suffix += "_falseontology"
-    if distractors == "none":
-        suffix += "_nodistractor"
-    elif distractors == "irrelevant":
-        suffix += "_irrelevantdistractor"
-    if seed != UPSTREAM_DEFAULT_SEED:
-        suffix += f"_seed{seed}"
-    return suffix + ".json"
+
+def _validate_generation_request(request: _GenerationRequest) -> None:
+    for name, value in (
+        ("hops", request.hops),
+        ("seed", request.seed),
+        ("num_trials", request.num_trials),
+    ):
+        if type(value) is not int:
+            msg = f"C18 upstream {name} must be an int"
+            raise TypeError(msg)
+    if request.hops <= 0:
+        msg = f"C18 upstream hops must be positive, got {request.hops}"
+        raise ValueError(msg)
+    if request.num_trials <= 0:
+        msg = (
+            "C18 upstream num_trials must be positive, "
+            f"got {request.num_trials}"
+        )
+        raise ValueError(msg)
+    if not isinstance(request.distractors, DistractorMode):
+        msg = "C18 upstream distractors must be a DistractorMode"
+        raise TypeError(msg)
+    if isinstance(request.timeout_s, bool) or not isinstance(
+        request.timeout_s,
+        int | float,
+    ):
+        msg = "C18 upstream timeout_s must be a number"
+        raise TypeError(msg)
+    if request.timeout_s <= 0:
+        msg = (
+            f"C18 upstream timeout_s must be positive, got {request.timeout_s}"
+        )
+        raise ValueError(msg)
+
+
+def _copy_runtime_files(work: Path) -> None:
+    for name in _VENDOR_FILES:
+        source = _VENDOR_DIR / name
+        if not source.is_file():
+            msg = f"C18 vendored runtime file is missing: {name}"
+            raise UpstreamError(msg)
+        shutil.copy2(source, work / name)
+
+
+def _run_generator(
+    work: Path,
+    *,
+    request: _GenerationRequest,
+) -> Path:
+    command = (
+        sys.executable,
+        "run_experiment.py",
+        "--model-name",
+        "json",
+        "--model-size",
+        "1",
+        "--num-trials",
+        str(request.num_trials),
+        "--min-hops",
+        str(request.hops),
+        "--max-hops",
+        str(request.hops),
+        "--ontology",
+        _FIXED_ONTOLOGY,
+        "--distractors",
+        request.distractors.value,
+        "--test-distractors",
+        request.distractors.value,
+        "--seed",
+        str(request.seed),
+    )
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed executable and argv
+            command,
+            cwd=work,
+            capture_output=True,
+            text=True,
+            timeout=request.timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        msg = (
+            f"C18 vendored generator timed out after {request.timeout_s}s "
+            f"for D{request.hops} seed {request.seed}"
+        )
+        raise UpstreamError(msg) from error
+    except OSError as error:
+        msg = (
+            "C18 vendored generator could not start for "
+            f"D{request.hops} seed {request.seed}"
+        )
+        raise UpstreamError(msg) from error
+
+    if completed.returncode != 0:
+        stderr = completed.stderr[-500:]
+        msg = (
+            f"C18 vendored generator exited {completed.returncode} "
+            f"for D{request.hops} seed {request.seed}: {stderr}"
+        )
+        raise UpstreamError(msg)
+
+    outputs = tuple(work.glob("*.json"))
+    if len(outputs) != 1:
+        names = tuple(path.name for path in outputs)
+        msg = (
+            "C18 vendored generator must produce exactly one JSON file, "
+            f"got {names!r} for D{request.hops} seed {request.seed}"
+        )
+        raise UpstreamError(msg)
+    return outputs[0]
+
+
+def _example_index(key: str) -> int:
+    prefix = "example"
+    if not key.startswith(prefix) or not key[len(prefix) :].isdigit():
+        msg = f"C18 upstream output has invalid example key {key!r}"
+        raise UpstreamError(msg)
+    return int(key[len(prefix) :])
+
+
+def _parse_examples(payload: object, *, hops: int) -> tuple[RawInstance, ...]:
+    if not isinstance(payload, dict):
+        msg = "C18 upstream output must be a JSON object"
+        raise UpstreamError(msg)
+
+    examples: dict[str, object] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str):
+            msg = "C18 upstream output keys must be strings"
+            raise UpstreamError(msg)
+        examples[key] = value
+
+    rows: list[RawInstance] = []
+    for key in sorted(examples, key=_example_index):
+        try:
+            block = _ExampleBlock.model_validate(examples[key], strict=True)
+        except ValidationError as error:
+            msg = f"C18 upstream example {key!r} is malformed"
+            raise UpstreamError(msg) from error
+        example = block.test_example
+        rows.append(
+            RawInstance(
+                question=example.question,
+                query=example.query,
+                answer=example.answer,
+                hops=hops,
+            )
+        )
+    if not rows:
+        msg = "C18 upstream output contains no examples"
+        raise UpstreamError(msg)
+    return tuple(rows)
 
 
 def generate_raw(
@@ -114,139 +221,31 @@ def generate_raw(
     hops: int,
     seed: int,
     num_trials: int,
-    ontology: str = "fictional",
-    distractors: str = "relevant",
+    distractors: DistractorMode = DistractorMode.RELEVANT,
     timeout_s: float = 300.0,
-) -> list[RawInstance]:
-    """Run the vendored generator once and return its parsed instances.
-
-    Parameters
-    ----------
-    hops:
-        The hop-depth loop bound (``--min-hops`` == ``--max-hops`` ==
-        ``hops``); the vendored proof depth is ``1 + hops``.
-    seed:
-        A fresh non-default ``--seed`` (asserted fresh by the caller).
-    num_trials:
-        ``--num-trials``: how many test instances to emit at this depth.
-    ontology / distractors:
-        Held to the spec's fixed constraints by default (``fictional``
-        nonce ontology; ``relevant`` distractors -- Open Decision O1's
-        default). ``--test-distractors`` is pinned equal to
-        ``--distractors`` so train and test conditions match (avoids the
-        vendored default's train/test distractor mismatch).
-
-    The subprocess runs in a throwaway temp dir symlinked to the vendored
-    source, so the read-only vendored tree is never written to and
-    parallel calls cannot collide on the fixed output filename.
-    """
-    with tempfile.TemporaryDirectory(prefix="c18-prontoqa-") as tmp:
-        work = Path(tmp)
-        for name in _VENDOR_FILES:
-            (work / name).symlink_to(_VENDOR_DIR / name)
-        cmd = [
-            sys.executable,
-            "run_experiment.py",
-            "--model-name",
-            "json",
-            "--model-size",
-            "1",
-            "--num-trials",
-            str(num_trials),
-            "--min-hops",
-            str(hops),
-            "--max-hops",
-            str(hops),
-            "--ontology",
-            ontology,
-            "--distractors",
-            distractors,
-            "--test-distractors",
-            distractors,
-            "--seed",
-            str(seed),
-        ]
-        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell, vendored script
-            cmd,
-            cwd=work,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
+) -> tuple[RawInstance, ...]:
+    """Run the pinned fictional-ontology generator in an isolated directory."""
+    request = _GenerationRequest(
+        hops=hops,
+        seed=seed,
+        num_trials=num_trials,
+        distractors=distractors,
+        timeout_s=timeout_s,
+    )
+    _validate_generation_request(request)
+    with tempfile.TemporaryDirectory(prefix="c18-prontoqa-") as temporary:
+        work = Path(temporary)
+        _copy_runtime_files(work)
+        output = _run_generator(
+            work,
+            request=request,
         )
-        if proc.returncode != 0:
-            msg = (
-                f"vendored prontoqa exited {proc.returncode} for "
-                f"hops={hops} seed={seed}: {proc.stderr[-500:]}"
-            )
-            raise UpstreamError(msg)
-        out_path = work / _output_filename(
-            hops,
-            seed,
-            distractors,
-            ontology,
-        )
-        if not out_path.exists():
-            msg = (
-                f"vendored prontoqa wrote no output file "
-                f"{out_path.name!r} for hops={hops} seed={seed}"
-            )
-            raise UpstreamError(msg)
-        data: object = json.loads(out_path.read_text(encoding="utf-8"))
-    return _parse_examples(data, hops)
+        try:
+            payload: object = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, JSONDecodeError) as error:
+            msg = f"C18 upstream output {output.name!r} is unreadable"
+            raise UpstreamError(msg) from error
+        return _parse_examples(payload, hops=hops)
 
 
-def _require(fields: dict[str, object], key: str) -> str:
-    """Read ``key`` from ``fields`` as a string, or raise ``UpstreamError``."""
-    if key not in fields:
-        msg = f"generator output missing expected field {key!r}"
-        raise UpstreamError(msg)
-    return str(fields[key])
-
-
-def _as_str_dict(value: object) -> dict[str, object] | None:
-    """Return ``value`` as a ``{str: object}`` dict, or ``None``.
-
-    ``json.loads`` yields ``dict`` objects keyed by ``str``; this narrows
-    an untyped decoded value to that concrete shape (copying into a fresh
-    dict so the static type is exact) or rejects a non-object.
-    """
-    if not isinstance(value, dict):
-        return None
-    return {str(k): v for k, v in value.items()}
-
-
-def _parse_examples(data: object, hops: int) -> list[RawInstance]:
-    """Project the generator's JSON into :class:`RawInstance` records.
-
-    The top level maps ``example{i}`` to an object whose ``test_example``
-    holds the scored instance; the in-context demos and the CoT trace are
-    intentionally discarded.
-    """
-    top = _as_str_dict(data)
-    if top is None:
-        msg = "generator output is not a JSON object"
-        raise UpstreamError(msg)
-    out: list[RawInstance] = []
-    for key in sorted(top, key=_example_index):
-        block = _as_str_dict(top[key])
-        if block is None:
-            continue
-        test_example = _as_str_dict(block.get("test_example"))
-        if test_example is None:
-            continue
-        out.append(
-            RawInstance(
-                question=_require(test_example, "question"),
-                query=_require(test_example, "query"),
-                answer=_require(test_example, "answer"),
-                hops=hops,
-            ),
-        )
-    return out
-
-
-def _example_index(key: str) -> int:
-    """Sort key extracting the integer from an ``example{i}`` label."""
-    digits = "".join(ch for ch in key if ch.isdigit())
-    return int(digits) if digits else 0
+__all__ = ["RawInstance", "UpstreamError", "generate_raw"]

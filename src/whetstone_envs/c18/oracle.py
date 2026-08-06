@@ -1,19 +1,9 @@
-r"""The from-scratch forward-chaining fixpoint ORACLE for c18.
+r"""Independent forward-chaining entailment and scoring for C18.
 
-A pure function of an instance's **public** fields -- the concatenated
-``question`` (facts + if-then rules) and the ``query`` statement -- and
-nothing else. It never consults the vendored generator's internal
-``Theory`` / proof object or its RNG, so it cannot silently become a
-re-derivation of how the generator built the instance (rubric criteria 2,
-8, 11). It re-derives the entailment label from the surface text alone.
-
-The independence matters here more than for any other candidate: the
-generator's stored ``answer`` is *definitional* -- it comes from a 50 %
-negation flag, not from an independent prover (the repos review's red
-flag #5). A generation-soundness bug would be invisible in ``answer``
-alone. This oracle is the independent verdict that catches it, so the
-generator asserts oracle==answer at construction (see
-:mod:`whetstone_envs.c18.generate`).
+The oracle derives a label only from an instance's public ``question`` and
+``query`` text. It does not import the vendored generator or inspect its proof
+objects, generated label, or random state. Pool generation requires this
+surface-text derivation to agree with every generated label.
 
 Task shape (PrOntoQA ModusPonens, fictional ontology). Each instance is:
 
@@ -43,9 +33,10 @@ The algorithm is a textbook forward-chaining fixpoint:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from whetstone_envs.core.probes import normalize
+from whetstone_envs.probes import normalize
+from whetstone_envs.scoring import exact_match
 
 # The nine proper-noun individuals the fictional ontology draws from
 # (upstream ``available_entity_names``). A sentence whose subject is one
@@ -98,14 +89,14 @@ class _Rule:
     consequent: _Consequent
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class _Parsed:
     """The parsed theory: the individual plus its facts and the rules."""
 
     entity: str
-    kinds: set[str] = field(default_factory=set)
-    props: set[tuple[str, bool]] = field(default_factory=set)
-    rules: list[_Rule] = field(default_factory=list)
+    kinds: frozenset[str]
+    props: frozenset[tuple[str, bool]]
+    rules: tuple[_Rule, ...]
 
 
 # --- Surface grammar (matches the upstream ``inflect`` output exactly) -----
@@ -187,7 +178,9 @@ def _parse(question: str, query: str) -> tuple[_Parsed, _Consequent]:
     entity = qm.group("subj")
     goal = _consequent_from_match(qm)
 
-    parsed = _Parsed(entity=entity)
+    kinds: set[str] = set()
+    props: set[tuple[str, bool]] = set()
+    rules: list[_Rule] = []
     for sentence in _split_sentences(question):
         fact_m = _FACT_RE.match(sentence)
         if fact_m is not None and fact_m.group("subj") in ENTITY_NAMES:
@@ -195,22 +188,30 @@ def _parse(question: str, query: str) -> tuple[_Parsed, _Consequent]:
                 continue
             cons = _consequent_from_match(fact_m)
             if cons.is_kind:
-                parsed.kinds.add(cons.name)
+                kinds.add(cons.name)
             else:
-                parsed.props.add((cons.name, cons.negated))
+                props.add((cons.name, cons.negated))
             continue
         rule_m = _RULE_EACH_RE.match(sentence) or _RULE_PLURAL_RE.match(
             sentence,
         )
         if rule_m is not None:
             antecedent = _singular(rule_m.group("subj"))
-            parsed.rules.append(
+            rules.append(
                 _Rule(antecedent, _consequent_from_match(rule_m)),
             )
             continue
         msg = f"unparsable sentence: {sentence!r}"
         raise OracleError(msg)
-    return parsed, goal
+    return (
+        _Parsed(
+            entity=entity,
+            kinds=frozenset(kinds),
+            props=frozenset(props),
+            rules=tuple(rules),
+        ),
+        goal,
+    )
 
 
 def _forward_chain(parsed: _Parsed) -> set[tuple[str, bool]]:
@@ -260,19 +261,9 @@ def entailment_label(question: str, query: str) -> str:
     return "True" if (goal.name, goal.negated) in closure else "False"
 
 
-# --- Verdict extraction (baseline spec Section 3 decision rule) ------------
-# The spec's decision rule scores a single True/False verdict by exact
-# match, and the ceiling probe (Section 2.2) instructs the model to "end
-# your reply with exactly one word on its own final line: either True or
-# False". A chain-of-thought reply therefore ends with the verdict but is
-# many lines long, and even the naive probe may append a trailing rationale
-# clause. Matching the *whole* reply against the gold token scores every
-# such well-formed reply 0 (observed live: a CoT reply ending
-# "...not entailed.\n\nFalse" with gold "False" scored 0). This extractor
-# therefore accepts the two response shapes requested by the probes: an
-# exact verdict on the final non-empty line (ceiling) or a leading verdict
-# followed by a rationale (naive). It never scans rationale text for a
-# later boolean word that could overwrite the response's actual verdict.
+# The two C18 probes request either a bare verdict or a reasoned response with
+# a terminal verdict. Extraction accepts those two shapes without scanning a
+# rationale for a later boolean word that could overwrite the actual verdict.
 _VERDICT_RE = re.compile(r"(true|false)\b", re.IGNORECASE)
 _FINAL_VERDICT_RE = re.compile(r"(true|false)\.?", re.IGNORECASE)
 
@@ -300,37 +291,28 @@ def extract_verdict(text: str) -> str:
     return text
 
 
+def _score_prediction(prediction: str, gold: str) -> int:
+    return exact_match(extract_verdict(normalize(prediction)), gold)
+
+
 def score(prediction: str, question: str, query: str) -> int:
     """Return 1 iff ``prediction`` matches the re-derived label, else 0.
 
-    The model's ``prediction`` is passed through the shared
-    :func:`whetstone_envs.core.probes.normalize` (strip surrounding
-    whitespace / one code fence) and then :func:`extract_verdict` (the
-    spec Section 3 verdict extraction: recover the protocol verdict from
-    a chain-of-thought or rationale-trailing reply) before a
-    case-insensitive exact-match compare against the freshly re-derived
-    gold -- no partial credit (rubric criterion 2). A question/query the
-    oracle cannot parse scores ``0`` rather than raising: a model response
-    is graded, not trusted.
+    Shared normalization removes surrounding whitespace or one complete code
+    fence. Verdict extraction then canonicalizes a protocol-compliant answer
+    before shared exact-match scoring. Unparseable public input scores zero.
     """
     try:
         gold = entailment_label(question, query)
     except OracleError:
         return 0
-    predicted = extract_verdict(normalize(prediction))
-    return int(predicted.lower() == normalize(gold).lower())
+    return _score_prediction(prediction, gold)
 
 
 def score_gold(prediction: str, gold: str) -> int:
     """Return the 0/1 score of ``prediction`` against a frozen ``gold``.
 
-    The pool-facing entry point mirroring the other candidates'
-    ``score_gold``: given an instance's already-derived ``gold`` label and
-    a model response, return 0 or 1. The prediction is shared-normalized
-    and then run through :func:`extract_verdict` (spec Section 3) so the
-    protocol verdict in a chain-of-thought or rationale-trailing reply is
-    scored instead of its whole text. Use :func:`score` instead to re-derive
-    straight from the public question + query.
+    This is the pool-facing scoring path. Use :func:`score` when the caller
+    needs to re-derive gold from public question and query text.
     """
-    predicted = extract_verdict(normalize(prediction))
-    return int(predicted.lower() == normalize(gold).lower())
+    return _score_prediction(prediction, gold)

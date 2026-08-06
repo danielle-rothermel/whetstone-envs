@@ -25,6 +25,8 @@ code:
 - [**C11 JSON canonicalization**][c11-source] provides deterministic RFC 8785
   tasks, an independent canonicalization oracle, and naive and known-good
   probes.
+- [**C18 PrOntoQA**][c18-source] provides deterministic fictional-ontology
+  entailment tasks with an independent forward-chaining oracle.
 - [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
@@ -37,6 +39,12 @@ shared harness; the adapter to Whetstone's optimizer lives above this package.
 
 ```bash
 uv add whetstone-envs
+```
+
+Install C18's pinned generator dependencies when generating its pools:
+
+```bash
+uv add 'whetstone-envs[c18]'
 ```
 
 ## Instances
@@ -299,6 +307,39 @@ private injected random-number generators. The adapted InductionBench
 reference transducers and generation path are pinned and attributed inside
 the package; no process-global random state is read or mutated.
 
+## C18 PrOntoQA
+
+[`whetstone_envs.c18`][c18-source] provides deterministic fictional-ontology
+deductive-entailment pools. Its frozen default and hard configurations drive a
+pinned vendored PrOntoQA generator in a temporary subprocess directory. An
+independent forward-chaining oracle derives each label from public question and
+query text before an instance enters the pool.
+
+```python
+from whetstone_envs.c18 import (
+    DEFAULT_CONFIG,
+    HARD_CONFIG,
+    PROBES,
+    build_manifest,
+    default_split_sizes,
+    generate_pool,
+    score_gold,
+)
+
+pool = generate_pool(DEFAULT_CONFIG)
+split = pool.split(*default_split_sizes(pool, DEFAULT_CONFIG))
+manifest = build_manifest(pool, DEFAULT_CONFIG)
+```
+
+Checked-in default and hard manifests pin the complete generated pool content.
+Regeneration is an explicit repository operation:
+
+```bash
+uv run python scripts/regenerate-c18.py \
+  --config default \
+  --output src/whetstone_envs/c18/resources/default.manifest.json
+```
+
 ## Terms and contracts
 
 The [published terms and contracts](https://danielle-rothermel.github.io/whetstone-envs/)
@@ -315,7 +356,7 @@ records notable changes.
 Install the locked development environment and commit hook once per clone:
 
 ```bash
-uv sync --locked
+uv sync --locked --extra c18
 uv run pre-commit install
 ```
 
@@ -347,3 +388,4 @@ uv run python -m whetstone_envs.c11.regenerate
 [probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes
 [scoring-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/scoring
 [c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23
+[c18-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c18

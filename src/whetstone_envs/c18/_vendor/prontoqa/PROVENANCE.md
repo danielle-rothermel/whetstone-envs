@@ -9,7 +9,7 @@
 
 ## Why vendored
 
-The c18 baseline spec reseeds instances directly from
+C18 reseeds instances directly from
 `asaparov/prontoqa`'s `run_experiment.py --model-name json` (fresh
 `--seed` per split, `--ontology fictional` nonce ontologies) and must
 never reuse a published instance. Vendoring pins the exact generator
@@ -40,9 +40,9 @@ Added by this vendor (not present upstream):
 
 - `PROVENANCE.md` -- this file.
 - `.gitignore` -- ignores the generator's json/log output files, which
-  are written to the process cwd. The boundary runs the generator in a
-  throwaway temp dir symlinked to this source, so output never lands
-  here; the ignore is defensive.
+  are written to the process cwd. The boundary copies the required runtime
+  files into a throwaway temp directory, so output never lands here; the
+  ignore is defensive.
 
 No line of upstream generator logic was edited. The two upstream
 integration gotchas (the relative `bad_patterns.txt` open and the
@@ -60,7 +60,7 @@ so it is a required dependency for generation. `torch` / `transformers` /
 `nltk` / `matplotlib` are NOT required (eval-path only) and are not
 installed for this path.
 
-## Known upstream caveats (from the repos review; handled by the boundary)
+## Known upstream caveats
 
 - `--seed` threads into both stdlib `random` and `np.random`; two runs at
   a fixed seed are byte-identical (verified).

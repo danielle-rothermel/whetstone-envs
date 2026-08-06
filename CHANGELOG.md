@@ -25,6 +25,11 @@ environment PRs in the release have merged.
   probes, exact scoring, default split sizing, and a committed pool manifest.
 - A private-RNG adaptation of the pinned InductionBench generation and
   reference-transducer path with packaged Apache-2.0 attribution.
+- The C18 PrOntoQA task family with frozen default and hard generation
+  configurations, independent surface-text entailment, two public probes, and
+  checked-in pool manifests.
+- A pinned vendored generator boundary, an optional `c18` dependency extra,
+  and an explicit script for regenerating either canonical C18 manifest.
 - Distribution validation that checks artifact metadata, package contents, and
   isolated installed-wheel imports before publication.
 
@@ -44,6 +49,8 @@ environment PRs in the release have merged.
   assigned to that version have merged and passed the release gate.
 - Extend the owning-subpackage API model to the higher-layer
   `whetstone_envs.c23` environment.
+- Package and test C18 through the published instances, pools, probes,
+  scoring, and manifests capability boundaries.
 
 ## [0.1.1] - 2026-08-06
 

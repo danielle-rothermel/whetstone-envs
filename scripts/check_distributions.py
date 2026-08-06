@@ -28,6 +28,10 @@ CHANGELOG = PROJECT_ROOT / "CHANGELOG.md"
 LICENSE_EXPRESSION = "MIT AND Apache-2.0"
 LICENSE_FILES = [
     "LICENSE",
+    "src/whetstone_envs/c18/_vendor/prontoqa/LICENSE",
+    "src/whetstone_envs/c18/_vendor/prontoqa/PROVENANCE.md",
+    "src/whetstone_envs/c22/_vendor/instruction_following_eval/LICENSE",
+    "src/whetstone_envs/c22/_vendor/instruction_following_eval/PROVENANCE.md",
     "src/whetstone_envs/c23/attribution/LICENSE",
     "src/whetstone_envs/c23/attribution/PROVENANCE.md",
 ]

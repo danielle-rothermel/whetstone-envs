@@ -25,6 +25,8 @@ code:
 - [**C11 JSON canonicalization**][c11-source] provides deterministic RFC 8785
   tasks, an independent canonicalization oracle, and naive and known-good
   probes.
+- [**C18 PrOntoQA**][c18-source] provides deterministic fictional-ontology
+  entailment tasks with an independent forward-chaining oracle.
 - [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
@@ -37,6 +39,12 @@ shared harness; the adapter to Whetstone's optimizer lives above this package.
 
 ```bash
 uv add whetstone-envs
+```
+
+Install C18's pinned generator dependencies when generating its pools:
+
+```bash
+uv add 'whetstone-envs[c18]'
 ```
 
 ## Instances
@@ -232,6 +240,73 @@ def build_manifest(pool: TaskPool) -> Manifest: ...
 def canonicalize(input_json: str) -> str: ...
 ```
 
+## C18 PrOntoQA
+
+[`whetstone_envs.c18`][c18-source] provides deterministic fictional-ontology
+deductive-entailment pools. An independent forward-chaining oracle derives each
+label from public question and query text before an instance enters the pool.
+
+```python
+@verify(UNIQUE)
+class DistractorMode(StrEnum):
+    NONE = "none"
+    RELEVANT = "relevant"
+
+@dataclass(frozen=True, slots=True)
+class DepthStratum:
+    hops: int
+    distractors: DistractorMode
+
+@dataclass(frozen=True, slots=True)
+class SplitPlan:
+    internal_eval: int
+    official: int
+    held_out: int
+
+@dataclass(frozen=True, slots=True)
+class GenerationConfig:
+    generator_version: str
+    seed_start: int
+    n_per_stratum: int
+    strata: tuple[DepthStratum, ...]
+    split: SplitPlan
+```
+
+```python
+DEFAULT_CONFIG: GenerationConfig
+HARD_CONFIG: GenerationConfig
+PROBES: ProbePair
+
+def generate_pool(
+    config: GenerationConfig = DEFAULT_CONFIG,
+    *,
+    n_per_stratum: int | None = None,
+) -> TaskPool: ...
+
+def default_split_sizes(
+    pool: TaskPool,
+    config: GenerationConfig = DEFAULT_CONFIG,
+) -> tuple[int, int, int]: ...
+
+def build_manifest(
+    pool: TaskPool,
+    config: GenerationConfig = DEFAULT_CONFIG,
+) -> Manifest: ...
+
+def score_gold(prediction: str, gold: str) -> int: ...
+```
+
+The frozen default and hard configurations use a pinned vendored PrOntoQA
+generator. Their checked-in manifests pin the complete pool content; custom
+validated configurations produce explicit, unpinned cohorts. Regeneration is a
+repository operation:
+
+```bash
+uv run python scripts/regenerate-c18.py \
+  --config default \
+  --output src/whetstone_envs/c18/resources/default.manifest.json
+```
+
 ## C22 instruction constraints
 
 [`whetstone_envs.c22`][c22-source] provides two fixed, seeded pools of
@@ -315,7 +390,7 @@ records notable changes.
 Install the locked development environment and commit hook once per clone:
 
 ```bash
-uv sync --locked
+uv sync --locked --extra c18
 uv run pre-commit install
 ```
 
@@ -340,6 +415,7 @@ uv run python -m whetstone_envs.c11.regenerate
 ```
 
 [c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
+[c18-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c18
 [instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
 [c22-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c22
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests

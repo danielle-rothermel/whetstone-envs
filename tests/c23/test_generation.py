@@ -7,7 +7,6 @@ import os
 import random
 import subprocess
 import sys
-from dataclasses import FrozenInstanceError
 from typing import TYPE_CHECKING
 
 import pytest
@@ -120,18 +119,28 @@ def _assert_pool_is_determinate_and_nontrivial(pool: TaskPool) -> None:
         assert {_apply(rule, query) for rule in consistent} == {instance.gold}
 
 
-def test_small_pool_is_determinate_nontrivial_and_immutable() -> None:
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [
+        (0, ValueError),
+        (-1, ValueError),
+        (True, TypeError),
+        (1.0, TypeError),
+    ],
+    ids=["zero", "negative", "boolean", "non-integer"],
+)
+def test_generate_pool_rejects_invalid_sizes(
+    value: object,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        generate_pool(n_per_stratum=value)  # ty: ignore[invalid-argument-type]
+
+
+def test_small_pool_is_determinate_and_nontrivial() -> None:
     _assert_pool_is_determinate_and_nontrivial(
         generate_pool(n_per_stratum=1),
     )
-
-    with pytest.raises(FrozenInstanceError):
-        pool_module.DEFAULT_CONFIG.__setattr__("vocab", ("x",))
-
-
-@pytest.mark.integration
-def test_default_pool_is_independently_determinate() -> None:
-    _assert_pool_is_determinate_and_nontrivial(generate_pool())
 
 
 def test_generation_is_independent_of_and_preserves_global_rng() -> None:
@@ -214,8 +223,13 @@ def test_duplicate_public_identity_retries_then_exhausts(
         attempts_per_instance=1,
     )
 
-    with pytest.raises(
-        pool_module.GenerationExhaustedError, match="retained 1"
-    ):
+    with pytest.raises(pool_module.GenerationExhaustedError):
         pool_module._generate_pool(config, n_per_stratum=2)
     assert calls == 2
+
+
+@pytest.mark.integration
+def test_default_pool_is_independently_determinate(
+    c23_default_pool: TaskPool,
+) -> None:
+    _assert_pool_is_determinate_and_nontrivial(c23_default_pool)

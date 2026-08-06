@@ -1,10 +1,4 @@
-"""Pinned reference transducers adapted from InductionBench.
-
-MODIFIED DERIVATIVE: this file adapts the on-path rule application functions
-from Wenyueh/inductive_reasoning_benchmark commit
-e0b839221a8509b351b324dfb247b35a434b7fd5.
-See attribution/LICENSE and attribution/PROVENANCE.md in this package.
-"""
+# Modified from InductionBench e0b8392; see attribution/PROVENANCE.md.
 
 from __future__ import annotations
 
@@ -12,7 +6,6 @@ from whetstone_envs.c23._domain import Hypothesis, RuleFamily
 
 
 def apply_reference(hypothesis: Hypothesis, value: str) -> str:
-    """Apply one supported hypothesis through the pinned implementation."""
     family = hypothesis.configuration.family
     if family is RuleFamily.ISL:
         return _apply_isl(hypothesis, value)

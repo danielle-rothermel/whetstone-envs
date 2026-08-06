@@ -1,10 +1,4 @@
-"""Private-RNG C23 rule and example generation adapted from InductionBench.
-
-MODIFIED DERIVATIVE: this file adapts only the single-rule ISL/OSL sampling
-and finite example-generation path from Wenyueh/inductive_reasoning_benchmark
-commit e0b839221a8509b351b324dfb247b35a434b7fd5. See attribution/LICENSE
-and attribution/PROVENANCE.md in this package.
-"""
+# Modified from InductionBench e0b8392; see attribution/PROVENANCE.md.
 
 from __future__ import annotations
 
@@ -56,7 +50,6 @@ def sample_hypothesis(
     vocab: tuple[str, ...],
     rng: random.Random,
 ) -> Hypothesis:
-    """Sample one non-identity, single-rule hypothesis."""
     contexts = tuple(
         "".join(symbols)
         for symbols in itertools.product(
@@ -80,7 +73,6 @@ def examples_for(
     hypothesis: Hypothesis,
     inputs: tuple[str, ...],
 ) -> tuple[Demonstration, ...]:
-    """Apply the reference transducer to a canonical finite input space."""
     return tuple(
         Demonstration(value, apply_reference(hypothesis, value))
         for value in inputs

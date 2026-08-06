@@ -6,8 +6,6 @@ from enum import UNIQUE, StrEnum, verify
 
 @verify(UNIQUE)
 class RuleFamily(StrEnum):
-    """Supported single-rule transducer families."""
-
     ISL = "ISL"
     L_OSL = "L-OSL"
     R_OSL = "R-OSL"

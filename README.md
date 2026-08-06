@@ -27,6 +27,8 @@ code:
   probes.
 - [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
   composed IFEval constraints and strict all-pass scoring.
+- [**C23 subregular induction**][c23-source] provides determinate hidden-rule
+  string transformations across four ISL and OSL strata.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness; the adapter to Whetstone's optimizer lives above this package.
@@ -261,23 +263,35 @@ def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest: ...
 
 [`whetstone_envs.c23`][c23-source] is a higher-layer environment built on the
 shared harness. It generates four balanced single-rule strata: ISL k=2,
-left-OSL k=2, right-OSL k=2, and ISL k=3 over the fixed vocabulary `abcd`.
-Every instance exposes exactly six demonstrations and a held-out nontrivial
-query whose answer is determinate across the complete supported finite
-hypothesis class.
+left-OSL k=2, right-OSL k=2, and ISL k=3 over the fixed vocabulary `abcd`; each
+task has six demonstrations and a distinct nontrivial query whose output is
+determinate across the complete supported hypothesis class.
+
+Internally, the stable rule vocabulary is represented by:
 
 ```python
-from whetstone_envs.c23 import (
-    PROBES,
-    default_split_sizes,
-    generate_pool,
-    score_gold,
-)
+@verify(UNIQUE)
+class RuleFamily(StrEnum):
+    ISL = "ISL"
+    L_OSL = "L-OSL"
+    R_OSL = "R-OSL"
 
-pool = generate_pool()
-split = pool.split(*default_split_sizes(pool))
-prompt = PROBES.render_ceiling(split.official[0])
-score = score_gold("Output: candidate", split.official[0].gold)
+@dataclass(frozen=True, slots=True)
+class RuleConfiguration:
+    family: RuleFamily
+    context_length: int
+```
+
+```python
+GENERATOR_VERSION: str
+PROBES: ProbePair
+
+def generate_pool(*, n_per_stratum: int = 50) -> TaskPool: ...
+def default_split_sizes(pool: TaskPool) -> tuple[int, int, int]: ...
+```
+
+```python
+def score_gold(prediction: str, gold: str) -> int: ...
 ```
 
 Generation uses fixed fresh stratum seeds beginning at `555000000` and
@@ -305,11 +319,18 @@ uv sync --locked
 uv run pre-commit install
 ```
 
-The hook runs the same formatting, lint, type, definitions, test, and package
-build gate used by CI. Run it directly at any time:
+The hook runs formatting, lint, type, definitions, the fast test suite, and
+package validation. Run it directly at any time:
 
 ```bash
 scripts/pre-check.sh
+```
+
+CI also runs the full-cohort integration checks. Run that exact gate locally
+before release:
+
+```bash
+CI=true scripts/pre-check.sh
 ```
 
 Regenerate the canonical C11 manifest after an intentional generator change:

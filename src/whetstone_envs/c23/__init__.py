@@ -1,5 +1,3 @@
-"""C23 single-rule subregular string induction environment."""
-
 from whetstone_envs.c23._pool import (
     GENERATOR_VERSION,
     default_split_sizes,

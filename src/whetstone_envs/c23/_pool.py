@@ -65,7 +65,7 @@ DEFAULT_CONFIG = GenerationConfiguration(
 
 
 class GenerationExhaustedError(RuntimeError):
-    """Raised when bounded generation cannot produce a unique public task."""
+    pass
 
 
 def generate_pool(*, n_per_stratum: int = DEFAULT_N_PER_STRATUM) -> TaskPool:

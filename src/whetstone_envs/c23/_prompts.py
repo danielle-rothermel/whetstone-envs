@@ -18,7 +18,8 @@ exactly one of these four forms over a, b, c, and d: ISL k=2, ISL k=3,
 left-OSL k=2, or right-OSL k=2. ISL reads context from the input; OSL reads
 context from the partial output in the named direction. When the full context
 matches, its final character is deleted or replaced by a different character.
-Infer the one rule that fits every demonstration, then apply it to the query.
+Infer the query output that is consistent with every demonstration. More than
+one rule may fit the demonstrations, but they agree on the query output.
 Do not explain your reasoning.
 
 Demonstrations:

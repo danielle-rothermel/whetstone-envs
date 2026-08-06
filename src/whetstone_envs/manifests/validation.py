@@ -59,8 +59,8 @@ def validate_seed_range(value: object) -> tuple[int, int]:
         raise TypeError(msg)
     start = _require_integer(value[0], field_name="seed_range")
     end = _require_integer(value[1], field_name="seed_range")
-    if start > end:
-        msg = "manifest seed_range must be ordered from start to end"
+    if start >= end:
+        msg = "manifest seed_range must be ordered with start less than end"
         raise ValueError(msg)
     return (start, end)
 
@@ -87,6 +87,9 @@ def validate_stratum_counts(
         )
         if count < 0:
             msg = "manifest stratum_counts values must be non-negative"
+            raise ValueError(msg)
+        if count == 0:
+            msg = "manifest stratum_counts values must be positive"
             raise ValueError(msg)
         counts[name] = count
     if sum(counts.values()) == 0:

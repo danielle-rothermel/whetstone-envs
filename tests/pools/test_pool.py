@@ -31,12 +31,31 @@ def test_in_stratum_returns_members(two_stratum_pool: TaskPool) -> None:
     assert two_stratum_pool.in_stratum("absent") == ()
 
 
+def test_multi_label_membership_counts_and_first_seen_order(
+    synthetic_instance: Callable[..., Instance],
+) -> None:
+    first = synthetic_instance(0, ("shared", "alpha"))
+    second = synthetic_instance(1, ("beta", "shared"))
+    third = synthetic_instance(2, ("alpha", "beta"))
+
+    pool = TaskPool([first, second, third])
+
+    assert pool.strata == ("shared", "alpha", "beta")
+    assert pool.stratum_counts() == {"shared": 2, "alpha": 2, "beta": 2}
+    assert pool.in_stratum("shared") == (first, second)
+    assert pool.in_stratum("alpha") == (first, third)
+    assert pool.in_stratum("beta") == (second, third)
+
+
 def test_duplicate_id_rejected(
     synthetic_instance: Callable[..., Instance],
 ) -> None:
-    duplicate = synthetic_instance(0, "easy")
+    first = synthetic_instance(0, "easy")
+    second = synthetic_instance(0, "easy")
+    assert first is not second
+
     with pytest.raises(ValueError, match="duplicate instance id"):
-        TaskPool([duplicate, duplicate])
+        TaskPool([first, second])
 
 
 @pytest.mark.parametrize(

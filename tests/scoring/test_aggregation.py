@@ -1,9 +1,7 @@
 """Tests for the complete aggregation ladder.
 
-The failed/missing cases here are the rubric-criterion-13 guard: a
-non-scored observation must make every aggregate that depends on it
-visibly incomplete (``mean is None``, non-zero failed/missing counts),
-never a silent zero.
+A non-scored observation makes every dependent aggregate visibly incomplete
+(``mean is None``, non-zero failed/missing counts), never a silent zero.
 """
 
 from __future__ import annotations
@@ -54,6 +52,22 @@ def test_aggregate_task_rejects_mixed_task_ids() -> None:
         aggregate_task([scored("a", 0, 1), scored("b", 0, 1)])
 
 
+def test_aggregate_task_rejects_duplicate_repeat_ids() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*duplicate)(?=.*task)(?=.*repeat(?:_id)?\D*7)",
+    ):
+        aggregate_task([scored("task", 7, 1), scored("task", 7, 0)])
+
+
+def test_aggregate_task_rejects_corrupted_outcome() -> None:
+    observation = scored("task", 0, 1)
+    object.__setattr__(observation, "outcome", "corrupted")
+
+    with pytest.raises(TypeError, match="Outcome"):
+        aggregate_task([observation])
+
+
 # --- task -> stratum -> overall -----------------------------------------
 
 
@@ -76,8 +90,7 @@ def test_full_ladder_all_complete() -> None:
         expected_repeat_ids=(0,),
     )
     # easy stratum mean = (1 + 0)/2 = 0.5; hard = (1 + 1)/2 = 1.0;
-    # overall = mean of stratum means = 0.75. Crucially this is the mean
-    # of stratum means, not of raw scores -- aggregation crosses strata.
+    # overall = mean of stratum means = 0.75.
     assert root.mean == pytest.approx(0.75)
     assert root.complete is True
     strata = {child.label: child for child in root.children}
@@ -92,6 +105,30 @@ def test_full_ladder_all_complete() -> None:
         "hard-0",
         "hard-1",
     }
+
+
+def test_aggregation_crosses_strata_not_raw_mean() -> None:
+    # An imbalanced pool: 3 easy tasks all correct, 1 hard task wrong.
+    # Raw pooled mean would be 3/4 = 0.75; the strata-crossing mean is
+    # mean(1.0, 0.0) = 0.5.
+    observations = [
+        scored("easy-0", 0, 1),
+        scored("easy-1", 0, 1),
+        scored("easy-2", 0, 1),
+        scored("hard-0", 0, 0),
+    ]
+    task_strata = {
+        "easy-0": ("easy",),
+        "easy-1": ("easy",),
+        "easy-2": ("easy",),
+        "hard-0": ("hard",),
+    }
+    root = aggregate(
+        observations,
+        task_strata,
+        expected_repeat_ids=(0,),
+    )
+    assert root.mean == pytest.approx(0.5)
 
 
 def test_planned_matrix_marks_unobserved_repeat_missing() -> None:
@@ -207,28 +244,22 @@ def test_task_strata_require_canonical_label_tuples(
         )
 
 
-def test_aggregation_crosses_strata_not_raw_mean() -> None:
-    # An imbalanced pool: 3 easy tasks all correct, 1 hard task wrong.
-    # Raw pooled mean would be 3/4 = 0.75; the strata-crossing mean is
-    # mean(1.0, 0.0) = 0.5. Confirm we get the strata-crossing value.
-    observations = [
-        scored("easy-0", 0, 1),
-        scored("easy-1", 0, 1),
-        scored("easy-2", 0, 1),
-        scored("hard-0", 0, 0),
-    ]
-    task_strata = {
-        "easy-0": ("easy",),
-        "easy-1": ("easy",),
-        "easy-2": ("easy",),
-        "hard-0": ("hard",),
-    }
-    root = aggregate(
-        observations,
-        task_strata,
-        expected_repeat_ids=(0,),
-    )
-    assert root.mean == pytest.approx(0.5)
+def test_task_strata_require_tuple() -> None:
+    with pytest.raises(TypeError, match="must be a tuple"):
+        aggregate(
+            [],
+            {"task": ["easy"]},  # ty: ignore[invalid-argument-type]
+            expected_repeat_ids=(0,),
+        )
+
+
+def test_task_strata_require_string_labels() -> None:
+    with pytest.raises(TypeError, match="must be strings"):
+        aggregate(
+            [],
+            {"task": (1,)},  # ty: ignore[invalid-argument-type]
+            expected_repeat_ids=(0,),
+        )
 
 
 def test_failed_observation_propagates_to_overall() -> None:
@@ -270,8 +301,7 @@ def test_stratum_and_overall_helpers_compose() -> None:
 
 def test_empty_stratum_is_incomplete_not_zero() -> None:
     # No children means nothing to average; mean is None, not 0.0, and
-    # the aggregate must be visibly incomplete -- a zero-observation
-    # aggregate is not vacuously complete (rubric 13).
+    # a zero-observation aggregate is not vacuously complete.
     agg = aggregate_stratum([])
     assert agg.mean is None
     assert agg.total == 0

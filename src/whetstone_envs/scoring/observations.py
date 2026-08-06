@@ -35,6 +35,9 @@ class Observation:
     score: int | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.outcome, Outcome):
+            msg = f"outcome must be an Outcome, got {self.outcome!r}"
+            raise TypeError(msg)
         if self.outcome is Outcome.SCORED:
             if self.score not in (0, 1):
                 msg = (

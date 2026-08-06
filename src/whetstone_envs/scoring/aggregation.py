@@ -77,8 +77,14 @@ def _mean_of_observations(
             scores.append(observation.score)
         elif observation.outcome is Outcome.FAILED:
             failed_count += 1
-        else:
+        elif observation.outcome is Outcome.MISSING:
             missing_count += 1
+        else:
+            msg = (
+                "observation outcome must be an Outcome, "
+                f"got {observation.outcome!r}"
+            )
+            raise TypeError(msg)
     complete = failed_count == 0 and missing_count == 0
     mean = (sum(scores) / len(scores)) if (scores and complete) else None
     return Aggregate(
@@ -118,13 +124,22 @@ def _mean_of_children(
 
 
 def aggregate_task(observations: Iterable[Observation]) -> Aggregate:
-    """Mean the repeats within one task, rejecting mixed task IDs."""
+    """Mean unique repeats within one task."""
     materialized = list(observations)
     task_ids = {observation.task_id for observation in materialized}
     if len(task_ids) > 1:
         msg = "aggregate_task requires observations from a single task"
         raise ValueError(msg)
     label = next(iter(task_ids), None)
+    repeat_ids: set[int] = set()
+    for observation in materialized:
+        if observation.repeat_id in repeat_ids:
+            msg = (
+                f"duplicate observation for task {observation.task_id!r} "
+                f"repeat_id {observation.repeat_id}"
+            )
+            raise ValueError(msg)
+        repeat_ids.add(observation.repeat_id)
     return _mean_of_observations(materialized, label=label)
 
 

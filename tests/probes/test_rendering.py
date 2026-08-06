@@ -2,11 +2,11 @@
 
 import pytest
 
-from whetstone_envs.instances import make_instance
+from whetstone_envs.instances import Instance, make_instance
 from whetstone_envs.probes import ProbePair, render_with_prompt_inputs
 
 
-def test_render_uses_only_prompt_inputs() -> None:
+def test_default_renderer_is_restricted_to_prompt_inputs() -> None:
     instance = make_instance(
         id="t1",
         seed=1,
@@ -14,16 +14,14 @@ def test_render_uses_only_prompt_inputs() -> None:
         prompt_inputs={"question": "Q?", "hint": "H"},
         gold="SECRET",
     )
-    pair = ProbePair(
-        naive_template="Answer: {question}",
-        ceiling_template="Think about {hint}, then answer {question}.",
-        render=render_with_prompt_inputs,
-    )
-    assert pair.render_naive(instance) == "Answer: Q?"
-    assert pair.render_ceiling(instance) == "Think about H, then answer Q?."
+
+    rendered = render_with_prompt_inputs("Answer: {question}", instance)
+    assert rendered == "Answer: Q?"
+    with pytest.raises(KeyError):
+        render_with_prompt_inputs("{gold}", instance)
 
 
-def test_probe_pair_defaults_to_prompt_input_renderer() -> None:
+def test_probe_pair_routes_templates_through_default_renderer() -> None:
     instance = make_instance(
         id="t1",
         seed=1,
@@ -39,34 +37,26 @@ def test_probe_pair_defaults_to_prompt_input_renderer() -> None:
     assert pair.render_ceiling(instance) == "Use H for Q?"
 
 
-def test_render_cannot_leak_gold() -> None:
+def test_custom_renderer_receives_templates_and_full_instance() -> None:
     instance = make_instance(
         id="t1",
         seed=1,
         strata="s",
         prompt_inputs={"q": "x"},
-        gold="LEAK",
+        gold="private answer",
     )
-    pair = ProbePair(
-        naive_template="{gold}",
-        ceiling_template="{q}",
-        render=render_with_prompt_inputs,
-    )
-    with pytest.raises(KeyError):
-        pair.render_naive(instance)
+    calls: list[tuple[str, Instance]] = []
 
+    def recording_renderer(template: str, received: Instance) -> str:
+        calls.append((template, received))
+        return f"{template}: {received.gold}"
 
-def test_missing_field_raises_loudly() -> None:
-    instance = make_instance(
-        id="t1",
-        seed=1,
-        strata="s",
-        prompt_inputs={"q": "x"},
-    )
     pair = ProbePair(
-        naive_template="{does_not_exist}",
-        ceiling_template="{q}",
-        render=render_with_prompt_inputs,
+        naive_template="naive",
+        ceiling_template="ceiling",
+        render=recording_renderer,
     )
-    with pytest.raises(KeyError):
-        pair.render_naive(instance)
+
+    assert pair.render_naive(instance) == "naive: private answer"
+    assert pair.render_ceiling(instance) == "ceiling: private answer"
+    assert calls == [("naive", instance), ("ceiling", instance)]

@@ -36,7 +36,7 @@ def valid_manifest_payload() -> dict[str, object]:
         "schema_version": 1,
         "generator_version": "generator@1.0",
         "seed_range": [10, 20],
-        "stratum_counts": {"easy": 2, "hard": 0},
+        "stratum_counts": {"easy": 2, "hard": 1},
         "content_hash": "a" * 64,
     }
 
@@ -210,12 +210,22 @@ def test_from_dict_rejects_non_string_generator_version(
     ("field", "value"),
     [
         ("schema_version", 1.5),
+        ("schema_version", True),
         ("seed_range", [10.5, 20]),
-        ("stratum_counts", {"easy": 2.5, "hard": 0}),
+        ("seed_range", [10, False]),
+        ("stratum_counts", {"easy": 2.5, "hard": 1}),
+        ("stratum_counts", {"easy": 2, "hard": True}),
     ],
-    ids=["schema-version", "seed", "count"],
+    ids=[
+        "fractional-schema-version",
+        "bool-schema-version",
+        "fractional-seed",
+        "bool-seed",
+        "fractional-count",
+        "bool-count",
+    ],
 )
-def test_from_dict_rejects_fractional_integer_fields(
+def test_from_dict_rejects_non_integer_fields(
     valid_manifest_payload: dict[str, object],
     field: str,
     value: object,
@@ -250,6 +260,30 @@ def test_from_dict_rejects_reversed_seed_range(
         Manifest.from_dict(valid_manifest_payload)
 
 
+def test_from_dict_rejects_equal_seed_range_endpoints(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["seed_range"] = [10, 10]
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*seed_range)(?=.*start)(?=.*end)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_direct_manifest_rejects_equal_seed_range_endpoints() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*seed_range)(?=.*start)(?=.*end)",
+    ):
+        Manifest(
+            generator_version="g",
+            seed_range=(10, 10),
+            stratum_counts={"easy": 1},
+            content_hash="a" * 64,
+        )
+
+
 def test_from_dict_rejects_non_numeric_count(
     valid_manifest_payload: dict[str, object],
 ) -> None:
@@ -267,12 +301,36 @@ def test_from_dict_rejects_non_numeric_count(
 def test_from_dict_rejects_negative_count(
     valid_manifest_payload: dict[str, object],
 ) -> None:
-    valid_manifest_payload["stratum_counts"] = {"easy": -1, "hard": 0}
+    valid_manifest_payload["stratum_counts"] = {"easy": -1, "hard": 1}
     with pytest.raises(
         ValueError,
         match=r"(?i)(?=.*stratum_counts)(?=.*non-negative)",
     ):
         Manifest.from_dict(valid_manifest_payload)
+
+
+def test_from_dict_rejects_zero_valued_stratum(
+    valid_manifest_payload: dict[str, object],
+) -> None:
+    valid_manifest_payload["stratum_counts"] = {"easy": 2, "hard": 0}
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*stratum_counts)(?=.*positive)",
+    ):
+        Manifest.from_dict(valid_manifest_payload)
+
+
+def test_direct_manifest_rejects_zero_valued_stratum() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"(?i)(?=.*stratum_counts)(?=.*positive)",
+    ):
+        Manifest(
+            generator_version="g",
+            seed_range=(10, 20),
+            stratum_counts={"easy": 2, "hard": 0},
+            content_hash="a" * 64,
+        )
 
 
 @pytest.mark.parametrize(

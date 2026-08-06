@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from whetstone_envs.instances import Instance, make_instance
-from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -56,6 +55,37 @@ def test_prompt_inputs_are_read_only_and_detached() -> None:
 def test_empty_id_rejected() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         make_instance(id="", seed=1, strata="s")
+
+
+@pytest.mark.parametrize("invalid_id", [1, True, [], {}])
+def test_id_requires_string_runtime_type(invalid_id: object) -> None:
+    with pytest.raises(TypeError, match=r"(?i)(?=.*id)(?=.*string)"):
+        Instance(
+            id=cast("str", invalid_id),
+            seed=1,
+            strata=("s",),
+        )
+
+
+@pytest.mark.parametrize("invalid_seed", [True, False, 1.0, "1", []])
+def test_seed_requires_exact_int_runtime_type(invalid_seed: object) -> None:
+    with pytest.raises(TypeError, match=r"(?i)(?=.*seed)(?=.*int)"):
+        Instance(
+            id="t1",
+            seed=cast("int", invalid_seed),
+            strata=("s",),
+        )
+
+
+@pytest.mark.parametrize("invalid_gold", [1, True, [], {}])
+def test_gold_requires_string_runtime_type(invalid_gold: object) -> None:
+    with pytest.raises(TypeError, match=r"(?i)(?=.*gold)(?=.*string)"):
+        Instance(
+            id="t1",
+            seed=1,
+            strata=("s",),
+            gold=cast("str", invalid_gold),
+        )
 
 
 def test_empty_strata_rejected() -> None:
@@ -133,16 +163,35 @@ def test_blank_stratum_rejected(stratum: str) -> None:
         make_instance(id="t1", seed=1, strata=stratum)
 
 
-def test_repeated_strata_are_ordered_and_deduplicated_in_pool() -> None:
+@pytest.mark.parametrize(
+    "invalid_strata",
+    [
+        ["easy", "hard"],
+        {"easy", "hard"},
+        {"easy": 1, "hard": 2},
+        iter(("easy", "hard")),
+    ],
+    ids=["list", "set", "dict", "iterator"],
+)
+def test_make_instance_rejects_non_string_non_tuple_strata(
+    invalid_strata: object,
+) -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"(?i)(?=.*strata)(?=.*string)(?=.*tuple)",
+    ):
+        make_instance(
+            id="t1",
+            seed=1,
+            strata=cast("tuple[str, ...] | str", invalid_strata),
+        )
+
+
+def test_repeated_strata_are_ordered_and_deduplicated() -> None:
     inst = make_instance(
         id="t1",
         seed=1,
         strata=("easy", "hard", "easy", "hard"),
     )
-    pool = TaskPool([inst])
 
     assert inst.strata == ("easy", "hard")
-    assert pool.strata == ("easy", "hard")
-    assert pool.stratum_counts() == {"easy": 1, "hard": 1}
-    assert pool.in_stratum("easy") == (inst,)
-    assert pool.in_stratum("hard") == (inst,)

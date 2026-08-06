@@ -4,12 +4,172 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from heapq import heappop, heappush
 from typing import TYPE_CHECKING
 
 from whetstone_envs.instances import Instance
 
 if TYPE_CHECKING:
     from whetstone_envs.pools.pool import TaskPool
+
+
+@dataclass(slots=True)
+class _FlowEdge:
+    destination: int
+    reverse: int
+    capacity: int
+    cost: int
+
+
+def _add_flow_edge(
+    graph: list[list[_FlowEdge]],
+    source: int,
+    destination: int,
+    capacity: int,
+    cost: int,
+) -> _FlowEdge:
+    """Add a residual edge pair and return the forward edge."""
+    forward = _FlowEdge(destination, len(graph[destination]), capacity, cost)
+    reverse = _FlowEdge(source, len(graph[source]), 0, -cost)
+    graph[source].append(forward)
+    graph[destination].append(reverse)
+    return forward
+
+
+def _flow_step(
+    previous: list[tuple[int, int] | None],
+    node: int,
+) -> tuple[int, int]:
+    """Return one predecessor step from a complete residual path."""
+    step = previous[node]
+    if step is None:
+        msg = "destination quota path is incomplete"
+        raise AssertionError(msg)
+    return step
+
+
+def _send_min_cost_flow(
+    graph: list[list[_FlowEdge]],
+    source: int,
+    sink: int,
+    required_flow: int,
+) -> None:
+    """Send exact flow using successive shortest residual paths."""
+    node_count = len(graph)
+    potentials = [0] * node_count
+    sent = 0
+
+    while sent < required_flow:
+        distances: list[int | None] = [None] * node_count
+        previous: list[tuple[int, int] | None] = [None] * node_count
+        distances[source] = 0
+        queue = [(0, source)]
+
+        while queue:
+            distance, node = heappop(queue)
+            if distance != distances[node]:
+                continue
+            for edge_index, edge in enumerate(graph[node]):
+                if edge.capacity == 0:
+                    continue
+                candidate = (
+                    distance
+                    + edge.cost
+                    + potentials[node]
+                    - potentials[edge.destination]
+                )
+                known = distances[edge.destination]
+                if known is not None and candidate >= known:
+                    continue
+                distances[edge.destination] = candidate
+                previous[edge.destination] = (node, edge_index)
+                heappush(queue, (candidate, edge.destination))
+
+        if distances[sink] is None:
+            msg = "destination quota flow is infeasible"
+            raise AssertionError(msg)
+        for node, distance in enumerate(distances):
+            if distance is not None:
+                potentials[node] += distance
+
+        amount = required_flow - sent
+        node = sink
+        while node != source:
+            previous_node, edge_index = _flow_step(previous, node)
+            amount = min(amount, graph[previous_node][edge_index].capacity)
+            node = previous_node
+
+        node = sink
+        while node != source:
+            previous_node, edge_index = _flow_step(previous, node)
+            edge = graph[previous_node][edge_index]
+            edge.capacity -= amount
+            graph[node][edge.reverse].capacity += amount
+            node = previous_node
+        sent += amount
+
+
+def _allocate_destination_quotas(
+    selected_by_combination: dict[tuple[str, ...], int],
+    destination_sizes: tuple[int, int, int],
+) -> list[dict[tuple[str, ...], int]]:
+    """Globally optimize coverage, then squared quota spread."""
+    combinations = tuple(selected_by_combination)
+    combination_count = len(combinations)
+    destination_count = len(destination_sizes)
+    source = 0
+    first_combination = 1
+    first_destination = first_combination + combination_count
+    sink = first_destination + destination_count
+    graph: list[list[_FlowEdge]] = [[] for _ in range(sink + 1)]
+
+    total = sum(destination_sizes)
+    # With fixed total flow, non-first cell units equal total - coverage. The
+    # penalty exceeds the full possible range of the squared-count objective,
+    # so coverage is optimized first without needing a separate greedy pass.
+    coverage_penalty = total * total + 1
+    cell_edges: list[list[list[_FlowEdge]]] = [
+        [[] for _ in destination_sizes] for _ in combinations
+    ]
+
+    for combination_index, combination in enumerate(combinations):
+        quota = selected_by_combination[combination]
+        combination_node = first_combination + combination_index
+        _add_flow_edge(graph, source, combination_node, quota, 0)
+        for destination, size in enumerate(destination_sizes):
+            destination_node = first_destination + destination
+            for unit in range(1, min(quota, size) + 1):
+                marginal_square_cost = 2 * unit - 1
+                edge = _add_flow_edge(
+                    graph,
+                    combination_node,
+                    destination_node,
+                    1,
+                    marginal_square_cost
+                    + (coverage_penalty if unit > 1 else 0),
+                )
+                cell_edges[combination_index][destination].append(edge)
+
+    for destination, size in enumerate(destination_sizes):
+        _add_flow_edge(
+            graph,
+            first_destination + destination,
+            sink,
+            size,
+            0,
+        )
+
+    _send_min_cost_flow(graph, source, sink, total)
+    return [
+        {
+            combination: sum(
+                edge.capacity == 0
+                for edge in cell_edges[combination_index][destination]
+            )
+            for combination_index, combination in enumerate(combinations)
+        }
+        for destination in range(destination_count)
+    ]
 
 
 def _validate_split_sizes(
@@ -23,6 +183,9 @@ def _validate_split_sizes(
         destination_sizes,
         strict=True,
     ):
+        if type(size) is not int:
+            msg = f"{name} must be an int, got {type(size).__name__}"
+            raise TypeError(msg)
         if size < 0:
             msg = f"{name} must be non-negative, got {size}"
             raise ValueError(msg)
@@ -105,65 +268,19 @@ def split_pool(
         ):
             active.append(combination)
 
-    destination_assigned = [0, 0, 0]
-    destination_quotas = [
-        dict.fromkeys(by_combination, 0) for _ in destination_sizes
-    ]
-    destinations_by_combination: dict[tuple[str, ...], list[int]] = {
-        combination: [] for combination in by_combination
+    destination_quotas = _allocate_destination_quotas(
+        selected_by_combination,
+        destination_sizes,
+    )
+    combinations = tuple(by_combination)
+    destinations_by_combination = {
+        combination: [
+            destination
+            for destination, quotas in enumerate(destination_quotas)
+            for _ in range(quotas[combination])
+        ]
+        for combination in combinations
     }
-    coverage_targets = [
-        min(size, len(by_combination)) for size in destination_sizes
-    ]
-
-    for combination in by_combination:
-        combination_quota = selected_by_combination[combination]
-        for _ in range(min(combination_quota, len(destination_sizes))):
-            eligible = [
-                index
-                for index in range(len(destination_sizes))
-                if destination_quotas[index][combination] == 0
-                and destination_assigned[index] < coverage_targets[index]
-            ]
-            if not eligible:
-                break
-            destination = min(
-                eligible,
-                key=lambda index: (
-                    -(coverage_targets[index] - destination_assigned[index]),
-                    -destination_sizes[index],
-                    index,
-                ),
-            )
-            destination_quotas[destination][combination] += 1
-            destination_assigned[destination] += 1
-            destinations_by_combination[combination].append(destination)
-
-    combination_order = {
-        combination: index for index, combination in enumerate(by_combination)
-    }
-    for destination, size in enumerate(destination_sizes):
-        while destination_assigned[destination] < size:
-            eligible = [
-                combination
-                for combination in by_combination
-                if len(destinations_by_combination[combination])
-                < selected_by_combination[combination]
-            ]
-            combination = min(
-                eligible,
-                key=lambda candidate: (
-                    destination_quotas[destination][candidate],
-                    -(
-                        selected_by_combination[candidate]
-                        - len(destinations_by_combination[candidate])
-                    ),
-                    combination_order[candidate],
-                ),
-            )
-            destination_quotas[destination][combination] += 1
-            destination_assigned[destination] += 1
-            destinations_by_combination[combination].append(destination)
 
     assignment_by_id: dict[str, int] = {}
     for combination, combination_instances in by_combination.items():

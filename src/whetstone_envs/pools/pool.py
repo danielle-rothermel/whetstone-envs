@@ -104,11 +104,10 @@ class TaskPool:
         Instances are grouped by their complete ``strata`` tuple.
         Round-robin selection first determines a balanced quota for each
         combination. Those quotas are then distributed across the three
-        destinations. The allocation first maximizes distinct combination
-        coverage, then fills each destination from its least-represented
-        combinations with remaining quota. This keeps scarce combinations
-        from being consumed before coverage is established and balances
-        composition within each destination.
+        destinations by a global allocation that first maximizes distinct
+        combination coverage, then minimizes the sum of squared destination
+        counts. Equal objectives are resolved deterministically in first-seen
+        combination and destination order.
 
         Sizes are supplied by the caller rather than hardcoded here. Their
         sum must not exceed the pool size. Selected instances retain pool

@@ -15,6 +15,16 @@ if TYPE_CHECKING:
     from whetstone_envs.instances import Instance
 
 
+def _ids_by_destination(
+    split: PoolSplit,
+) -> tuple[set[str], set[str], set[str]]:
+    return (
+        {instance.id for instance in split.internal_eval},
+        {instance.id for instance in split.official},
+        {instance.id for instance in split.held_out},
+    )
+
+
 def test_split_is_stratified_and_independent_of_global_layout(
     synthetic_instance: Callable[..., Instance],
 ) -> None:
@@ -29,11 +39,21 @@ def test_split_is_stratified_and_independent_of_global_layout(
     interleaved = interleaved_pool.split(2, 2, 2)
     expected_ids = {inst.id for inst in blocked_pool.instances}
 
-    blocked_roles: dict[str, set[str]] = {}
-    interleaved_roles: dict[str, set[str]] = {}
-    for role in ("internal_eval", "official", "held_out"):
-        blocked_subset = getattr(blocked, role)
-        interleaved_subset = getattr(interleaved, role)
+    blocked_subsets = (
+        blocked.internal_eval,
+        blocked.official,
+        blocked.held_out,
+    )
+    interleaved_subsets = (
+        interleaved.internal_eval,
+        interleaved.official,
+        interleaved.held_out,
+    )
+    for blocked_subset, interleaved_subset in zip(
+        blocked_subsets,
+        interleaved_subsets,
+        strict=True,
+    ):
         assert len(blocked_subset) == 2
         assert len(interleaved_subset) == 2
         assert {inst.strata[0] for inst in blocked_subset} == {
@@ -44,14 +64,14 @@ def test_split_is_stratified_and_independent_of_global_layout(
             "easy",
             "hard",
         }
-        blocked_roles[role] = {inst.id for inst in blocked_subset}
-        interleaved_roles[role] = {inst.id for inst in interleaved_subset}
 
-    assert set().union(*blocked_roles.values()) == expected_ids
-    assert sum(map(len, blocked_roles.values())) == len(expected_ids)
-    assert set().union(*interleaved_roles.values()) == expected_ids
-    assert sum(map(len, interleaved_roles.values())) == len(expected_ids)
-    assert blocked_roles == interleaved_roles
+    blocked_ids = _ids_by_destination(blocked)
+    interleaved_ids = _ids_by_destination(interleaved)
+    assert set().union(*blocked_ids) == expected_ids
+    assert sum(map(len, blocked_ids)) == len(expected_ids)
+    assert set().union(*interleaved_ids) == expected_ids
+    assert sum(map(len, interleaved_ids)) == len(expected_ids)
+    assert blocked_ids == interleaved_ids
 
 
 def test_split_allows_leaving_instances_unassigned(
@@ -92,17 +112,20 @@ def test_split_distributes_scarce_combinations_across_destinations(
 
     split = TaskPool([*alpha, *beta]).split(2, 2, 4)
 
-    assert {instance.strata for instance in split.internal_eval} == {
-        ("shared", "alpha"),
-        ("shared", "beta"),
+    assert len(split.internal_eval) == 2
+    assert len(split.official) == 2
+    assert len(split.held_out) == 4
+    assert Counter(instance.strata for instance in split.internal_eval) == {
+        ("shared", "alpha"): 1,
+        ("shared", "beta"): 1,
     }
-    assert {instance.strata for instance in split.official} == {
-        ("shared", "alpha"),
-        ("shared", "beta"),
+    assert Counter(instance.strata for instance in split.official) == {
+        ("shared", "alpha"): 1,
+        ("shared", "beta"): 1,
     }
-    assert {instance.strata for instance in split.held_out} == {
-        ("shared", "alpha"),
-        ("shared", "beta"),
+    assert Counter(instance.strata for instance in split.held_out) == {
+        ("shared", "alpha"): 3,
+        ("shared", "beta"): 1,
     }
 
 
@@ -143,44 +166,65 @@ def test_split_balances_combinations_within_each_destination(
         instance for combination in combinations for instance in combination
     ).split(4, 7, 7)
 
-    assert Counter(instance.strata for instance in split.internal_eval) == {
+    subsets = (split.internal_eval, split.official, split.held_out)
+    assert tuple(map(len, subsets)) == (4, 7, 7)
+    assert Counter(
+        instance.strata for subset in subsets for instance in subset
+    ) == {("alpha",): 9, ("beta",): 9}
+    for subset in subsets:
+        counts = Counter(instance.strata for instance in subset)
+        assert set(counts) == {("alpha",), ("beta",)}
+        assert max(counts.values()) - min(counts.values()) <= 1
+
+
+@pytest.mark.parametrize(
+    "combination_order",
+    [("alpha", "beta"), ("beta", "alpha")],
+)
+def test_split_balances_after_scarce_destination_coverage(
+    synthetic_instance: Callable[..., Instance],
+    combination_order: tuple[str, str],
+) -> None:
+    counts = {"alpha": 2, "beta": 3}
+    instances = [
+        synthetic_instance(index, label)
+        for index, label in enumerate(
+            label for label in combination_order for _ in range(counts[label])
+        )
+    ]
+
+    split = TaskPool(instances).split(0, 1, 4)
+
+    assert len(split.internal_eval) == 0
+    assert len(split.official) == 1
+    assert len(split.held_out) == 4
+    assert Counter(instance.strata for instance in split.held_out) == {
         ("alpha",): 2,
         ("beta",): 2,
     }
-    assert Counter(instance.strata for instance in split.official) == {
-        ("alpha",): 4,
-        ("beta",): 3,
-    }
-    assert Counter(instance.strata for instance in split.held_out) == {
-        ("alpha",): 3,
-        ("beta",): 4,
-    }
 
 
-def test_split_balances_five_uniform_strata_at_c11_default_scale(
+def test_split_finds_global_balance_across_three_way_exchange(
     synthetic_instance: Callable[..., Instance],
 ) -> None:
-    labels = ("S0", "S1", "S2", "S3", "S4")
-    combinations = [
-        [
-            synthetic_instance(index * 82 + offset, label)
-            for offset in range(82)
-        ]
-        for index, label in enumerate(labels)
+    counts = {"alpha": 3, "beta": 2, "gamma": 4}
+    instances = [
+        synthetic_instance(index, label)
+        for index, label in enumerate(
+            label for label, count in counts.items() for _ in range(count)
+        )
     ]
-    split = TaskPool(
-        instance for combination in combinations for instance in combination
-    ).split(10, 200, 200)
 
-    assert Counter(instance.strata for instance in split.internal_eval) == {
-        (label,): 2 for label in labels
-    }
-    assert Counter(instance.strata for instance in split.official) == {
-        (label,): 40 for label in labels
-    }
-    assert Counter(instance.strata for instance in split.held_out) == {
-        (label,): 40 for label in labels
-    }
+    split = TaskPool(instances).split(2, 1, 6)
+
+    assert [
+        Counter(instance.strata for instance in subset)
+        for subset in (split.internal_eval, split.official, split.held_out)
+    ] == [
+        Counter({("alpha",): 1, ("gamma",): 1}),
+        Counter({("gamma",): 1}),
+        Counter({("alpha",): 2, ("beta",): 2, ("gamma",): 2}),
+    ]
 
 
 def test_split_preserves_pool_order_with_interleaved_combinations(
@@ -197,6 +241,11 @@ def test_split_preserves_pool_order_with_interleaved_combinations(
     pool = TaskPool(instances)
 
     split = pool.split(3, 2, 1)
+    assert (
+        len(split.internal_eval),
+        len(split.official),
+        len(split.held_out),
+    ) == (3, 2, 1)
     positions = {
         instance.id: index for index, instance in enumerate(instances)
     }
@@ -216,9 +265,32 @@ def test_split_oversize_rejected(two_stratum_pool: TaskPool) -> None:
         two_stratum_pool.split(3, 3, 3)
 
 
-def test_split_negative_size_rejected(two_stratum_pool: TaskPool) -> None:
-    with pytest.raises(ValueError, match="non-negative"):
-        two_stratum_pool.split(-1, 0, 0)
+@pytest.mark.parametrize("role", range(3))
+@pytest.mark.parametrize(
+    ("invalid_size", "error", "match"),
+    [
+        (-1, ValueError, "non-negative"),
+        (True, TypeError, "must be an int"),
+        (1.0, TypeError, "must be an int"),
+        (0.5, TypeError, "must be an int"),
+    ],
+)
+def test_split_invalid_size_rejected(
+    two_stratum_pool: TaskPool,
+    role: int,
+    invalid_size: object,
+    error: type[Exception],
+    match: str,
+) -> None:
+    sizes: list[object] = [0, 0, 0]
+    sizes[role] = invalid_size
+
+    with pytest.raises(error, match=match):
+        two_stratum_pool.split(*sizes)  # ty: ignore[invalid-argument-type]
+
+
+def test_empty_pool_splits_into_empty_destinations() -> None:
+    assert TaskPool([]).split(0, 0, 0) == PoolSplit((), (), ())
 
 
 def test_pool_split_asserts_no_overlap(

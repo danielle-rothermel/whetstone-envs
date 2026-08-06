@@ -8,13 +8,30 @@ from whetstone_envs.probes import normalize
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("  yes  ", "yes"),
-        ("yes\n", "yes"),
-        ("```\nyes\n```", "yes"),
-        ('```json\n{"a": 1}\n```', '{"a": 1}'),
-        ("  ```\n  answer  \n```  ", "answer"),
-        ("no fence here", "no fence here"),
-        ("```only one backtick line", "```only one backtick line"),
+        pytest.param("  yes  ", "yes", id="surrounding-spaces"),
+        pytest.param("yes\n", "yes", id="trailing-newline"),
+        pytest.param("```\nyes\n```", "yes", id="plain-fence"),
+        pytest.param(
+            '```json\n{"a": 1}\n```',
+            '{"a": 1}',
+            id="language-tagged-fence",
+        ),
+        pytest.param(
+            "```text\nfirst line\n\n    indented line\nlast line\n```",
+            "first line\n\n    indented line\nlast line",
+            id="internal-blank-line-and-indentation",
+        ),
+        pytest.param(
+            "  ```\n  answer  \n```  ",
+            "answer",
+            id="whitespace-around-fence-and-payload",
+        ),
+        pytest.param("no fence here", "no fence here", id="unfenced-text"),
+        pytest.param(
+            "```only one backtick line",
+            "```only one backtick line",
+            id="inline-backticks",
+        ),
     ],
 )
 def test_normalize(raw: str, expected: str) -> None:
@@ -59,6 +76,12 @@ def test_normalize_preserves_internal_backticks() -> None:
     assert normalize("a `b` c") == "a `b` c"
 
 
-@pytest.mark.parametrize("raw", ["```\nanswer", "answer\n```"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("```\nanswer", id="opening-only"),
+        pytest.param("answer\n```", id="closing-only"),
+    ],
+)
 def test_normalize_preserves_unmatched_fence_lines(raw: str) -> None:
     assert normalize(raw) == raw

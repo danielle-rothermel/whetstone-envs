@@ -65,7 +65,8 @@ def public_prompt_identity(
 ## Probes
 
 Probes define the prompt boundary: a paired floor and ceiling interface, a
-renderer restricted to public inputs, and shared prediction normalization.
+default renderer restricted to public prompt inputs, an explicit
+custom-renderer hook, and shared prediction normalization.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -86,6 +87,11 @@ def render_with_prompt_inputs(
 
 def normalize(prediction: str) -> str: ...
 ```
+
+`render_with_prompt_inputs` is the default renderer and formats templates only
+against `Instance.prompt_inputs`. A custom `ProbePair.render` intentionally
+receives the full `Instance`, including private evaluation fields, so callers
+that supply one own that access boundary.
 
 ## Scoring
 

@@ -152,6 +152,34 @@ exported_symbols = [
 ]
 
 [[terms]]
+name = "C19 task family"
+definition = """
+An evaluation task family for complete-script MiniGrid state transitions \
+spanning navigation, object manipulation, and door interaction at standard \
+world sizes, with deterministic generation, standard cohort sizes, a \
+naive-and-known-good probe pair, and a reproducibility manifest."""
+exported_symbols = [
+    "whetstone_envs.c19.C19Scenario",
+    "whetstone_envs.c19.C19Size",
+    "whetstone_envs.c19.DEFAULT_SPLIT_SIZES",
+    "whetstone_envs.c19.PROBES",
+    "whetstone_envs.c19.build_manifest",
+    "whetstone_envs.c19.generate_pool",
+]
+
+[[terms]]
+name = "C19 state transition"
+definition = """
+The evolution of supported answer-relevant physical grid-world state under an \
+ordered action script, from which a requested final-state fact is derived \
+after every action has been applied."""
+exported_symbols = [
+    "whetstone_envs.c19.Action",
+    "whetstone_envs.c19.C19Fact",
+    "whetstone_envs.c19.derive_fact",
+]
+
+[[terms]]
 name = "C22 task family"
 definition = """
 An evaluation task family for satisfying composed deterministic instruction \

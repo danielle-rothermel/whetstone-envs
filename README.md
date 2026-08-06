@@ -27,6 +27,9 @@ code:
   probes.
 - [**C18 PrOntoQA**][c18-source] provides deterministic fictional-ontology
   entailment tasks with an independent forward-chaining oracle.
+- [**C19 MiniGrid state prediction**][c19-source] provides deterministic
+  grid-world tasks, a supported answer-relevant physical-state transition
+  oracle, and naive and known-good probes.
 - [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
@@ -307,6 +310,63 @@ uv run python scripts/regenerate-c18.py \
   --output src/whetstone_envs/c18/resources/default.manifest.json
 ```
 
+## C19 MiniGrid state prediction
+
+[`whetstone_envs.c19`][c19-source] generates balanced navigation, object-
+manipulation, and door-interaction tasks on 5x5 and 8x8 MiniGrid worlds. Its
+independent oracle simulates complete `LRFPDT` scripts from the public grid and
+is checked against the pinned MiniGrid adapter after every action prefix.
+
+```python
+@verify(UNIQUE)
+class Action(StrEnum):
+    LEFT = "L"
+    RIGHT = "R"
+    FORWARD = "F"
+    PICKUP = "P"
+    DROP = "D"
+    TOGGLE = "T"
+
+@verify(UNIQUE)
+class C19Fact(StrEnum):
+    COORDINATE = "coordinate"
+    HEADING = "heading"
+    FRONT = "front"
+    CARRYING = "carrying"
+```
+
+```python
+@verify(UNIQUE)
+class C19Scenario(StrEnum):
+    NAVIGATION = "navigation"
+    MANIPULATION = "manipulation"
+    DOOR = "door"
+
+@verify(UNIQUE)
+class C19Size(IntEnum):
+    SMALL = 5
+    MEDIUM = 8
+```
+
+```python
+DEFAULT_SPLIT_SIZES: tuple[int, int, int]
+PROBES: ProbePair
+
+def generate_pool(
+    *,
+    n_per_stratum: int = ...,
+    seed_start: int = ...,
+) -> TaskPool: ...
+
+def build_manifest(
+    *,
+    n_per_stratum: int = ...,
+    seed_start: int = ...,
+) -> Manifest: ...
+
+def derive_fact(grid_text: str, command: str, fact: C19Fact) -> str: ...
+```
+
 ## C22 instruction constraints
 
 [`whetstone_envs.c22`][c22-source] provides two fixed, seeded pools of
@@ -414,8 +474,15 @@ Regenerate the canonical C11 manifest after an intentional generator change:
 uv run python -m whetstone_envs.c11.regenerate
 ```
 
+Regenerate the canonical C19 manifest after an intentional generator change:
+
+```bash
+uv run python -m whetstone_envs.c19.regenerate
+```
+
 [c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
 [c18-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c18
+[c19-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c19
 [instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
 [c22-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c22
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests

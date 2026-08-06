@@ -30,6 +30,11 @@ environment PRs in the release have merged.
   checked-in pool manifests.
 - A pinned vendored generator boundary, an optional `c18` dependency extra,
   and an explicit script for regenerating either canonical C18 manifest.
+- Deterministic C19 MiniGrid state-prediction tasks across navigation, object
+  manipulation, and door-interaction scenarios at two grid sizes.
+- A complete-state oracle independently cross-checked against live MiniGrid
+  transitions, naive and known-good probes, and a canonical persisted pool
+  manifest.
 - Distribution validation that checks artifact metadata, package contents, and
   isolated installed-wheel imports before publication.
 
@@ -51,6 +56,8 @@ environment PRs in the release have merged.
   `whetstone_envs.c23` environment.
 - Package and test C18 through the published instances, pools, probes,
   scoring, and manifests capability boundaries.
+- Expand the package scope to include task families and exactly pin C19's
+  MiniGrid, Gymnasium, and NumPy transition semantics.
 
 ## [0.1.1] - 2026-08-06
 

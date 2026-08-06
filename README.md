@@ -27,6 +27,9 @@ code:
   probes.
 - [**C18 PrOntoQA**][c18-source] provides deterministic fictional-ontology
   entailment tasks with an independent forward-chaining oracle.
+- [**C19 MiniGrid state prediction**][c19-source] provides deterministic
+  grid-world tasks, a complete-state transition oracle, and naive and
+  known-good probes.
 - [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
@@ -45,6 +48,22 @@ Install C18's pinned generator dependencies when generating its pools:
 
 ```bash
 uv add 'whetstone-envs[c18]'
+```
+
+## C19 MiniGrid state prediction
+
+[`whetstone_envs.c19`][c19-source] generates balanced tasks over navigation,
+object manipulation, and door interaction on small and medium MiniGrid worlds.
+Its independent oracle simulates complete `LRFPDT` action scripts from the
+public grid, while the pinned MiniGrid adapter cross-checks generated state
+transitions.
+
+```python
+from whetstone_envs.c19 import DEFAULT_SPLIT_SIZES, PROBES, generate_pool
+
+pool = generate_pool()
+split = pool.split(*DEFAULT_SPLIT_SIZES)
+prompt = PROBES.render_ceiling(split.internal_eval[0])
 ```
 
 ## Instances
@@ -414,8 +433,15 @@ Regenerate the canonical C11 manifest after an intentional generator change:
 uv run python -m whetstone_envs.c11.regenerate
 ```
 
+Regenerate the canonical C19 manifest after an intentional generator change:
+
+```bash
+uv run python -m whetstone_envs.c19.regenerate
+```
+
 [c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
 [c18-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c18
+[c19-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c19
 [instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
 [c22-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c22
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests

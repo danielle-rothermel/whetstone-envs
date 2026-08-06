@@ -88,14 +88,15 @@ title = "Foundational dependencies change through releases"
 statement = """
 The dr-graph solver, dr-serialize identity format, dr-store persistence \
 capability, Pydantic schema runtime, rfc8785 canonicalization oracle, C18 \
-NumPy/SciPy generator runtime, and C22 IFEval runtime dependencies are exact \
-runtime dependency pins. A dependency change requires a new whetstone-envs \
-package version and lockfile."""
+NumPy/SciPy generator runtime, C19 MiniGrid/Gymnasium/NumPy transition \
+semantics, and C22 IFEval runtime dependencies are exact runtime dependency \
+pins. A dependency change requires a new whetstone-envs package version and \
+lockfile."""
 rationale = """
-Pool allocation, content identity, durable files, persisted validation, and \
-private gold generation are load-bearing semantics; consumer installation and \
-pool regeneration must not select a different implementation than the release \
-validated."""
+Pool allocation, content identity, durable files, persisted validation, private \
+gold generation, and grid-world transitions are load-bearing semantics; \
+consumer installation and pool regeneration must not select a different \
+implementation than the release validated."""
 date = "2026-08-06"
 check = "uv lock --check"
 
@@ -135,8 +136,8 @@ Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
 whetstone_envs.scoring. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
-whetstone_envs.c22, and whetstone_envs.c23; the root whetstone_envs namespace \
-exports no API."""
+whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23; the root \
+whetstone_envs namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""
@@ -217,3 +218,22 @@ label derivation prevents the generator's own answer from being the sole \
 evidence for correctness."""
 date = "2026-08-06"
 check = "uv run --extra c18 pytest -q --run-integration tests/c18"
+
+[[contracts]]
+title = "C19 generation is transition-complete and reproducible"
+statement = """
+The C19 task family applies every action in each complete bounded LRFPDT script \
+to the full grid-world state and generates only its closed wall, key, ball, and \
+door object subset. MiniGrid 3.1.0, Gymnasium 1.3.0, and NumPy 2.5.1 are exact \
+semantic dependency pins. An independent complete-state oracle parses only the \
+public grid and script and agrees with the live MiniGrid adapter after every \
+generated action prefix. Default generation is deterministic and balanced \
+across its 22 scenario, size, and fact strata, and regenerating the canonical \
+manifest reproduces the committed 352-instance pool identity."""
+rationale = """
+Full-state prefix agreement exposes transition drift before it can corrupt \
+private gold, while closed generated worlds, balanced deterministic generation, \
+exact runtime versions, and a canonical manifest make the task family \
+reproducible."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/c19"

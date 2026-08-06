@@ -25,6 +25,12 @@ DIST_DIR = PROJECT_ROOT / "dist"
 PACKAGE_DIR = PROJECT_ROOT / "src" / "whetstone_envs"
 DISTRIBUTION_NAME = "whetstone-envs"
 CHANGELOG = PROJECT_ROOT / "CHANGELOG.md"
+LICENSE_EXPRESSION = "MIT AND Apache-2.0"
+LICENSE_FILES = [
+    "LICENSE",
+    "src/whetstone_envs/c23/attribution/LICENSE",
+    "src/whetstone_envs/c23/attribution/PROVENANCE.md",
+]
 
 
 def _fail(message: str) -> NoReturn:
@@ -161,6 +167,17 @@ def _validate_metadata(
         _fail(
             f"{artifact.name} has version {metadata.get('Version')!r}; "
             f"expected {expected_version!r}"
+        )
+    if metadata.get("License-Expression") != LICENSE_EXPRESSION:
+        _fail(
+            f"{artifact.name} has license expression "
+            f"{metadata.get('License-Expression')!r}; "
+            f"expected {LICENSE_EXPRESSION!r}"
+        )
+    if metadata.get_all("License-File") != LICENSE_FILES:
+        _fail(
+            f"{artifact.name} has license files "
+            f"{metadata.get_all('License-File')!r}; expected {LICENSE_FILES!r}"
         )
 
 

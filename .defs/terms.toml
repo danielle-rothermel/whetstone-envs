@@ -143,3 +143,18 @@ exported_symbols = [
     "whetstone_envs.c22.load_manifest",
     "whetstone_envs.c22.score",
 ]
+
+[[terms]]
+name = "C23 task family"
+definition = """
+An evaluation task family for single-rule subregular string induction across \
+ISL k=2, left-OSL k=2, right-OSL k=2, and ISL k=3, with determinate held-out \
+query outputs, a naive-and-known-good probe pair, exact scoring, standard \
+cohort sizes, and a reproducibility manifest."""
+exported_symbols = [
+    "whetstone_envs.c23.GENERATOR_VERSION",
+    "whetstone_envs.c23.PROBES",
+    "whetstone_envs.c23.default_split_sizes",
+    "whetstone_envs.c23.generate_pool",
+    "whetstone_envs.c23.score_gold",
+]

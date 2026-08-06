@@ -19,6 +19,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "dr-graph>=0.1.2,<0.2.0",
     "dr-serialize>=0.1.2,<0.2.0",
     "pydantic>=2.13.4",
 ]

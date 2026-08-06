@@ -2,110 +2,18 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from heapq import heappop, heappush
 from typing import TYPE_CHECKING
+
+from dr_graph.flow.transport import (
+    TransportCell,
+    TransportProblem,
+    solve_separable_transport,
+)
 
 from whetstone_envs.instances import Instance
 
 if TYPE_CHECKING:
     from whetstone_envs.pools.pool import TaskPool
-
-
-@dataclass(slots=True)
-class _FlowEdge:
-    destination: int
-    reverse_edge_index: int
-    capacity: int
-    cost: int
-
-
-def _add_flow_edge(
-    graph: list[list[_FlowEdge]],
-    source: int,
-    destination: int,
-    capacity: int,
-    cost: int,
-) -> _FlowEdge:
-    forward = _FlowEdge(destination, len(graph[destination]), capacity, cost)
-    reverse = _FlowEdge(source, len(graph[source]), 0, -cost)
-    graph[source].append(forward)
-    graph[destination].append(reverse)
-    return forward
-
-
-def _require_predecessor_step(
-    predecessors: list[tuple[int, int] | None],
-    node: int,
-) -> tuple[int, int]:
-    step = predecessors[node]
-    if step is None:
-        msg = "destination quota path is incomplete"
-        raise AssertionError(msg)
-    return step
-
-
-def _send_min_cost_flow(
-    graph: list[list[_FlowEdge]],
-    source: int,
-    sink: int,
-    required_flow: int,
-) -> None:
-    node_count = len(graph)
-    potentials = [0] * node_count
-    sent = 0
-
-    while sent < required_flow:
-        distances: list[int | None] = [None] * node_count
-        predecessors: list[tuple[int, int] | None] = [None] * node_count
-        distances[source] = 0
-        queue = [(0, source)]
-
-        while queue:
-            distance, node = heappop(queue)
-            if distance != distances[node]:
-                continue
-            for edge_index, edge in enumerate(graph[node]):
-                if edge.capacity == 0:
-                    continue
-                candidate = (
-                    distance
-                    + edge.cost
-                    + potentials[node]
-                    - potentials[edge.destination]
-                )
-                known = distances[edge.destination]
-                if known is not None and candidate >= known:
-                    continue
-                distances[edge.destination] = candidate
-                predecessors[edge.destination] = (node, edge_index)
-                heappush(queue, (candidate, edge.destination))
-
-        if distances[sink] is None:
-            msg = "destination quota flow is infeasible"
-            raise AssertionError(msg)
-        for node, distance in enumerate(distances):
-            if distance is not None:
-                potentials[node] += distance
-
-        amount = required_flow - sent
-        node = sink
-        while node != source:
-            previous_node, edge_index = _require_predecessor_step(
-                predecessors, node
-            )
-            amount = min(amount, graph[previous_node][edge_index].capacity)
-            node = previous_node
-
-        node = sink
-        while node != source:
-            previous_node, edge_index = _require_predecessor_step(
-                predecessors, node
-            )
-            edge = graph[previous_node][edge_index]
-            edge.capacity -= amount
-            graph[node][edge.reverse_edge_index].capacity += amount
-            node = previous_node
-        sent += amount
 
 
 def _destination_cell_marginal_costs(
@@ -131,59 +39,37 @@ def _allocate_destination_quotas(
 ) -> list[dict[tuple[str, ...], int]]:
     """Set global quotas maximizing coverage before squared-count balance."""
     combinations = tuple(selected_by_combination)
-    combination_count = len(combinations)
-    destination_count = len(destination_sizes)
-    source = 0
-    first_combination = 1
-    first_destination = first_combination + combination_count
-    sink = first_destination + destination_count
-    graph: list[list[_FlowEdge]] = [[] for _ in range(sink + 1)]
-
+    supplies = tuple(selected_by_combination.values())
     total = sum(destination_sizes)
-    cell_edges: list[list[list[_FlowEdge]]] = [
-        [[] for _ in destination_sizes] for _ in combinations
-    ]
-
-    for combination_index, combination in enumerate(combinations):
-        quota = selected_by_combination[combination]
-        combination_node = first_combination + combination_index
-        _add_flow_edge(graph, source, combination_node, quota, 0)
-        for destination, size in enumerate(destination_sizes):
-            destination_node = first_destination + destination
+    cells: list[TransportCell] = []
+    for combination_index, supply in enumerate(supplies):
+        for destination_index, demand in enumerate(destination_sizes):
             marginal_costs = _destination_cell_marginal_costs(
-                combination_supply=quota,
-                destination_demand=size,
+                combination_supply=supply,
+                destination_demand=demand,
                 total_flow=total,
             )
-            for marginal_cost in marginal_costs:
-                edge = _add_flow_edge(
-                    graph,
-                    combination_node,
-                    destination_node,
-                    1,
-                    marginal_cost,
+            if marginal_costs:
+                cells.append(
+                    TransportCell(
+                        source_index=combination_index,
+                        destination_index=destination_index,
+                        marginal_costs=marginal_costs,
+                    )
                 )
-                cell_edges[combination_index][destination].append(edge)
-
-    for destination, size in enumerate(destination_sizes):
-        _add_flow_edge(
-            graph,
-            first_destination + destination,
-            sink,
-            size,
-            0,
+    solution = solve_separable_transport(
+        TransportProblem(
+            supplies=supplies,
+            demands=destination_sizes,
+            cells=tuple(cells),
         )
-
-    _send_min_cost_flow(graph, source, sink, total)
+    )
     return [
         {
-            combination: sum(
-                edge.capacity == 0
-                for edge in cell_edges[combination_index][destination]
-            )
+            combination: solution.allocations[combination_index][destination]
             for combination_index, combination in enumerate(combinations)
         }
-        for destination in range(destination_count)
+        for destination in range(len(destination_sizes))
     ]
 
 

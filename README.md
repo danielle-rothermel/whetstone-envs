@@ -12,8 +12,8 @@ probe rendering, score aggregation, and pinned manifests.**
   normalizes predictions for evaluation.
 - `whetstone_envs.scoring` evaluates repeated observations and
   aggregates results through task, stratum, and overall levels.
-- `whetstone_envs.pools` validates instance collections and splits
-  them across evaluation destinations.
+- `whetstone_envs.pools` validates instance collections and supplies
+  Whetstone's split policy to `dr-graph`'s exact transport solver.
 - `whetstone_envs.manifests` validates frozen manifests, derives versioned
   pool identities through `dr-serialize`, and persists exact canonical JSON.
 

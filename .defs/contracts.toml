@@ -59,7 +59,8 @@ Task-pool splitting selects without replacement by each task instance's \
 complete ordered task-strata tuple, fills exactly the requested nonnegative \
 destination sizes without oversubscription, maximizes combination coverage \
 before balancing combination counts, preserves source-pool order in every \
-destination, and leaves unselected task instances unassigned."""
+destination, and leaves unselected task instances unassigned. Exact separable \
+transport optimization is delegated to dr-graph."""
 rationale = """
 Repeated generation of evaluation cohorts must be reproducible while \
 representing scarce combinations as broadly as destination capacity permits."""

@@ -9,6 +9,7 @@ from dr_serialize import (
     JsonByteLimitError,
     Sha256Digest,
 )
+from dr_store import DocumentReadError
 from pydantic import BaseModel, ValidationError
 
 from whetstone_envs.instances import make_instance
@@ -116,6 +117,7 @@ def test_manifest_write_read_round_trip(
     path = tmp_path / "manifest.json"
     manifest.write(path)
     assert path.read_bytes() == manifest.to_json().encode("utf-8")
+    assert tuple(tmp_path.iterdir()) == (path,)
     assert Manifest.read(path) == manifest
 
 
@@ -387,8 +389,9 @@ def test_read_rejects_noncanonical_json(
 ) -> None:
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(valid_manifest_payload), encoding="utf-8")
-    with pytest.raises(ValueError, match="exact Canonical JSON Text"):
+    with pytest.raises(DocumentReadError) as caught:
         Manifest.read(path)
+    assert isinstance(caught.value.__cause__, ValueError)
 
 
 def test_read_rejects_duplicate_keys(tmp_path: Path) -> None:
@@ -396,15 +399,17 @@ def test_read_rejects_duplicate_keys(tmp_path: Path) -> None:
     path.write_text(
         '{"schema_version":1,"schema_version":1}', encoding="utf-8"
     )
-    with pytest.raises(DuplicateJsonKeyError):
+    with pytest.raises(DocumentReadError) as caught:
         Manifest.read(path)
+    assert isinstance(caught.value.__cause__, DuplicateJsonKeyError)
 
 
 def test_read_rejects_oversized_document(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_bytes(b" " * ((1 << 20) + 1))
-    with pytest.raises(JsonByteLimitError):
+    with pytest.raises(DocumentReadError) as caught:
         Manifest.read(path)
+    assert isinstance(caught.value.__cause__, JsonByteLimitError)
 
 
 def test_read_rejects_non_object_json(tmp_path: Path) -> None:

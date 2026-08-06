@@ -8,10 +8,9 @@ from dr_serialize import (
     Jsonable,
     Sha256Digest,
     canonical_json,
-    canonical_json_bytes,
-    decode_strict_json_bytes,
     validate_strict_json,
 )
+from dr_store import CanonicalJsonFile
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -52,6 +51,15 @@ def _retained_seeds_within_range(
 ) -> bool:
     start, end = seed_range
     return all(start <= instance.seed < end for instance in pool.instances)
+
+
+def _manifest_document(path: Path) -> CanonicalJsonFile:
+    return CanonicalJsonFile(
+        path.parent,
+        path.name,
+        max_bytes=_MANIFEST_MAX_BYTES,
+        max_depth=CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    )
 
 
 class Manifest(BaseModel):
@@ -166,22 +174,13 @@ class Manifest(BaseModel):
         return canonical_json(self.to_dict())
 
     def write(self, path: Path) -> None:
-        """Write canonical bytes without atomicity or durability guarantees."""
-        path.write_bytes(canonical_json_bytes(self.to_dict()))
+        """Publish through dr-store's bounded canonical-file capability."""
+        _manifest_document(path).publish(self.to_dict())
 
     @classmethod
     def read(cls, path: Path) -> Manifest:
-        with path.open("rb") as manifest_file:
-            raw = manifest_file.read(_MANIFEST_MAX_BYTES + 1)
-        payload = decode_strict_json_bytes(
-            raw,
-            max_bytes=_MANIFEST_MAX_BYTES,
-            max_depth=CANONICAL_JSON_MAX_CONTAINER_DEPTH,
-        )
-        if canonical_json_bytes(payload) != raw:
-            msg = "manifest file must contain exact Canonical JSON Text"
-            raise ValueError(msg)
-        return cls.from_dict(payload)
+        """Read through dr-store's bounded canonical-file capability."""
+        return cls.from_dict(_manifest_document(path).read())
 
     def matches_pool(self, pool: TaskPool) -> bool:
         """Check retained seeds, stratum counts, and content hash."""

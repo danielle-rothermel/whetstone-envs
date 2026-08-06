@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Probe rendering, idempotent prediction normalization, explicit evaluation
   observations, exact-match scoring, and complete-matrix aggregation.
 - Frozen persisted pool manifests with versioned `dr-serialize` identities,
-  bounded canonical JSON reads, and explicit retained-pool matching.
+  `dr-store` atomic canonical publication and bounded descriptor-pinned reads,
+  and explicit retained-pool matching.
 - The authoritative `.defs` vocabulary and contracts reference, published by
   GitHub Pages from the current TOML sources.
 - Locked, multi-version Depot CI, a canonical local pre-check hook, and

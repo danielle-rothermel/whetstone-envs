@@ -64,6 +64,18 @@ wheels = [
 ]
 
 [[package]]
+name = "dr-store"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dr-serialize" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2e/1d/e7005c47eb628c4014ce1e2e0cf513e1844a09bda0a61da6c5370eafe7ba/dr_store-0.1.4.tar.gz", hash = "sha256:f5369d5142f896c40ca6a2fbd8c3be6b52ed3b3ed6d792ad25a887b811713e17", size = 20895, upload-time = "2026-08-06T08:35:56.182Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/35/4f8dfd7fd5b61207bb0d5a498ba1c34c2f036f1dadc4bd98947917da7ac0/dr_store-0.1.4-py3-none-any.whl", hash = "sha256:fff9a403563fcd2fd83161e776eb02f41c07d176ff1218aa8e0ef36c76f69c15", size = 29218, upload-time = "2026-08-06T08:35:55.056Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "3.32.0"
 source = { registry = "https://pypi.org/simple" }
@@ -409,6 +421,7 @@ source = { editable = "." }
 dependencies = [
     { name = "dr-graph" },
     { name = "dr-serialize" },
+    { name = "dr-store" },
     { name = "pydantic" },
 ]
 
@@ -424,6 +437,7 @@ dev = [
 requires-dist = [
     { name = "dr-graph", specifier = ">=0.1.2,<0.2.0" },
     { name = "dr-serialize", specifier = ">=0.1.2,<0.2.0" },
+    { name = "dr-store", specifier = ">=0.1.4,<0.2.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
 ]
 

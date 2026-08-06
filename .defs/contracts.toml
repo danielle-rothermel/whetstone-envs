@@ -83,15 +83,17 @@ date = "2026-08-06"
 check = "uv run pytest -q tests/manifests"
 
 [[contracts]]
-title = "Manifest files use bounded canonical JSON"
+title = "Manifest files use bounded atomic canonical publication"
 statement = """
 Manifest files contain the exact dr-serialize Canonical JSON Text \
-representation, reject duplicate keys and noncanonical encodings, and accept \
-at most 1 MiB at the shared canonical-JSON depth bound. Local file writes do \
-not claim atomic visibility or durable persistence."""
+representation and are published through dr-store's flushed same-directory \
+atomic replacement. Descriptor-pinned reads reject duplicate keys, \
+noncanonical encodings, final-component symlinks, and files exceeding 1 MiB \
+or the shared canonical-JSON depth bound."""
 rationale = """
-One bounded representation prevents equivalent persisted forms from drifting \
-while keeping storage guarantees explicit at the current ownership boundary."""
+One bounded representation prevents equivalent persisted forms from drifting. \
+Atomic visibility depends on supported filesystem replacement semantics; this \
+contract does not claim locking, compare-and-set, or power-loss durability."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/manifests"
 

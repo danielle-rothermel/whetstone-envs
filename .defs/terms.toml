@@ -245,3 +245,11 @@ exported_symbols = [
     "whetstone_envs.reporting.TRAJECTORY_REPORT_SCHEMA",
     "whetstone_envs.reporting.TrajectoryReport",
 ]
+
+[[terms]]
+name = "self-contained HTML report"
+definition = """
+A deterministic, portable, offline presentation derived only from one strict \
+evaluation or optimization trajectory report plus packaged trusted assets. It \
+is replaceable from its authoritative JSON source, contains private debugging \
+data, and defines no persistence or interchange schema."""

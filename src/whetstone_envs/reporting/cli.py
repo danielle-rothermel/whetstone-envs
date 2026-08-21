@@ -131,6 +131,14 @@ def build_parser() -> argparse.ArgumentParser:
     trajectory.add_argument("run_dir", type=Path)
     trajectory.add_argument("--show-candidates", action="store_true")
     _color_argument(trajectory)
+
+    html = commands.add_parser("html")
+    html.add_argument("run_dir", type=Path)
+    _color_argument(html)
+
+    trajectory_html = commands.add_parser("trajectory-html")
+    trajectory_html.add_argument("run_dir", type=Path)
+    _color_argument(trajectory_html)
     return parser
 
 
@@ -195,6 +203,22 @@ def _dispatch(arguments: argparse.Namespace) -> int:
             )
             else 1
         )
+
+    if arguments.command in {"html", "trajectory-html"}:
+        from whetstone_envs.reporting.html import (
+            publish_eval_html,
+            publish_trajectory_html,
+        )
+
+        publisher = (
+            publish_eval_html
+            if arguments.command == "html"
+            else publish_trajectory_html
+        )
+        console.print(
+            str(publisher(arguments.run_dir).resolve()), soft_wrap=True
+        )
+        return 0
 
     from whetstone_envs.reporting.publication import (
         load_eval_report,

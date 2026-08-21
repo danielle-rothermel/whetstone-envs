@@ -58,3 +58,35 @@ def test_optimizer_cli_preserves_traceback_and_prints_run_directory(
     assert status == 2
     assert "RuntimeError: publication failed" in captured.err
     assert str(directory) in captured.err
+
+
+def test_html_cli_prints_absolute_expected_filename(
+    fake_eval_output, capsys
+) -> None:
+    status = reporting_main(
+        ["html", str(fake_eval_output.directory), "--no-color"]
+    )
+
+    captured = capsys.readouterr()
+    expected = (fake_eval_output.directory / "eval-report.html").resolve()
+    assert status == 0
+    assert captured.out.strip() == str(expected)
+    assert expected.is_file()
+
+
+def test_trajectory_html_cli_prints_absolute_expected_filename(
+    tmp_path, capsys
+) -> None:
+    expected = (tmp_path / "trajectory-report.html").resolve()
+    expected.write_text("valid", encoding="utf-8")
+    with patch(
+        "whetstone_envs.reporting.html.publish_trajectory_html",
+        return_value=expected,
+    ):
+        status = reporting_main(
+            ["trajectory-html", str(tmp_path), "--no-color"]
+        )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert captured.out.strip() == str(expected)

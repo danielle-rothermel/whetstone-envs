@@ -34,8 +34,19 @@ def openrouter_transport_factory(policy: ProviderExecutionPolicy):
     return OpenRouterTransport(policy)
 
 
+def bind_openrouter_transport(policy: ProviderExecutionPolicy):
+    """Return one transport and a factory that always yields it."""
+    transport = OpenRouterTransport(policy)
+
+    def factory(_policy: ProviderExecutionPolicy) -> OpenRouterTransport:
+        return transport
+
+    return transport, factory
+
+
 __all__ = [
     "OpenRouterTransport",
+    "bind_openrouter_transport",
     "openrouter_seeded_call_config",
     "openrouter_transport_factory",
 ]

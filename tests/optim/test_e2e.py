@@ -100,7 +100,7 @@ def test_gepa_fake_transport_completes(tmp_path) -> None:
             prompt_binding_identity_hash="e" * 64,
             trainset_task_hashes=task_hashes,
             valset_task_hashes=None,
-            component_names=("generate",),
+            component_names=(C19_MUTATION_FIELD,),
             num_predictors=1,
             max_metric_calls=2,
         )
@@ -112,7 +112,7 @@ def test_gepa_fake_transport_completes(tmp_path) -> None:
         )
         adapter = GepaHarnessAdapter(
             control=control,
-            seed_candidate={"generate": PROBES.naive_template},
+            seed_candidate={C19_MUTATION_FIELD: PROBES.naive_template},
             trainset=(),
             valset=None,
             adapter_factory=GepaHarnessAdapterFactory(factory=factory),
@@ -136,7 +136,7 @@ def test_gepa_fake_transport_completes(tmp_path) -> None:
             controller_identity_hash=runtime.controller.runtime_hash,
         )
         detailed = GepaDetailedResult(
-            candidates=({"generate": PROBES.naive_template},),
+            candidates=({C19_MUTATION_FIELD: PROBES.naive_template},),
             parents=((None,),),
             val_aggregate_scores=(1.0,),
             val_subscores=({"task": 1.0},),
@@ -169,7 +169,9 @@ def test_gepa_fake_transport_completes(tmp_path) -> None:
             patch(
                 "whetstone.optim.gepa.harness_adapter.project_gepa_terminal",
                 return_value=GepaTerminalResult(
-                    best_candidate={"generate": PROBES.ceiling_template},
+                    best_candidate={
+                        C19_MUTATION_FIELD: PROBES.ceiling_template
+                    },
                     control_identity_hash=control.identity_hash(),
                     artifact_ref=TypedRef(
                         schema_name="whetstone.gepa.result",

@@ -34,8 +34,8 @@ from whetstone_envs.optim.experiment import (
     c19_render_contract,
 )
 from whetstone_envs.optim.provider import (
+    bind_openrouter_transport,
     openrouter_seeded_call_config,
-    openrouter_transport_factory,
 )
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
 
@@ -134,11 +134,9 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
     sqlite_path = resolved_output / "runtime.sqlite"
     provider = None
     api_key_env = "WHETSTONE_TOY_API_KEY"
-    live_factory = None
     if spec.transport == "openrouter":
         provider = openrouter_seeded_call_config(model=spec.model)
         api_key_env = "OPENROUTER_API_KEY"
-        live_factory = openrouter_transport_factory
     pool = generate_pool(n_per_stratum=2, seed_start=765_432)
     experiment = build_c19_experiment(
         pool,
@@ -155,6 +153,12 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
         runtime_config = ReferenceEvalRuntimeConfig(
             transport_api_key_env=api_key_env,
         )
+    live_transport = None
+    live_factory = None
+    if spec.transport == "openrouter":
+        live_transport, live_factory = bind_openrouter_transport(
+            runtime_config.execution_policy
+        )
     with open_sqlite(str(sqlite_path)) as store:
         engine_kwargs = {}
         if live_factory is not None:
@@ -169,12 +173,12 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
         )
         prompt_adapter = PlainPromptAdapter()
         proposer_transport = None
-        if live_factory is not None:
+        if live_transport is not None:
             proposer_transport = ProviderProposerTransport(
                 resolve_provider_call_config=_provider_config_resolver(
                     experiment
                 ),
-                transport=live_factory(runtime_config.execution_policy),
+                transport=live_transport,
                 execution_policy=runtime_config.execution_policy,
                 prompt_adapter=prompt_adapter,
             )

@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA
 from whetstone.core.effects.authority import ReplayPolicy
-from whetstone.core.identity import ImmutableJsonObject, compute_identity_hash
+from whetstone.core.identity import (
+    IdentityRef,
+    ImmutableJsonObject,
+    compute_identity_hash,
+    typed_ref_for_record,
+)
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import StepStatus
@@ -258,6 +264,17 @@ def _gepa_transport(
     )
 
 
+def _provider_call_config_ref(experiment: Experiment) -> IdentityRef:
+    payload = experiment.rollout_graph.provider_call_config.model_dump(
+        mode="json"
+    )
+    record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
+    return IdentityRef(
+        record_ref=record_ref,
+        record_hash=record_ref.content_hash,
+    )
+
+
 def build_c19_gepa_adapter(
     *,
     store: ObjectStore,
@@ -277,7 +294,7 @@ def build_c19_gepa_adapter(
     task_hashes = engine.sampling.task_hashes
     control = configure_gepa(
         reflection_model=ProposerConfig(
-            provider_call_config=engine.provider_execution_policy_ref,
+            provider_call_config=_provider_call_config_ref(experiment),
         ),
         metric=engine.eval_config_ref,
         reward_policy_hash=experiment.reward_policy.identity_hash(),

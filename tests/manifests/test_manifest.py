@@ -7,11 +7,10 @@ import pytest
 from dr_serialize import (
     CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     DuplicateJsonKeyError,
-    JsonByteLimitError,
     JsonDepthLimitError,
     Sha256Digest,
 )
-from dr_store import DocumentReadError
+from dr_store import DocumentReadError, ReadStage, RegularChildFailureReason
 from pydantic import ValidationError
 
 from whetstone_envs.instances import make_instance
@@ -369,7 +368,8 @@ def test_read_rejects_oversized_document(tmp_path: Path) -> None:
     path.write_bytes(b" " * ((1 << 20) + 1))
     with pytest.raises(DocumentReadError) as caught:
         Manifest.read(path)
-    assert isinstance(caught.value.__cause__, JsonByteLimitError)
+    assert caught.value.stage is ReadStage.READ_BYTES
+    assert caught.value.reason is RegularChildFailureReason.BOUNDS_EXCEEDED
 
 
 def test_read_rejects_document_beyond_shared_depth_limit(

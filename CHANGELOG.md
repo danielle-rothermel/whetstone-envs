@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The C19 optimizer CLI and runner accept `--optimizer gepa` through the
+  same `run_c19_optimizer` path as COPRO.
+
+### Changed
+
+- Fake GEPA accepts the ceiling draft because the fake task model emits
+  gold for ceiling-rendered prompts; exact-match scoring is unchanged.
+  The GEPA trainset is the internal eval split. Live nano runs that stay
+  at 0.0/0.0 still fail 0.1.1's `diff_check` instead of writing a fake
+  ceiling.
+- The public-surface guard allowlists the 0.1.1 GEPA authority
+  attributes reached through `cast("Any", …)` so the next pin can prove
+  the list is empty.
+
 ## [0.2.1] - 2026-08-21
 
 ### Changed

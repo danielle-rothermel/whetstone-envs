@@ -165,6 +165,7 @@ exclude = [
 include = [
     "src/whetstone_envs/optim/cli.py",
     "src/whetstone_envs/optim/experiment.py",
+    "src/whetstone_envs/optim/gepa.py",
     "src/whetstone_envs/optim/provider.py",
     "src/whetstone_envs/optim/run.py",
     "tests/optim/test_e2e.py",

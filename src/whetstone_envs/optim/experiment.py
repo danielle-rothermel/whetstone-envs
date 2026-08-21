@@ -226,12 +226,13 @@ def build_c19_experiment(
         aggregation=aggregation,
         num_seeds=num_seeds,
     )
+    held_out_rows = task_rows_from_instances(split.held_out)
     eval_configs = EvalConfigs(
         env_name=C19_NAMESPACE,
         procedure_config_hash=procedure_hash,
         internal=internal,
         official=official,
-        held_out_task_hashes=(),
+        held_out_task_hashes=tuple(row.task_hash for row in held_out_rows),
     )
     resolved_initial = PROBES.naive_template
     resolved_ceiling = PROBES.ceiling_template

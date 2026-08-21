@@ -197,3 +197,20 @@ def test_run_refuses_in_repo_output() -> None:
                 output_dir=Path("artifacts") / "c19-run",
             )
         )
+
+
+def test_run_refuses_in_repo_output_when_cwd_is_elsewhere(
+    tmp_path, monkeypatch
+) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(
+        ValueError, match="must not be written inside the repo"
+    ):
+        run_c19_optimizer(
+            C19RunSpec(
+                optimizer="copro",
+                transport="fake",
+                output_dir=repo_root / "artifacts" / "c19-run",
+            )
+        )

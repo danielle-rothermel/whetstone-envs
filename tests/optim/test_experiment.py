@@ -58,3 +58,13 @@ def test_build_c19_experiment_maps_split_to_eval_rows() -> None:
     assert experiment.reward_policy.terms[0].name == "score"
     rows = task_rows_from_instances(split.internal_eval)
     assert rows[0].gold == split.internal_eval[0].gold
+    assert experiment.eval_configs.held_out_task_hashes == ()
+
+
+def test_build_c19_experiment_records_held_out_hashes() -> None:
+    pool = _small_pool()
+    experiment = build_c19_experiment(pool, split_sizes=(1, 1, 1), num_seeds=1)
+    split = pool.split(1, 1, 1)
+    assert experiment.eval_configs.held_out_task_hashes == tuple(
+        row.task_hash for row in task_rows_from_instances(split.held_out)
+    )

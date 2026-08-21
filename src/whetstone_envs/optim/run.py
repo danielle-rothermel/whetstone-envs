@@ -66,6 +66,24 @@ def default_output_dir(run_id: str) -> Path:
     return DEFAULT_OUTPUT_ROOT / run_id
 
 
+def _git_root(start: Path) -> Path | None:
+    for parent in (start, *start.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def _repository_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    for start in (Path.cwd().resolve(), Path(__file__).resolve()):
+        root = _git_root(start)
+        if root is not None and root not in seen:
+            seen.add(root)
+            roots.append(root)
+    return tuple(roots)
+
+
 def _provider_config_resolver(experiment: Experiment):
     provider_config = experiment.rollout_graph.provider_call_config
 
@@ -109,7 +127,8 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
     resolved_output = (
         spec.output_dir or default_output_dir(resolved_run_id)
     ).resolve()
-    if resolved_output.is_relative_to(Path.cwd().resolve()):
+    repo_roots = _repository_roots()
+    if any(resolved_output.is_relative_to(root) for root in repo_roots):
         raise ValueError("run artifacts must not be written inside the repo")
     resolved_output.mkdir(parents=True, exist_ok=True)
     sqlite_path = resolved_output / "runtime.sqlite"

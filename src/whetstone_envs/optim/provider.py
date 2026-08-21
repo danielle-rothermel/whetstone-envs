@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dr_providers import HttpProvider, RequestControl, openrouter_chat_config
+from dr_providers import (
+    HttpProvider,
+    ProviderCallRequest,
+    ProviderInvocationEvidence,
+    RequestControl,
+    openrouter_chat_config,
+)
+from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
+from dr_providers.outcomes.models import ProviderTransportResponse
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from whetstone.provider.policy import ProviderExecutionPolicy
 
 
@@ -44,9 +54,61 @@ def bind_openrouter_transport(policy: ProviderExecutionPolicy):
     return transport, factory
 
 
+def c19_fake_task_reply(prompt: str, gold_by_prompt: Mapping[str, str]) -> str:
+    return gold_by_prompt.get(prompt, f"generated: {prompt}")
+
+
+class C19FakeTaskTransport:
+    """Emit gold for ceiling-rendered prompts; echo every other prompt."""
+
+    def __init__(
+        self,
+        policy: ProviderExecutionPolicy,
+        gold_by_prompt: Mapping[str, str],
+    ) -> None:
+        self._policy = policy
+        self._gold_by_prompt = dict(gold_by_prompt)
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        messages = getattr(
+            getattr(request, "transcript", None), "messages", ()
+        )
+        prompt = messages[-1].content if messages else ""
+        if not isinstance(prompt, str):
+            prompt = str(prompt or "")
+        text = c19_fake_task_reply(prompt, self._gold_by_prompt)
+        response = ProviderTransportResponse(text=text, stop_reason="stop")
+        return ProviderInvocationEvidence.build(
+            request=request,
+            policy=self._policy.transport_policy,
+            http_request=ProviderHttpRequestEvidence(
+                method="POST",
+                url="http://whetstone.fake/llm",
+                headers={},
+                body={},
+                body_bytes=0,
+            ),
+            outcome=response,
+        )
+
+
+def c19_fake_transport_factory(*, gold_by_prompt: Mapping[str, str]):
+    replies = dict(gold_by_prompt)
+
+    def factory(policy: ProviderExecutionPolicy) -> C19FakeTaskTransport:
+        return C19FakeTaskTransport(policy, replies)
+
+    return factory
+
+
 __all__ = [
+    "C19FakeTaskTransport",
     "OpenRouterTransport",
     "bind_openrouter_transport",
+    "c19_fake_task_reply",
+    "c19_fake_transport_factory",
     "openrouter_seeded_call_config",
     "openrouter_transport_factory",
 ]

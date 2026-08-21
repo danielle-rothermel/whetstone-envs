@@ -48,7 +48,6 @@ from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_PROMPT_FIELDS,
 )
-from whetstone_envs.optim.scoring_runner import prefer_c19_ceiling_score
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -88,27 +87,6 @@ class _GepaEvalStoreView:
         return getattr(self._store, name)
 
 
-class _CeilingScoreView:
-    """Award the ceiling probe a winning fake-transport score.
-
-    The fake task model never emits gold, so both seed and ceiling score
-    0.0 and GEPA keeps the naive seed. Live OpenRouter is not wrapped.
-    """
-
-    def __init__(self, engine: EvalEngine) -> None:
-        self._engine = engine
-
-    def __getattr__(self, name: str):
-        return getattr(self._engine, name)
-
-    def evaluate(self, request):
-        template = request.candidate.payload.get(C19_MUTATION_FIELD)
-        if template == PROBES.ceiling_template:
-            with prefer_c19_ceiling_score():
-                return self._engine.evaluate(request)
-        return self._engine.evaluate(request)
-
-
 class _GepaEngineHashView:
     """Expose engine identity hashes as strings for GEPA authority bind.
 
@@ -117,14 +95,8 @@ class _GepaEngineHashView:
     binds.
     """
 
-    def __init__(
-        self,
-        engine: EvalEngine,
-        *,
-        prefer_ceiling: bool,
-    ) -> None:
+    def __init__(self, engine: EvalEngine) -> None:
         self._engine = engine
-        self._prefer_ceiling = prefer_ceiling
         self.task_model_identity_hash = engine.task_model_identity_hash()
         self.execution_policy_identity_hash = (
             engine.execution_policy_identity_hash()
@@ -144,10 +116,7 @@ class _GepaEngineHashView:
             for task in self._engine.sampling.tasks
         }
         resolved = tuple(hash_to_id.get(item, item) for item in task_ids)
-        subset = self._engine.for_task_ids(resolved)
-        if not self._prefer_ceiling:
-            return subset
-        return _CeilingScoreView(subset)
+        return self._engine.for_task_ids(resolved)
 
 
 class _C19GepaHarnessAdapter(GepaHarnessAdapter):
@@ -276,7 +245,9 @@ def build_c19_gepa_adapter(
         schema_version=1,
         payload={"mode": "inline"},
     )
-    task_hashes = engine.sampling.task_hashes
+    task_hashes = experiment.eval_configs.internal.task_set.task_hashes
+    if engine.sampling.task_hashes != task_hashes:
+        raise ValueError("GEPA trainset must be the internal eval split")
     control = configure_gepa(
         reflection_model=ProposerConfig(
             provider_call_config=_provider_call_config_ref(experiment),
@@ -311,10 +282,7 @@ def build_c19_gepa_adapter(
             ),
         ),
     )
-    hashed_engine = _GepaEngineHashView(
-        engine,
-        prefer_ceiling=proposer_transport is None,
-    )
+    hashed_engine = _GepaEngineHashView(engine)
     evaluation_authority = CanonicalGepaEvalAuthority(
         store=store,
         engine=cast("EvalEngine", hashed_engine),

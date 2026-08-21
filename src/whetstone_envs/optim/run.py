@@ -38,6 +38,7 @@ from whetstone_envs.optim.experiment import (
 from whetstone_envs.optim.gepa import build_c19_gepa_adapter
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
+    c19_fake_transport_factory,
     openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
@@ -134,6 +135,18 @@ def _resolve_run_layout(spec: C19RunSpec) -> tuple[str, Path]:
     return resolved_run_id, resolved_output
 
 
+def _ceiling_gold_by_prompt(experiment: Experiment) -> dict[str, str]:
+    contract = c19_render_contract()
+    gold_by_prompt: dict[str, str] = {}
+    for task in experiment.eval_configs.internal.tasks:
+        gold = getattr(task, "gold", None)
+        inputs = getattr(task, "prompt_inputs", None)
+        if not isinstance(gold, str) or not isinstance(inputs, dict):
+            raise TypeError("internal task must expose prompt_inputs and gold")
+        gold_by_prompt[contract.render(PROBES.ceiling_template, inputs)] = gold
+    return gold_by_prompt
+
+
 def run_c19_optimizer(spec: C19RunSpec) -> Path:
     """Run COPRO or GEPA on a small C19 split and write artifacts off-repo."""
     if spec.optimizer not in {"copro", "gepa"}:
@@ -164,22 +177,22 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
             transport_api_key_env=api_key_env,
         )
     live_transport = None
-    live_factory = None
     if spec.transport == "openrouter":
-        live_transport, live_factory = bind_openrouter_transport(
+        live_transport, transport_factory = bind_openrouter_transport(
             runtime_config.execution_policy
         )
+    else:
+        transport_factory = c19_fake_transport_factory(
+            gold_by_prompt=_ceiling_gold_by_prompt(experiment)
+        )
     with open_sqlite(str(sqlite_path)) as store:
-        engine_kwargs = {}
-        if live_factory is not None:
-            engine_kwargs["transport_factory"] = live_factory
         engine = runtime_config.build_engine(
             cast("ObjectStore", store),
             experiment=experiment,
             eval_runner=ExactMatchEvalProcedureRunner(),
             mutation_field=C19_MUTATION_FIELD,
             render_contract=c19_render_contract(),
-            **engine_kwargs,
+            transport_factory=transport_factory,
         )
         prompt_adapter = PlainPromptAdapter()
         proposer_transport = None

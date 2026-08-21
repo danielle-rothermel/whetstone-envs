@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Fake GEPA accepts the ceiling draft through scored selection so the
-  persisted evidence matches `OptimResult.proposals`. The runner no
-  longer substitutes an unevaluated ceiling when scores tie.
+- Fake GEPA accepts the ceiling draft because the fake task model emits
+  gold for ceiling-rendered prompts; exact-match scoring is unchanged.
+  The GEPA trainset is the internal eval split. Live nano runs that stay
+  at 0.0/0.0 still fail 0.1.1's `diff_check` instead of writing a fake
+  ceiling.
 - The public-surface guard allowlists the 0.1.1 GEPA authority
   attributes reached through `cast("Any", …)` so the next pin can prove
   the list is empty.

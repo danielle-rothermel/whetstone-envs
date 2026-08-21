@@ -1740,7 +1740,7 @@ wheels = [
 
 [[package]]
 name = "whetstone-ai"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-exec" },
@@ -1755,9 +1755,9 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e7/1d/041f28c433826b133fee9bfb9b746b310c4801d329356c25f1f4bd299c08/whetstone_ai-0.1.1.tar.gz", hash = "sha256:1780c9fd38ba0a24c72b7b7681f822e028b32ea1f03e947bbce153ad8056877e", size = 327433, upload-time = "2026-08-21T17:34:43.368Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/4a/914112da46469d1301b56ff774a8b656e4d84068eef02d20bf91e4aae20c/whetstone_ai-0.1.2.tar.gz", hash = "sha256:c2720e891210bb0e2cc1f3fa2f337f2c0410d6f54eb4d7a7ad5da1a4a6fc4490", size = 327991, upload-time = "2026-08-21T23:31:22.644Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/84/6c45386ba3d09e69287c3f69e9446ded87a19d7c9e378f7eafb27434b772/whetstone_ai-0.1.1-py3-none-any.whl", hash = "sha256:e2f098c6613451caf4b0d0ea581e64c23d5fd3cfadeac436bdbb79e5ff396ea5", size = 431932, upload-time = "2026-08-21T17:34:41.966Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/f1/a4ce1027919073b35d63b5883fdc9f87ac55216e5a64e3ca0f165b6f7d7e/whetstone_ai-0.1.2-py3-none-any.whl", hash = "sha256:be87c2d8e3f08d8b062363e54d824feef9d24f603937f425dd75e7f05b12e223", size = 428974, upload-time = "2026-08-21T23:31:21.256Z" },
 ]
 
 [[package]]
@@ -1813,7 +1813,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.1" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.2" },
 ]
 provides-extras = ["c18", "optim"]
 

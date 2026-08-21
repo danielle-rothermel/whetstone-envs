@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-21
+
 ### Changed
 
 - Pin `dr-store` to 0.2.5 and `dr-graph` to 0.1.3 so this package can share

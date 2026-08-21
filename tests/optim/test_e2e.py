@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
+    build_toy_copro_control,
     copro_run_request,
     prepare_gepa_run,
     register_runtime,
@@ -119,6 +120,7 @@ def test_gepa_fake_transport_completes(tmp_path) -> None:
         runtime = register_runtime(
             store=store,
             engine=engine,
+            copro_control=build_toy_copro_control(engine=engine),
             extra_adapters={GEPA_ADAPTER_KEY: adapter},
         )
         launch = prepare_gepa_run(

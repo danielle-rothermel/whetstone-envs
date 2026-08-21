@@ -47,7 +47,7 @@ c18 = [
     "scipy==1.18.0",
 ]
 optim = [
-    "whetstone-ai; python_version >= '3.13' and python_version < '3.15'",
+    "whetstone-ai==0.1.1; python_version >= '3.13' and python_version < '3.15'",
 ]
 
 [project.urls]
@@ -71,9 +71,6 @@ dev = [
 
 [tool.uv]
 required-version = "==0.11.25"
-
-[tool.uv.sources]
-whetstone-ai = { git = "https://github.com/danielle-rothermel/whetstone-ai.git", rev = "cd9f89b295a829a8ede77a476158c983791580c4" }
 
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]

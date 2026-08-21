@@ -1741,7 +1741,7 @@ wheels = [
 [[package]]
 name = "whetstone-ai"
 version = "0.1.1"
-source = { git = "https://github.com/danielle-rothermel/whetstone-ai.git?rev=cd9f89b295a829a8ede77a476158c983791580c4#cd9f89b295a829a8ede77a476158c983791580c4" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-exec" },
     { name = "dr-graph" },
@@ -1754,6 +1754,10 @@ dependencies = [
     { name = "optuna" },
     { name = "rich" },
     { name = "typer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e7/1d/041f28c433826b133fee9bfb9b746b310c4801d329356c25f1f4bd299c08/whetstone_ai-0.1.1.tar.gz", hash = "sha256:1780c9fd38ba0a24c72b7b7681f822e028b32ea1f03e947bbce153ad8056877e", size = 327433, upload-time = "2026-08-21T17:34:43.368Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/84/6c45386ba3d09e69287c3f69e9446ded87a19d7c9e378f7eafb27434b772/whetstone_ai-0.1.1-py3-none-any.whl", hash = "sha256:e2f098c6613451caf4b0d0ea581e64c23d5fd3cfadeac436bdbb79e5ff396ea5", size = 431932, upload-time = "2026-08-21T17:34:41.966Z" },
 ]
 
 [[package]]
@@ -1809,7 +1813,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", git = "https://github.com/danielle-rothermel/whetstone-ai.git?rev=cd9f89b295a829a8ede77a476158c983791580c4" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.1" },
 ]
 provides-extras = ["c18", "optim"]
 

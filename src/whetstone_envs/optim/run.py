@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA
+from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA, ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     copro_run_request,
@@ -127,9 +127,10 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
         num_seeds=1,
         provider_call_config=provider,
     )
-    runtime_config = ReferenceEvalRuntimeConfig(
-        transport_api_key_env=api_key_env,
-    )
+    runtime_kwargs = {"transport_api_key_env": api_key_env}
+    if spec.transport == "openrouter":
+        runtime_kwargs["provider_kind"] = ProviderKind.OPENROUTER
+    runtime_config = ReferenceEvalRuntimeConfig(**runtime_kwargs)
     with open_sqlite(str(sqlite_path)) as store:
         engine_kwargs = {}
         if live_factory is not None:

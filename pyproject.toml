@@ -73,7 +73,7 @@ dev = [
 required-version = "==0.11.25"
 
 [tool.uv.sources]
-whetstone-ai = { git = "https://github.com/danielle-rothermel/whetstone-ai.git", rev = "cfb51870674f2e273691025cc7d7cae95f8d91da" }
+whetstone-ai = { git = "https://github.com/danielle-rothermel/whetstone-ai.git", rev = "cd9f89b295a829a8ede77a476158c983791580c4" }
 
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]

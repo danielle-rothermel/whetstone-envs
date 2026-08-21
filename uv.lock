@@ -1741,7 +1741,7 @@ wheels = [
 [[package]]
 name = "whetstone-ai"
 version = "0.1.1"
-source = { git = "https://github.com/danielle-rothermel/whetstone-ai.git?rev=cfb51870674f2e273691025cc7d7cae95f8d91da#cfb51870674f2e273691025cc7d7cae95f8d91da" }
+source = { git = "https://github.com/danielle-rothermel/whetstone-ai.git?rev=cd9f89b295a829a8ede77a476158c983791580c4#cd9f89b295a829a8ede77a476158c983791580c4" }
 dependencies = [
     { name = "dr-exec" },
     { name = "dr-graph" },
@@ -1809,7 +1809,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", git = "https://github.com/danielle-rothermel/whetstone-ai.git?rev=cfb51870674f2e273691025cc7d7cae95f8d91da" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", git = "https://github.com/danielle-rothermel/whetstone-ai.git?rev=cd9f89b295a829a8ede77a476158c983791580c4" },
 ]
 provides-extras = ["c18", "optim"]
 

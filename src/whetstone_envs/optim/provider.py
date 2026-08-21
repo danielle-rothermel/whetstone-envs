@@ -1,6 +1,21 @@
 from __future__ import annotations
 
-from dr_providers import RequestControl, openrouter_chat_config
+from typing import TYPE_CHECKING
+
+from dr_providers import HttpProvider, RequestControl, openrouter_chat_config
+
+if TYPE_CHECKING:
+    from whetstone.provider.policy import ProviderExecutionPolicy
+
+
+class OpenRouterTransport:
+    """Hold one HttpProvider so eval and proposal share one live client."""
+
+    def __init__(self, policy: ProviderExecutionPolicy) -> None:
+        self._provider = HttpProvider(policy=policy.transport_policy)
+
+    def __call__(self, request: object):
+        return self._provider.invoke(request)
 
 
 def openrouter_seeded_call_config(*, model: str):
@@ -15,4 +30,12 @@ def openrouter_seeded_call_config(*, model: str):
     return config
 
 
-__all__ = ["openrouter_seeded_call_config"]
+def openrouter_transport_factory(policy: ProviderExecutionPolicy):
+    return OpenRouterTransport(policy)
+
+
+__all__ = [
+    "OpenRouterTransport",
+    "openrouter_seeded_call_config",
+    "openrouter_transport_factory",
+]

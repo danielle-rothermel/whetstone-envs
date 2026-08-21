@@ -59,9 +59,10 @@ task family. The extra is git-sourced until whetstone-ai is published:
 uv add 'whetstone-envs[optim]'
 ```
 
-The extra is Python 3.13/3.14 only. Run COPRO or GEPA on C19 in-process;
-artifacts write under `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never
-inside the git tree:
+The extra is Python 3.13/3.14 only. Run COPRO on C19 in-process; artifacts
+write under `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never inside the
+git tree. GEPA uses the same public `prepare_gepa_run` surface and is covered
+by the extra's tests rather than this CLI:
 
 ```bash
 uv run --extra optim python scripts/run-optim.py \

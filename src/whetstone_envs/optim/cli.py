@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--family", choices=("c19",), default="c19")
     parser.add_argument(
         "--optimizer",
-        choices=("copro", "gepa"),
+        choices=("copro",),
         required=True,
     )
     parser.add_argument(

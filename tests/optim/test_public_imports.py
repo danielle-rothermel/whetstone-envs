@@ -4,17 +4,8 @@ import ast
 from pathlib import Path
 
 OPTIM_ROOT = Path(__file__).parents[2] / "src" / "whetstone_envs" / "optim"
-ALLOWED_PRIVATE_IMPORTS = frozenset(
-    {
-        "whetstone.optim.proposal.proposer._durable_proposal_executor",
-    }
-)
-ALLOWED_PRIVATE_ATTRIBUTES = frozenset(
-    {
-        "CanonicalGepaEvalAuthority._completed_result",
-        "CanonicalGepaEvalAuthority._store",
-    }
-)
+ALLOWED_PRIVATE_IMPORTS: frozenset[str] = frozenset()
+ALLOWED_PRIVATE_ATTRIBUTES: frozenset[str] = frozenset()
 
 
 def _annotation_name(node: ast.AST | None) -> str | None:
@@ -99,6 +90,30 @@ def _private_whetstone_names(tree: ast.AST) -> list[str]:
     return names
 
 
+def _getattr_private_access(
+    node: ast.Call,
+    types: dict[str, str],
+    cast_names: dict[str, str],
+) -> str | None:
+    """Name the owner reached by ``getattr(obj, "_private")``, if any."""
+    func = node.func
+    if not isinstance(func, ast.Name) or func.id != "getattr":
+        return None
+    if len(node.args) < 2 or not isinstance(node.args[1], ast.Constant):
+        return None
+    name = node.args[1].value
+    if not isinstance(name, str) or not name.startswith("_"):
+        return None
+    subject = node.args[0]
+    owner: str | None = None
+    if _is_cast_any(subject):
+        cast_subject = _cast_subject_name(subject)
+        owner = types.get(cast_subject) if cast_subject else None
+    elif isinstance(subject, ast.Name):
+        owner = cast_names.get(subject.id) or types.get(subject.id)
+    return f"{owner or 'Unknown'}.{name}"
+
+
 def _private_cast_attributes(tree: ast.AST) -> list[str]:
     types = _name_types(tree)
     cast_names: dict[str, str] = {}
@@ -121,6 +136,11 @@ def _private_cast_attributes(tree: ast.AST) -> list[str]:
 
     found: list[str] = []
     for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            reached = _getattr_private_access(node, types, cast_names)
+            if reached is not None:
+                found.append(reached)
+            continue
         if not isinstance(node, ast.Attribute) or not node.attr.startswith(
             "_"
         ):
@@ -161,3 +181,17 @@ def test_cast_any_private_attribute_access_is_detected() -> None:
     names = _private_cast_attributes(tree)
     assert "Unknown._hidden" in names
     assert "Unknown._also" in names
+
+
+def test_getattr_private_access_is_detected() -> None:
+    tree = ast.parse(
+        "from typing import Any, cast\n"
+        "def use(authority: CanonicalGepaEvalAuthority) -> None:\n"
+        "    getattr(authority, '_completed_result')\n"
+        "    getattr(cast('Any', authority), '_store')\n"
+        "    getattr(authority, 'public')\n"
+    )
+    names = _private_cast_attributes(tree)
+    assert "CanonicalGepaEvalAuthority._completed_result" in names
+    assert "CanonicalGepaEvalAuthority._store" in names
+    assert not any(name.endswith(".public") for name in names)

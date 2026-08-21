@@ -38,7 +38,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.1`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.2`.
 
 ## Installation
 
@@ -53,15 +53,19 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO or GEPA against a
-task family. The extra pins published `whetstone-ai==0.1.1` from PyPI:
+task family. The extra pins published `whetstone-ai==0.1.2` from PyPI:
 
 ```bash
 uv add 'whetstone-envs[optim]'
 ```
 
-The extra is Python 3.13/3.14 only. Run COPRO or GEPA on C19 in-process;
-artifacts write under `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never
-inside the git tree:
+The extra is Python 3.13/3.14 only. Both optimizers run on whetstone-ai's
+public surface: GEPA is assembled from `CanonicalGepaAdapterFactory`,
+`GepaHarnessAdapter`, and `build_inline_proposal_executor` with no private
+imports and no adapter subclassing, and a GEPA run that finds no improvement
+reports the retained seed rather than substituting a candidate. Run COPRO or
+GEPA on C19 in-process; artifacts write under
+`~/drotherm/data/runs/whetstone-envs/<run-id>/`, never inside the git tree:
 
 ```bash
 uv run --extra optim python scripts/run-optim.py \

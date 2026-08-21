@@ -8,8 +8,8 @@ from whetstone_envs.c19 import PROBES, generate_pool
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_PROMPT_FIELDS,
-    build_c19_experiment,
     c19_render_contract,
+    prepare_c19_experiment,
     probe_candidates_from_templates,
     reward_policy_for_exact_match,
 )
@@ -43,10 +43,12 @@ def test_reward_policy_is_single_exact_match_term() -> None:
     assert policy.terms[0].weight == 1.0
 
 
-def test_build_c19_experiment_maps_split_to_eval_rows() -> None:
+def test_prepare_c19_experiment_maps_split_to_eval_rows() -> None:
     pool = _small_pool()
-    experiment = build_c19_experiment(pool, split_sizes=(2, 2, 0), num_seeds=1)
+    prepared = prepare_c19_experiment(pool, split_sizes=(2, 2, 0), num_seeds=1)
+    experiment = prepared.experiment
     split = pool.split(2, 2, 0)
+    assert prepared.split == split
     internal_ids = {
         row.task_id for row in experiment.eval_configs.internal.tasks
     }
@@ -61,9 +63,11 @@ def test_build_c19_experiment_maps_split_to_eval_rows() -> None:
     assert experiment.eval_configs.held_out_task_hashes == ()
 
 
-def test_build_c19_experiment_records_held_out_hashes() -> None:
+def test_prepare_c19_experiment_records_held_out_hashes() -> None:
     pool = _small_pool()
-    experiment = build_c19_experiment(pool, split_sizes=(1, 1, 1), num_seeds=1)
+    experiment = prepare_c19_experiment(
+        pool, split_sizes=(1, 1, 1), num_seeds=1
+    ).experiment
     split = pool.split(1, 1, 1)
     assert experiment.eval_configs.held_out_task_hashes == tuple(
         row.task_hash for row in task_rows_from_instances(split.held_out)

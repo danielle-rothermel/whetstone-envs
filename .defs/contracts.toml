@@ -134,7 +134,8 @@ title = "Owning subpackages define the public API"
 statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
-whetstone_envs.scoring. Task-family contracts are imported from their owning \
+whetstone_envs.scoring. Strict report models are imported from \
+whetstone_envs.reporting. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
 whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23. The optional \
 whetstone_envs.optim extra maps those contracts onto whetstone-ai experiments \
@@ -144,6 +145,34 @@ rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""
 date = "2026-08-21"
+
+[[contracts]]
+title = "Evaluation reports are strict bounded local evidence"
+statement = """
+Evaluation and optimization inspection reads only strict canonical JSON using \
+the exact persisted literals `whetstone_envs.eval_report/v1` and \
+`whetstone_envs.trajectory_report/v1`. Publication validates a complete \
+candidate, task, observation, step, resolution, reference, ordering, matrix, \
+and finite-number contract under an explicit 128 MiB limit before bounded \
+same-directory atomic replacement. \
+Standalone observation order is candidate-major then exact task and seed \
+order; trajectory order is exact step and resolution order, including repeated \
+evaluations. COPRO projections follow intent resolutions; GEPA projections \
+follow unique evaluate effects in persisted transcript order without \
+duplicating replayed per-step search evidence. Reports preserve private gold, \
+prompts, outputs, traces, full \
+candidate payloads, exact mutation text, safe typed provider failure metadata, \
+and both per-step and cumulative budgets. Raw provider messages, bodies, and \
+metadata, credentials, headers, environment values, and SQLite bytes never \
+enter reports. C19 scored observations are exact binary normalized matches to \
+their report task gold, and every hydrated trajectory evaluation binds its \
+exact candidate, evaluation result, and reward references."""
+rationale = """
+Offline debugging must remain reproducible and complete without reopening \
+mutable runtime storage, while validation or write failure must preserve an \
+existing report and incomplete execution must never masquerade as a zero."""
+date = "2026-08-21"
+check = "uv run --extra optim pytest -q tests/reporting tests/optim/test_e2e.py"
 
 [[contracts]]
 title = "C11 generation is reproducible and oracle-grounded"

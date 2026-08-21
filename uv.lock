@@ -1785,6 +1785,7 @@ c18 = [
     { name = "scipy" },
 ]
 optim = [
+    { name = "rich" },
     { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15'" },
 ]
 
@@ -1812,6 +1813,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'c18'", specifier = "==2.5.1" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "rfc8785", specifier = "==0.1.4" },
+    { name = "rich", marker = "extra == 'optim'", specifier = "==15.0.0" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
     { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.2" },
 ]

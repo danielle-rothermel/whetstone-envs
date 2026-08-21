@@ -220,3 +220,28 @@ exported_symbols = [
     "whetstone_envs.optim.task_row_from_instance",
     "whetstone_envs.optim.task_rows_from_instances",
 ]
+
+[[terms]]
+name = "evaluation report"
+definition = """
+A bounded, atomically published, versioned canonical JSON debugging artifact \
+that retains normalized candidates and tasks plus candidate-major C19 \
+observations, exact accounting, aggregate evidence, prompts, outputs, private \
+gold, safe typed provider-failure metadata, and component traces without raw \
+provider messages, credentials, or SQLite content."""
+exported_symbols = [
+    "whetstone_envs.reporting.EVAL_REPORT_SCHEMA",
+    "whetstone_envs.reporting.EvalReport",
+]
+
+[[terms]]
+name = "optimization trajectory report"
+definition = """
+A bounded, atomically published, versioned canonical JSON projection of an \
+exact terminal optimization result, preserving ordered steps and resolutions, \
+full candidate payloads and mutation text, per-step budget deltas, cumulative \
+budget state, and exact hydrated evaluation reports for offline debugging."""
+exported_symbols = [
+    "whetstone_envs.reporting.TRAJECTORY_REPORT_SCHEMA",
+    "whetstone_envs.reporting.TrajectoryReport",
+]

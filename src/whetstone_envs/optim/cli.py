@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import traceback
 from pathlib import Path
 
 from whetstone_envs.optim.run import (
@@ -8,6 +10,7 @@ from whetstone_envs.optim.run import (
     default_output_dir,
     run_c19_optimizer,
 )
+from whetstone_envs.reporting.publication import DurableRunError
 
 
 def _split_sizes(value: str) -> tuple[int, int, int]:
@@ -52,16 +55,21 @@ def main(argv: list[str] | None = None) -> int:
     output = arguments.output
     if output is None and run_id is not None:
         output = default_output_dir(run_id)
-    path = run_c19_optimizer(
-        C19RunSpec(
-            optimizer=arguments.optimizer,
-            transport=arguments.transport,
-            split_sizes=arguments.split_sizes,
-            output_dir=output,
-            run_id=run_id,
-            model=arguments.model,
+    try:
+        path = run_c19_optimizer(
+            C19RunSpec(
+                optimizer=arguments.optimizer,
+                transport=arguments.transport,
+                split_sizes=arguments.split_sizes,
+                output_dir=output,
+                run_id=run_id,
+                model=arguments.model,
+            )
         )
-    )
+    except DurableRunError as error:
+        traceback.print_exception(error.cause)
+        print(error.directory, file=sys.stderr)
+        return 2
     print(path)
     return 0
 

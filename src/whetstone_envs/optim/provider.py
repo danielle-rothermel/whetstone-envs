@@ -12,9 +12,13 @@ from dr_providers import (
 from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
 from dr_providers.outcomes.models import ProviderTransportResponse
 
+from whetstone_envs.c19 import PROBES
+from whetstone_envs.optim.experiment import c19_render_contract
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from whetstone.experiment.env import Experiment
     from whetstone.provider.policy import ProviderExecutionPolicy
 
 
@@ -56,6 +60,31 @@ def bind_openrouter_transport(policy: ProviderExecutionPolicy):
 
 def c19_fake_task_reply(prompt: str, gold_by_prompt: Mapping[str, str]) -> str:
     return gold_by_prompt.get(prompt, f"generated: {prompt}")
+
+
+def c19_fake_gold_by_prompt(experiment: Experiment) -> dict[str, str]:
+    """Map every prepared C19 ceiling prompt to its exact task gold."""
+    contract = c19_render_contract()
+    gold_by_prompt: dict[str, str] = {}
+    for split in (
+        experiment.eval_configs.internal,
+        experiment.eval_configs.official,
+    ):
+        for task in split.tasks:
+            gold = getattr(task, "gold", None)
+            inputs = getattr(task, "prompt_inputs", None)
+            if not isinstance(gold, str) or not isinstance(inputs, dict):
+                raise TypeError(
+                    "C19 task must expose strict prompt_inputs and gold"
+                )
+            prompt = contract.render(PROBES.ceiling_template, inputs)
+            existing = gold_by_prompt.get(prompt)
+            if existing is not None and existing != gold:
+                raise ValueError(
+                    "one C19 ceiling prompt maps to multiple golds"
+                )
+            gold_by_prompt[prompt] = gold
+    return gold_by_prompt
 
 
 class C19FakeTaskTransport:
@@ -107,6 +136,7 @@ __all__ = [
     "C19FakeTaskTransport",
     "OpenRouterTransport",
     "bind_openrouter_transport",
+    "c19_fake_gold_by_prompt",
     "c19_fake_task_reply",
     "c19_fake_transport_factory",
     "openrouter_seeded_call_config",

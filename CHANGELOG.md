@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - The C19 optimizer CLI and runner accept `--optimizer gepa` through the
   same `run_c19_optimizer` path as COPRO.
+- A C19 evaluation CLI for task-family information, standalone fake or
+  OpenRouter execution, strict local report publication, summary/failure/task
+  inspection, and paired candidate comparison, exposed as the installed
+  `whetstone-eval` command and a thin source-checkout launcher.
+- Strict bounded `eval-report.json` and `trajectory-report.json` contracts,
+  including safe typed provider-failure projection, exact binary C19 score
+  reconciliation, COPRO intent and GEPA effect-transcript trajectory
+  publication, explicit
+  delta/cumulative budgets, and exact full-text candidate views.
 
 ### Changed
 
@@ -29,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The public-surface guard runs with an empty allowlist and also rejects
   `getattr(obj, "_name")` reads of whetstone privates alongside the
   existing `cast("Any", …)._name` check.
+- Preserve the authoritative C19 `PoolSplit` beside each prepared Whetstone
+  experiment so report projection joins evidence to source instances exactly.
 
 ## [0.2.1] - 2026-08-21
 

@@ -136,12 +136,14 @@ Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
 whetstone_envs.scoring. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
-whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23; the root \
-whetstone_envs namespace exports no API."""
+whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23. The optional \
+whetstone_envs.optim extra maps those contracts onto whetstone-ai experiments \
+and is importable only for its extra-free symbols without installing \
+whetstone-ai; the root whetstone_envs namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""
-date = "2026-08-06"
+date = "2026-08-21"
 
 [[contracts]]
 title = "C11 generation is reproducible and oracle-grounded"

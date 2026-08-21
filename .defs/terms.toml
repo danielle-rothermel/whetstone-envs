@@ -207,3 +207,16 @@ exported_symbols = [
     "whetstone_envs.c23.generate_pool",
     "whetstone_envs.c23.score_gold",
 ]
+
+[[terms]]
+name = "optimizer adapter extra"
+definition = """
+An optional whetstone_envs.optim surface that maps task-family pools, probe \
+pairs, and exact-match scoring onto whetstone-ai experiment rows without \
+importing whetstone-ai from core environment packages."""
+exported_symbols = [
+    "whetstone_envs.optim.ExactMatchEvalProcedureRunner",
+    "whetstone_envs.optim.TaskRow",
+    "whetstone_envs.optim.task_row_from_instance",
+    "whetstone_envs.optim.task_rows_from_instances",
+]

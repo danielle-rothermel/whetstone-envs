@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Pin `dr-store` to 0.2.5 and `dr-graph` to 0.1.3 so this package can share
   an environment with whetstone-ai.
 
+### Added
+
+- An optional `optim` extra that maps C19 pools, probes, and exact-match
+  scoring onto whetstone-ai experiments through the public optimizer surface.
+
 ## [0.2.0] - 2026-08-06
 
 ### Added

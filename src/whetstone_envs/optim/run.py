@@ -127,10 +127,15 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
         num_seeds=1,
         provider_call_config=provider,
     )
-    runtime_kwargs = {"transport_api_key_env": api_key_env}
     if spec.transport == "openrouter":
-        runtime_kwargs["provider_kind"] = ProviderKind.OPENROUTER
-    runtime_config = ReferenceEvalRuntimeConfig(**runtime_kwargs)
+        runtime_config = ReferenceEvalRuntimeConfig(
+            transport_api_key_env=api_key_env,
+            provider_kind=ProviderKind.OPENROUTER,
+        )
+    else:
+        runtime_config = ReferenceEvalRuntimeConfig(
+            transport_api_key_env=api_key_env,
+        )
     with open_sqlite(str(sqlite_path)) as store:
         engine_kwargs = {}
         if live_factory is not None:

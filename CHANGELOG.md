@@ -13,14 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Fake GEPA accepts the ceiling draft because the fake task model emits
-  gold for ceiling-rendered prompts; exact-match scoring is unchanged.
-  The GEPA trainset is the internal eval split. Live nano runs that stay
-  at 0.0/0.0 still fail 0.1.1's `diff_check` instead of writing a fake
-  ceiling.
-- The public-surface guard allowlists the 0.1.1 GEPA authority
-  attributes reached through `cast("Any", …)` so the next pin can prove
-  the list is empty.
+- Pin the `optim` extra to published `whetstone-ai==0.1.2`.
+- C19's GEPA adapter is assembled entirely from whetstone-ai's public
+  surface: `CanonicalGepaAdapterFactory`, `GepaHarnessAdapter`, and
+  `build_inline_proposal_executor`, with no private imports, no wrapper
+  views over the eval engine or object store, and no `GepaHarnessAdapter`
+  subclass. `build_c19_gepa_adapter` is now prompt services, a data
+  registry, control, and that assembly.
+- A GEPA run that finds no improvement completes by reporting the
+  retained seed instead of substituting a candidate, and its steps carry
+  resolvable eval and reward evidence for the evaluations its search
+  drove. The GEPA trainset remains the internal eval split, and fake GEPA
+  still accepts the ceiling draft because the fake task model emits gold
+  for ceiling-rendered prompts; exact-match scoring is unchanged.
+- The public-surface guard runs with an empty allowlist and also rejects
+  `getattr(obj, "_name")` reads of whetstone privates alongside the
+  existing `cast("Any", …)._name` check.
 
 ## [0.2.1] - 2026-08-21
 

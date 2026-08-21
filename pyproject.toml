@@ -47,7 +47,7 @@ c18 = [
     "scipy==1.18.0",
 ]
 optim = [
-    "whetstone-ai==0.1.1; python_version >= '3.13' and python_version < '3.15'",
+    "whetstone-ai==0.1.2; python_version >= '3.13' and python_version < '3.15'",
 ]
 
 [project.urls]

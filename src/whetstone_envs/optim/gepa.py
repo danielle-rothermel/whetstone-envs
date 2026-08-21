@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA
-from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import (
     IdentityRef,
-    ImmutableJsonObject,
     compute_identity_hash,
     typed_ref_for_record,
 )
 from whetstone.experiment.candidate import candidate_reference
-from whetstone.optim.adapters import AdapterOutput
-from whetstone.optim.contracts import StepStatus
 from whetstone.optim.gepa.authorities import (
     CanonicalGepaCandidateAssembler,
     CanonicalGepaEvalAuthority,
@@ -33,12 +29,10 @@ from whetstone.optim.gepa.prompts import (
     NativeGepaReflectionPromptBuilder,
     NativeGepaReflectionResponseParser,
 )
-from whetstone.optim.gepa.step_engine import GEPA_STATE_KEY, GepaStepCheckpoint
 from whetstone.optim.proposal.proposer import (
     FakeProposerTransport,
-    ProposalExecutorDurabilityContract,
     ProposerConfig,
-    _durable_proposal_executor,
+    build_inline_proposal_executor,
     prompt_adapter_identity_hash,
 )
 from whetstone.provider.language_model import PlainPromptAdapter
@@ -58,122 +52,6 @@ if TYPE_CHECKING:
 GEPA_COMPONENT_NAME = "generate"
 _INLINE_EXECUTOR_SCHEMA = "whetstone_envs.c19.inline_proposal_executor"
 _COMPONENT_SCHEMA = "whetstone_envs.c19.gepa_component"
-
-
-class _GepaEvalStoreView:
-    """Add the outputs candidate_id field 0.1.1 reads but does not persist."""
-
-    def __init__(self, store: ObjectStore) -> None:
-        self._store = store
-
-    def get(self, reference):
-        content = self._store.get(reference)
-        if not isinstance(content, dict):
-            return content
-        if "outputs" not in content or "candidate_id" in content:
-            return content
-        record = content.get("candidate")
-        if not isinstance(record, dict):
-            return content
-        payload = record.get("record")
-        if not isinstance(payload, dict):
-            return content
-        candidate_id = payload.get("candidate_id")
-        if not isinstance(candidate_id, str):
-            return content
-        return {**content, "candidate_id": candidate_id}
-
-    def __getattr__(self, name: str):
-        return getattr(self._store, name)
-
-
-class _GepaEngineHashView:
-    """Expose engine identity hashes as strings for GEPA authority bind.
-
-    whetstone-ai 0.1.1 compares these attributes without calling them.
-    RuntimeEvalEngine implements them as methods, so a raw engine never
-    binds.
-    """
-
-    def __init__(self, engine: EvalEngine) -> None:
-        self._engine = engine
-        self.task_model_identity_hash = engine.task_model_identity_hash()
-        self.execution_policy_identity_hash = (
-            engine.execution_policy_identity_hash()
-        )
-        self.reward_policy_identity_hash = engine.reward_policy_identity_hash()
-
-    def __getattr__(self, name: str):
-        return getattr(self._engine, name)
-
-    def evaluate(self, *args, **kwargs):
-        return self._engine.evaluate(*args, **kwargs)
-
-    def for_task_ids(self, task_ids: tuple[str, ...]):
-        # GEPA data_id is the task hash; RuntimeEvalEngine looks up task_id.
-        hash_to_id = {
-            task.task_hash: task.task_id
-            for task in self._engine.sampling.tasks
-        }
-        resolved = tuple(hash_to_id.get(item, item) for item in task_ids)
-        return self._engine.for_task_ids(resolved)
-
-
-class _C19GepaHarnessAdapter(GepaHarnessAdapter):
-    """Hold GEPA completion until the harness step contract asks for it.
-
-    whetstone-ai 0.1.1 gives the first GEPA step a zero-proposal contract
-    unless the budget is already zero. A real optimize() can still
-    terminalize on that step.
-    """
-
-    def invoke(self, request, handles):
-        output = super().invoke(request, handles)
-        expected = request.step_output_contract.returned_proposal_count
-        if output.proposed_status is StepStatus.COMPLETE and expected == 0:
-            hold = GepaStepCheckpoint(
-                metric_calls_consumed=max(
-                    0, self.control.resolved_max_metric_calls - 1
-                ),
-                terminal=False,
-            )
-            return AdapterOutput(
-                proposed_status=StepStatus.CONTINUE,
-                state_delta=ImmutableJsonObject(
-                    {GEPA_STATE_KEY: hold.model_dump(mode="json")}
-                ),
-                budget_delta=hold.budget_delta,
-            )
-        return output
-
-
-def _bind_outputs_candidate_id(
-    authority: CanonicalGepaEvalAuthority, store: ObjectStore
-) -> None:
-    bound = cast("Any", authority)
-    completed = bound._completed_result
-
-    def _completed(*args, **kwargs):
-        bound._store = _GepaEvalStoreView(store)
-        try:
-            return completed(*args, **kwargs)
-        finally:
-            bound._store = store
-
-    bound._completed_result = _completed
-
-
-def _inline_proposal_executor(*, policy_identity_hash: str):
-    def execute(*, config, request, transport, count: int):
-        return transport.draft(config, request, count)
-
-    return _durable_proposal_executor(
-        durability_contract=ProposalExecutorDurabilityContract(
-            recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
-            policy_identity_hash=policy_identity_hash,
-        ),
-        execute=execute,
-    )
 
 
 def _c19_prompt_services() -> GepaPromptServices:
@@ -269,6 +147,7 @@ def build_c19_gepa_adapter(
         valset_task_hashes=None,
         component_names=(GEPA_COMPONENT_NAME,),
         num_predictors=1,
+        # One full pass to score the seed, plus one reflection minibatch.
         max_metric_calls=len(task_hashes) + 1,
         reflection_minibatch_size=1,
     ).model_copy(update={"mutation_field": C19_MUTATION_FIELD})
@@ -282,15 +161,13 @@ def build_c19_gepa_adapter(
             ),
         ),
     )
-    hashed_engine = _GepaEngineHashView(engine)
     evaluation_authority = CanonicalGepaEvalAuthority(
         store=store,
-        engine=cast("EvalEngine", hashed_engine),
+        engine=engine,
         control=control,
         candidate_assembler=assembler,
         data_registry=registry,
     )
-    _bind_outputs_candidate_id(evaluation_authority, store)
     proposal_authority = CanonicalGepaProposalAuthority(
         store=store,
         control=control,
@@ -304,7 +181,7 @@ def build_c19_gepa_adapter(
             ),
             proposer_transport=proposer_transport,
         ),
-        proposal_executor=_inline_proposal_executor(
+        proposal_executor=build_inline_proposal_executor(
             policy_identity_hash=policy_identity_hash,
         ),
     )
@@ -316,7 +193,7 @@ def build_c19_gepa_adapter(
         proposal_authority=proposal_authority,
         prompt_services=prompt_services,
     )
-    return _C19GepaHarnessAdapter(
+    return GepaHarnessAdapter(
         control=control,
         seed_candidate={GEPA_COMPONENT_NAME: PROBES.naive_template},
         trainset=registry.entries,

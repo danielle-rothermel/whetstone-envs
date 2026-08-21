@@ -7,8 +7,8 @@ Reproducible quick-test environment contracts and task families.
 ## Scope
 
 This repo owns the environment data and evaluation rules shared by Whetstone's
-quick-test task families, with no dependency on optimizer or execution-contract
-code:
+quick-test task families. Core packages have no dependency on optimizer or
+execution-contract code:
 
 - [**Instances**][instances-source] define immutable task inputs,
   private gold data, generation seeds, task strata, and public prompt identity.
@@ -36,7 +36,9 @@ code:
   string transformations across four ISL and OSL strata.
 
 Task-family implementations live in their owning subpackages alongside the
-shared harness; the adapter to Whetstone's optimizer lives above this package.
+shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
+those contracts onto whetstone-ai experiments; installing it requires Python
+3.13 or 3.14 and pins published `whetstone-ai==0.1.1`.
 
 ## Installation
 
@@ -48,6 +50,23 @@ Install C18's pinned generator dependencies when generating its pools:
 
 ```bash
 uv add 'whetstone-envs[c18]'
+```
+
+Install the optimizer adapter extra when running COPRO or GEPA against a
+task family. The extra pins published `whetstone-ai==0.1.1` from PyPI:
+
+```bash
+uv add 'whetstone-envs[optim]'
+```
+
+The extra is Python 3.13/3.14 only. Run COPRO on C19 in-process; artifacts
+write under `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never inside the
+git tree. GEPA uses the same public `prepare_gepa_run` surface and is covered
+by the extra's tests rather than this CLI:
+
+```bash
+uv run --extra optim python scripts/run-optim.py \
+  --family c19 --optimizer copro --transport fake --split-sizes 2,2,0
 ```
 
 ## Instances
@@ -490,3 +509,4 @@ uv run python -m whetstone_envs.c19.regenerate
 [probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes
 [scoring-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/scoring
 [c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23
+[optim-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/optim

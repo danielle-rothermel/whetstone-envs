@@ -5,7 +5,11 @@ set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd -- "${repo_root}"
 
-uv sync --locked --extra c18
+if uv run --no-project python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)'; then
+  uv sync --locked --extra c18 --extra optim
+else
+  uv sync --locked --extra c18
+fi
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check

@@ -46,6 +46,9 @@ c18 = [
     "numpy==2.5.1",
     "scipy==1.18.0",
 ]
+optim = [
+    "whetstone-ai==0.1.1; python_version >= '3.13' and python_version < '3.15'",
+]
 
 [project.urls]
 Repository = "https://github.com/danielle-rothermel/whetstone-envs"
@@ -157,3 +160,16 @@ exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
 ]
+
+[[tool.ty.overrides]]
+include = [
+    "src/whetstone_envs/optim/cli.py",
+    "src/whetstone_envs/optim/experiment.py",
+    "src/whetstone_envs/optim/provider.py",
+    "src/whetstone_envs/optim/run.py",
+    "tests/optim/test_e2e.py",
+    "tests/optim/test_experiment.py",
+    "tests/optim/test_provider.py",
+]
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"

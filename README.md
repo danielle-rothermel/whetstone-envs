@@ -59,14 +59,15 @@ task family. The extra pins published `whetstone-ai==0.1.1` from PyPI:
 uv add 'whetstone-envs[optim]'
 ```
 
-The extra is Python 3.13/3.14 only. Run COPRO on C19 in-process; artifacts
-write under `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never inside the
-git tree. GEPA uses the same public `prepare_gepa_run` surface and is covered
-by the extra's tests rather than this CLI:
+The extra is Python 3.13/3.14 only. Run COPRO or GEPA on C19 in-process;
+artifacts write under `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never
+inside the git tree:
 
 ```bash
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer copro --transport fake --split-sizes 2,2,0
+uv run --extra optim python scripts/run-optim.py \
+  --family c19 --optimizer gepa --transport fake --split-sizes 2,2,0
 ```
 
 ## Instances

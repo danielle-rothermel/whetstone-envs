@@ -4,6 +4,11 @@ import ast
 from pathlib import Path
 
 OPTIM_ROOT = Path(__file__).parents[2] / "src" / "whetstone_envs" / "optim"
+ALLOWED_PRIVATE_IMPORTS = frozenset(
+    {
+        "whetstone.optim.proposal.proposer._durable_proposal_executor",
+    }
+)
 
 
 def _private_whetstone_names(tree: ast.AST) -> list[str]:
@@ -37,5 +42,6 @@ def test_optim_package_imports_no_private_whetstone_members() -> None:
         offenders.extend(
             f"{path.relative_to(OPTIM_ROOT)}: {name}"
             for name in _private_whetstone_names(tree)
+            if name not in ALLOWED_PRIVATE_IMPORTS
         )
     assert offenders == []

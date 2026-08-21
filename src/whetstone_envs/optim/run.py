@@ -10,6 +10,7 @@ from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     copro_run_request,
     prepare_copro_run,
+    prepare_gepa_run,
     register_runtime,
 )
 from whetstone.core.identity import IdentityRef, typed_ref_for_record
@@ -21,6 +22,7 @@ from whetstone.optim.copro.control import (
     configure_copro,
 )
 from whetstone.optim.copro.proposal_contract import CoproProposalContractRecord
+from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 from whetstone.optim.proposal.proposer import (
     ProposerConfig,
     ProviderProposerTransport,
@@ -33,6 +35,7 @@ from whetstone_envs.optim.experiment import (
     build_c19_experiment,
     c19_render_contract,
 )
+from whetstone_envs.optim.gepa import build_c19_gepa_adapter
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
     openrouter_seeded_call_config,
@@ -117,12 +120,7 @@ def _c19_proposal_contract() -> CoproProposalContractRecord:
     )
 
 
-def run_c19_optimizer(spec: C19RunSpec) -> Path:
-    """Run COPRO on a small C19 split and write artifacts off-repo."""
-    if spec.optimizer != "copro":
-        raise ValueError(f"unsupported optimizer {spec.optimizer!r}")
-    if spec.transport not in {"fake", "openrouter"}:
-        raise ValueError(f"unsupported transport {spec.transport!r}")
+def _resolve_run_layout(spec: C19RunSpec) -> tuple[str, Path]:
     resolved_run_id = spec.run_id or (
         f"c19-{spec.optimizer}-{uuid4().hex[:8]}"
     )
@@ -133,6 +131,16 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
     if any(resolved_output.is_relative_to(root) for root in repo_roots):
         raise ValueError("run artifacts must not be written inside the repo")
     resolved_output.mkdir(parents=True, exist_ok=True)
+    return resolved_run_id, resolved_output
+
+
+def run_c19_optimizer(spec: C19RunSpec) -> Path:
+    """Run COPRO or GEPA on a small C19 split and write artifacts off-repo."""
+    if spec.optimizer not in {"copro", "gepa"}:
+        raise ValueError(f"unsupported optimizer {spec.optimizer!r}")
+    if spec.transport not in {"fake", "openrouter"}:
+        raise ValueError(f"unsupported transport {spec.transport!r}")
+    resolved_run_id, resolved_output = _resolve_run_layout(spec)
     sqlite_path = resolved_output / "runtime.sqlite"
     provider = None
     api_key_env = "WHETSTONE_TOY_API_KEY"
@@ -209,21 +217,42 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
             track_stats=False,
             defaults=defaults,
         )
+        extra_adapters = None
+        if spec.optimizer == "gepa":
+            gepa_adapter = build_c19_gepa_adapter(
+                store=cast("ObjectStore", store),
+                engine=engine,
+                experiment=experiment,
+                run_id=resolved_run_id,
+                proposer_transport=proposer_transport,
+            )
+            extra_adapters = {GEPA_ADAPTER_KEY: gepa_adapter}
         runtime = register_runtime(
             store=store,
             engine=engine,
             copro_control=copro_control,
+            extra_adapters=extra_adapters,
             proposal_bodies=C19_PROPOSAL_BODIES,
             proposer_transport=proposer_transport,
         )
-        launch = prepare_copro_run(
-            runtime,
-            run_id=resolved_run_id,
-            control=copro_control,
-            experiment=experiment,
-            render_contract=c19_render_contract(),
-            mutation_field=C19_MUTATION_FIELD,
-        )
+        if spec.optimizer == "gepa":
+            launch = prepare_gepa_run(
+                runtime,
+                run_id=resolved_run_id,
+                control=gepa_adapter.control,
+                experiment=experiment,
+                render_contract=c19_render_contract(),
+                mutation_field=C19_MUTATION_FIELD,
+            )
+        else:
+            launch = prepare_copro_run(
+                runtime,
+                run_id=resolved_run_id,
+                control=copro_control,
+                experiment=experiment,
+                render_contract=c19_render_contract(),
+                mutation_field=C19_MUTATION_FIELD,
+            )
         request = copro_run_request(
             launch,
             controller_identity_hash=runtime.controller.runtime_hash,

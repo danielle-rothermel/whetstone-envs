@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The C19 optimizer CLI and runner accept `--optimizer gepa` through the
+  same `run_c19_optimizer` path as COPRO.
+
 ## [0.2.1] - 2026-08-21
 
 ### Changed

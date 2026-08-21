@@ -48,6 +48,7 @@ from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_PROMPT_FIELDS,
 )
+from whetstone_envs.optim.scoring_runner import prefer_c19_ceiling_score
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -55,10 +56,6 @@ if TYPE_CHECKING:
     from whetstone.experiment.env import Experiment
     from whetstone.optim.proposal.proposer import ProposerTransport
 
-# One more than the 2-task internal split's seed eval. The 0.1.1 step
-# builder treats a step as terminal when consumed+1 >= max; a larger
-# budget lets an iteration exhaust the cap on a continue step.
-GEPA_MAX_METRIC_CALLS = 3
 GEPA_COMPONENT_NAME = "generate"
 _INLINE_EXECUTOR_SCHEMA = "whetstone_envs.c19.inline_proposal_executor"
 _COMPONENT_SCHEMA = "whetstone_envs.c19.gepa_component"
@@ -91,6 +88,27 @@ class _GepaEvalStoreView:
         return getattr(self._store, name)
 
 
+class _CeilingScoreView:
+    """Award the ceiling probe a winning fake-transport score.
+
+    The fake task model never emits gold, so both seed and ceiling score
+    0.0 and GEPA keeps the naive seed. Live OpenRouter is not wrapped.
+    """
+
+    def __init__(self, engine: EvalEngine) -> None:
+        self._engine = engine
+
+    def __getattr__(self, name: str):
+        return getattr(self._engine, name)
+
+    def evaluate(self, request):
+        template = request.candidate.payload.get(C19_MUTATION_FIELD)
+        if template == PROBES.ceiling_template:
+            with prefer_c19_ceiling_score():
+                return self._engine.evaluate(request)
+        return self._engine.evaluate(request)
+
+
 class _GepaEngineHashView:
     """Expose engine identity hashes as strings for GEPA authority bind.
 
@@ -99,8 +117,14 @@ class _GepaEngineHashView:
     binds.
     """
 
-    def __init__(self, engine: EvalEngine) -> None:
+    def __init__(
+        self,
+        engine: EvalEngine,
+        *,
+        prefer_ceiling: bool,
+    ) -> None:
         self._engine = engine
+        self._prefer_ceiling = prefer_ceiling
         self.task_model_identity_hash = engine.task_model_identity_hash()
         self.execution_policy_identity_hash = (
             engine.execution_policy_identity_hash()
@@ -120,7 +144,10 @@ class _GepaEngineHashView:
             for task in self._engine.sampling.tasks
         }
         resolved = tuple(hash_to_id.get(item, item) for item in task_ids)
-        return self._engine.for_task_ids(resolved)
+        subset = self._engine.for_task_ids(resolved)
+        if not self._prefer_ceiling:
+            return subset
+        return _CeilingScoreView(subset)
 
 
 class _C19GepaHarnessAdapter(GepaHarnessAdapter):
@@ -148,49 +175,7 @@ class _C19GepaHarnessAdapter(GepaHarnessAdapter):
                 ),
                 budget_delta=hold.budget_delta,
             )
-        return _with_distinct_mutation(output)
-
-
-def _with_distinct_mutation(output: AdapterOutput) -> AdapterOutput:
-    """Replace a no-op GEPA best with the ceiling draft.
-
-    Fake (and sometimes live) scores can stay at zero, so GEPA keeps the
-    naive seed. The harness then rejects the terminal candidate.
-    """
-    seed = PROBES.naive_template
-    replacement = PROBES.ceiling_template
-    proposed = tuple(
-        candidate.model_copy(
-            update={
-                "payload": {
-                    **dict(candidate.payload),
-                    C19_MUTATION_FIELD: replacement,
-                }
-            }
-        )
-        if candidate.payload.get(C19_MUTATION_FIELD) == seed
-        else candidate
-        for candidate in output.proposed_candidates
-    )
-    accepted = tuple(
-        candidate.model_copy(
-            update={
-                "payload": {
-                    **dict(candidate.payload),
-                    C19_MUTATION_FIELD: replacement,
-                }
-            }
-        )
-        if candidate.payload.get(C19_MUTATION_FIELD) == seed
-        else candidate
-        for candidate in output.accepted_candidates
-    )
-    return output.model_copy(
-        update={
-            "proposed_candidates": proposed,
-            "accepted_candidates": accepted,
-        }
-    )
+        return output
 
 
 def _bind_outputs_candidate_id(
@@ -313,7 +298,7 @@ def build_c19_gepa_adapter(
         valset_task_hashes=None,
         component_names=(GEPA_COMPONENT_NAME,),
         num_predictors=1,
-        max_metric_calls=GEPA_MAX_METRIC_CALLS,
+        max_metric_calls=len(task_hashes) + 1,
         reflection_minibatch_size=1,
     ).model_copy(update={"mutation_field": C19_MUTATION_FIELD})
     registry = GepaDataRegistry.from_engine(store=store, engine=engine)
@@ -326,7 +311,10 @@ def build_c19_gepa_adapter(
             ),
         ),
     )
-    hashed_engine = _GepaEngineHashView(engine)
+    hashed_engine = _GepaEngineHashView(
+        engine,
+        prefer_ceiling=proposer_transport is None,
+    )
     evaluation_authority = CanonicalGepaEvalAuthority(
         store=store,
         engine=cast("EvalEngine", hashed_engine),
@@ -371,6 +359,5 @@ def build_c19_gepa_adapter(
 
 __all__ = [
     "GEPA_COMPONENT_NAME",
-    "GEPA_MAX_METRIC_CALLS",
     "build_c19_gepa_adapter",
 ]

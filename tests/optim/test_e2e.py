@@ -8,7 +8,9 @@ pytest.importorskip("whetstone.experiment.env")
 
 from whetstone.optim.contracts import OptimResult
 
+from whetstone_envs.c19 import PROBES
 from whetstone_envs.optim.cli import main
+from whetstone_envs.optim.experiment import C19_MUTATION_FIELD
 from whetstone_envs.optim.run import C19RunSpec, run_c19_optimizer
 
 
@@ -39,6 +41,12 @@ def test_fake_transport_completes(tmp_path, optimizer: str) -> None:
     assert result.terminal_failure is None
     assert result.step_results[-1].record.status.value == "complete"
     assert result.proposals
+    if optimizer == "gepa":
+        template = result.proposals[0].candidate.record.payload[
+            C19_MUTATION_FIELD
+        ]
+        assert template == PROBES.ceiling_template
+        assert template != PROBES.naive_template
 
 
 def test_run_refuses_in_repo_output() -> None:

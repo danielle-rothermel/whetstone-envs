@@ -9,6 +9,70 @@ ALLOWED_PRIVATE_IMPORTS = frozenset(
         "whetstone.optim.proposal.proposer._durable_proposal_executor",
     }
 )
+ALLOWED_PRIVATE_ATTRIBUTES = frozenset(
+    {
+        "CanonicalGepaEvalAuthority._completed_result",
+        "CanonicalGepaEvalAuthority._store",
+    }
+)
+
+
+def _annotation_name(node: ast.AST | None) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.rsplit(".", 1)[-1]
+    return None
+
+
+def _name_types(tree: ast.AST) -> dict[str, str]:
+    types: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            for arg in (*node.args.args, *node.args.kwonlyargs):
+                name = _annotation_name(arg.annotation)
+                if name is not None:
+                    types[arg.arg] = name
+        elif isinstance(node, ast.AnnAssign) and isinstance(
+            node.target, ast.Name
+        ):
+            name = _annotation_name(node.annotation)
+            if name is not None:
+                types[node.target.id] = name
+    return types
+
+
+def _is_cast_any(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        call_name = func.id
+    elif isinstance(func, ast.Attribute):
+        call_name = func.attr
+    else:
+        return False
+    if call_name != "cast" or not node.args:
+        return False
+    first = node.args[0]
+    if isinstance(first, ast.Constant) and first.value == "Any":
+        return True
+    return isinstance(first, ast.Name) and first.id == "Any"
+
+
+def _cast_subject_name(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Call):
+        return None
+    if len(node.args) < 2:
+        return None
+    subject = node.args[1]
+    if isinstance(subject, ast.Name):
+        return subject.id
+    return None
 
 
 def _private_whetstone_names(tree: ast.AST) -> list[str]:
@@ -35,6 +99,41 @@ def _private_whetstone_names(tree: ast.AST) -> list[str]:
     return names
 
 
+def _private_cast_attributes(tree: ast.AST) -> list[str]:
+    types = _name_types(tree)
+    cast_names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is None or not _is_cast_any(value):
+            continue
+        subject = _cast_subject_name(value)
+        owner = types.get(subject, "Unknown") if subject else "Unknown"
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                cast_names[target.id] = owner
+        elif isinstance(node, ast.AnnAssign) and isinstance(
+            node.target, ast.Name
+        ):
+            cast_names[node.target.id] = owner
+
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute) or not node.attr.startswith(
+            "_"
+        ):
+            continue
+        if _is_cast_any(node.value):
+            subject = _cast_subject_name(node.value)
+            owner = types.get(subject, "Unknown") if subject else "Unknown"
+            found.append(f"{owner}.{node.attr}")
+        elif isinstance(node.value, ast.Name) and node.value.id in cast_names:
+            found.append(f"{cast_names[node.value.id]}.{node.attr}")
+    return found
+
+
 def test_optim_package_imports_no_private_whetstone_members() -> None:
     offenders: list[str] = []
     for path in sorted(OPTIM_ROOT.rglob("*.py")):
@@ -44,4 +143,21 @@ def test_optim_package_imports_no_private_whetstone_members() -> None:
             for name in _private_whetstone_names(tree)
             if name not in ALLOWED_PRIVATE_IMPORTS
         )
+        offenders.extend(
+            f"{path.relative_to(OPTIM_ROOT)}: {name}"
+            for name in _private_cast_attributes(tree)
+            if name not in ALLOWED_PRIVATE_ATTRIBUTES
+        )
     assert offenders == []
+
+
+def test_cast_any_private_attribute_access_is_detected() -> None:
+    tree = ast.parse(
+        "from typing import Any, cast\n"
+        "cast('Any', obj)._hidden\n"
+        "bound = cast(Any, obj)\n"
+        "bound._also\n"
+    )
+    names = _private_cast_attributes(tree)
+    assert "Unknown._hidden" in names
+    assert "Unknown._also" in names

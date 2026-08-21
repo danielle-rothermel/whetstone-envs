@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The C19 optimizer CLI and runner accept `--optimizer gepa` through the
   same `run_c19_optimizer` path as COPRO.
 
+### Changed
+
+- Fake GEPA accepts the ceiling draft through scored selection so the
+  persisted evidence matches `OptimResult.proposals`. The runner no
+  longer substitutes an unevaluated ceiling when scores tie.
+- The public-surface guard allowlists the 0.1.1 GEPA authority
+  attributes reached through `cast("Any", …)` so the next pin can prove
+  the list is empty.
+
 ## [0.2.1] - 2026-08-21
 
 ### Changed

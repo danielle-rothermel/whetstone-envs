@@ -46,9 +46,11 @@ if TYPE_CHECKING:
 DEFAULT_OUTPUT_ROOT = (
     Path.home() / "drotherm" / "data" / "runs" / ("whetstone-envs")
 )
+# Seed COPRO asks for one draft and keeps the naive initial candidate. The
+# first body must differ from that seed or COPRO rejects a no-op mutation.
 C19_PROPOSAL_BODIES = (
-    PROBES.naive_template,
     PROBES.ceiling_template,
+    PROBES.naive_template,
 )
 
 

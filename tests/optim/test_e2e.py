@@ -59,10 +59,9 @@ def test_copro_fake_transport_completes(tmp_path) -> None:
         (output / "result.json").read_text(encoding="utf-8")
     )
     assert result.step_results
-    assert result.step_results[-1].record.status.value in {
-        "complete",
-        "failed",
-    }
+    assert result.terminal_failure is None
+    assert result.step_results[-1].record.status.value == "complete"
+    assert result.proposals
 
 
 def test_gepa_fake_transport_completes(tmp_path) -> None:

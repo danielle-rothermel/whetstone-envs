@@ -20,8 +20,8 @@ from whetstone_envs.optim.experiment import (
 )
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
-    c19_fake_gold_by_prompt,
-    c19_fake_transport_factory,
+    fake_gold_by_prompt,
+    fake_transport_factory,
     openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.run import DEFAULT_OUTPUT_ROOT
@@ -33,12 +33,18 @@ from whetstone_envs.reporting.publication import (
     publish_eval_report,
 )
 from whetstone_envs.reporting.schema import (
+    SPLIT_ROLE_BY_REPORT_ROLE,
     CandidateSource,
     EvalReport,
+    EvalRoleName,
 )
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
+
+    from whetstone_envs.optim.experiment import (
+        PreparedSplitExperiment,
+    )
 
 _C19_STRATUM_COUNT = 22
 
@@ -53,7 +59,7 @@ class CandidateInput:
 @dataclass(frozen=True, slots=True)
 class C19EvalSpec:
     transport: Literal["fake", "openrouter"]
-    role: Literal["internal", "official"]
+    role: EvalRoleName
     candidates: tuple[CandidateInput, ...] = ()
     repeats: int = 1
     split_sizes: tuple[int, int, int] = (20, 20, 0)
@@ -99,11 +105,27 @@ def _validate_candidates(
     return tuple(prepared)
 
 
+def _require_split_for_role(
+    prepared: PreparedSplitExperiment, role: EvalRoleName
+) -> None:
+    """Refuse a role whose split this experiment does not carry.
+
+    Held-out is the only optional split, so a zero held-out size must fail by
+    name here rather than degrade into evaluating some other role's tasks.
+    """
+    split_role = SPLIT_ROLE_BY_REPORT_ROLE[role]
+    if split_role not in prepared.experiment.eval_configs.splits():
+        raise ValueError(
+            f"this experiment has no {role} split: "
+            f"split sizes must give the {role} role a positive size"
+        )
+
+
 def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
     """Evaluate selected C19 candidates and publish one strict local report."""
     if spec.transport not in {"fake", "openrouter"}:
         raise ValueError(f"unsupported transport {spec.transport!r}")
-    if spec.role not in {"internal", "official"}:
+    if spec.role not in SPLIT_ROLE_BY_REPORT_ROLE:
         raise ValueError(f"unsupported role {spec.role!r}")
     if spec.repeats < 1:
         raise ValueError("repeats must be at least 1")
@@ -129,15 +151,14 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
         num_seeds=spec.repeats,
         provider_call_config=provider,
     )
+    _require_split_for_role(prepared, spec.role)
     run_id = spec.run_id or f"c19-eval-{uuid4().hex[:8]}"
     output = prepare_output_root(
         spec.output_dir or default_eval_output_dir(run_id)
     )
     with durable_run_boundary(output):
         runtime_config = ReferenceEvalRuntimeConfig(
-            split_role=(
-                "internal_eval" if spec.role == "internal" else "official"
-            ),
+            split_role=SPLIT_ROLE_BY_REPORT_ROLE[spec.role],
             transport_api_key_env=api_key_env,
             provider_kind=(
                 ProviderKind.OPENROUTER
@@ -150,8 +171,12 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                 runtime_config.execution_policy
             )
         else:
-            transport_factory = c19_fake_transport_factory(
-                gold_by_prompt=c19_fake_gold_by_prompt(prepared.experiment)
+            transport_factory = fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    prepared.experiment,
+                    render_contract=c19_render_contract(),
+                    ceiling_template=PROBES.ceiling_template,
+                )
             )
         with open_sqlite(str(output / "runtime.sqlite")) as store:
             engine = runtime_config.build_engine(

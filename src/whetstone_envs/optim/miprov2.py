@@ -1,23 +1,37 @@
-"""C19 MIPROv2 wiring on whetstone-ai's public MIPROv2 surface.
+"""MIPROv2 wiring on whetstone-ai's public MIPROv2 surface.
 
 MIPROv2 differs from COPRO and GEPA in that its control alone cannot start a
 run: the search reads a labeled trainset, rendered proposal examples, and a
 durable RNG checkpoint, all of which belong to the opening state. This module
 resolves the control, builds the adapter, and derives that opening state from
-the same prepared C19 experiment the other optimizers use.
+the same prepared experiment the other optimizers use, for whichever family
+the run names.
 
 Demonstrations reach the candidate through MIPROv2's own composed template
-(``### Demonstrations``), not through a placeholder in the C19 render
+(``### Demonstrations``), not through a placeholder in the family's render
 contract: the composer emits the section itself and escapes its JSON so the
-composed template still satisfies the contract's ``{grid}``/``{command}``/
-``{question}`` requirement. ``fewshot`` searches over demo sets and renders
-the selected set into that section; ``zeroshot`` and ``ground_only`` keep the
-section empty while still bootstrapping demos to ground instruction
-proposals.
+composed template still satisfies the family's placeholder requirement.
+``fewshot`` searches over demo sets and renders the selected set into that
+section; ``zeroshot`` and ``ground_only`` keep the section empty while still
+bootstrapping demos to ground instruction proposals.
+
+Minibatching is off by default. The valset is the internal split less the
+trainset -- see :class:`Miprov2Split` for the two partitions and why the
+choice is substantive -- and ``configure_miprov2`` refuses a
+``minibatch_size`` exceeding it. C18's internal split of 24 is below
+MIPROv2's default 35, so a study that turns minibatching on must size it
+against the run's own valset.
+
+The search shape (``num_trials``, ``num_candidates``) and the split are
+parameters rather than literals, so a study arm can request the protocol's
+auto-light configuration without editing this module. The defaults are this
+runner's own, smaller shape, which is what keeps the fake-transport
+end-to-end runs fast.
 """
 
 from __future__ import annotations
 
+from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING
 
 from whetstone.core.identity import ImmutableJsonObject, compute_identity_hash
@@ -61,15 +75,9 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
-from whetstone_envs.c19 import PROBES
 from whetstone_envs.optim.experiment import (
-    C19_MUTATION_FIELD,
-    C19_NAMESPACE,
-    C19_PROMPT_FIELDS,
-    C19_RESPONSE_FIELD,
-    c19_gold_by_task_hash,
-    c19_provider_call_config_ref,
-    c19_render_contract,
+    gold_by_task_hash,
+    provider_call_config_ref,
 )
 
 if TYPE_CHECKING:
@@ -79,23 +87,86 @@ if TYPE_CHECKING:
     from whetstone.optim.contracts import OptimRunRef
     from whetstone.optim.proposal.proposer import ProposerTransport
 
-#: The single optimizable component: the C19 rollout graph exposes exactly
-#: one provider trace, so MIPROv2 optimizes one prompt component.
+    from whetstone_envs.optim.families import FamilySpec
+
+#: The single optimizable component: every family's rollout graph exposes
+#: exactly one provider trace, so MIPROv2 optimizes one prompt component.
 MIPROV2_COMPONENT_ID = "generate"
 #: MIPROv2 partitions the engine's tasks into a trainset and a valset, so a
 #: run needs at least one task for each.
 MIN_MIPROV2_TASKS = 2
-#: MIPROv2 records a component's input field order canonically.
-C19_PROMPT_FIELDS_SORTED = tuple(sorted(C19_PROMPT_FIELDS))
-_INLINE_EXECUTOR_SCHEMA = "whetstone_envs.c19.miprov2_proposal_executor"
+#: The family-namespaced schema name for MIPROv2's inline executor policy.
+INLINE_EXECUTOR_SCHEMA_SUFFIX = "miprov2_proposal_executor"
+#: Minibatching is off by default: every trial then evaluates the whole
+#: validation split, which is the schedule this runner has always produced.
+#: The protocol's auto-light configuration turns it on explicitly.
+DEFAULT_MIPROV2_MINIBATCH = False
+#: Trials between full-validation re-evaluations of the incumbent. Only
+#: observable once ``minibatch`` is on.
+DEFAULT_MIPROV2_FULL_EVAL_STEPS = 1
 
-C19_DEMO_MODES = tuple(mode.value for mode in Miprov2DemoMode)
+#: The search shape this runner has always produced. Both are **below** the
+#: protocol's auto-light configuration, which assumes ``num_trials=10`` and
+#: ``num_candidates=6``; Wave 3's measured 245 task calls are therefore the
+#: cost of *this* shape, not of the protocol's.
+#:
+#: They stay the defaults so the fake-transport end-to-end tests remain
+#: fast, and are exposed as settings so a study arm can request the
+#: protocol's shape without editing this module.
+DEFAULT_MIPROV2_NUM_TRIALS = 2
+#: Seeds -3/-2 are RESET/LABELS_ONLY; 3 admits seed -1, the first
+#: bootstrap candidate.
+DEFAULT_MIPROV2_NUM_CANDIDATES = 3
+
+DEMO_MODES = tuple(mode.value for mode in Miprov2DemoMode)
 
 
-def c19_miprov2_policy_identity_hash() -> str:
-    """The identity of C19's inline MIPROv2 proposal executor policy."""
+@verify(UNIQUE)
+class Miprov2Split(StrEnum):
+    """How a run partitions the engine's tasks into trainset and valset.
+
+    The two are genuinely different experiments, not two spellings of one,
+    which is why this is a named setting rather than a slice literal.
+
+    ``SINGLE_TASK`` is what this runner has always done:
+    ``trainset=task_hashes[:1]``, ``valset=task_hashes[1:]``. Bootstrapping
+    is a single cursor walk over the trainset, so a one-task trainset means
+    every bootstrapped demonstration is drawn from **one task** -- which
+    Wave 3 measured as 1-2 bootstrap rows per run and flagged as a
+    substantive design question, not just a budget one.
+
+    ``INTERNAL`` is DSPy's own default: trainset and valset are both the
+    whole internal split, so demonstrations are drawn from every task the
+    run can see.
+
+    ``SINGLE_TASK`` remains the default pending that decision, so this
+    setting changes nothing until a caller asks for the other one.
+    """
+
+    SINGLE_TASK = "single-task"
+    INTERNAL = "internal"
+
+
+#: The split this runner has always produced. Kept as the default while the
+#: one-task-trainset question is open; see :class:`Miprov2Split`.
+DEFAULT_MIPROV2_SPLIT = Miprov2Split.SINGLE_TASK
+
+MIPROV2_SPLITS = tuple(split.value for split in Miprov2Split)
+
+
+def _resolve_split(
+    split: Miprov2Split, task_hashes: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """This split's ``(trainset, valset)`` over ``task_hashes``."""
+    if split is Miprov2Split.INTERNAL:
+        return task_hashes, task_hashes
+    return task_hashes[:1], task_hashes[1:]
+
+
+def miprov2_policy_identity_hash(family: FamilySpec) -> str:
+    """One family's inline MIPROv2 proposal executor policy identity."""
     return compute_identity_hash(
-        schema=_INLINE_EXECUTOR_SCHEMA,
+        schema=f"{family.namespace}.{INLINE_EXECUTOR_SCHEMA_SUFFIX}",
         schema_version=1,
         payload={"mode": "inline"},
     )
@@ -114,28 +185,65 @@ def _demo_maxima(
     return 1, 1
 
 
-def build_c19_miprov2_control(  # noqa: PLR0913
+def build_miprov2_control(  # noqa: PLR0913
     *,
     engine: EvalEngine,
     experiment: Experiment,
+    family: FamilySpec,
     demo_mode: Miprov2DemoMode = Miprov2DemoMode.FEWSHOT,
-    num_trials: int = 2,
-    # Seeds -3/-2 are RESET/LABELS_ONLY; 3 admits seed -1, the first
-    # bootstrap candidate.
-    num_candidates: int = 3,
+    num_trials: int = DEFAULT_MIPROV2_NUM_TRIALS,
+    num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES,
     seed: int = 9,
+    minibatch: bool = DEFAULT_MIPROV2_MINIBATCH,
+    minibatch_size: int | None = None,
+    minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS,
+    split: Miprov2Split = DEFAULT_MIPROV2_SPLIT,
 ) -> Miprov2Control:
-    """Resolve the C19 MIPROv2 control against the engine's authorities."""
+    """Resolve one family's MIPROv2 control against the engine.
+
+    ``minibatch_size`` defaults to the whole validation split, which is what
+    a non-minibatched run evaluates on every trial. The protocol's
+    auto-light configuration turns ``minibatch`` on and sizes the batch
+    below that, so the periodic full evaluation becomes observable.
+
+    ``num_trials`` and ``num_candidates`` default to this runner's own
+    shape, which is smaller than the protocol's auto-light 10 and 6. They
+    are parameters rather than literals so a study arm can request the
+    protocol's shape; raising them raises the run's call count, which is
+    why the Stage-1 estimate is a loose upper bound.
+
+    ``split`` selects the trainset/valset partition; see
+    :class:`Miprov2Split` for why the choice is substantive.
+    """
     prompt_adapter = PlainPromptAdapter()
     task_hashes = tuple(engine.sampling.task_hashes)
     if len(task_hashes) < MIN_MIPROV2_TASKS:
         raise ValueError(
-            "C19 MIPROv2 needs at least two tasks to split train and val"
+            "MIPROv2 needs at least two tasks to split train and val"
         )
+    if num_trials < 1:
+        raise ValueError("num_trials must be at least 1")
+    if num_candidates < 1:
+        raise ValueError("num_candidates must be at least 1")
     bootstrapped, labeled = _demo_maxima(demo_mode)
+    trainset, valset = _resolve_split(split, task_hashes)
+    resolved_minibatch_size = (
+        len(valset) if minibatch_size is None else minibatch_size
+    )
+    if resolved_minibatch_size < 1:
+        raise ValueError("minibatch_size must be at least 1")
+    if resolved_minibatch_size > len(valset):
+        # ``configure_miprov2`` refuses a batch larger than the valset, and
+        # refusing here keeps the failure outside the durable run boundary.
+        raise ValueError(
+            f"minibatch_size {resolved_minibatch_size} exceeds the "
+            f"validation split of {len(valset)}"
+        )
+    if minibatch_full_eval_steps < 1:
+        raise ValueError("minibatch_full_eval_steps must be at least 1")
     defaults = Miprov2InjectedDefaults(
         prompt_model=ProposerConfig(
-            provider_call_config=c19_provider_call_config_ref(experiment),
+            provider_call_config=provider_call_config_ref(experiment),
             temperature=1.0,
         ),
         bootstrap_eval_source=engine.eval_config_ref,
@@ -148,13 +256,13 @@ def build_c19_miprov2_control(  # noqa: PLR0913
         ),
         task_model_identity_hash=engine.task_model_identity_hash(),
         prompt_adapter=prompt_adapter,
-        template_render_contract=c19_render_contract(),
-        mutation_field=C19_MUTATION_FIELD,
+        template_render_contract=family.render_contract(),
+        mutation_field=family.mutation_field,
         max_errors=4,
         validation_eval_source_is_metric_authority=True,
     )
     layout = Miprov2ProgramLayout(
-        layout_id=f"{C19_NAMESPACE}.miprov2",
+        layout_id=f"{family.namespace}.miprov2",
         component_specs=(
             Miprov2ComponentSpec(
                 component_id=MIPROV2_COMPONENT_ID,
@@ -167,8 +275,8 @@ def build_c19_miprov2_control(  # noqa: PLR0913
     return configure_miprov2(
         base_candidate=candidate_reference(experiment.initial_candidate),
         program_layout=layout,
-        trainset=task_hashes[:1],
-        valset=task_hashes[1:],
+        trainset=trainset,
+        valset=valset,
         max_bootstrapped_demos=bootstrapped,
         max_labeled_demos=labeled,
         auto=None,
@@ -176,34 +284,30 @@ def build_c19_miprov2_control(  # noqa: PLR0913
         num_trials=num_trials,
         seed=seed,
         init_temperature=1.0,
-        minibatch=False,
-        minibatch_size=len(task_hashes[1:]),
-        minibatch_full_eval_steps=1,
+        minibatch=minibatch,
+        minibatch_size=resolved_minibatch_size,
+        minibatch_full_eval_steps=minibatch_full_eval_steps,
         demo_mode=demo_mode,
         defaults=defaults,
     )
 
 
-def c19_miprov2_proposal_bodies() -> tuple[str, ...]:
-    """Scripted proposer bodies for a fake-transport C19 MIPROv2 run.
-
-    MIPROv2 rejects an instruction that drops a placeholder the base template
-    requires, so every scripted instruction keeps ``{grid}``, ``{command}``,
-    and ``{question}``.
-    """
-    return (PROBES.ceiling_template, PROBES.naive_template)
-
-
-def build_c19_miprov2_adapter(
+def build_miprov2_adapter(
     *,
     store: ObjectStore,
     engine: EvalEngine,
     control: Miprov2Control,
+    family: FamilySpec,
     proposer_transport: ProposerTransport | None = None,
 ) -> Miprov2Adapter:
-    """Assemble the C19 MIPROv2 adapter on the public adapter surface."""
+    """Assemble one family's MIPROv2 adapter on the public adapter surface.
+
+    MIPROv2 rejects an instruction that drops a placeholder the base
+    template requires, so the scripted bodies are the family's own probe
+    templates, which satisfy its render contract by construction.
+    """
     prompt_adapter = PlainPromptAdapter()
-    bodies = c19_miprov2_proposal_bodies()
+    bodies = family.proposal_bodies()
     transport = proposer_transport or FakeProposerTransport(
         {},
         default=bodies,
@@ -218,13 +322,13 @@ def build_c19_miprov2_adapter(
         transport=transport,
         eval_config_resolver=EngineEvalBindingResolver(engine=engine),
         proposal_executor=build_inline_proposal_executor(
-            policy_identity_hash=c19_miprov2_policy_identity_hash(),
+            policy_identity_hash=miprov2_policy_identity_hash(family),
         ),
     )
 
 
-def c19_miprov2_budget() -> Miprov2EffectBudget:
-    """A ceiling generous enough that a small C19 run ends on its schedule.
+def miprov2_budget() -> Miprov2EffectBudget:
+    """A ceiling generous enough that a small run ends on its schedule.
 
     These are budgets, not expectations: the run should terminate because its
     trial schedule is exhausted, so budget exhaustion is a real signal.
@@ -237,7 +341,7 @@ def c19_miprov2_budget() -> Miprov2EffectBudget:
     )
 
 
-def c19_miprov2_run(
+def miprov2_run(
     *,
     run_id: str,
     control: Miprov2Control,
@@ -257,16 +361,17 @@ def c19_miprov2_run(
     )
 
 
-def build_c19_miprov2_state(  # noqa: PLR0913
+def build_miprov2_state(  # noqa: PLR0913
     *,
     run: OptimRunRef,
     control: Miprov2Control,
     engine: EvalEngine,
     experiment: Experiment,
     adapter: Miprov2Adapter,
+    family: FamilySpec,
     budget: Miprov2EffectBudget | None = None,
 ) -> Miprov2State:
-    """Derive the opening MIPROv2 state for one C19 run."""
+    """Derive the opening MIPROv2 state for one run of one family."""
     bindings = Miprov2DurableBindings(
         control_identity_hash=control.identity_hash(),
         prompt_route_identity_hash=control.prompt_model.identity_hash(),
@@ -294,11 +399,11 @@ def build_c19_miprov2_state(  # noqa: PLR0913
     # The engine's sampling view withholds gold, so a labeled demonstration
     # reads its output from the family's own experiment splits. A demo with
     # an empty output would teach the model to answer with nothing.
-    gold_by_hash = c19_gold_by_task_hash(experiment)
+    gold_by_hash = gold_by_task_hash(experiment)
     missing = set(control.trainset_task_hashes) - set(gold_by_hash)
     if missing:
         raise ValueError(
-            "C19 MIPROv2 trainset tasks have no gold in the experiment: "
+            "MIPROv2 trainset tasks have no gold in the experiment: "
             f"{', '.join(sorted(missing))}"
         )
     labeled_trainset = tuple(
@@ -308,7 +413,11 @@ def build_c19_miprov2_state(  # noqa: PLR0913
                 {component_id: dict(inputs_by_hash[task_hash])}
             ),
             outputs_by_component=ImmutableJsonObject(
-                {component_id: {C19_RESPONSE_FIELD: gold_by_hash[task_hash]}}
+                {
+                    component_id: {
+                        family.response_field: gold_by_hash[task_hash]
+                    }
+                }
             ),
         )
         for task_hash in control.trainset_task_hashes
@@ -319,14 +428,8 @@ def build_c19_miprov2_state(  # noqa: PLR0913
             component_id=component_id,
             template=str(template),
             template_render_contract=control.template_render_contract,
-            rendering_rules=(
-                "Render the template with the task's grid, command, and "
-                "question substituted for its placeholders."
-            ),
-            example_execution=(
-                "The rendered prompt is sent to the task model and its reply "
-                "is scored by exact match against the MiniGrid oracle answer."
-            ),
+            rendering_rules=family.rendering_rules,
+            example_execution=family.example_execution,
         ),
     )
     proposal_trainset = tuple(
@@ -346,19 +449,22 @@ def build_c19_miprov2_state(  # noqa: PLR0913
         labeled_trainset=labeled_trainset,
         proposal_components=proposal_components,
         proposal_trainset=proposal_trainset,
-        component_field_order={component_id: C19_PROMPT_FIELDS_SORTED},
-        budget=budget or c19_miprov2_budget(),
+        # MIPROv2 records a component's input field order canonically.
+        component_field_order={
+            component_id: tuple(sorted(family.prompt_fields))
+        },
+        budget=budget or miprov2_budget(),
     )
 
 
-def c19_miprov2_run_ref(
+def miprov2_run_ref(
     *,
     run_id: str,
     control: Miprov2Control,
     experiment: Experiment,
 ) -> OptimRunRef:
     return optimization_run_reference(
-        c19_miprov2_run(
+        miprov2_run(
             run_id=run_id,
             control=control,
             experiment=experiment,
@@ -367,15 +473,17 @@ def c19_miprov2_run_ref(
 
 
 __all__ = [
-    "C19_DEMO_MODES",
+    "DEFAULT_MIPROV2_FULL_EVAL_STEPS",
+    "DEFAULT_MIPROV2_MINIBATCH",
+    "DEMO_MODES",
+    "INLINE_EXECUTOR_SCHEMA_SUFFIX",
     "MIPROV2_COMPONENT_ID",
     "Miprov2DemoMode",
-    "build_c19_miprov2_adapter",
-    "build_c19_miprov2_control",
-    "build_c19_miprov2_state",
-    "c19_miprov2_budget",
-    "c19_miprov2_policy_identity_hash",
-    "c19_miprov2_proposal_bodies",
-    "c19_miprov2_run",
-    "c19_miprov2_run_ref",
+    "build_miprov2_adapter",
+    "build_miprov2_control",
+    "build_miprov2_state",
+    "miprov2_budget",
+    "miprov2_policy_identity_hash",
+    "miprov2_run",
+    "miprov2_run_ref",
 ]

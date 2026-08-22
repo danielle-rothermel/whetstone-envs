@@ -7,6 +7,7 @@ from pydantic import JsonValue, ValidationError
 
 from whetstone_envs.reporting.schema import (
     EVAL_REPORT_SCHEMA,
+    SPLIT_ROLE_BY_REPORT_ROLE,
     TRAJECTORY_REPORT_SCHEMA,
     EvalFailed,
     EvalReport,
@@ -22,6 +23,20 @@ from whetstone_envs.reporting.schema import (
 def test_persisted_schema_literals_are_pinned() -> None:
     assert EVAL_REPORT_SCHEMA == "whetstone_envs.eval_report/v1"
     assert TRAJECTORY_REPORT_SCHEMA == "whetstone_envs.trajectory_report/v1"
+
+
+def test_report_role_names_and_split_roles_are_pinned() -> None:
+    assert SPLIT_ROLE_BY_REPORT_ROLE == {
+        "internal": "internal_eval",
+        "official": "official",
+        "held_out": "held_out",
+    }
+
+
+def test_split_role_mapping_agrees_with_upstream_split_roles() -> None:
+    from whetstone.experiment.sampling import SPLIT_ROLES
+
+    assert set(SPLIT_ROLE_BY_REPORT_ROLE.values()) == set(SPLIT_ROLES)
 
 
 def test_eval_report_is_strict_and_forbids_unknown_fields(

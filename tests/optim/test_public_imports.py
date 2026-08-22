@@ -7,6 +7,21 @@ OPTIM_ROOT = Path(__file__).parents[2] / "src" / "whetstone_envs" / "optim"
 ALLOWED_PRIVATE_IMPORTS: frozenset[str] = frozenset()
 ALLOWED_PRIVATE_ATTRIBUTES: frozenset[str] = frozenset()
 
+#: The package whose privates are off limits: whetstone-ai, the upstream
+#: dependency. This repo's own ``whetstone_envs`` privates are ours to use --
+#: ``optim/audit/_evidence.py`` and ``_mutate.py`` are deliberately private
+#: module names within our package. Matching on the bare ``whetstone``
+#: prefix would also catch ``whetstone_envs``, so the check is anchored to
+#: the exact top-level package name.
+UPSTREAM_PACKAGE = "whetstone"
+
+
+def _is_upstream(module: str) -> bool:
+    """True when ``module`` names whetstone-ai, not our own package."""
+    return module == UPSTREAM_PACKAGE or module.startswith(
+        f"{UPSTREAM_PACKAGE}."
+    )
+
 
 def _annotation_name(node: ast.AST | None) -> str | None:
     if node is None:
@@ -70,7 +85,7 @@ def _private_whetstone_names(tree: ast.AST) -> list[str]:
     names: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
-            if not node.module.startswith("whetstone"):
+            if not _is_upstream(node.module):
                 continue
             parts = node.module.split(".")
             if any(part.startswith("_") for part in parts):
@@ -82,7 +97,7 @@ def _private_whetstone_names(tree: ast.AST) -> list[str]:
             )
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if not alias.name.startswith("whetstone"):
+                if not _is_upstream(alias.name):
                     continue
                 parts = alias.name.split(".")
                 if any(part.startswith("_") for part in parts):
@@ -195,3 +210,32 @@ def test_getattr_private_access_is_detected() -> None:
     assert "CanonicalGepaEvalAuthority._completed_result" in names
     assert "CanonicalGepaEvalAuthority._store" in names
     assert not any(name.endswith(".public") for name in names)
+
+
+def test_our_own_private_modules_are_not_flagged() -> None:
+    """``whetstone_envs`` privates are ours; only whetstone-ai's are barred.
+
+    The guard exists to stop this repo reaching into its upstream
+    dependency's internals. A bare ``whetstone`` prefix match would also
+    catch our own ``whetstone_envs`` package, making a deliberately private
+    module such as ``optim/audit/_evidence.py`` unimportable by its own
+    package.
+    """
+    tree = ast.parse(
+        "from whetstone_envs.optim.audit._evidence import RunEvidence\n"
+        "import whetstone_envs.optim.audit._mutate\n"
+    )
+    assert _private_whetstone_names(tree) == []
+
+
+def test_upstream_private_imports_are_still_flagged() -> None:
+    tree = ast.parse(
+        "from whetstone.optim.gepa._internal import thing\n"
+        "from whetstone.optim.contracts import _private\n"
+        "import whetstone._secret\n"
+    )
+    assert sorted(_private_whetstone_names(tree)) == [
+        "whetstone._secret",
+        "whetstone.optim.contracts._private",
+        "whetstone.optim.gepa._internal",
+    ]

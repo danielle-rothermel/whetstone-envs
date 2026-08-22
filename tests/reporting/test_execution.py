@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from whetstone_envs.c19 import PROBES
@@ -9,7 +11,7 @@ from whetstone_envs.reporting.execution import (
     run_c19_evaluation,
 )
 from whetstone_envs.reporting.publication import load_eval_report
-from whetstone_envs.reporting.schema import EvalSuccess
+from whetstone_envs.reporting.schema import EvalRoleName, EvalSuccess
 
 
 def test_fake_naive_ceiling_e2e_and_reload(fake_eval_output) -> None:
@@ -103,3 +105,91 @@ def test_candidate_validation_precedes_output_creation(
             )
         )
     assert not output.exists()
+
+
+def test_held_out_role_runs_through_the_same_path_as_official(
+    tmp_path,
+) -> None:
+    output = run_c19_evaluation(
+        C19EvalSpec(
+            transport="fake",
+            role="held_out",
+            candidates=(
+                CandidateInput("ceiling", "ceiling", PROBES.ceiling_template),
+            ),
+            split_sizes=(1, 1, 2),
+            output_dir=tmp_path / "held-out",
+            run_id="held-out-test",
+        )
+    )
+    result = output.report.results[0]
+    assert isinstance(result, EvalSuccess)
+    assert output.report.run.role == "held_out"
+    assert len(output.report.tasks) == 2
+    reloaded = load_eval_report(output.directory)
+    assert reloaded.run.role == "held_out"
+    assert reloaded == output.report
+
+
+def test_each_role_reports_its_own_split_and_eval_config(tmp_path) -> None:
+    reports = {
+        role: run_c19_evaluation(
+            C19EvalSpec(
+                transport="fake",
+                role=role,
+                candidates=(
+                    CandidateInput(
+                        "ceiling", "ceiling", PROBES.ceiling_template
+                    ),
+                ),
+                split_sizes=(1, 1, 2),
+                output_dir=tmp_path / role,
+                run_id=f"role-{role}",
+            )
+        ).report
+        for role in ("internal", "official", "held_out")
+    }
+    config_hashes = {
+        report.run.eval_config_hash for report in reports.values()
+    }
+    assert len(config_hashes) == 3
+    task_ids = {
+        role: {task.task_id for task in report.tasks}
+        for role, report in reports.items()
+    }
+    assert task_ids["held_out"].isdisjoint(task_ids["internal"])
+    assert task_ids["held_out"].isdisjoint(task_ids["official"])
+
+
+def test_absent_held_out_split_refuses_rather_than_falling_back(
+    tmp_path,
+) -> None:
+    """A two-role experiment must not silently report official as held-out."""
+    output = tmp_path / "must-not-exist"
+    with pytest.raises(ValueError, match="no held_out split"):
+        run_c19_evaluation(
+            C19EvalSpec(
+                transport="fake",
+                role="held_out",
+                candidates=(
+                    CandidateInput(
+                        "ceiling", "ceiling", PROBES.ceiling_template
+                    ),
+                ),
+                split_sizes=(1, 1, 0),
+                output_dir=output,
+                run_id="held-out-absent",
+            )
+        )
+    assert not output.exists()
+
+
+def test_unsupported_role_is_refused_by_name() -> None:
+    with pytest.raises(ValueError, match="unsupported role"):
+        run_c19_evaluation(
+            C19EvalSpec(
+                transport="fake",
+                role=cast("EvalRoleName", "validation"),
+                split_sizes=(1, 1, 1),
+            )
+        )

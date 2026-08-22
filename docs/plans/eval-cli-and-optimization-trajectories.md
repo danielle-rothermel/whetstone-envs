@@ -133,8 +133,8 @@ Candidate selection is explicit and repeatable:
 
 Other run options mirror the existing optimizer CLI where their semantics are
 identical: `--transport`, `--model`, `--run-id`, and `--output`.
-`--role` accepts `internal` or `official`; held-out hashes are not an executable
-split. `--repeats` maps to the Whetstone seed plan and must be positive.
+`--role` accepts `internal`, `official`, or `held_out`; the held-out split is
+optional and the role is refused when the prepared experiment has none. `--repeats` maps to the Whetstone seed plan and must be positive.
 
 The command prints a compact summary and the absolute run directory after
 atomically publishing `eval-report.json`. A failed or rejected run exits

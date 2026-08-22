@@ -13,7 +13,7 @@ from whetstone_envs.optim.experiment import (
 )
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
-    c19_fake_task_reply,
+    fake_task_reply,
     openrouter_seeded_call_config,
 )
 
@@ -40,8 +40,8 @@ def test_fake_transport_emits_gold_for_ceiling_prompt() -> None:
     naive = contract.render(PROBES.naive_template, inputs)
     gold_by_prompt = {ceiling: gold}
 
-    assert c19_fake_task_reply(ceiling, gold_by_prompt) == gold
-    assert c19_fake_task_reply(naive, gold_by_prompt) == f"generated: {naive}"
+    assert fake_task_reply(ceiling, gold_by_prompt) == gold
+    assert fake_task_reply(naive, gold_by_prompt) == f"generated: {naive}"
 
 
 def test_bind_openrouter_transport_reuses_one_client() -> None:

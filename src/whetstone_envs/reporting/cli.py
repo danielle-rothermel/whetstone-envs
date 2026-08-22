@@ -91,7 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--transport", choices=("fake", "openrouter"), default="fake"
     )
     run.add_argument(
-        "--role", choices=("internal", "official"), default="internal"
+        "--role",
+        choices=("internal", "official", "held_out"),
+        default="internal",
     )
     run.add_argument("--repeats", type=int, default=1)
     run.add_argument("--split-sizes", type=_split_sizes, default=(20, 20, 0))

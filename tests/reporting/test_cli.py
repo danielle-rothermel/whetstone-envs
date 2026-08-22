@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from whetstone_envs.optim.cli import main as optim_main
 from whetstone_envs.reporting.cli import main as reporting_main
-from whetstone_envs.reporting.publication import DurableRunError
+from whetstone_envs.reporting.publication import (
+    DurableRunError,
+    load_eval_report,
+)
 
 
 def test_eval_cli_prints_created_run_directory_on_failure(
@@ -42,7 +47,7 @@ def test_optimizer_cli_preserves_traceback_and_prints_run_directory(
     directory.mkdir()
     error = DurableRunError(directory, RuntimeError("publication failed"))
     with patch(
-        "whetstone_envs.optim.cli.run_c19_optimizer",
+        "whetstone_envs.optim.cli.run_optimizer",
         side_effect=error,
     ):
         status = optim_main(
@@ -90,3 +95,64 @@ def test_trajectory_html_cli_prints_absolute_expected_filename(
     captured = capsys.readouterr()
     assert status == 0
     assert captured.out.strip() == str(expected)
+
+
+def test_eval_cli_runs_and_publishes_the_held_out_role(
+    tmp_path, capsys
+) -> None:
+    directory = tmp_path / "held-out"
+    status = reporting_main(
+        [
+            "run",
+            "--transport",
+            "fake",
+            "--role",
+            "held_out",
+            "--candidate",
+            "ceiling",
+            "--split-sizes",
+            "1,1,2",
+            "--run-id",
+            "cli-held-out",
+            "--output",
+            str(directory),
+            "--no-color",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "role=held_out" in captured.out
+    assert load_eval_report(directory).run.role == "held_out"
+
+
+def test_eval_cli_rejects_a_role_outside_the_three_splits(capsys) -> None:
+    with pytest.raises(SystemExit):
+        reporting_main(["run", "--role", "validation"])
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_eval_cli_reports_an_absent_held_out_split_as_an_error(
+    tmp_path, capsys
+) -> None:
+    status = reporting_main(
+        [
+            "run",
+            "--transport",
+            "fake",
+            "--role",
+            "held_out",
+            "--candidate",
+            "ceiling",
+            "--split-sizes",
+            "1,1,0",
+            "--output",
+            str(tmp_path / "absent"),
+            "--no-color",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 2
+    assert "no held_out split" in captured.out
+    assert not (tmp_path / "absent").exists()

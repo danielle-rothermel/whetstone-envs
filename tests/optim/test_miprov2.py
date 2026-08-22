@@ -15,30 +15,37 @@ from whetstone_envs.c19 import generate_pool
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_RESPONSE_FIELD,
-    c19_gold_by_task_hash,
-    c19_provider_call_config_ref,
     c19_render_contract,
+    gold_by_task_hash,
     prepare_c19_experiment,
+    provider_call_config_ref,
 )
+from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.miprov2 import (
-    C19_DEMO_MODES,
+    DEFAULT_MIPROV2_NUM_CANDIDATES,
+    DEFAULT_MIPROV2_NUM_TRIALS,
+    DEFAULT_MIPROV2_SPLIT,
+    DEMO_MODES,
     MIPROV2_COMPONENT_ID,
+    MIPROV2_SPLITS,
     Miprov2DemoMode,
-    build_c19_miprov2_adapter,
-    build_c19_miprov2_control,
-    build_c19_miprov2_state,
-    c19_miprov2_proposal_bodies,
-    c19_miprov2_run_ref,
+    Miprov2Split,
+    build_miprov2_adapter,
+    build_miprov2_control,
+    build_miprov2_state,
+    miprov2_run_ref,
 )
 from whetstone_envs.optim.provider import (
-    c19_fake_gold_by_prompt,
-    c19_fake_transport_factory,
+    fake_gold_by_prompt,
+    fake_transport_factory,
 )
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
     from whetstone.core.identity import ImmutableJsonObject
+
+C19 = family_spec("c19")
 
 
 @pytest.fixture
@@ -62,16 +69,20 @@ def engine_and_store(tmp_path, prepared):
             eval_runner=ExactMatchEvalProcedureRunner(),
             mutation_field=C19_MUTATION_FIELD,
             render_contract=c19_render_contract(),
-            transport_factory=c19_fake_transport_factory(
-                gold_by_prompt=c19_fake_gold_by_prompt(prepared.experiment)
+            transport_factory=fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    prepared.experiment,
+                    render_contract=C19.render_contract(),
+                    ceiling_template=C19.probes.ceiling_template,
+                )
             ),
         )
         yield engine, store
 
 
 def test_demo_modes_cover_the_whetstone_enumeration() -> None:
-    assert set(C19_DEMO_MODES) == {mode.value for mode in Miprov2DemoMode}
-    assert C19_DEMO_MODES == ("fewshot", "zeroshot", "ground_only")
+    assert set(DEMO_MODES) == {mode.value for mode in Miprov2DemoMode}
+    assert DEMO_MODES == ("fewshot", "zeroshot", "ground_only")
 
 
 @pytest.mark.parametrize("demo_mode", list(Miprov2DemoMode))
@@ -79,9 +90,10 @@ def test_control_binds_the_c19_mutation_surface(
     engine_and_store, prepared, demo_mode: Miprov2DemoMode
 ) -> None:
     engine, _store = engine_and_store
-    control = build_c19_miprov2_control(
+    control = build_miprov2_control(
         engine=engine,
         experiment=prepared.experiment,
+        family=C19,
         demo_mode=demo_mode,
     )
     assert control.mutation_field == C19_MUTATION_FIELD
@@ -99,9 +111,10 @@ def test_control_binds_the_c19_mutation_surface(
 
 def test_zeroshot_carries_zero_demo_maxima(engine_and_store, prepared) -> None:
     engine, _store = engine_and_store
-    control = build_c19_miprov2_control(
+    control = build_miprov2_control(
         engine=engine,
         experiment=prepared.experiment,
+        family=C19,
         demo_mode=Miprov2DemoMode.ZEROSHOT,
     )
     assert control.max_bootstrapped_demos == 0
@@ -125,7 +138,7 @@ def test_only_fewshot_searches_over_demo_sets(
 def test_scripted_proposal_bodies_keep_required_placeholders() -> None:
     """MIPROv2 rejects an instruction that drops a required placeholder."""
     contract = c19_render_contract()
-    for body in c19_miprov2_proposal_bodies():
+    for body in C19.proposal_bodies():
         assert set(contract.validate_template(body)) == set(
             contract.required_fields
         )
@@ -151,7 +164,7 @@ def test_composed_template_satisfies_the_c19_render_contract(
     )
     component = {
         "component_id": MIPROV2_COMPONENT_ID,
-        "instruction": c19_miprov2_proposal_bodies()[0],
+        "instruction": C19.proposal_bodies()[0],
         "instruction_identity_hash": "a" * 64,
         "instruction_index": 0,
         "demo_index": 0 if with_demos else None,
@@ -175,24 +188,25 @@ def test_adapter_and_opening_state_bind_the_exact_run(
     engine_and_store, prepared
 ) -> None:
     engine, store = engine_and_store
-    control = build_c19_miprov2_control(
-        engine=engine, experiment=prepared.experiment
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
     )
-    adapter = build_c19_miprov2_adapter(
-        store=store, engine=engine, control=control
+    adapter = build_miprov2_adapter(
+        store=store, engine=engine, control=control, family=C19
     )
     assert adapter.key == MIPROV2_ADAPTER_KEY
-    run_ref = c19_miprov2_run_ref(
+    run_ref = miprov2_run_ref(
         run_id="c19-miprov2-unit",
         control=control,
         experiment=prepared.experiment,
     )
-    state = build_c19_miprov2_state(
+    state = build_miprov2_state(
         run=run_ref,
         control=control,
         engine=engine,
         experiment=prepared.experiment,
         adapter=adapter,
+        family=C19,
     )
     assert state.run == run_ref
     assert state.control.identity_hash() == control.identity_hash()
@@ -226,14 +240,18 @@ def test_control_requires_two_tasks_to_split(tmp_path) -> None:
             eval_runner=ExactMatchEvalProcedureRunner(),
             mutation_field=C19_MUTATION_FIELD,
             render_contract=c19_render_contract(),
-            transport_factory=c19_fake_transport_factory(
-                gold_by_prompt=c19_fake_gold_by_prompt(single.experiment)
+            transport_factory=fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    single.experiment,
+                    render_contract=C19.render_contract(),
+                    ceiling_template=C19.probes.ceiling_template,
+                )
             ),
         )
         assert len(engine.sampling.task_hashes) == 1
         with pytest.raises(ValueError, match="at least two tasks"):
-            build_c19_miprov2_control(
-                engine=engine, experiment=single.experiment
+            build_miprov2_control(
+                engine=engine, experiment=single.experiment, family=C19
             )
 
 
@@ -241,35 +259,37 @@ def test_prompt_model_binds_the_experiment_provider_call_config(
     engine_and_store, prepared
 ) -> None:
     engine, _store = engine_and_store
-    control = build_c19_miprov2_control(
-        engine=engine, experiment=prepared.experiment
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
     )
-    expected = c19_provider_call_config_ref(prepared.experiment)
+    expected = provider_call_config_ref(prepared.experiment)
     assert control.prompt_model.provider_call_config == expected
 
 
 def test_labeled_demos_carry_the_task_gold(engine_and_store, prepared) -> None:
     """FAILS-BEFORE probe for empty labeled demo outputs."""
     engine, store = engine_and_store
-    control = build_c19_miprov2_control(
-        engine=engine, experiment=prepared.experiment
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
     )
-    adapter = build_c19_miprov2_adapter(
-        store=store, engine=engine, control=control
+    adapter = build_miprov2_adapter(
+        store=store, engine=engine, control=control, family=C19
     )
-    run_ref = c19_miprov2_run_ref(
+    run_ref = miprov2_run_ref(
         run_id="c19-miprov2-gold",
         control=control,
         experiment=prepared.experiment,
     )
-    state = build_c19_miprov2_state(
+    state = build_miprov2_state(
         run=run_ref,
         control=control,
         engine=engine,
         experiment=prepared.experiment,
         adapter=adapter,
+        family=C19,
     )
-    gold_by_hash = c19_gold_by_task_hash(prepared.experiment)
+    gold_by_hash = gold_by_task_hash(prepared.experiment)
+    assert C19.response_field == C19_RESPONSE_FIELD
     assert state.labeled_trainset
     for demo in state.labeled_trainset:
         outputs = cast(
@@ -277,6 +297,140 @@ def test_labeled_demos_carry_the_task_gold(engine_and_store, prepared) -> None:
             demo.outputs_by_component[MIPROV2_COMPONENT_ID],
         ).to_json()
         assert outputs == {
-            C19_RESPONSE_FIELD: gold_by_hash[demo.source_task_hash]
+            C19.response_field: gold_by_hash[demo.source_task_hash]
         }
-        assert outputs[C19_RESPONSE_FIELD]
+        assert outputs[C19.response_field]
+
+
+# --------------------------------------------------------------------------
+# Search shape and split
+# --------------------------------------------------------------------------
+
+
+def test_the_default_search_shape_is_this_runners_own(
+    engine_and_store, prepared
+) -> None:
+    """Wave 3's measured call counts are the cost of *these* numbers.
+
+    Both are below the protocol's auto-light 10 and 6, which is exactly the
+    caveat Wave 3 recorded; the defaults stay put so the fake-transport
+    end-to-end tests remain fast.
+    """
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
+    )
+    assert DEFAULT_MIPROV2_NUM_TRIALS == 2
+    assert DEFAULT_MIPROV2_NUM_CANDIDATES == 3
+    assert control.num_trials == DEFAULT_MIPROV2_NUM_TRIALS
+    assert control.num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES
+
+
+def test_the_protocol_shape_reaches_the_control(
+    engine_and_store, prepared
+) -> None:
+    """The point of the setting: request auto-light without editing code."""
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        num_trials=10,
+        num_candidates=6,
+    )
+    assert control.num_trials == 10
+    assert control.num_candidates == 6
+
+
+@pytest.mark.parametrize(
+    ("num_trials", "num_candidates", "message"),
+    [
+        (0, 3, "num_trials must be at least 1"),
+        (-1, 3, "num_trials must be at least 1"),
+        (2, 0, "num_candidates must be at least 1"),
+    ],
+)
+def test_a_non_positive_search_shape_is_refused(
+    engine_and_store,
+    prepared,
+    num_trials: int,
+    num_candidates: int,
+    message: str,
+) -> None:
+    """Refused outside the durable run boundary, like the other settings."""
+    engine, _store = engine_and_store
+    with pytest.raises(ValueError, match=message):
+        build_miprov2_control(
+            engine=engine,
+            experiment=prepared.experiment,
+            family=C19,
+            num_trials=num_trials,
+            num_candidates=num_candidates,
+        )
+
+
+def test_the_split_names_cover_the_enumeration() -> None:
+    assert set(MIPROV2_SPLITS) == {split.value for split in Miprov2Split}
+    assert DEFAULT_MIPROV2_SPLIT is Miprov2Split.SINGLE_TASK
+
+
+def test_single_task_split_keeps_the_one_task_trainset(
+    engine_and_store, prepared
+) -> None:
+    """Today's behaviour, retained as the default pending a decision.
+
+    Bootstrapping is a cursor walk over the trainset, so a one-task
+    trainset means every demonstration is drawn from one task -- which is
+    what Wave 3 measured as 1-2 bootstrap rows and flagged as substantive.
+    """
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.SINGLE_TASK,
+    )
+    task_hashes = tuple(engine.sampling.task_hashes)
+    assert control.trainset_task_hashes == task_hashes[:1]
+    assert control.valset_task_hashes == task_hashes[1:]
+    assert not set(control.trainset_task_hashes) & set(
+        control.valset_task_hashes
+    )
+
+
+def test_internal_split_is_dspys_own_default(
+    engine_and_store, prepared
+) -> None:
+    """``internal`` means trainset = valset = the whole internal split."""
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.INTERNAL,
+    )
+    task_hashes = tuple(engine.sampling.task_hashes)
+    assert control.trainset_task_hashes == task_hashes
+    assert control.valset_task_hashes == task_hashes
+
+
+def test_the_split_choice_moves_the_bootstrap_surface(
+    engine_and_store, prepared
+) -> None:
+    """The two splits are different experiments, not two spellings of one."""
+    engine, _store = engine_and_store
+    single = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.SINGLE_TASK,
+    )
+    internal = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.INTERNAL,
+    )
+    assert len(internal.trainset_task_hashes) > len(
+        single.trainset_task_hashes
+    )

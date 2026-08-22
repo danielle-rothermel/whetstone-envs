@@ -25,8 +25,21 @@ TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
 #: not been checked against, so it is rejected rather than reinterpreted.
 SPEND_SCHEMA_VERSION = 1
 CandidateSource = Literal["naive", "ceiling", "custom", "optimized"]
-EvalRoleName = Literal["internal", "official"]
+EvalRoleName = Literal["internal", "official", "held_out"]
+#: Every task family a persisted report may name. Persisted-format values:
+#: a report's family string is pinned here, not derived from a module name,
+#: so a family rename is a deliberate schema change with a golden test.
+FamilyName = Literal["c19", "c18"]
 RoleSpendName = Literal["task_model", "proposer"]
+
+#: The reported role name mapped to the upstream experiment split role. The
+#: keys are this package's persisted ``EvalRun.role`` literals; the values are
+#: whetstone's ``SPLIT_ROLES`` spellings, which differ for ``internal``.
+SPLIT_ROLE_BY_REPORT_ROLE: dict[EvalRoleName, str] = {
+    "internal": "internal_eval",
+    "official": "official",
+    "held_out": "held_out",
+}
 
 
 class _StrictModel(BaseModel):
@@ -51,7 +64,9 @@ class ReportRef(_StrictModel):
 
 class EvalRun(_StrictModel):
     run_id: StrictStr
-    family: Literal["c19"]
+    #: The task family this run evaluated. A persisted-format value: a new
+    #: family widens this literal deliberately rather than by inference.
+    family: FamilyName
     transport: StrictStr
     model: StrictStr
     role: EvalRoleName
@@ -120,8 +135,10 @@ class TaskRecord(_StrictModel):
             raise ValueError("tasks require nonblank strata")
         if len(set(self.strata)) != len(self.strata):
             raise ValueError("task strata must be unique and ordered")
-        if set(self.prompt_inputs) != {"grid", "command", "question"}:
-            raise ValueError("C19 tasks require exact prompt inputs")
+        if not self.prompt_inputs:
+            raise ValueError("tasks require at least one prompt input")
+        if any(not name.strip() for name in self.prompt_inputs):
+            raise ValueError("task prompt input names must be nonblank")
         return self
 
 

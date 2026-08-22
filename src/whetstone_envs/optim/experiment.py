@@ -1,18 +1,29 @@
+"""The prepared-experiment shape every task family hands the runner.
+
+One family-generic builder, :func:`prepare_experiment`, turns a pool and a
+:class:`ExperimentContract` into the ``Experiment`` the optimizers drive.
+``prepare_c19_experiment`` is that builder bound to C19's contract, and a
+second family binds its own; nothing here is C19-shaped except the
+``C19_*`` constants and the binding at the bottom of this module.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from dr_graph import GraphConfig, graph_hash
 from dr_providers import (
     PROVIDER_CALL_CONFIG_SCHEMA,
     ControlConstraints,
-    Protocol,
     ProviderCallConfig,
     ProviderCallDefinition,
     ProviderKind,
     RequestControl,
     TokenLimitParameter,
+)
+from dr_providers import (
+    Protocol as WireProtocol,
 )
 from whetstone.core.identity import IdentityRef, typed_ref_for_record
 from whetstone.eval import (
@@ -56,12 +67,14 @@ C19_MUTATION_FIELD = "prompt_template"
 C19_ROOT_BASE_SCHEMA = "whetstone_envs.c19.root_candidate"
 C19_PROMPT_FIELDS = ("grid", "command", "question")
 #: The C19 family names its single generated component output "response";
-#: demonstrations and traces carry the task gold under this exact key.
+#: demonstrations and traces carry the task gold under this exact key. It
+#: reaches the optimizers through ``C19_CONTRACT.response_field``, never as
+#: a literal in the runner.
 C19_RESPONSE_FIELD = "response"
 
 
 @dataclass(frozen=True, slots=True)
-class _C19RolloutGraph:
+class _RolloutGraph:
     graph_config: GraphConfig
     provider_call_config: ProviderCallConfig
     procedure_hash: str
@@ -76,18 +89,105 @@ class _C19RolloutGraph:
         return self.procedure_hash
 
 
+class PreparedExperiment(Protocol):
+    """What a family's experiment builder hands the runner and the report.
+
+    ``run_optimizer`` and ``project_trajectory_report`` read exactly these
+    two attributes, so a second family satisfies the contract by returning
+    its own prepared pair rather than by subclassing anything.
+    """
+
+    @property
+    def experiment(self) -> Experiment: ...
+
+    @property
+    def split(self) -> PoolSplit: ...
+
+
 @dataclass(frozen=True, slots=True)
-class PreparedC19Experiment:
+class PreparedSplitExperiment:
+    """One family's Experiment beside the pool split that authored it.
+
+    The split is retained because the eval configs carry task hashes, not
+    the source instances, and the report projects per-stratum results from
+    the instances.
+    """
+
     experiment: Experiment
     split: PoolSplit
 
 
+@dataclass(frozen=True, slots=True)
+class ExperimentContract:
+    """Everything :func:`prepare_experiment` needs that is family-specific.
+
+    A family names its persisted identity (``namespace`` and
+    ``dataset_revision``, which reach the derived eval splits), the payload
+    field its optimizers mutate, the placeholders its templates must keep,
+    the key its generated component answers under, and the two probe
+    templates that anchor its initial and ceiling candidates. Nothing else
+    about the family reaches the builder.
+    """
+
+    namespace: str
+    dataset_revision: str
+    mutation_field: str
+    prompt_fields: tuple[str, ...]
+    #: The key a generated component writes its answer under. A labeled
+    #: demonstration files the task's gold here, so a family that names its
+    #: output differently says so once, in its contract.
+    response_field: str
+    root_base_schema: str
+    reward_policy_name: str
+    candidate_id_prefix: str
+    naive_template: str
+    ceiling_template: str
+
+    def render_contract(self) -> TemplateRenderContract:
+        """The contract every template for this family must satisfy."""
+        return TemplateRenderContract(
+            kind=TemplateRenderKind.PYTHON_FORMAT_V1,
+            available_fields=self.prompt_fields,
+            required_fields=self.prompt_fields,
+        )
+
+    def candidate(self, *, candidate_id: str, template: str) -> Candidate:
+        """Build one validated prompt candidate for this family."""
+        self.render_contract().validate_template(template)
+        root_ref = typed_ref_for_record(
+            self.root_base_schema, {"kind": "root"}
+        )
+        candidate = Candidate(
+            candidate_id=candidate_id,
+            base_ref=root_ref,
+            payload={self.mutation_field: template},
+        )
+        return candidate_reference(candidate).record
+
+    def reward_policy(self) -> RewardPolicy:
+        """This family's single exact-match reward term."""
+        return RewardPolicy(
+            policy_name=self.reward_policy_name,
+            terms=(RewardTerm(name="score", weight=1.0),),
+        )
+
+
+C19_CONTRACT = ExperimentContract(
+    namespace=C19_NAMESPACE,
+    dataset_revision=C19_DATASET_REVISION,
+    mutation_field=C19_MUTATION_FIELD,
+    prompt_fields=C19_PROMPT_FIELDS,
+    response_field=C19_RESPONSE_FIELD,
+    root_base_schema=C19_ROOT_BASE_SCHEMA,
+    reward_policy_name="c19-exact-match",
+    candidate_id_prefix="c19",
+    naive_template=PROBES.naive_template,
+    ceiling_template=PROBES.ceiling_template,
+)
+
+
 def c19_render_contract() -> TemplateRenderContract:
-    return TemplateRenderContract(
-        kind=TemplateRenderKind.PYTHON_FORMAT_V1,
-        available_fields=C19_PROMPT_FIELDS,
-        required_fields=C19_PROMPT_FIELDS,
-    )
+    return C19_CONTRACT.render_contract()
 
 
 def _task_hash(task: object) -> str:
@@ -97,19 +197,21 @@ def _task_hash(task: object) -> str:
     return hashed
 
 
-def _reference_procedure() -> tuple[EvalProcedureConfig, str]:
+def _reference_procedure(
+    namespace: str,
+) -> tuple[EvalProcedureConfig, str]:
     preprocessing = PreprocessingDefinition(
-        definition_id=f"{C19_NAMESPACE}.preprocessing",
+        definition_id=f"{namespace}.preprocessing",
         version="1",
         steps=(),
     ).materialize()
     metric_extraction = MetricExtractionDefinition(
-        definition_id=f"{C19_NAMESPACE}.metric_extraction",
+        definition_id=f"{namespace}.metric_extraction",
         version="1",
         questions=(MetricQuestionBinding(metric="score", on="submission"),),
     ).materialize(resolved_operators=(("score", "1"),))
     procedure = EvalProcedureDefinition(
-        definition_id=f"{C19_NAMESPACE}.evaluation_procedure",
+        definition_id=f"{namespace}.evaluation_procedure",
         version="1",
     ).materialize(
         preprocessing=preprocessing,
@@ -121,14 +223,16 @@ def _reference_procedure() -> tuple[EvalProcedureConfig, str]:
 
 def _seeded_provider_call_config(
     provider_call_config: ProviderCallConfig | None,
+    *,
+    namespace: str,
 ) -> ProviderCallConfig:
     if provider_call_config is not None:
         return provider_call_config
     definition = ProviderCallDefinition(
-        definition_id=f"{C19_NAMESPACE}.provider/v1",
+        definition_id=f"{namespace}.provider/v1",
         route={
             "provider": ProviderKind.OPENAI,
-            "protocol": Protocol.CHAT_COMPLETIONS,
+            "protocol": WireProtocol.CHAT_COMPLETIONS,
             "model": "fake-model",
         },
         constraints=ControlConstraints(
@@ -151,7 +255,7 @@ def _seeded_provider_call_config(
 def _reference_rollout_graph(
     provider_call_config: ProviderCallConfig,
     procedure_hash: str,
-) -> _C19RolloutGraph:
+) -> _RolloutGraph:
     provider_ref_hash = str(
         typed_ref_for_record(
             PROVIDER_CALL_CONFIG_SCHEMA,
@@ -163,7 +267,7 @@ def _reference_rollout_graph(
         evaluation_procedure_config_schema=SCHEMA_EVAL_PROCEDURE_CONFIG,
         evaluation_procedure_config_hash=procedure_hash,
     )
-    return _C19RolloutGraph(
+    return _RolloutGraph(
         graph_config=graph_config,
         provider_call_config=provider_call_config,
         procedure_hash=procedure_hash,
@@ -171,8 +275,8 @@ def _reference_rollout_graph(
     )
 
 
-def _reference_aggregation():
-    return aggregation_definition(f"{C19_NAMESPACE}.aggregation").materialize(
+def _reference_aggregation(namespace: str):
+    return aggregation_definition(f"{namespace}.aggregation").materialize(
         {
             "reduction": "mean",
             "missing_data": "propagate",
@@ -182,25 +286,89 @@ def _reference_aggregation():
 
 def c19_candidate(*, candidate_id: str, template: str) -> Candidate:
     """Build one validated C19 prompt candidate."""
-    c19_render_contract().validate_template(template)
-    root_ref = typed_ref_for_record(C19_ROOT_BASE_SCHEMA, {"kind": "root"})
-    candidate = Candidate(
-        candidate_id=candidate_id,
-        base_ref=root_ref,
-        payload={C19_MUTATION_FIELD: template},
-    )
-    return candidate_reference(candidate).record
+    return C19_CONTRACT.candidate(candidate_id=candidate_id, template=template)
 
 
 def _rows_from_split(
     split: PoolSplit,
+    *,
+    namespace: str,
 ) -> tuple[tuple[TaskRow, ...], tuple[TaskRow, ...]]:
     internal = task_rows_from_instances(split.internal_eval)
     official = task_rows_from_instances(split.official)
     if not internal or not official:
-        msg = "c19 experiment requires non-empty internal and official splits"
+        msg = (
+            f"{namespace} experiment requires non-empty internal and "
+            "official splits"
+        )
         raise ValueError(msg)
     return internal, official
+
+
+def prepare_experiment(
+    pool: TaskPool,
+    *,
+    contract: ExperimentContract,
+    split_sizes: tuple[int, int, int],
+    num_seeds: int = 1,
+    provider_call_config: ProviderCallConfig | None = None,
+) -> PreparedSplitExperiment:
+    """Prepare one family's Experiment and retain its source split.
+
+    Every family reaches the optimizers through this one builder; the only
+    thing that varies between two families is the ``contract`` handed in.
+    Held-out is derived under its own role when the split requests one, and
+    omitted otherwise, because upstream treats it as optional.
+    """
+    if num_seeds < 1:
+        raise ValueError("num_seeds must be at least 1")
+    split = pool.split(*split_sizes)
+    internal_rows, official_rows = _rows_from_split(
+        split, namespace=contract.namespace
+    )
+    procedure, procedure_hash = _reference_procedure(contract.namespace)
+    aggregation = _reference_aggregation(contract.namespace)
+    resolved_provider = _seeded_provider_call_config(
+        provider_call_config, namespace=contract.namespace
+    )
+    rollout_graph = _reference_rollout_graph(resolved_provider, procedure_hash)
+
+    def derive(split_role, rows):
+        return derive_eval_split(
+            namespace=contract.namespace,
+            dataset_revision=contract.dataset_revision,
+            split_role=split_role,
+            tasks=rows,
+            task_hash_of=_task_hash,
+            procedure=procedure,
+            aggregation=aggregation,
+            num_seeds=num_seeds,
+        )
+
+    held_out_rows = task_rows_from_instances(split.held_out)
+    eval_configs = EvalConfigs(
+        env_name=contract.namespace,
+        procedure_config_hash=procedure_hash,
+        internal=derive(INTERNAL_EVAL, internal_rows),
+        official=derive(OFFICIAL, official_rows),
+        held_out=derive(HELD_OUT, held_out_rows) if held_out_rows else None,
+    )
+    experiment = Experiment(
+        env_name=contract.namespace,
+        rollout_graph=rollout_graph,
+        initial_candidate=contract.candidate(
+            candidate_id=f"{contract.candidate_id_prefix}-initial",
+            template=contract.naive_template,
+        ),
+        ceiling_candidate=contract.candidate(
+            candidate_id=f"{contract.candidate_id_prefix}-ceiling",
+            template=contract.ceiling_template,
+        ),
+        eval_configs=eval_configs,
+        reward_policy=contract.reward_policy(),
+        completeness_policy=CompletenessPolicy(),
+    )
+    return PreparedSplitExperiment(experiment=experiment, split=split)
 
 
 def prepare_c19_experiment(
@@ -209,91 +377,27 @@ def prepare_c19_experiment(
     split_sizes: tuple[int, int, int],
     num_seeds: int = 1,
     provider_call_config: ProviderCallConfig | None = None,
-) -> PreparedC19Experiment:
-    """Prepare an Experiment and retain its authoritative source split."""
-    if num_seeds < 1:
-        raise ValueError("num_seeds must be at least 1")
-    split = pool.split(*split_sizes)
-    internal_rows, official_rows = _rows_from_split(split)
-    procedure, procedure_hash = _reference_procedure()
-    aggregation = _reference_aggregation()
-    resolved_provider = _seeded_provider_call_config(provider_call_config)
-    rollout_graph = _reference_rollout_graph(resolved_provider, procedure_hash)
-    internal = derive_eval_split(
-        namespace=C19_NAMESPACE,
-        dataset_revision=C19_DATASET_REVISION,
-        split_role=INTERNAL_EVAL,
-        tasks=internal_rows,
-        task_hash_of=_task_hash,
-        procedure=procedure,
-        aggregation=aggregation,
+) -> PreparedSplitExperiment:
+    """Prepare the C19 Experiment: :func:`prepare_experiment` under C19."""
+    return prepare_experiment(
+        pool,
+        contract=C19_CONTRACT,
+        split_sizes=split_sizes,
         num_seeds=num_seeds,
+        provider_call_config=provider_call_config,
     )
-    official = derive_eval_split(
-        namespace=C19_NAMESPACE,
-        dataset_revision=C19_DATASET_REVISION,
-        split_role=OFFICIAL,
-        tasks=official_rows,
-        task_hash_of=_task_hash,
-        procedure=procedure,
-        aggregation=aggregation,
-        num_seeds=num_seeds,
-    )
-    held_out_rows = task_rows_from_instances(split.held_out)
-    held_out = (
-        derive_eval_split(
-            namespace=C19_NAMESPACE,
-            dataset_revision=C19_DATASET_REVISION,
-            split_role=HELD_OUT,
-            tasks=held_out_rows,
-            task_hash_of=_task_hash,
-            procedure=procedure,
-            aggregation=aggregation,
-            num_seeds=num_seeds,
-        )
-        if held_out_rows
-        else None
-    )
-    eval_configs = EvalConfigs(
-        env_name=C19_NAMESPACE,
-        procedure_config_hash=procedure_hash,
-        internal=internal,
-        official=official,
-        held_out=held_out,
-    )
-    resolved_initial = PROBES.naive_template
-    resolved_ceiling = PROBES.ceiling_template
-    render_contract = c19_render_contract()
-    render_contract.validate_template(resolved_initial)
-    render_contract.validate_template(resolved_ceiling)
-    reward_policy = RewardPolicy(
-        policy_name="c19-exact-match",
-        terms=(RewardTerm(name="score", weight=1.0),),
-    )
-    experiment = Experiment(
-        env_name=C19_NAMESPACE,
-        rollout_graph=rollout_graph,
-        initial_candidate=c19_candidate(
-            candidate_id="c19-initial",
-            template=resolved_initial,
-        ),
-        ceiling_candidate=c19_candidate(
-            candidate_id="c19-ceiling",
-            template=resolved_ceiling,
-        ),
-        eval_configs=eval_configs,
-        reward_policy=reward_policy,
-        completeness_policy=CompletenessPolicy(),
-    )
-    return PreparedC19Experiment(experiment=experiment, split=split)
 
 
-def c19_provider_call_config_ref(experiment: Experiment) -> IdentityRef:
+def provider_call_config_ref(experiment: Experiment) -> IdentityRef:
     """The typed reference to this experiment's provider call config.
 
     Optimizer proposer transports resolve the prompt model through this
     reference, so it must carry the ``PROVIDER_CALL_CONFIG_SCHEMA`` identity
     of the experiment's rollout config -- not an execution-policy reference.
+
+    Every family's prepared experiment carries one rollout provider call
+    config, so this reads the experiment alone: COPRO, GEPA, and MIPROv2
+    bind one derivation rather than three copies.
     """
     payload = experiment.rollout_graph.provider_call_config.model_dump(
         mode="json"
@@ -305,11 +409,13 @@ def c19_provider_call_config_ref(experiment: Experiment) -> IdentityRef:
     )
 
 
-def c19_gold_by_task_hash(experiment: Experiment) -> dict[str, str]:
-    """Map every prepared C19 task hash to its exact oracle gold.
+def gold_by_task_hash(experiment: Experiment) -> dict[str, str]:
+    """Map every prepared task hash to its exact oracle gold.
 
     The eval engine deliberately withholds gold from its sampling view, so
     labeled demonstrations read it from the family's own experiment splits.
+    Every family's task rows carry a strict ``gold``, so this names no
+    family.
     """
     gold_by_hash: dict[str, str] = {}
     for split in (
@@ -322,7 +428,7 @@ def c19_gold_by_task_hash(experiment: Experiment) -> dict[str, str]:
         for task in split.tasks:
             gold = getattr(task, "gold", None)
             if not isinstance(gold, str):
-                raise TypeError("C19 task must expose a strict gold")
+                raise TypeError("an eval task must expose a strict gold")
             gold_by_hash[_task_hash(task)] = gold
     return gold_by_hash
 
@@ -332,34 +438,36 @@ def probe_candidates_from_templates(
     naive_template: str,
     ceiling_template: str,
 ) -> tuple[Candidate, Candidate]:
-    """Map a probe pair's templates onto initial and ceiling candidates."""
-    render_contract = c19_render_contract()
-    render_contract.validate_template(naive_template)
-    render_contract.validate_template(ceiling_template)
+    """Map a C19 probe pair's templates onto initial and ceiling candidates."""
     return (
-        c19_candidate(candidate_id="c19-initial", template=naive_template),
-        c19_candidate(candidate_id="c19-ceiling", template=ceiling_template),
+        C19_CONTRACT.candidate(
+            candidate_id="c19-initial", template=naive_template
+        ),
+        C19_CONTRACT.candidate(
+            candidate_id="c19-ceiling", template=ceiling_template
+        ),
     )
 
 
 def reward_policy_for_exact_match() -> RewardPolicy:
-    return RewardPolicy(
-        policy_name="c19-exact-match",
-        terms=(RewardTerm(name="score", weight=1.0),),
-    )
+    return C19_CONTRACT.reward_policy()
 
 
 __all__ = [
+    "C19_CONTRACT",
     "C19_MUTATION_FIELD",
     "C19_NAMESPACE",
     "C19_PROMPT_FIELDS",
     "C19_RESPONSE_FIELD",
-    "PreparedC19Experiment",
+    "ExperimentContract",
+    "PreparedExperiment",
+    "PreparedSplitExperiment",
     "c19_candidate",
-    "c19_gold_by_task_hash",
-    "c19_provider_call_config_ref",
     "c19_render_contract",
+    "gold_by_task_hash",
     "prepare_c19_experiment",
+    "prepare_experiment",
     "probe_candidates_from_templates",
+    "provider_call_config_ref",
     "reward_policy_for_exact_match",
 ]

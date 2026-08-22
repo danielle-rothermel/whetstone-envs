@@ -12,12 +12,10 @@ from dr_providers import (
 from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
 from dr_providers.outcomes.models import ProviderTransportResponse
 
-from whetstone_envs.c19 import PROBES
-from whetstone_envs.optim.experiment import c19_render_contract
-
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from whetstone.experiment.candidate import TemplateRenderContract
     from whetstone.experiment.env import Experiment
     from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -58,13 +56,22 @@ def bind_openrouter_transport(policy: ProviderExecutionPolicy):
     return transport, factory
 
 
-def c19_fake_task_reply(prompt: str, gold_by_prompt: Mapping[str, str]) -> str:
+def fake_task_reply(prompt: str, gold_by_prompt: Mapping[str, str]) -> str:
     return gold_by_prompt.get(prompt, f"generated: {prompt}")
 
 
-def c19_fake_gold_by_prompt(experiment: Experiment) -> dict[str, str]:
-    """Map every prepared C19 ceiling prompt to its exact task gold."""
-    contract = c19_render_contract()
+def fake_gold_by_prompt(
+    experiment: Experiment,
+    *,
+    render_contract: TemplateRenderContract,
+    ceiling_template: str,
+) -> dict[str, str]:
+    """Map every prepared ceiling prompt to its exact task gold.
+
+    The family supplies its own contract and ceiling template, so one fake
+    transport serves every family: the scripted ceiling answer is that
+    family's own gold, and any other prompt is echoed.
+    """
     gold_by_prompt: dict[str, str] = {}
     for split in (
         experiment.eval_configs.internal,
@@ -75,19 +82,17 @@ def c19_fake_gold_by_prompt(experiment: Experiment) -> dict[str, str]:
             inputs = getattr(task, "prompt_inputs", None)
             if not isinstance(gold, str) or not isinstance(inputs, dict):
                 raise TypeError(
-                    "C19 task must expose strict prompt_inputs and gold"
+                    "an eval task must expose strict prompt_inputs and gold"
                 )
-            prompt = contract.render(PROBES.ceiling_template, inputs)
+            prompt = render_contract.render(ceiling_template, inputs)
             existing = gold_by_prompt.get(prompt)
             if existing is not None and existing != gold:
-                raise ValueError(
-                    "one C19 ceiling prompt maps to multiple golds"
-                )
+                raise ValueError("one ceiling prompt maps to multiple golds")
             gold_by_prompt[prompt] = gold
     return gold_by_prompt
 
 
-class C19FakeTaskTransport:
+class FakeTaskTransport:
     """Emit gold for ceiling-rendered prompts; echo every other prompt."""
 
     def __init__(
@@ -107,7 +112,7 @@ class C19FakeTaskTransport:
         prompt = messages[-1].content if messages else ""
         if not isinstance(prompt, str):
             prompt = str(prompt or "")
-        text = c19_fake_task_reply(prompt, self._gold_by_prompt)
+        text = fake_task_reply(prompt, self._gold_by_prompt)
         response = ProviderTransportResponse(text=text, stop_reason="stop")
         return ProviderInvocationEvidence.build(
             request=request,
@@ -123,22 +128,22 @@ class C19FakeTaskTransport:
         )
 
 
-def c19_fake_transport_factory(*, gold_by_prompt: Mapping[str, str]):
+def fake_transport_factory(*, gold_by_prompt: Mapping[str, str]):
     replies = dict(gold_by_prompt)
 
-    def factory(policy: ProviderExecutionPolicy) -> C19FakeTaskTransport:
-        return C19FakeTaskTransport(policy, replies)
+    def factory(policy: ProviderExecutionPolicy) -> FakeTaskTransport:
+        return FakeTaskTransport(policy, replies)
 
     return factory
 
 
 __all__ = [
-    "C19FakeTaskTransport",
+    "FakeTaskTransport",
     "OpenRouterTransport",
     "bind_openrouter_transport",
-    "c19_fake_gold_by_prompt",
-    "c19_fake_task_reply",
-    "c19_fake_transport_factory",
+    "fake_gold_by_prompt",
+    "fake_task_reply",
+    "fake_transport_factory",
     "openrouter_seeded_call_config",
     "openrouter_transport_factory",
 ]

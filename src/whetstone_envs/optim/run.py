@@ -52,7 +52,7 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
-from whetstone_envs.optim.experiment import c19_provider_call_config_ref
+from whetstone_envs.optim.experiment import provider_call_config_ref
 from whetstone_envs.optim.families import (
     KNOWN_FAMILY_IDS,
     FamilyId,
@@ -60,22 +60,21 @@ from whetstone_envs.optim.families import (
     family_spec,
     registered_family_ids,
 )
-from whetstone_envs.optim.gepa import build_c19_gepa_adapter
+from whetstone_envs.optim.gepa import build_gepa_adapter
 from whetstone_envs.optim.miprov2 import (
-    C19_DEMO_MODES,
+    DEMO_MODES,
     Miprov2DemoMode,
-    build_c19_miprov2_adapter,
-    build_c19_miprov2_control,
-    build_c19_miprov2_state,
-    c19_miprov2_run_ref,
+    build_miprov2_adapter,
+    build_miprov2_control,
+    build_miprov2_state,
+    miprov2_run_ref,
 )
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
-    c19_fake_gold_by_prompt,
-    c19_fake_transport_factory,
+    fake_gold_by_prompt,
+    fake_transport_factory,
     openrouter_seeded_call_config,
 )
-from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
 from whetstone_envs.reporting.projection import project_trajectory_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
@@ -90,8 +89,6 @@ if TYPE_CHECKING:
     from whetstone.experiment.env import Experiment
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.proposal.proposer import ProposerTransport
-
-    from whetstone_envs.optim.experiment import PreparedC19Experiment
 
 DEFAULT_OUTPUT_ROOT = (
     Path.home() / "drotherm" / "data" / "runs" / ("whetstone-envs")
@@ -219,7 +216,8 @@ def _proposal_contract(family: FamilySpec) -> CoproProposalContractRecord:
     )
 
 
-_COPRO_EXECUTOR_SCHEMA = "whetstone_envs.c19.copro_proposal_executor"
+#: The family-namespaced schema name for COPRO's inline executor policy.
+COPRO_EXECUTOR_SCHEMA_SUFFIX = "copro_proposal_executor"
 
 
 def _copro_adapter(
@@ -244,7 +242,7 @@ def _copro_adapter(
         transport=transport,
         proposal_executor=build_inline_proposal_executor(
             policy_identity_hash=compute_identity_hash(
-                schema=_COPRO_EXECUTOR_SCHEMA,
+                schema=(f"{family.namespace}.{COPRO_EXECUTOR_SCHEMA_SUFFIX}"),
                 schema_version=1,
                 payload={"mode": "inline"},
             ),
@@ -358,10 +356,11 @@ def _bind_optimizer(  # noqa: PLR0913
             ),
         )
     if spec.optimizer == "gepa":
-        gepa_adapter = build_c19_gepa_adapter(
+        gepa_adapter = build_gepa_adapter(
             store=store,
             engine=engine,
             experiment=experiment,
+            family=validated.family,
             run_id=run_id,
             proposer_transport=proposer_transport,
             max_metric_calls=spec.gepa_max_metric_calls,
@@ -372,16 +371,18 @@ def _bind_optimizer(  # noqa: PLR0913
             adapter=gepa_adapter,
             gepa_control=gepa_adapter.control,
         )
-    miprov2_control = build_c19_miprov2_control(
+    miprov2_control = build_miprov2_control(
         engine=engine,
         experiment=experiment,
+        family=validated.family,
         demo_mode=validated.demo_mode,
         seed=MIPROV2_DEFAULT_SEED if spec.seed is None else spec.seed,
     )
-    miprov2_adapter = build_c19_miprov2_adapter(
+    miprov2_adapter = build_miprov2_adapter(
         store=store,
         engine=engine,
         control=miprov2_control,
+        family=validated.family,
         proposer_transport=proposer_transport,
     )
     return _BoundOptimizer(
@@ -422,8 +423,8 @@ def _prepare_launch(  # noqa: PLR0913
             run_id=run_id,
             control=control,
             experiment=experiment,
-            initial_state=build_c19_miprov2_state(
-                run=c19_miprov2_run_ref(
+            initial_state=build_miprov2_state(
+                run=miprov2_run_ref(
                     run_id=run_id,
                     control=control,
                     experiment=experiment,
@@ -432,6 +433,7 @@ def _prepare_launch(  # noqa: PLR0913
                 engine=engine,
                 experiment=experiment,
                 adapter=miprov2_adapter,
+                family=family,
             ),
             render_contract=render_contract,
             mutation_field=family.mutation_field,
@@ -490,8 +492,12 @@ def run_optimizer(spec: RunSpec) -> Path:
             runtime_config.execution_policy
         )
     else:
-        transport_factory = c19_fake_transport_factory(
-            gold_by_prompt=c19_fake_gold_by_prompt(experiment)
+        transport_factory = fake_transport_factory(
+            gold_by_prompt=fake_gold_by_prompt(
+                experiment,
+                render_contract=family.render_contract(),
+                ceiling_template=family.probes.ceiling_template,
+            )
         )
     resolved_output = prepare_output_root(
         spec.output_dir or default_output_dir(resolved_run_id)
@@ -504,7 +510,7 @@ def run_optimizer(spec: RunSpec) -> Path:
         engine = runtime_config.build_engine(
             cast("ObjectStore", store),
             experiment=experiment,
-            eval_runner=ExactMatchEvalProcedureRunner(),
+            eval_runner=family.eval_runner(),
             mutation_field=family.mutation_field,
             render_contract=family.render_contract(),
             transport_factory=transport_factory,
@@ -523,7 +529,7 @@ def run_optimizer(spec: RunSpec) -> Path:
             )
         defaults = CoproInjectedDefaults(
             prompt_model=ProposerConfig(
-                provider_call_config=c19_provider_call_config_ref(experiment),
+                provider_call_config=provider_call_config_ref(experiment),
                 temperature=None,
             ),
             proposal_contract=_proposal_contract(family),
@@ -605,12 +611,7 @@ def run_optimizer(spec: RunSpec) -> Path:
             )
             trajectory = project_trajectory_report(
                 store=cast("ObjectStore", store),
-                # ``project_trajectory_report`` reads only ``.split`` and
-                # ``.experiment``, which is exactly ``PreparedExperiment``,
-                # but its annotation still names the concrete c19 type.
-                # Widening that annotation belongs to the reporting layer,
-                # so the narrowing is stated here rather than there.
-                prepared=cast("PreparedC19Experiment", prepared),
+                prepared=prepared,
                 result_ref=result_ref,
                 result=result,
                 transport=spec.transport,
@@ -644,11 +645,12 @@ def _proposer_config_resolver(
 
 
 __all__ = [
-    "C19_DEMO_MODES",
+    "COPRO_EXECUTOR_SCHEMA_SUFFIX",
     "DEFAULT_COPRO_BREADTH",
     "DEFAULT_COPRO_DEPTH",
     "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_SPLIT_SIZES",
+    "DEMO_MODES",
     "GEPA_DEFAULT_SEED",
     "KNOWN_FAMILY_IDS",
     "MIPROV2_DEFAULT_SEED",

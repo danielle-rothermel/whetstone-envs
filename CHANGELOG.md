@@ -27,6 +27,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `RunSpec` fields with those values as defaults. A breadth below 2 is
   refused at spec validation rather than inside the durable run boundary,
   matching `CoproControl`'s own rule.
+- **The optimizer adapters are family-generic.** `gepa.py`, `miprov2.py`, and
+  `provider.py` read the family's contract instead of C19's constants, so
+  `build_c19_gepa_adapter` becomes `build_gepa_adapter`,
+  `build_c19_miprov2_{control,adapter,state}` become
+  `build_miprov2_{control,adapter,state}`, `c19_fake_transport_factory` and
+  `c19_fake_gold_by_prompt` become `fake_transport_factory` and
+  `fake_gold_by_prompt` (taking the family's render contract and ceiling
+  template), and `C19_DEMO_MODES` becomes `DEMO_MODES`. Wave 1 generalized
+  `run.py`; these three modules still carried C19's mutation field, prompt
+  fields, render contract, and probes, so C18 could not have reached the
+  optimizers without a C19 branch somewhere. Each family now namespaces the
+  identities GEPA, MIPROv2, and COPRO mint for their inline proposal executors
+  and GEPA component schema, so two families' runs never share a policy
+  identity.
+- `FamilySpec` carries a `contract` rather than repeating its namespace,
+  mutation field, prompt fields, and render contract; those are now properties
+  reading the one contract. It gains `eval_runner`, `rendering_rules`, and
+  `example_execution`, the last two being the proposer-facing prose MIPROv2's
+  opening state used to hardcode as C19's.
+- The persisted evaluation report no longer assumes C19. `EvalRun.family` is
+  the pinned `FamilyName` literal `"c19" | "c18"`, read from the prepared
+  experiment's own namespace rather than written in; `EvalRun.dataset_revision`
+  comes from the evaluated split's task set; and `TaskRecord` requires nonempty
+  nonblank prompt-input names instead of exactly `{grid, command, question}`.
+  Before this, a C18 run reached `project_eval_report` and was rejected by the
+  report schema — the one place C19 vocabulary had leaked into a shared
+  contract.
+- `project_trajectory_report` and `project_eval_report` annotate `prepared` as
+  the `PreparedExperiment` protocol they actually read, removing the
+  `cast("PreparedC19Experiment", ...)` the runner carried. The concrete
+  dataclass both families return is now `PreparedSplitExperiment`.
 
 ### Added
 
@@ -100,6 +131,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `--optimizer miprov2` through the same shared runner path as COPRO.
 - `--num-seeds` on the CLI and `RunSpec.num_seeds` make repeats per task
   (`K_REPEAT`) a runner parameter instead of a hardcoded 1.
+- **C18 PrOntoQA is the study's second optimizer family (C3).** It reaches
+  every optimizer through the identical `run_optimizer`, with only the family
+  adapter swapped: `whetstone_envs.optim.c18_experiment` carries C18's
+  `ExperimentContract` (its own namespace, dataset revision, root candidate
+  schema, reward policy, and the `{question}`/`{query}` placeholders both C18
+  probes use), a pool generator matching the registry's calling convention, a
+  `prepare_c18_experiment` that is `prepare_experiment` under that contract,
+  and `C18VerdictEvalProcedureRunner`. C18 is registered in
+  `whetstone_envs.optim.families`; `--family c18` now parses. Splits follow
+  C18's own `SplitPlan`, which at `n_per_stratum=30` over four depth strata
+  gives `C18_PROTOCOL_SPLIT_SIZES = (24, 48, 48)` — pinned as a literal and
+  checked against `default_split_sizes` so a generator change cannot resize
+  the study's second family unnoticed.
+- C18 scores by terminal verdict rather than by whole-reply exact match.
+  `C18VerdictEvalProcedureRunner` delegates to `whetstone_envs.c18.score_gold`,
+  which extracts the final `True`/`False` line. C18's ceiling probe asks for
+  step-by-step reasoning ending in that line, so an exact-match runner would
+  have scored every reasoned answer zero and flattened the ceiling anchor into
+  the floor. Which runner a run uses is now a `FamilySpec` field, so this is a
+  family fact rather than a branch in the runner.
+- `whetstone_envs.optim.experiment.ExperimentContract` and
+  `prepare_experiment`: one family-generic experiment builder both families
+  call. A family's persisted identity, mutation field, placeholders, and probe
+  templates have exactly one owner, and `prepare_c19_experiment` is that
+  builder bound to `C19_CONTRACT`. `PreparedExperiment` — the protocol the
+  runner and the reporting projection read — now lives beside it.
+- The adapter-swap assertion, `tests/optim/test_c18_adapter_swap.py`. It
+  traces every function entered under `whetstone_envs/optim/` during a C19 run
+  and a C18 run of the same optimizer and asserts the two differ only inside
+  the family-adapter file set, so a C19 branch in the runner or a C18 special
+  case in the fake transport fails the test rather than passing quietly. The
+  source is checked too — no shared module imports a family's package, and the
+  only family literal outside the adapters is the CLI's default `--family`.
+  Every optimizer, and every MIPROv2 demo mode, drives C18 end to end on the
+  fake transport, and no private whetstone-ai import was needed to add it.
 
 ## [0.2.2] - 2026-08-22
 

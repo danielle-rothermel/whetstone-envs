@@ -4,7 +4,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from importlib.metadata import version
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, get_args
 
 from pydantic import JsonValue
 from whetstone.core.identity import TypedRef
@@ -42,6 +42,7 @@ from whetstone_envs.reporting.schema import (
     EvalRun,
     EvalSuccess,
     EvaluationResult,
+    FamilyName,
     Observation,
     ObservationState,
     ProviderErrorProjection,
@@ -65,7 +66,7 @@ if TYPE_CHECKING:
     from whetstone.experiment.sampling import EvalSplit
 
     from whetstone_envs.instances import Instance
-    from whetstone_envs.optim.experiment import PreparedC19Experiment
+    from whetstone_envs.optim.experiment import PreparedExperiment
 
 
 def _ref(value: TypedRef | None) -> ReportRef | None:
@@ -83,8 +84,31 @@ def _required_ref(value: TypedRef) -> ReportRef:
     return result
 
 
+#: The package prefix every task family's namespace carries. A prepared
+#: experiment names itself ``whetstone_envs.<family>``, so the report's
+#: family field is read from that namespace rather than passed in and
+#: possibly disagreeing with the evidence it labels.
+_FAMILY_NAMESPACE_PREFIX = "whetstone_envs."
+
+
+def _family_name(prepared: PreparedExperiment) -> FamilyName:
+    """Name the task family that authored this evidence.
+
+    ``FamilyName`` is a persisted-format literal, so an unrecognised
+    namespace is refused here rather than written into a report the schema
+    would reject on read-back.
+    """
+    env_name = prepared.experiment.env_name
+    family = env_name.removeprefix(_FAMILY_NAMESPACE_PREFIX)
+    if family not in get_args(FamilyName):
+        raise ValueError(
+            f"experiment namespace {env_name!r} names no reportable family"
+        )
+    return cast("FamilyName", family)
+
+
 def _instances_for_role(
-    prepared: PreparedC19Experiment, role: EvalRoleName
+    prepared: PreparedExperiment, role: EvalRoleName
 ) -> tuple[Instance, ...]:
     if role == "internal":
         return prepared.split.internal_eval
@@ -96,7 +120,7 @@ def _instances_for_role(
 
 
 def _eval_split_for_role(
-    prepared: PreparedC19Experiment, role: EvalRoleName
+    prepared: PreparedExperiment, role: EvalRoleName
 ) -> EvalSplit:
     """Resolve the prepared eval split for one reporting role.
 
@@ -377,7 +401,7 @@ def _success_projection(
 def project_eval_report(  # noqa: PLR0913
     *,
     store: ObjectStore,
-    prepared: PreparedC19Experiment,
+    prepared: PreparedExperiment,
     run_id: str,
     transport: str,
     model: str,
@@ -482,13 +506,13 @@ def project_eval_report(  # noqa: PLR0913
         schema_version=EVAL_REPORT_SCHEMA,
         run=EvalRun(
             run_id=run_id,
-            family="c19",
+            family=_family_name(prepared),
             transport=transport,
             model=model,
             role=role,
             split_sizes=split_sizes,
             repeats=eval_split.seed_plan.num_seeds,
-            dataset_revision="c19/v1",
+            dataset_revision=eval_split.task_set.dataset_revision,
             graph_hash=graph_hash,
             eval_config_hash=eval_split.eval_config.config_hash,
             package_version=version("whetstone-envs"),
@@ -735,7 +759,7 @@ def project_run_spend(result: OptimResult) -> RunSpend | None:
 def project_trajectory_report(  # noqa: PLR0912, PLR0913, PLR0915
     *,
     store: ObjectStore,
-    prepared: PreparedC19Experiment,
+    prepared: PreparedExperiment,
     result_ref: TypedRef,
     result: OptimResult,
     transport: str,

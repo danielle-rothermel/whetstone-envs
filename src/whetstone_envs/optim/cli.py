@@ -6,10 +6,10 @@ import traceback
 from pathlib import Path
 
 from whetstone_envs.optim.run import (
-    C19_DEMO_MODES,
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
     DEFAULT_SPLIT_SIZES,
+    DEMO_MODES,
     MIN_COPRO_BREADTH,
     OPTIMIZERS,
     TRANSPORTS,
@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--demo-mode",
-        choices=C19_DEMO_MODES,
+        choices=DEMO_MODES,
         default="fewshot",
         help="MIPROv2 demonstration regime; ignored by COPRO and GEPA.",
     )

@@ -20,8 +20,8 @@ from whetstone_envs.optim.experiment import (
 )
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
-    c19_fake_gold_by_prompt,
-    c19_fake_transport_factory,
+    fake_gold_by_prompt,
+    fake_transport_factory,
     openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.run import DEFAULT_OUTPUT_ROOT
@@ -42,7 +42,9 @@ from whetstone_envs.reporting.schema import (
 if TYPE_CHECKING:
     from dr_store import ObjectStore
 
-    from whetstone_envs.optim.experiment import PreparedC19Experiment
+    from whetstone_envs.optim.experiment import (
+        PreparedSplitExperiment,
+    )
 
 _C19_STRATUM_COUNT = 22
 
@@ -104,7 +106,7 @@ def _validate_candidates(
 
 
 def _require_split_for_role(
-    prepared: PreparedC19Experiment, role: EvalRoleName
+    prepared: PreparedSplitExperiment, role: EvalRoleName
 ) -> None:
     """Refuse a role whose split this experiment does not carry.
 
@@ -169,8 +171,12 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                 runtime_config.execution_policy
             )
         else:
-            transport_factory = c19_fake_transport_factory(
-                gold_by_prompt=c19_fake_gold_by_prompt(prepared.experiment)
+            transport_factory = fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    prepared.experiment,
+                    render_contract=c19_render_contract(),
+                    ceiling_template=PROBES.ceiling_template,
+                )
             )
         with open_sqlite(str(output / "runtime.sqlite")) as store:
             engine = runtime_config.build_engine(

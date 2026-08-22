@@ -74,10 +74,30 @@ public surface, with no private imports and no adapter subclassing:
 
 `--demo-mode` selects MIPROv2's demonstration regime and is ignored by COPRO
 and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
-`### Demonstrations` section rather than through a C19 placeholder: `fewshot`
-searches over demo sets and renders the selected set there, while `zeroshot`
-and `ground_only` still bootstrap demos to ground instruction proposals but
-leave the section empty. `--num-seeds` sets repeats per task (`K_REPEAT`).
+`### Demonstrations` section rather than through a family placeholder:
+`fewshot` searches over demo sets and renders the selected set there, while
+`zeroshot` and `ground_only` still bootstrap demos to ground instruction
+proposals but leave the section empty. `--num-seeds` sets repeats per task
+(`K_REPEAT`).
+
+`--family` selects which task family the optimizers drive. Every optimizer
+runs every family through the same `run_optimizer`; a family is admitted by
+registering a `FamilySpec` in [`whetstone_envs.optim.families`][optim-source]
+and nothing on the shared path names one:
+
+| Family | Placeholders | Scoring | Protocol splits | Registered by |
+| --- | --- | --- | --- | --- |
+| `c19` | `{grid}`, `{command}`, `{question}` | exact match on the whole reply | `88,132,220` | `optim/experiment.py` |
+| `c18` | `{question}`, `{query}` | terminal `True`/`False` verdict, via `c18.score_gold` | `24,48,48` | `optim/c18_experiment.py` |
+
+C18's splits come from its own `SplitPlan` at `n_per_stratum=30` over four
+depth strata. Its internal split of 24 is below MIPROv2's default minibatch
+size of 35, so C18 runs keep `minibatch=False`, which is what the shared
+control builder already does.
+
+`tests/optim/test_c18_adapter_swap.py` is the mechanical evidence for that
+claim: it traces both families through one optimizer and asserts the two runs
+differ only inside the family-adapter file set.
 
 Runs happen in-process; artifacts write under
 `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never inside the git tree:
@@ -90,6 +110,9 @@ uv run --extra optim python scripts/run-optim.py \
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer miprov2 --demo-mode fewshot \
   --transport fake --split-sizes 2,2,0
+uv run --extra optim python scripts/run-optim.py \
+  --family c18 --optimizer copro --transport fake --split-sizes 2,2,0 \
+  --n-per-stratum 1
 ```
 
 ## Evaluation and trajectory reports

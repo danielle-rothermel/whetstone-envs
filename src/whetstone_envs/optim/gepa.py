@@ -20,12 +20,7 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
-from whetstone_envs.c19 import PROBES
-from whetstone_envs.optim.experiment import (
-    C19_MUTATION_FIELD,
-    C19_PROMPT_FIELDS,
-    c19_provider_call_config_ref,
-)
+from whetstone_envs.optim.experiment import provider_call_config_ref
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -34,31 +29,37 @@ if TYPE_CHECKING:
     from whetstone.optim.gepa.harness_adapter import GepaHarnessAdapter
     from whetstone.optim.proposal.proposer import ProposerTransport
 
+    from whetstone_envs.optim.families import FamilySpec
+
 GEPA_COMPONENT_NAME = "generate"
-_INLINE_EXECUTOR_SCHEMA = "whetstone_envs.c19.inline_proposal_executor"
-_COMPONENT_SCHEMA = "whetstone_envs.c19.gepa_component"
+#: Per-family schema names for the two identities GEPA mints. Both are
+#: persisted-format strings, so each family's own namespace owns its
+#: value rather than one family's name standing in for every family's.
+INLINE_EXECUTOR_SCHEMA_SUFFIX = "inline_proposal_executor"
+COMPONENT_SCHEMA_SUFFIX = "gepa_component"
 
 
-def c19_gepa_prompt_services() -> GepaPromptServices:
-    """Reflection prompt services bound to the C19 placeholder contract.
+def gepa_prompt_services(family: FamilySpec) -> GepaPromptServices:
+    """Reflection prompt services bound to one family's placeholders.
 
     The shared ``default_gepa_prompt_services`` binds a single ``{prompt}``
-    placeholder; C19 templates carry three, so the component format is
-    declared here rather than taken from the default.
+    placeholder; a family's templates carry its own set, so the component
+    format is declared from the family's contract rather than taken from
+    the default.
     """
     component_schema_hash = compute_identity_hash(
-        schema=_COMPONENT_SCHEMA,
+        schema=f"{family.namespace}.{COMPONENT_SCHEMA_SUFFIX}",
         schema_version=1,
-        payload={"field": C19_MUTATION_FIELD},
+        payload={"field": family.mutation_field},
     )
     descriptor = GepaPromptFormatDescriptor(
-        format_name="c19_prompt_template",
+        format_name=f"{family.family_id}_prompt_template",
         components=(
             GepaComponentFormat(
                 component_name=GEPA_COMPONENT_NAME,
                 component_schema_identity_hash=component_schema_hash,
-                allowed_placeholders=C19_PROMPT_FIELDS,
-                required_placeholders=C19_PROMPT_FIELDS,
+                allowed_placeholders=family.prompt_fields,
+                required_placeholders=family.prompt_fields,
             ),
         ),
     )
@@ -87,16 +88,17 @@ def _gepa_transport(
     )
 
 
-def build_c19_gepa_control(  # noqa: PLR0913
+def build_gepa_control(  # noqa: PLR0913
     *,
     engine: EvalEngine,
     experiment: Experiment,
+    family: FamilySpec,
     prompt_services: GepaPromptServices,
     policy_identity_hash: str,
     seed: int = 0,
     max_metric_calls: int | None = None,
 ):
-    """Resolve the C19 GEPA control over the engine's internal split.
+    """Resolve one family's GEPA control over the engine's internal split.
 
     ``seed`` is GEPA's explicit algorithmic seed, carried straight onto the
     control. ``max_metric_calls`` pins the paid metric-call ceiling; ``None``
@@ -109,7 +111,7 @@ def build_c19_gepa_control(  # noqa: PLR0913
         raise ValueError("GEPA trainset must be the internal eval split")
     return configure_gepa(
         reflection_model=ProposerConfig(
-            provider_call_config=c19_provider_call_config_ref(experiment),
+            provider_call_config=provider_call_config_ref(experiment),
         ),
         metric=engine.eval_config_ref,
         reward_policy_hash=experiment.reward_policy.identity_hash(),
@@ -136,30 +138,37 @@ def build_c19_gepa_control(  # noqa: PLR0913
         ),
         reflection_minibatch_size=1,
         seed=seed,
-    ).model_copy(update={"mutation_field": C19_MUTATION_FIELD})
+    ).model_copy(update={"mutation_field": family.mutation_field})
 
 
-def build_c19_gepa_adapter(  # noqa: PLR0913
+def gepa_policy_identity_hash(family: FamilySpec) -> str:
+    """The identity of one family's inline GEPA proposal executor policy."""
+    return compute_identity_hash(
+        schema=f"{family.namespace}.{INLINE_EXECUTOR_SCHEMA_SUFFIX}",
+        schema_version=1,
+        payload={"mode": "inline"},
+    )
+
+
+def build_gepa_adapter(  # noqa: PLR0913
     *,
     store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
+    family: FamilySpec,
     run_id: str,
     proposer_transport: ProposerTransport | None,
     seed: int = 0,
     max_metric_calls: int | None = None,
 ) -> GepaHarnessAdapter:
-    """Assemble a real C19 GEPA adapter on the public factory surface."""
+    """Assemble one family's GEPA adapter on the public factory surface."""
     prompt_adapter = PlainPromptAdapter()
-    prompt_services = c19_gepa_prompt_services()
-    policy_identity_hash = compute_identity_hash(
-        schema=_INLINE_EXECUTOR_SCHEMA,
-        schema_version=1,
-        payload={"mode": "inline"},
-    )
-    control = build_c19_gepa_control(
+    prompt_services = gepa_prompt_services(family)
+    policy_identity_hash = gepa_policy_identity_hash(family)
+    control = build_gepa_control(
         engine=engine,
         experiment=experiment,
+        family=family,
         prompt_services=prompt_services,
         policy_identity_hash=policy_identity_hash,
         seed=seed,
@@ -171,15 +180,12 @@ def build_c19_gepa_adapter(  # noqa: PLR0913
         control=control,
         run_id=run_id,
         initial_candidate=experiment.initial_candidate,
-        mutation_field=C19_MUTATION_FIELD,
+        mutation_field=family.mutation_field,
         prompt_services=prompt_services,
         transport=_gepa_transport(
             engine=engine,
             prompt_adapter=prompt_adapter,
-            proposal_bodies=(
-                PROBES.ceiling_template,
-                PROBES.naive_template,
-            ),
+            proposal_bodies=family.proposal_bodies(),
             proposer_transport=proposer_transport,
         ),
         proposal_executor=build_inline_proposal_executor(
@@ -189,8 +195,11 @@ def build_c19_gepa_adapter(  # noqa: PLR0913
 
 
 __all__ = [
+    "COMPONENT_SCHEMA_SUFFIX",
     "GEPA_COMPONENT_NAME",
-    "build_c19_gepa_adapter",
-    "build_c19_gepa_control",
-    "c19_gepa_prompt_services",
+    "INLINE_EXECUTOR_SCHEMA_SUFFIX",
+    "build_gepa_adapter",
+    "build_gepa_control",
+    "gepa_policy_identity_hash",
+    "gepa_prompt_services",
 ]

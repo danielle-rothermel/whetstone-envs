@@ -15,30 +15,32 @@ from whetstone_envs.c19 import generate_pool
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_RESPONSE_FIELD,
-    c19_gold_by_task_hash,
-    c19_provider_call_config_ref,
     c19_render_contract,
+    gold_by_task_hash,
     prepare_c19_experiment,
+    provider_call_config_ref,
 )
+from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.miprov2 import (
-    C19_DEMO_MODES,
+    DEMO_MODES,
     MIPROV2_COMPONENT_ID,
     Miprov2DemoMode,
-    build_c19_miprov2_adapter,
-    build_c19_miprov2_control,
-    build_c19_miprov2_state,
-    c19_miprov2_proposal_bodies,
-    c19_miprov2_run_ref,
+    build_miprov2_adapter,
+    build_miprov2_control,
+    build_miprov2_state,
+    miprov2_run_ref,
 )
 from whetstone_envs.optim.provider import (
-    c19_fake_gold_by_prompt,
-    c19_fake_transport_factory,
+    fake_gold_by_prompt,
+    fake_transport_factory,
 )
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
     from whetstone.core.identity import ImmutableJsonObject
+
+C19 = family_spec("c19")
 
 
 @pytest.fixture
@@ -62,16 +64,20 @@ def engine_and_store(tmp_path, prepared):
             eval_runner=ExactMatchEvalProcedureRunner(),
             mutation_field=C19_MUTATION_FIELD,
             render_contract=c19_render_contract(),
-            transport_factory=c19_fake_transport_factory(
-                gold_by_prompt=c19_fake_gold_by_prompt(prepared.experiment)
+            transport_factory=fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    prepared.experiment,
+                    render_contract=C19.render_contract(),
+                    ceiling_template=C19.probes.ceiling_template,
+                )
             ),
         )
         yield engine, store
 
 
 def test_demo_modes_cover_the_whetstone_enumeration() -> None:
-    assert set(C19_DEMO_MODES) == {mode.value for mode in Miprov2DemoMode}
-    assert C19_DEMO_MODES == ("fewshot", "zeroshot", "ground_only")
+    assert set(DEMO_MODES) == {mode.value for mode in Miprov2DemoMode}
+    assert DEMO_MODES == ("fewshot", "zeroshot", "ground_only")
 
 
 @pytest.mark.parametrize("demo_mode", list(Miprov2DemoMode))
@@ -79,9 +85,10 @@ def test_control_binds_the_c19_mutation_surface(
     engine_and_store, prepared, demo_mode: Miprov2DemoMode
 ) -> None:
     engine, _store = engine_and_store
-    control = build_c19_miprov2_control(
+    control = build_miprov2_control(
         engine=engine,
         experiment=prepared.experiment,
+        family=C19,
         demo_mode=demo_mode,
     )
     assert control.mutation_field == C19_MUTATION_FIELD
@@ -99,9 +106,10 @@ def test_control_binds_the_c19_mutation_surface(
 
 def test_zeroshot_carries_zero_demo_maxima(engine_and_store, prepared) -> None:
     engine, _store = engine_and_store
-    control = build_c19_miprov2_control(
+    control = build_miprov2_control(
         engine=engine,
         experiment=prepared.experiment,
+        family=C19,
         demo_mode=Miprov2DemoMode.ZEROSHOT,
     )
     assert control.max_bootstrapped_demos == 0
@@ -125,7 +133,7 @@ def test_only_fewshot_searches_over_demo_sets(
 def test_scripted_proposal_bodies_keep_required_placeholders() -> None:
     """MIPROv2 rejects an instruction that drops a required placeholder."""
     contract = c19_render_contract()
-    for body in c19_miprov2_proposal_bodies():
+    for body in C19.proposal_bodies():
         assert set(contract.validate_template(body)) == set(
             contract.required_fields
         )
@@ -151,7 +159,7 @@ def test_composed_template_satisfies_the_c19_render_contract(
     )
     component = {
         "component_id": MIPROV2_COMPONENT_ID,
-        "instruction": c19_miprov2_proposal_bodies()[0],
+        "instruction": C19.proposal_bodies()[0],
         "instruction_identity_hash": "a" * 64,
         "instruction_index": 0,
         "demo_index": 0 if with_demos else None,
@@ -175,24 +183,25 @@ def test_adapter_and_opening_state_bind_the_exact_run(
     engine_and_store, prepared
 ) -> None:
     engine, store = engine_and_store
-    control = build_c19_miprov2_control(
-        engine=engine, experiment=prepared.experiment
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
     )
-    adapter = build_c19_miprov2_adapter(
-        store=store, engine=engine, control=control
+    adapter = build_miprov2_adapter(
+        store=store, engine=engine, control=control, family=C19
     )
     assert adapter.key == MIPROV2_ADAPTER_KEY
-    run_ref = c19_miprov2_run_ref(
+    run_ref = miprov2_run_ref(
         run_id="c19-miprov2-unit",
         control=control,
         experiment=prepared.experiment,
     )
-    state = build_c19_miprov2_state(
+    state = build_miprov2_state(
         run=run_ref,
         control=control,
         engine=engine,
         experiment=prepared.experiment,
         adapter=adapter,
+        family=C19,
     )
     assert state.run == run_ref
     assert state.control.identity_hash() == control.identity_hash()
@@ -226,14 +235,18 @@ def test_control_requires_two_tasks_to_split(tmp_path) -> None:
             eval_runner=ExactMatchEvalProcedureRunner(),
             mutation_field=C19_MUTATION_FIELD,
             render_contract=c19_render_contract(),
-            transport_factory=c19_fake_transport_factory(
-                gold_by_prompt=c19_fake_gold_by_prompt(single.experiment)
+            transport_factory=fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    single.experiment,
+                    render_contract=C19.render_contract(),
+                    ceiling_template=C19.probes.ceiling_template,
+                )
             ),
         )
         assert len(engine.sampling.task_hashes) == 1
         with pytest.raises(ValueError, match="at least two tasks"):
-            build_c19_miprov2_control(
-                engine=engine, experiment=single.experiment
+            build_miprov2_control(
+                engine=engine, experiment=single.experiment, family=C19
             )
 
 
@@ -241,35 +254,37 @@ def test_prompt_model_binds_the_experiment_provider_call_config(
     engine_and_store, prepared
 ) -> None:
     engine, _store = engine_and_store
-    control = build_c19_miprov2_control(
-        engine=engine, experiment=prepared.experiment
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
     )
-    expected = c19_provider_call_config_ref(prepared.experiment)
+    expected = provider_call_config_ref(prepared.experiment)
     assert control.prompt_model.provider_call_config == expected
 
 
 def test_labeled_demos_carry_the_task_gold(engine_and_store, prepared) -> None:
     """FAILS-BEFORE probe for empty labeled demo outputs."""
     engine, store = engine_and_store
-    control = build_c19_miprov2_control(
-        engine=engine, experiment=prepared.experiment
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
     )
-    adapter = build_c19_miprov2_adapter(
-        store=store, engine=engine, control=control
+    adapter = build_miprov2_adapter(
+        store=store, engine=engine, control=control, family=C19
     )
-    run_ref = c19_miprov2_run_ref(
+    run_ref = miprov2_run_ref(
         run_id="c19-miprov2-gold",
         control=control,
         experiment=prepared.experiment,
     )
-    state = build_c19_miprov2_state(
+    state = build_miprov2_state(
         run=run_ref,
         control=control,
         engine=engine,
         experiment=prepared.experiment,
         adapter=adapter,
+        family=C19,
     )
-    gold_by_hash = c19_gold_by_task_hash(prepared.experiment)
+    gold_by_hash = gold_by_task_hash(prepared.experiment)
+    assert C19.response_field == C19_RESPONSE_FIELD
     assert state.labeled_trainset
     for demo in state.labeled_trainset:
         outputs = cast(
@@ -277,6 +292,6 @@ def test_labeled_demos_carry_the_task_gold(engine_and_store, prepared) -> None:
             demo.outputs_by_component[MIPROV2_COMPONENT_ID],
         ).to_json()
         assert outputs == {
-            C19_RESPONSE_FIELD: gold_by_hash[demo.source_task_hash]
+            C19.response_field: gold_by_hash[demo.source_task_hash]
         }
-        assert outputs[C19_RESPONSE_FIELD]
+        assert outputs[C19.response_field]

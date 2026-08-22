@@ -102,7 +102,6 @@ def test_cli_defaults_match_the_spec_defaults() -> None:
         ({"copro_depth": -1}, "copro_depth must be non-negative"),
         ({"n_per_stratum": 0}, "n_per_stratum must be at least 1"),
         ({"family": "c17"}, "unsupported family"),
-        ({"family": "c18"}, "known but not registered"),
     ],
 )
 def test_the_runner_rejects_an_unrunnable_spec_before_any_effect(
@@ -206,13 +205,13 @@ def test_an_explicit_seed_reaches_the_gepa_control(tmp_path) -> None:
     from whetstone_envs.optim import run as run_module
 
     seen: list[int] = []
-    original = run_module.build_c19_gepa_adapter
+    original = run_module.build_gepa_adapter
 
     def capture(**kwargs):
         seen.append(kwargs["seed"])
         return original(**kwargs)
 
-    with patch.object(run_module, "build_c19_gepa_adapter", capture):
+    with patch.object(run_module, "build_gepa_adapter", capture):
         run_optimizer(
             _spec(
                 optimizer="gepa",
@@ -239,9 +238,7 @@ def test_an_explicit_seed_reaches_the_miprov2_control(tmp_path) -> None:
         raise sentinel
 
     with (
-        patch.object(
-            run_module, "build_c19_miprov2_control", capture_then_stop
-        ),
+        patch.object(run_module, "build_miprov2_control", capture_then_stop),
         pytest.raises(DurableRunError),
     ):
         run_optimizer(
@@ -395,13 +392,13 @@ def test_gepa_metric_call_ceiling_reaches_the_control(tmp_path) -> None:
     from whetstone_envs.optim import run as run_module
 
     seen: list[int | None] = []
-    original = run_module.build_c19_gepa_adapter
+    original = run_module.build_gepa_adapter
 
     def capture(**kwargs):
         seen.append(kwargs["max_metric_calls"])
         return original(**kwargs)
 
-    with patch.object(run_module, "build_c19_gepa_adapter", capture):
+    with patch.object(run_module, "build_gepa_adapter", capture):
         run_optimizer(
             _spec(
                 optimizer="gepa",
@@ -502,16 +499,17 @@ def test_copro_breadth_refuses_a_single_draft_per_step() -> None:
         parser.parse_args(["--optimizer", "copro", "--copro-breadth", "1"])
 
 
-@pytest.mark.parametrize("family", ["c18", "c17"])
-def test_the_family_flag_offers_only_registered_families(family) -> None:
-    """An unregistered family is refused at the parser, not at the runner.
+@pytest.mark.parametrize("family", ["c19", "c18"])
+def test_every_registered_family_parses(family: str) -> None:
+    spec = _captured_spec(["--optimizer", "copro", "--family", family])
+    assert spec.family == family
 
-    ``c18`` is a known identifier with no spec yet, and ``c17`` is not a
-    family at all; neither is runnable, so neither parses.
-    """
+
+def test_an_unregistered_family_is_refused_at_the_parser() -> None:
+    """``c17`` is not a family at all, so it never reaches the runner."""
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["--optimizer", "copro", "--family", family])
+        parser.parse_args(["--optimizer", "copro", "--family", "c17"])
 
 
 @pytest.mark.parametrize("optimizer", OPTIMIZERS)

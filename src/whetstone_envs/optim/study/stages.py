@@ -445,14 +445,24 @@ def _stage_record(
     fact the cross-stage check and the renderers both need.
     """
     paid = environment.transport != TransportName.FAKE.value
-    if not paid:
-        spend: tuple[RunSpendRecord, ...] = ()
-    else:
-        spend = run_spend_records(run_spend) or (
-            stage_spend_records(store=environment.store, evidence=evidence)
-            if environment.store is not None
-            else ()
-        )
+    spend: tuple[RunSpendRecord, ...] = ()
+    if paid:
+        # The two routes are exclusive by construction -- Stage 0 passes
+        # evidence and no runs, an arm stage passes runs and no evidence --
+        # and the fold is preferred where both somehow arrive, because a
+        # run's own cost report is the narrower, already-attributed claim.
+        # Written as an explicit branch rather than an ``or`` chain so that
+        # neither route silently stands in for the other when it yields
+        # nothing: a paid stage that projects to no records must reach the
+        # renderers as UNLEDGERED, not as a stage measured by the route it
+        # does not use.
+        folded = run_spend_records(run_spend)
+        if folded:
+            spend = folded
+        elif environment.store is not None:
+            spend = stage_spend_records(
+                store=environment.store, evidence=evidence
+            )
     return StageRecord(
         stage=stage.value,
         transport=environment.transport,

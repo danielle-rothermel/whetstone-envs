@@ -184,34 +184,15 @@ exclude = [
 ]
 
 [[tool.ty.overrides]]
+# The optimizer, audit, study, and reporting packages import whetstone-ai,
+# which the `optim` extra installs only on Python 3.13+. The 3.12 check
+# therefore type-checks these files against no whetstone at all, so the
+# imports are unresolvable there by construction and nowhere else.
 include = [
-    "src/whetstone_envs/optim/cli.py",
-    "src/whetstone_envs/optim/experiment.py",
-    "src/whetstone_envs/optim/families.py",
-    "src/whetstone_envs/optim/gepa.py",
-    "src/whetstone_envs/optim/miprov2.py",
-    "src/whetstone_envs/optim/provider.py",
-    "src/whetstone_envs/optim/run.py",
-    "src/whetstone_envs/reporting/cli.py",
-    "src/whetstone_envs/reporting/execution.py",
-    "src/whetstone_envs/reporting/projection.py",
-    "src/whetstone_envs/reporting/rich_views.py",
-    "src/whetstone_envs/reporting/html.py",
-    "tests/optim/test_e2e.py",
-    "tests/optim/test_experiment.py",
-    "tests/optim/test_families.py",
-    "tests/optim/test_run_spec.py",
-    "tests/optim/test_miprov2.py",
-    "tests/optim/test_provider.py",
-    "tests/reporting/test_projection.py",
-    "tests/reporting/test_schema.py",
-    "tests/reporting/test_browser.py",
-    "tests/reporting/test_views.py",
-    # The Codex audit reads whetstone-ai 0.1.7 surface behind runtime
-    # guards so it still loads on 0.1.6; ty resolves against whichever
-    # is installed, so one of the two must be unresolvable.
-    "src/whetstone_envs/optim/audit/codex.py",
-    "tests/optim/audit/test_codex.py",
+    "src/whetstone_envs/optim/**",
+    "src/whetstone_envs/reporting/**",
+    "tests/optim/**",
+    "tests/reporting/**",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

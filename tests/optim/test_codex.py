@@ -365,3 +365,41 @@ def test_the_run_spec_carries_no_preflight_seam() -> None:
 
     names = {field.name for field in fields(RunSpec)}
     assert not any("seam" in name or "preflight" in name for name in names)
+
+
+def test_no_test_drives_codex_without_the_scripted_seam() -> None:
+    """A test that runs Codex must not reach the real, paid CLI.
+
+    ``run_optimizer`` spawns whatever ``codex_binary`` names, and the
+    default is the real binary on the run PATH -- correct for production
+    and a hazard in a suite. The hazard is not hypothetical: a test that
+    parametrized over ``OPTIMIZERS`` and called ``run_optimizer`` did
+    invoke the real CLI, and only its authentication preflight stopped
+    the run.
+
+    So every module that *calls* ``run_optimizer`` while naming the Codex
+    arm must also import the scripted seam. Checking the pairing rather
+    than each call site keeps the rule readable: a module holding one
+    without the other is the shape that goes wrong. A module that only
+    builds a spec, or only mentions the runner in prose, calls nothing
+    and is not the hazard.
+    """
+    import re
+
+    tests_root = Path(__file__).resolve().parent.parent
+    calls_runner = re.compile(r"run_optimizer\s*\(")
+    # A spec whose optimizer really is Codex. A module that only names the
+    # string -- to exclude it from a parametrization, say -- drives nothing.
+    drives_codex = re.compile(r"""optimizer\s*=\s*["']codex["']""")
+    seam = re.compile(r"codex_test_seam|CodexTestSeam")
+    unguarded = []
+    for path in sorted(tests_root.rglob("test_*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not calls_runner.search(source):
+            continue
+        if not drives_codex.search(source):
+            continue
+        if seam.search(source):
+            continue
+        unguarded.append(str(path.relative_to(tests_root)))
+    assert unguarded == []

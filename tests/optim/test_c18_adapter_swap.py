@@ -306,7 +306,21 @@ def test_no_private_whetstone_import_was_needed_for_c18() -> None:
     test_optim_package_imports_no_private_whetstone_members()
 
 
-@pytest.mark.parametrize("optimizer", OPTIMIZERS)
+#: Optimizers this test can drive with nothing but the fake transport.
+#:
+#: Codex is excluded because it is not one of them: it spawns a real
+#: foreign agent, so driving it needs the scripted CLI and the test seam
+#: that reaches it. Parametrizing over ``OPTIMIZERS`` alone would run the
+#: *real* Codex binary here. Its c18 evidence is
+#: ``test_codex_runs_the_second_family_unchanged`` in ``test_e2e.py``,
+#: which drives the identical ``run_optimizer`` path over c18 and audits
+#: the result -- the same C3 claim, made where the fake CLI is available.
+SELF_DRIVING_OPTIMIZERS = tuple(
+    optimizer for optimizer in OPTIMIZERS if optimizer != "codex"
+)
+
+
+@pytest.mark.parametrize("optimizer", SELF_DRIVING_OPTIMIZERS)
 def test_every_optimizer_drives_c18_to_a_complete_run(
     tmp_path, optimizer: str
 ) -> None:

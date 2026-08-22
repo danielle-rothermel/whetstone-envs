@@ -39,11 +39,6 @@ from whetstone_envs.optim.provider import (
     fake_transport_factory,
 )
 from whetstone_envs.optim.rows import task_rows_from_instances
-from whetstone_envs.optim.study.arms import (
-    BuildCandidate,
-    RoleScorer,
-    StudyOptimizerRunner,
-)
 from whetstone_envs.optim.study.manifest import (
     STUDY_STORE_NAME,
     SplitsRecord,
@@ -158,6 +153,18 @@ def bound_stage_environment(
             f"transport {transport!r} is not wired into the study harness; "
             "only fake-transport stages run today"
         )
+    # Imported inside the binder, not at module scope. ``arms`` reaches the
+    # shared optimizer runner, which reaches ``optim.run_cost``, which reads
+    # this package's ``RunSpendRecord`` -- so a module-level import here
+    # would close a cycle through ``study/__init__``. Deferring it at the one
+    # place the runner is actually constructed keeps every other importer of
+    # ``study.manifest`` free of the optimizer stack.
+    from whetstone_envs.optim.study.arms import (  # noqa: PLC0415
+        BuildCandidate,
+        RoleScorer,
+        StudyOptimizerRunner,
+    )
+
     manifest = read_study_manifest(study_dir)
     population = manifest.population
     family = family_spec(population.family)

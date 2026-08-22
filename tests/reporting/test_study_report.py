@@ -3,26 +3,30 @@
 **Where the manifest under test comes from.** The study CLI's Stage-0 dry run
 produces a manifest with real c19 splits over a real generated pool, and
 that is what :func:`stage0_manifest` builds -- the same shape a paid Stage 0
-would write, at toy sizes. There is **no fake-transport Stage-2 path**: the
-stage harness needs an optimizer runner, an official scorer, and a held-out
-evaluator, and wiring those on fakes is Wave 7's execution, not a unit test.
-So the reported study is a **synthetic Stage-2 manifest**: the Stage-0
-manifest's real population and real splits, with arms, runs, selections,
-held-out claims, and held-out rows added through the manifest's own
-constructors. Every one of those passes the same validation a paid stage's
-write would, so what the report reads is a document the study could have
-produced, not a hand-shaped dict.
+would write, at toy sizes. The reported study is then a **synthetic Stage-2
+manifest**: that real population and those real splits, with arms, runs,
+selections, held-out claims, and held-out rows added through the manifest's
+own constructors, shaped to hold one arm of each verdict. Every one of them
+passes the same validation a paid stage's write would.
 
-The load-bearing assertion is mechanical rather than by eye: every number
-the report renders is a :class:`Figure`, and every figure names the manifest
-field it came from and the pointer the manifest cites for it. A number added
-without its evidence fails the "names its evidence" test rather than
-shipping unbacked.
+Shaping it here rather than running the stages is deliberate: these tests
+are about what the *report* does with a manifest, so the manifest is
+constructed to exercise each verdict path directly. The stages' own
+fake-transport path is exercised end to end in
+``tests/optim/study/test_stage12_e2e.py``, which generates a report from a
+manifest the stages actually wrote.
+
+The load-bearing assertions are mechanical rather than by eye. Every number
+the report renders is either a :class:`Figure` naming the manifest field it
+came from and the pointer the manifest cites for it, or -- for the prose the
+report also renders -- a structural identifier the guard names explicitly.
+A number added without its evidence fails rather than shipping unbacked.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -73,6 +77,13 @@ from whetstone_envs.reporting.study_report import (
     generate_study_report,
     render_html,
     render_markdown,
+)
+
+from .prose_guard import (
+    DIGIT,
+    NON_EVIDENCE_PATTERNS,
+    strip_non_evidence,
+    unbacked_numbers_in,
 )
 
 if TYPE_CHECKING:
@@ -1011,3 +1022,99 @@ def test_the_rendered_report_carries_the_downgrade(
     for rendering in (markdown, html):
         assert VERDICT_INVALID in rendering
         assert "improved held-out accuracy" not in rendering.split("\n")[0]
+
+
+# --------------------------------------------------------------------------
+# The mechanical guard, extended to prose
+# --------------------------------------------------------------------------
+
+
+def test_no_rendered_prose_carries_an_unbacked_number(
+    reported_manifest: StudyManifest,
+) -> None:
+    """Item 9: the guard covers prose, not only table figures.
+
+    A number in a paragraph or a prose cell reaches a reader exactly as a
+    number in a figure cell does, but carries no provenance mark. Every one
+    the report renders must therefore be either a Figure -- which the
+    figure walk already checks -- or a structural identifier this test
+    names explicitly.
+    """
+    assert unbacked_numbers_in(build_study_report(reported_manifest)) == []
+
+
+def test_the_prose_guard_catches_a_number_planted_in_a_paragraph(
+    reported_manifest: StudyManifest,
+) -> None:
+    """The guard's own negative: a bare measurement in prose is caught.
+
+    Without this, a guard that silently matched nothing would pass forever
+    while the rule it encodes stopped holding.
+    """
+    report = build_study_report(reported_manifest)
+    planted = replace(
+        report,
+        sections=(
+            replace(
+                report.sections[0],
+                paragraphs=(
+                    *report.sections[0].paragraphs,
+                    "COPRO improved held-out accuracy by 7.4 points.",
+                ),
+            ),
+            *report.sections[1:],
+        ),
+    )
+    offenders = unbacked_numbers_in(planted)
+    assert len(offenders) == 1
+    assert "7.4" in offenders[0][2]
+
+
+def test_every_non_evidence_pattern_matches_something_it_allows() -> None:
+    """A whitelist entry that matches nothing is a rule nobody needs.
+
+    Each pattern is checked against a string it is meant to allow, so a
+    pattern that silently stopped matching -- because the prose it excused
+    was rewritten -- is removed rather than left widening the guard.
+    """
+    samples = {
+        r"\bL[1-6]\b": "L1 and L6 ran",
+        r"\bF\d+\b": "the F16 fan-out check",
+        (
+            r"\bStages [0-2]-[0-2]\b|\bStages? [0-2]\b|\bStage-[0-2]\b"
+        ): "Stages 1-2 -- optimizer runs",
+        r"\bC[1-3]\b": "C3 generality",
+        r"\bO\d+\b|\bD[1-9]\b|\bR\d+\b": "D5 decided the size",
+        (
+            r"\b[\w.-]*(?:copro|miprov2|gepa|codex|null[A-Za-z]*|c18)"
+            r"[\w.-]*\d[\w.-]*"
+        ): "copro-seed1000",
+        r"\bMIPROv2\b": "MIPROv2 buys minibatches",
+        r"\bc1[89]\b|\bc1[89]-[\w-]+": "c18-copro",
+        r"\bstudy\.json\b": "a field of study.json",
+        r"n_per_stratum \d+": "n_per_stratum 1, pool abc",
+        r"\b[\d,]+ resamples\b": "what 10,000 resamples can resolve",
+        r"/[\w./-]*\d[\w./-]*": "no report in /runs/copro-1000",
+        (
+            r"\d{4}-\d{2}-\d{2}T[\d:+.-]+|\d{4}-\d{2}-\d{2}"
+        ): "created 2026-08-22T12:00:00+00:00",
+        r"\bsha256\b": "at sha256 abc",
+        r"\b[0-9a-f]{12,64}\b": "hash aaaaaaaaaaaa",
+        r"\bstep10\S*": "Study step10-report-fixture",
+        r"@[0-9a-f]{12}\b": "schema@0123456789ab",
+        r"/v\d+\b": "whetstone_envs.audit_report/v1",
+        r"MDE\(T, K\) = [^\n]*": "MDE(T, K) = 2.8016 * sqrt(x)",
+        (r"tau\^2|sigma\^2|z_\{1-alpha/2\}"): "tau^2 (between-task variance)",
+        r"\bseed \d+\b": "bootstrap at seed 0",
+        r"2/resamples": "a floor at 2/resamples",
+        r"\b95%": "the nominal 95% is optimistic",
+        r"\b3-5 points\b": "an improvement of 3-5 points",
+        r"\bgpt-[\d.]+\S*": "openai/gpt-5-nano",
+        (
+            r"whetstone[_a-z-]*[.\w/-]*\d[\w./-]*"
+        ): "schema whetstone_envs.step10_study/v3",
+    }
+    for pattern, _why in NON_EVIDENCE_PATTERNS:
+        sample = samples[pattern]
+        assert re.search(pattern, sample), pattern
+        assert not DIGIT.search(strip_non_evidence(sample)), pattern

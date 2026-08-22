@@ -53,6 +53,7 @@ from pydantic import JsonValue
 from whetstone_envs.optim.study.manifest import (
     STUDY_MANIFEST_NAME,
     EvidencePointer,
+    StageId,
     StudyManifest,
 )
 from whetstone_envs.reporting.publication import (
@@ -89,6 +90,7 @@ __all__ = [
     "VERDICT_VALIDATED",
     "Cell",
     "Figure",
+    "RenderedText",
     "Row",
     "Section",
     "StudyReport",
@@ -98,6 +100,7 @@ __all__ = [
     "generate_study_report",
     "render_html",
     "render_markdown",
+    "rendered_text_in",
     "study_leakage_failed",
 ]
 
@@ -313,6 +316,90 @@ def figures_in(report: StudyReport) -> Iterator[Figure]:
     """
     for section in report.sections:
         yield from _figures_in_section(section)
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedText:
+    """One rendered string that is *not* a figure, and where it came from.
+
+    The figure walk covers every number the report backs with evidence.
+    This covers everything else it renders -- paragraphs, prose cells,
+    captions, headings, checklist items, code-block labels -- so a number
+    that reached a reader without a pointer is findable mechanically rather
+    than by reading the output.
+    """
+
+    kind: str
+    location: str
+    text: str
+
+
+def rendered_text_in(report: StudyReport) -> Iterator[RenderedText]:
+    """Every non-figure string the report renders, in document order.
+
+    Deliberately exhaustive over the report model rather than over its
+    Markdown: a number is unbacked because of how the report was *built*,
+    and reading the emitted text back would also have to re-parse the
+    provenance marks the emitters add.
+    """
+    yield RenderedText(kind="title", location="title", text=report.title)
+    yield RenderedText(kind="dek", location="dek", text=report.dek)
+    for index, note in enumerate(report.warnings):
+        yield RenderedText(
+            kind="warning", location=f"warnings[{index}]", text=note
+        )
+    for entry in report.colophon:
+        yield RenderedText(kind="colophon", location="colophon", text=entry)
+    for section in report.sections:
+        yield from _text_in_section(section)
+
+
+def _text_in_section(section: Section) -> Iterator[RenderedText]:
+    where = section.tag or section.heading
+    yield RenderedText(kind="heading", location=where, text=section.heading)
+    for index, paragraph in enumerate(section.paragraphs):
+        yield RenderedText(
+            kind="paragraph",
+            location=f"{where}.paragraphs[{index}]",
+            text=paragraph,
+        )
+    for table_index, table in enumerate(section.tables):
+        if table.caption:
+            yield RenderedText(
+                kind="caption",
+                location=f"{where}.tables[{table_index}].caption",
+                text=table.caption,
+            )
+        for header in table.headers:
+            yield RenderedText(
+                kind="header",
+                location=f"{where}.tables[{table_index}].headers",
+                text=header,
+            )
+        for row_index, row in enumerate(table.rows):
+            for cell_index, cell in enumerate(row.cells):
+                if cell.text is None:
+                    continue
+                yield RenderedText(
+                    kind="cell",
+                    location=(
+                        f"{where}.tables[{table_index}]"
+                        f".rows[{row_index}].cells[{cell_index}]"
+                    ),
+                    text=cell.text,
+                )
+    for index, item in enumerate(section.checklist):
+        yield RenderedText(
+            kind="checklist",
+            location=f"{where}.checklist[{index}]",
+            text=item,
+        )
+    for label, _body in section.code_blocks:
+        yield RenderedText(
+            kind="code_label", location=f"{where}.code_blocks", text=label
+        )
+    for panel in section.panels:
+        yield from _text_in_section(panel)
 
 
 def _figures_in_section(section: Section) -> Iterator[Figure]:
@@ -1142,12 +1229,17 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
             cells=(
                 Cell(text="Stage-1 precondition -- GEPA sizing (F9)"),
                 _presence_cell(sizing is not None),
-                Cell(
-                    text=(
-                        _sizing_detail(manifest)
-                        if sizing is not None
-                        else "no step, wall-time, or store measurement "
-                        "recorded"
+                (
+                    Cell(
+                        text=(
+                            "no step, wall-time, or store measurement recorded"
+                        )
+                    )
+                    if sizing is None
+                    else Cell(
+                        figure=_manifest_figure(
+                            _sizing_detail(manifest), "gepa_sizing"
+                        )
                     )
                 ),
             )
@@ -1156,19 +1248,21 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
             cells=(
                 Cell(text="Stage-1 precondition -- fan-out check (F16)"),
                 _presence_cell(fanout is not None),
-                Cell(
-                    text=(
-                        f"{fanout.minibatch_intents} minibatch intents, "
-                        f"{fanout.full_valset_intents} full-valset intents; "
-                        f"{'passed' if fanout.passed else 'FAILED'}"
-                        if fanout is not None
-                        else "no minibatch fan-out measurement recorded"
-                    ),
-                    status=(
-                        None
-                        if fanout is None
-                        else ("ok" if fanout.passed else "bad")
-                    ),
+                (
+                    Cell(
+                        text=("no minibatch fan-out measurement recorded"),
+                    )
+                    if fanout is None
+                    else Cell(
+                        figure=_manifest_figure(
+                            f"{fanout.minibatch_intents} minibatch intents, "
+                            f"{fanout.full_valset_intents} full-valset "
+                            f"intents; "
+                            f"{'passed' if fanout.passed else 'FAILED'}",
+                            "fanout_check",
+                        ),
+                        status="ok" if fanout.passed else "bad",
+                    )
                 ),
             )
         ),
@@ -1177,7 +1271,10 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 Cell(text="Stages 1-2 -- optimizer runs"),
                 _presence_cell(run_count > 0),
                 Cell(
-                    text=(f"{run_count} runs across {len(manifest.arms)} arms")
+                    figure=_manifest_figure(
+                        f"{run_count} runs across {len(manifest.arms)} arms",
+                        "arms[].runs",
+                    )
                 ),
             )
         ),
@@ -1186,9 +1283,10 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 Cell(text="Selection -- arg-max on official"),
                 _presence_cell(bool(manifest.selection)),
                 Cell(
-                    text=(
-                        f"{len(manifest.selection)} of {len(manifest.arms)} "
-                        "arms selected"
+                    figure=_manifest_figure(
+                        f"{_reported_selection_count(manifest)} of "
+                        f"{len(manifest.arms)} arms selected",
+                        "selection",
                     )
                 ),
             )
@@ -1198,9 +1296,10 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 Cell(text="Held-out -- one evaluation per candidate"),
                 _presence_cell(bool(manifest.held_out)),
                 Cell(
-                    text=(
+                    figure=_manifest_figure(
                         f"{len(manifest.held_out_claims)} claimed, "
-                        f"{len(manifest.held_out)} reported"
+                        f"{len(manifest.held_out)} reported",
+                        "held_out_claims",
                     )
                 ),
             )
@@ -1223,6 +1322,23 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
             ),
         ),
     )
+
+
+def _reported_selection_count(manifest: StudyManifest) -> int:
+    """How many arms the study's *reported* stage selected.
+
+    Selections are recorded once per arm per stage, so counting every entry
+    would report a study that ran a pilot and a full design as having
+    selected twice as many arms as it has. The reported stage is the latest
+    one that ran, which is the stage the held-out rows describe.
+    """
+    stages = {entry.stage for entry in manifest.selection}
+    for candidate in (StageId.STAGE2.value, StageId.STAGE1.value):
+        if candidate in stages:
+            return sum(
+                1 for entry in manifest.selection if entry.stage == candidate
+            )
+    return len(manifest.selection)
 
 
 def _sizing_detail(manifest: StudyManifest) -> str:
@@ -1504,9 +1620,11 @@ def _trajectory_table(
                         )
                     ),
                     Cell(
-                        text=(
+                        figure=_pointer_figure(
                             f"{len(points)} steps; terminal "
-                            f"{item.trajectory.terminal_status}"
+                            f"{item.trajectory.terminal_status}",
+                            f"runs[{run.run_id}].trajectory.steps",
+                            run.result_ref,
                         )
                     ),
                 )
@@ -1719,12 +1837,16 @@ def _threats_section(manifest: StudyManifest) -> Section:
     threats = (
         (
             "The Codex arm's agent model is uncontrolled",
-            (
-                f"Recorded as {manifest.models.codex_agent_model}. Its own "
-                "model calls run off this study's key entirely, so whetstone "
-                "observes no usage evidence for them and the manifest carries "
-                "no cost role for them. The arm's OpenRouter evaluation calls "
-                "price normally; the agent's do not appear at all."
+            Cell(
+                figure=_manifest_figure(
+                    f"Recorded as {manifest.models.codex_agent_model}. Its "
+                    "own model calls run off this study's key entirely, so "
+                    "whetstone observes no usage evidence for them and the "
+                    "manifest carries no cost role for them. The arm's "
+                    "OpenRouter evaluation calls price normally; the "
+                    "agent's do not appear at all.",
+                    "models.codex_agent_model",
+                )
             ),
             (
                 "A comparison against arms whose proposer this study pinned. "
@@ -1737,10 +1859,13 @@ def _threats_section(manifest: StudyManifest) -> Section:
                 "Codex buys whole-split evaluations; MIPROv2 and GEPA buy "
                 "minibatches"
             ),
-            (
-                "The study capped Codex at 8 admitted evaluate-calls per run "
-                "and audits that cap directly, which makes the arms comparable"
-                " in spend rather than in evaluation granularity."
+            Cell(
+                text=(
+                    "The study capped Codex's admitted evaluate-calls per "
+                    "run and audits that cap directly, which makes the arms "
+                    "comparable in spend rather than in evaluation "
+                    "granularity."
+                )
             ),
             (
                 "A residual incomparability the design chose not to engineer "
@@ -1749,10 +1874,13 @@ def _threats_section(manifest: StudyManifest) -> Section:
         ),
         (
             "Percentile intervals under-cover at small task counts",
-            (
-                f"Intervals are paired task-level percentile bootstrap over "
-                f"the {held_out_size}-task held-out split, and the p-value "
-                f"floor is reported rather than hidden."
+            Cell(
+                figure=_manifest_figure(
+                    f"Intervals are paired task-level percentile bootstrap "
+                    f"over the {held_out_size}-task held-out split, and the "
+                    f"p-value floor is reported rather than hidden.",
+                    "splits.held_out.size",
+                )
             ),
             (
                 "Percentile intervals are known to under-cover in small "
@@ -1765,10 +1893,20 @@ def _threats_section(manifest: StudyManifest) -> Section:
                 "effect"
             ),
             (
-                f"The measured MDE is {_proportion(design.mde_measured)} at "
-                f"the design's repeat count."
-                if design is not None
-                else "No MDE was measured, because Stage 0 is unrecorded."
+                Cell(
+                    text=(
+                        "No MDE was measured, because Stage 0 is unrecorded."
+                    )
+                )
+                if design is None
+                else Cell(
+                    figure=_manifest_figure(
+                        f"The measured MDE is "
+                        f"{_proportion(design.mde_measured)} at the design's "
+                        f"repeat count.",
+                        "design.mde_measured",
+                    )
+                )
             ),
             (
                 "A true improvement of 3-5 points is below what this design "
@@ -1777,9 +1915,11 @@ def _threats_section(manifest: StudyManifest) -> Section:
         ),
         (
             "Within-task variance is estimated from the naive arm only",
-            (
-                "The variance decomposition estimates the within-task "
-                "component from the naive arm's base rate."
+            Cell(
+                text=(
+                    "The variance decomposition estimates the within-task "
+                    "component from the naive arm's base rate."
+                )
             ),
             (
                 "If naive and ceiling have very different base rates, the "
@@ -1788,13 +1928,7 @@ def _threats_section(manifest: StudyManifest) -> Section:
         ),
     )
     rows = tuple(
-        Row(
-            cells=(
-                Cell(text=name),
-                Cell(text=did),
-                Cell(text=remains),
-            )
-        )
+        Row(cells=(Cell(text=name), did, Cell(text=remains)))
         for name, did, remains in threats
     )
     return Section(

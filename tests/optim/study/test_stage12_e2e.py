@@ -43,6 +43,7 @@ from whetstone_envs.reporting.study_report import (
     figures_in,
 )
 
+from ...reporting.prose_guard import unbacked_numbers_in  # noqa: TID252
 from .conftest import toy_manifest
 
 if TYPE_CHECKING:
@@ -309,3 +310,17 @@ def test_the_report_reads_the_deltas_the_manifest_recorded(
     )
     for arm_id in E2E_ARMS:
         assert arm_id in rendered
+
+
+def test_no_rendered_prose_carries_an_unbacked_number(
+    study_dir: Path,
+) -> None:
+    """The prose guard, over a manifest the stages actually wrote.
+
+    ``tests/reporting`` runs the same guard over a shaped manifest. Running
+    it here too is what stops the guard from passing only on fixtures: a
+    real study's run ids, spend, and trajectory details are exactly the
+    strings most likely to carry a number nobody backed.
+    """
+    manifest = _run_every_stage(study_dir)
+    assert unbacked_numbers_in(build_study_report(manifest)) == []

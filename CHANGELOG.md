@@ -173,6 +173,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the document fetches no font, script, or highlighter. The kit's Google
   Fonts `@import` is dropped for that reason, falling back to the system
   faces the kit already names.
+- **Stages 1 and 2 are operational end to end on the fake transport.**
+  `whetstone_envs.optim.study.arms` supplies the three collaborators the
+  stage harness takes as callables and refuses to import.
+  `StudyOptimizerRunner` drives one arm at one seed through `optim/run.py`'s
+  `RunSpec`, audits the run it produced, projects its cost, and copies the
+  three records the manifest cites into the study's own store, so
+  `whetstone-study manifest check` resolves every pointer the report prints.
+  `RoleScorer` evaluates a candidate on one role's split through the *same*
+  engine binder Stage 0 calibrated its anchors with, which makes L4's
+  identical-procedure rule a construction rather than an assertion. The two
+  controls run no optimizer and record that fact in their own run record
+  instead of borrowing an optimizer's evidence. `whetstone-study run --stage
+  stage0|stage1|stage2` over a toy c19 spec now produces a manifest with arm
+  runs, a persisted selection, held-out rows with their statistics, and a
+  report generated from it — with zero provider calls. Real transports stay
+  refused until a study spec selects one and a stage gate authorizes it.
+- **The statistics reach the manifest.**
+  `whetstone_envs.optim.study.analysis` is the second pass the numbers need:
+  a Holm-corrected p-value is a whole-study computation that cannot exist
+  until every arm is measured, so the anchors are measured through the
+  identical once-only ledger and one `held_out` row per reported candidate
+  is written afterwards. Each row carries its interval, its uncorrected
+  p-value, its row-completeness weighting, and — for the four real
+  optimizers only — its Holm-corrected p-value, and each cites the per-task
+  vector it was computed from as evidence in the study's own store. Nulls
+  and anchors are controls rather than hypotheses, so their Holm column is
+  empty by design. `null_triggers_downgrade` and the D5 held-out nesting
+  check run over what the stage recorded.
+- **Stage 2 continues from Stage 1 rather than refusing.** Previously it ran
+  the new seeds and then raised, leaving paid runs with no selection and no
+  recovery. A run an earlier stage recorded is now re-read from its own
+  artifacts, and selection runs over the union in seed order. Selections and
+  held-out claims carry the stage that made them, so L2 and L3 are "once per
+  arm per stage" — which is what the design describes, since a pilot's
+  arg-max over two runs and the full design's over five are different
+  decisions, both recorded rather than one overwriting the other.
+- **The pre-registration is immutable once pinned.** `study.json` gains a
+  `pre_registration` block holding the design fields fixed before any spend
+  plus the content hash over them (schema v3). Stage 0 pins it; every later
+  write must carry it back byte for byte or is refused with
+  `PreRegistrationViolationError`, so no stage that has seen results can
+  restate the power arithmetic it is judged against. A second `stage0` is
+  refused outright; `--replace-design` records the replacement as an
+  `amended` block naming the design hash it replaced, and a re-calibration
+  landing on the same design is written back unchanged rather than
+  relabelled.
+- **`leakage-check` really checks L1.** It extracts each run's completed
+  intent resolutions from the run stores the manifest names, so the rule
+  that an optimizer saw the internal split and nothing else is observed
+  rather than reported unchecked forever. That exposed why it could never
+  have passed: the repeat count is part of an Eval Config's identity, and
+  Stage 0 recorded the calibration's config (`K_CAL`) where every later
+  evaluation resolves the design's (`K_REPEAT`). Stage 0 now records the
+  config the runs actually use, and a clean study passes all six rules.
+- An arm stage is resumable, which matters because it is the path that
+  spends. A seed whose run is already recorded is not re-executed — that is
+  what makes "Stage 1's runs count toward Stage 2" a checkable property of
+  the seeds rather than an assertion — and the merged arm record keeps every
+  previously recorded run instead of replacing the list, so a stage that
+  crashed after paying for some runs does not discard them. A run an earlier
+  stage recorded is re-read from its own artifacts so Stage 2's arg-max
+  covers the arm's whole `K_RUN`; selecting over a subset is refused loudly
+  rather than quietly turning a `K_RUN = 5` arg-max into a `K_RUN = 3` one.
 
 ### Notes
 
@@ -289,6 +352,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `test_miprov2_fake_transport_completes` runs as an ordinary passing test in
   every demonstration mode; its `xfail(strict=True)` marker and the
   `MIPROV2_UPSTREAM_BLOCKER` reason it carried are gone.
+- **Leakage gates the report's headline and every verdict.** A study whose
+  leakage rules failed — or were never run, which makes the same claim to a
+  reader — reports every arm as `invalid (leakage)` and headlines the
+  downgrade. An interval measured through a procedure the study could not
+  establish is not a result, whatever its width, so the gate runs before the
+  per-arm fidelity check rather than beside it.
+- **Holm's `m` is the pre-registered family size, not the number of arms in
+  hand.** A pilot or a partial resume corrects at `m = 4` instead of
+  under-correcting exactly when multiplicity risk is unchanged; the
+  unanalysed members enter as `p = 1`, which is Holm over the declared
+  family with the missing arms unrejected. Analysing more arms than the
+  family declares is refused rather than silently widening it after the
+  fact.
+- **`reported_numbers_resolve` no longer passes vacuously.** A run whose
+  steps completed no evaluation intent now FAILs, and a run with no steps at
+  all is `NOT_APPLICABLE`. "All 0 of 0 resolve" read as audited fidelity on
+  a run whose numbers nobody had verified.
+- **The rendered-number guard covers prose, not only table figures.**
+  `rendered_text_in` walks every non-figure string the report renders —
+  paragraphs, prose cells, captions, headings, checklist items, code-block
+  labels — and the test refuses any digit that is not either a `Figure` or
+  one of an explicitly named set of structural identifiers (rule ids, run
+  ids, schema names, content hashes, the MDE formula). Several real numbers
+  it found — the stage-history counts, the fan-out and GEPA-sizing details,
+  the trajectory step count, the measured MDE and held-out size in the
+  threats table — are now figures citing their manifest paths.
 
 ### Added
 

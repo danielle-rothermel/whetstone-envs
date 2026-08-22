@@ -236,6 +236,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   stage recorded is re-read from its own artifacts so Stage 2's arg-max
   covers the arm's whole `K_RUN`; selecting over a subset is refused loudly
   rather than quietly turning a `K_RUN = 5` arg-max into a `K_RUN = 3` one.
+- **`leakage-check` really checks L1.** It extracts each run's completed
+  intent resolutions from the run stores the manifest names, so the rule
+  that an optimizer saw the internal split and nothing else is observed
+  rather than reported unchecked forever. That exposed why it could never
+  have passed: the repeat count is part of an Eval Config's identity, and
+  Stage 0 recorded the calibration's config (`K_CAL`) where every later
+  evaluation resolves the design's (`K_REPEAT`). Stage 0 now records the
+  config the runs actually use, and a clean study passes all six rules. The
+  verdict is also *recorded* into `manifest.leakage_check` rather than only
+  printed: the report treats an absent block exactly as it treats a failed
+  one, so a study whose rules passed on the terminal but were never written
+  back could never clear the downgrade.
 
 ### Notes
 

@@ -43,6 +43,7 @@ from whetstone_envs.optim.study.spec import StageId
 from whetstone_envs.reporting.study_report import (
     REPORT_HTML_NAME,
     REPORT_MARKDOWN_NAME,
+    VERDICT_INVALID,
     build_study_report,
     figures_in,
 )
@@ -260,6 +261,51 @@ def test_a_clean_study_passes_every_leakage_rule(
     out = capsys.readouterr().out
     assert "ok L1 ::" in out
     assert "NOT CHECKED" not in out
+
+
+def test_the_leakage_verdict_is_recorded_not_only_printed(
+    study_dir: Path,
+) -> None:
+    """The report gates on the recorded block, so it has to be written.
+
+    An absent ``leakage_check`` downgrades exactly as a failed one does, so
+    a study whose rules passed on the terminal but were never written back
+    would report as though nobody had checked it -- and no clean study
+    could ever clear the downgrade.
+    """
+    _run_every_stage(study_dir)
+    assert read_study_manifest(study_dir).leakage_check is None
+
+    assert main(["leakage-check", "--study-dir", str(study_dir)]) == EXIT_OK
+
+    recorded = read_study_manifest(study_dir).leakage_check
+    assert recorded is not None
+    assert recorded.passed
+    # L6 is the roll-up, so it is not stored beside what it rolls up.
+    assert {entry.check_id for entry in recorded.checks} == {
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+    }
+
+
+def test_a_clean_study_reports_its_result_rather_than_a_downgrade(
+    study_dir: Path,
+) -> None:
+    """The whole loop, closed: run, check, then report an honest verdict."""
+    _run_every_stage(study_dir)
+    assert main(["leakage-check", "--study-dir", str(study_dir)]) == EXIT_OK
+    report = build_study_report(read_study_manifest(study_dir))
+    assert "leakage" not in report.title.lower()
+    verdicts = {
+        row.cells[-1].rendered()
+        for section in report.sections
+        if section.tag == "verdict"
+        for row in section.tables[0].rows
+    }
+    assert VERDICT_INVALID not in verdicts
 
 
 def test_the_report_generates_from_the_manifest_and_every_figure_resolves(

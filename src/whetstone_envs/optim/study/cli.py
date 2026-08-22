@@ -44,11 +44,14 @@ from whetstone_envs.optim.study.leakage import (
 from whetstone_envs.optim.study.manifest import (
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
+    LeakageCheckEntry,
+    LeakageCheckRecord,
     SplitName,
     StageId,
     check_manifest_pointers,
     format_pointer_report,
     read_study_manifest,
+    write_study_manifest,
 )
 from whetstone_envs.optim.study.selection import SelectionError
 from whetstone_envs.optim.study.spec import load_study_spec
@@ -366,6 +369,14 @@ def _run_leakage_check(*, study_dir: Path) -> int:
     unchecked. **An unchecked rule fails the command**, exactly as a
     violated one does: from the reader's side, a study whose L1 nobody
     checked and one whose L1 failed make the same claim.
+
+    **The verdict is recorded, not only printed.** The report gates its
+    headline and every arm verdict on ``manifest.leakage_check``, treating
+    an absent block exactly as it treats a failed one, so a study whose
+    rules passed on the terminal but were never written back would report
+    as though nobody had checked it. Writing the block here is what closes
+    that gap, and it is written whether the rules passed or failed --
+    a recorded failure is the finding the report must print.
     """
     manifest = read_study_manifest(study_dir)
     report = _leakage_report(
@@ -375,6 +386,7 @@ def _run_leakage_check(*, study_dir: Path) -> int:
         ),
     )
     _emit(_format_leakage(report))
+    _record_leakage(study_dir, manifest, report)
     unchecked = report.unchecked()
     # L6 is the roll-up of the other rules, so it is excluded from the
     # tally rather than counted a second time alongside what it rolls up.
@@ -393,6 +405,42 @@ def _run_leakage_check(*, study_dir: Path) -> int:
         return EXIT_CHECK_FAILED
     print(f"all {len(report.findings)} leakage rules passed")
     return EXIT_OK
+
+
+def _record_leakage(
+    study_dir: Path, manifest: StudyManifest, report: LeakageReport
+) -> None:
+    """Persist this run's verdict into the study's own manifest.
+
+    L6 is the roll-up rather than a rule of its own, so it is not stored
+    beside what it rolls up; the record's ``passed`` is the conjunction of
+    the rules it holds, which the manifest validates. An **unchecked** rule
+    is recorded as failed, because that is what it means to the reader: the
+    study did not establish it.
+    """
+    entries = tuple(
+        LeakageCheckEntry(
+            check_id=finding.rule.value,
+            passed=finding.passed and finding.checked,
+            detail=finding.detail,
+        )
+        for finding in report.findings
+        if finding.rule is not LeakageRule.L6_CHECK_RAN
+    )
+    if not entries:  # pragma: no cover - the rule set is never empty
+        return
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "leakage_check": LeakageCheckRecord(
+                    passed=all(entry.passed for entry in entries),
+                    checks=entries,
+                )
+            }
+        ),
+        replace=True,
+    )
 
 
 def _recorded_run_dirs(manifest: StudyManifest) -> tuple[Path, ...]:

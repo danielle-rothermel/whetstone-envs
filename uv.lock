@@ -1771,7 +1771,7 @@ wheels = [
 
 [[package]]
 name = "whetstone-ai"
-version = "0.1.7"
+version = "0.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-exec" },
@@ -1787,9 +1787,9 @@ dependencies = [
     { name = "typer" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/53/2b/3aef2f981218d6b4a5ad5b8dab89b365bb89e38dfb20b5996e99268a531a/whetstone_ai-0.1.7.tar.gz", hash = "sha256:d475a4f1f5e7a9a6393627c41e3fe2837a2c9353fbc15a95151b2ecd2756b2c6", size = 412469, upload-time = "2026-08-22T16:49:40.986Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/56/39a3c00785ead9c5a6e3aa5fa1b1a86c9216c854ee6164e7715cd38cf20f/whetstone_ai-0.1.8.tar.gz", hash = "sha256:22645cd915d4f6045d6aadafc53f67f3164254690754db8a5d47c8f6f493d04d", size = 418110, upload-time = "2026-08-22T20:30:30.567Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/97/f91cb41d7c48582e4db78975f89571236a2c6ab42cf9d1bb76a11ea14f48/whetstone_ai-0.1.7-py3-none-any.whl", hash = "sha256:ac6d505fb3b2c96ee1f3ca69816f6bcbd3c285a51fa5f6ffdad537e251e6f67f", size = 521340, upload-time = "2026-08-22T16:49:39.663Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/12/e30539a9164f2fef935c54a49343cf2f470407fbc86812f96484b849f70a/whetstone_ai-0.1.8-py3-none-any.whl", hash = "sha256:0faa9149fc26e9d7b2cc41aaa0de152f2052ce886ab4dea011e482ace791e44f", size = 527021, upload-time = "2026-08-22T20:30:29.018Z" },
 ]
 
 [[package]]
@@ -1850,7 +1850,7 @@ requires-dist = [
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "rich", marker = "extra == 'optim'", specifier = "==15.0.0" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.7" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.8" },
 ]
 provides-extras = ["c18", "optim"]
 

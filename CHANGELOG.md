@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Pins published whetstone-ai 0.1.8, whose Codex-direct optimizer is the
+  first to have produced evaluations against the real `codex` CLI: the
+  output schema, the MCP tool host and approval mode, and the
+  `model_route`/`base_ref` the agent must supply were all fixed there.
+
 ### Added
 
 - **Every optimizer with a train/val concept runs on an explicit disjoint

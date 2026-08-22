@@ -109,9 +109,19 @@ class StageRunner(Protocol):
     Wave 4a owns the implementation. It returns the manifest rather than a
     path so the CLI reports what the stage recorded without re-reading a
     file the harness may still be writing.
+
+    ``replace_design`` is part of the contract rather than a Stage-0 detail
+    because the CLI cannot know which stage a runner will dispatch to; the
+    harness refuses it on the stages that record no design.
     """
 
-    def __call__(self, *, study_dir: Path, stage: str) -> StudyManifest: ...
+    def __call__(
+        self,
+        *,
+        study_dir: Path,
+        stage: str,
+        replace_design: bool = False,
+    ) -> StudyManifest: ...
 
 
 class ReportGenerator(Protocol):
@@ -265,7 +275,11 @@ def _run_plan(*, study_dir: Path, load_spec: StudySpecLoader | None) -> int:
 
 
 def _run_stage(
-    *, study_dir: Path, stage: str, run_stage: StageRunner | None
+    *,
+    study_dir: Path,
+    stage: str,
+    run_stage: StageRunner | None,
+    replace_design: bool = False,
 ) -> int:
     if run_stage is None:
         print(
@@ -274,7 +288,9 @@ def _run_stage(
             file=sys.stderr,
         )
         return EXIT_ERROR
-    manifest = run_stage(study_dir=study_dir, stage=stage)
+    manifest = run_stage(
+        study_dir=study_dir, stage=stage, replace_design=replace_design
+    )
     print(f"{stage} complete for study {manifest.study_id}")
     print(study_dir / STUDY_MANIFEST_NAME)
     return EXIT_OK
@@ -520,6 +536,15 @@ def build_parser() -> argparse.ArgumentParser:
             "runs the full design."
         ),
     )
+    run.add_argument(
+        "--replace-design",
+        action="store_true",
+        help=(
+            "Re-run stage0 over a study that already pre-registered its "
+            "design, recording the replacement as an amendment. Without "
+            "this, a second stage0 is refused."
+        ),
+    )
 
     report = commands.add_parser(
         "report", help="Generate the report packet from the manifest."
@@ -556,7 +581,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def default_stage_runner(*, study_dir: Path, stage: str) -> StudyManifest:
+def default_stage_runner(
+    *, study_dir: Path, stage: str, replace_design: bool = False
+) -> StudyManifest:
     """Run one stage on the fake transport, over the study's own directory.
 
     This is the CLI's default :class:`StageRunner`. It binds the study's
@@ -571,7 +598,10 @@ def default_stage_runner(*, study_dir: Path, stage: str) -> StudyManifest:
     """
     with bound_stage_environment(study_dir) as environment:
         return _run_stage_harness(
-            study_dir=study_dir, stage=stage, environment=environment
+            study_dir=study_dir,
+            stage=stage,
+            environment=environment,
+            replace_design=replace_design,
         )
 
 
@@ -620,6 +650,7 @@ def main(
                 study_dir=arguments.study_dir,
                 stage=arguments.stage,
                 run_stage=run_stage,
+                replace_design=arguments.replace_design,
             )
         if arguments.command == "report":
             return _run_report(

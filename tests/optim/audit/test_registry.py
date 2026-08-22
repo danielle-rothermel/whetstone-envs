@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from whetstone_envs.optim.audit._evidence import (
@@ -74,3 +76,45 @@ def test_reported_numbers_resolve_cites_the_evidence_it_checked(
     for ref in finding.evidence_refs:
         assert ref.schema_name == "whetstone.eval_evidence"
         assert len(ref.content_hash) == 64
+
+
+# --------------------------------------------------------------------------
+# Zero checked evaluations is never a pass
+# --------------------------------------------------------------------------
+
+
+def test_a_run_that_completed_no_evaluation_fails_rather_than_passing(
+    copro_run_dir,
+) -> None:
+    """ "All 0 of 0 resolve" would read as audited fidelity on an empty run.
+
+    The run kept its persisted steps, so it had every opportunity to report
+    a number and reported none. That is a defect in the run, not an
+    invariant this run is exempt from.
+    """
+    evidence = load_run_evidence(copro_run_dir)
+    assert evidence.steps, "the fixture run persists steps"
+    stripped = replace(
+        evidence,
+        steps=tuple(
+            replace(
+                step,
+                step=step.step.model_copy(
+                    update={"resolved_intents": (), "search_evidence": ()}
+                ),
+            )
+            for step in evidence.steps
+        ),
+    )
+    finding = reported_numbers_resolve(stripped)
+    assert finding.status is AuditStatus.FAIL
+    assert "completed no evaluation intent" in finding.detail
+    assert finding.evidence_refs == ()
+
+
+def test_a_run_with_no_steps_at_all_is_not_applicable(copro_run_dir) -> None:
+    """Nothing to resolve is a different fact from nothing resolving."""
+    evidence = replace(load_run_evidence(copro_run_dir), steps=())
+    finding = reported_numbers_resolve(evidence)
+    assert finding.status is AuditStatus.NOT_APPLICABLE
+    assert "persisted no steps" in finding.detail

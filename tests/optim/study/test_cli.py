@@ -164,7 +164,10 @@ def test_plan_on_a_missing_manifest_fails_cleanly(
 def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
     seen: list[tuple[Path, str]] = []
 
-    def run_stage(*, study_dir: Path, stage: str) -> StudyManifest:
+    def run_stage(
+        *, study_dir: Path, stage: str, replace_design: bool = False
+    ) -> StudyManifest:
+        assert replace_design is False
         seen.append((study_dir, stage))
         return _minimal_manifest()
 

@@ -22,6 +22,8 @@ from whetstone_envs.optim.study.manifest import (
     COMPLETENESS_BACKSTOP,
     CORRECTION_FAMILY_SIZE,
     CORRECTION_HOLM_BONFERRONI,
+    PROVENANCE_AMENDED,
+    PROVENANCE_ORIGINAL,
     SELECTION_RULE_ARGMAX_OFFICIAL,
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
@@ -44,6 +46,8 @@ from whetstone_envs.optim.study.manifest import (
     ManifestKey,
     ModelsRecord,
     PopulationRecord,
+    PreRegistrationRecord,
+    PreRegistrationViolationError,
     RunRecord,
     RunSpendRecord,
     SelectionRecord,
@@ -54,6 +58,7 @@ from whetstone_envs.optim.study.manifest import (
     StudyManifest,
     check_manifest_pointers,
     format_pointer_report,
+    pre_registration_design_hash,
     read_study_manifest,
     study_manifest_path,
     write_study_manifest,
@@ -269,8 +274,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 2
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v2"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 3
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v3"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -292,6 +297,7 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "population",
         "splits",
         "models",
+        "pre_registration",
         "design",
         "gepa_sizing",
         "fanout_check",
@@ -462,7 +468,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v3"
+    payload["schema"] = "whetstone_envs.step10_study/v4"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 
@@ -801,3 +807,179 @@ def test_a_row_backed_only_by_an_outstanding_claim_is_refused() -> None:
                 }
             ).model_dump_json(by_alias=True)
         )
+
+
+# --------------------------------------------------------------------------
+# The pre-registration is immutable once pinned
+# --------------------------------------------------------------------------
+
+_PINNED_K_RUN_BY_ARM = {"copro": 5, "gepa": 5}
+
+
+def _pre_registration(
+    *,
+    k_repeat: int = 3,
+    provenance: str = PROVENANCE_ORIGINAL,
+    amended_from: str | None = None,
+) -> PreRegistrationRecord:
+    """A pinned block whose hash actually covers its own fields."""
+    return PreRegistrationRecord(
+        k_repeat=k_repeat,
+        k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
+        ci_level=0.95,
+        resamples=10_000,
+        bootstrap_seed=0,
+        correction=CORRECTION_HOLM_BONFERRONI,
+        m=CORRECTION_FAMILY_SIZE,
+        completeness_backstop=COMPLETENESS_BACKSTOP,
+        design_hash=pre_registration_design_hash(
+            k_repeat=k_repeat,
+            k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
+            ci_level=0.95,
+            resamples=10_000,
+            bootstrap_seed=0,
+            correction=CORRECTION_HOLM_BONFERRONI,
+            m=CORRECTION_FAMILY_SIZE,
+            completeness_backstop=COMPLETENESS_BACKSTOP,
+        ),
+        provenance=provenance,
+        amended_from=amended_from,
+    )
+
+
+def _pinned_manifest() -> StudyManifest:
+    return _minimal_manifest().model_copy(
+        update={"pre_registration": _pre_registration()}
+    )
+
+
+def test_a_pre_registration_hash_covers_its_own_fields() -> None:
+    record = _pre_registration()
+    assert record.provenance == PROVENANCE_ORIGINAL
+    assert record.pinned_fields()["k_repeat"] == 3
+    assert record.pinned_fields()["m"] == CORRECTION_FAMILY_SIZE
+
+
+def test_a_pre_registration_whose_hash_does_not_cover_it_is_refused() -> None:
+    """The hash is the pinning; a block whose hash drifted pins nothing."""
+    payload = _pre_registration().model_dump(mode="json")
+    payload["design_hash"] = _hash("f")
+    with pytest.raises(ValidationError, match="does not cover its own"):
+        PreRegistrationRecord.model_validate_json(json.dumps(payload))
+
+
+def test_changing_a_pinned_field_changes_the_design_hash() -> None:
+    assert (
+        _pre_registration(k_repeat=5).design_hash
+        != _pre_registration().design_hash
+    )
+
+
+def test_a_later_write_may_not_change_the_pre_registration(
+    tmp_path: Path,
+) -> None:
+    """The load-bearing refusal: a design fixed before spend stays fixed."""
+    write_study_manifest(tmp_path, _pinned_manifest())
+    restated = _minimal_manifest().model_copy(
+        update={"pre_registration": _pre_registration(k_repeat=9)}
+    )
+    with pytest.raises(PreRegistrationViolationError, match="k_repeat"):
+        write_study_manifest(tmp_path, restated, replace=True)
+    # The document on disk is untouched by the refused write.
+    assert read_study_manifest(tmp_path).pre_registration == (
+        _pre_registration()
+    )
+
+
+def test_a_later_write_may_not_drop_the_pre_registration(
+    tmp_path: Path,
+) -> None:
+    write_study_manifest(tmp_path, _pinned_manifest())
+    with pytest.raises(PreRegistrationViolationError, match="drops the block"):
+        write_study_manifest(tmp_path, _minimal_manifest(), replace=True)
+
+
+def test_an_unchanged_pre_registration_writes_through(tmp_path: Path) -> None:
+    """Stages 1 and 2 rewrite the manifest constantly; that must still work."""
+    write_study_manifest(tmp_path, _pinned_manifest())
+    again = _pinned_manifest().model_copy(
+        update={"created_at": "2026-08-23T00:00:00+00:00"}
+    )
+    write_study_manifest(tmp_path, again, replace=True)
+    assert read_study_manifest(tmp_path).created_at.startswith("2026-08-23")
+
+
+def test_an_amendment_names_the_design_hash_it_replaced(
+    tmp_path: Path,
+) -> None:
+    write_study_manifest(tmp_path, _pinned_manifest())
+    original_hash = _pre_registration().design_hash
+    amended = _minimal_manifest().model_copy(
+        update={
+            "pre_registration": _pre_registration(
+                k_repeat=9,
+                provenance=PROVENANCE_AMENDED,
+                amended_from=original_hash,
+            )
+        }
+    )
+    write_study_manifest(
+        tmp_path, amended, replace=True, amend_pre_registration=True
+    )
+    written = read_study_manifest(tmp_path).pre_registration
+    assert written is not None
+    assert written.provenance == PROVENANCE_AMENDED
+    assert written.amended_from == original_hash
+
+
+def test_an_amendment_that_names_the_wrong_predecessor_is_refused(
+    tmp_path: Path,
+) -> None:
+    write_study_manifest(tmp_path, _pinned_manifest())
+    amended = _minimal_manifest().model_copy(
+        update={
+            "pre_registration": _pre_registration(
+                k_repeat=9,
+                provenance=PROVENANCE_AMENDED,
+                amended_from=_hash("9"),
+            )
+        }
+    )
+    with pytest.raises(
+        PreRegistrationViolationError, match="names the design"
+    ):
+        write_study_manifest(
+            tmp_path, amended, replace=True, amend_pre_registration=True
+        )
+
+
+def test_an_amendment_without_its_provenance_is_refused() -> None:
+    """An amendment that names no predecessor erases what it amended."""
+    payload = _pre_registration().model_dump(mode="json")
+    payload["provenance"] = PROVENANCE_AMENDED
+    with pytest.raises(ValidationError, match="names the design hash it"):
+        PreRegistrationRecord.model_validate_json(json.dumps(payload))
+
+
+def test_a_design_contradicting_the_pre_registration_is_refused() -> None:
+    """The overlap is checked, so pinning cannot become decorative."""
+    design = DesignRecord(
+        k_cal=4,
+        k_repeat=9,
+        k_run_by_arm={"copro": 5, "gepa": 5},
+        ci_level=0.95,
+        resamples=10_000,
+        bootstrap_seed=0,
+        correction=CORRECTION_HOLM_BONFERRONI,
+        m=CORRECTION_FAMILY_SIZE,
+        mde_formula="z-based",
+        mde_measured=0.1,
+        tau_sq=0.01,
+        sigma_sq=0.02,
+        completeness_rule="achieved rows / scheduled rows",
+        completeness_backstop=COMPLETENESS_BACKSTOP,
+    )
+    payload = _pinned_manifest().model_dump(mode="json", by_alias=True)
+    payload["design"] = design.model_dump(mode="json")
+    with pytest.raises(ValidationError, match="contradicts the pinned"):
+        StudyManifest.model_validate_json(json.dumps(payload))

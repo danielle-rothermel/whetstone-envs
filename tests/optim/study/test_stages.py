@@ -17,6 +17,8 @@ pytest.importorskip("whetstone.experiment.env")
 
 from whetstone_envs.optim.study.environment import bound_stage_environment
 from whetstone_envs.optim.study.manifest import (
+    PROVENANCE_AMENDED,
+    PROVENANCE_ORIGINAL,
     EvidencePointer,
     RunRecord,
     read_study_manifest,
@@ -623,3 +625,114 @@ def test_stage2_does_not_re_gate_what_the_pilot_already_established(
         environment=harness.environment(),
     )
     assert result.arms
+
+
+# --------------------------------------------------------------------------
+# The pre-registration Stage 0 pins
+# --------------------------------------------------------------------------
+
+
+def test_stage0_pins_the_pre_registration(tmp_path: Path) -> None:
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        result = run_stage0_into_manifest(
+            study_dir=study_dir, environment=environment
+        )
+    pinned = result.manifest.pre_registration
+    design = result.manifest.design
+    assert pinned is not None
+    assert design is not None
+    assert pinned.provenance == PROVENANCE_ORIGINAL
+    assert pinned.amended_from is None
+    # The frozen block and the measured design agree on every field they
+    # share, which is what the manifest's own cross-check enforces.
+    assert pinned.k_repeat == design.k_repeat
+    assert pinned.k_run_by_arm == design.k_run_by_arm
+    assert pinned.m == design.m
+
+
+def test_a_second_stage0_refuses_rather_than_restating_the_design(
+    tmp_path: Path,
+) -> None:
+    """Re-calibrating after results exist would make the design post-hoc."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        run_stage0_into_manifest(study_dir=study_dir, environment=environment)
+    with (
+        bound_stage_environment(study_dir) as environment,
+        pytest.raises(StageError, match="already pre-registered"),
+    ):
+        run_stage0_into_manifest(study_dir=study_dir, environment=environment)
+
+
+def test_replace_design_records_an_amendment(tmp_path: Path) -> None:
+    """An identical re-calibration is not an amendment; a changed one is."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        first = run_stage0_into_manifest(
+            study_dir=study_dir, environment=environment
+        )
+    original = first.manifest.pre_registration
+    assert original is not None
+
+    # Re-running with the same declared design lands on the same hash, so
+    # the block is written back unchanged rather than relabelled.
+    with bound_stage_environment(study_dir) as environment:
+        again = run_stage0_into_manifest(
+            study_dir=study_dir,
+            environment=environment,
+            replace_design=True,
+        )
+    unchanged = again.manifest.pre_registration
+    assert unchanged is not None
+    assert unchanged.provenance == PROVENANCE_ORIGINAL
+    assert unchanged.design_hash == original.design_hash
+
+    # A genuinely different design amends, and says which hash it replaced.
+    manifest = read_study_manifest(study_dir)
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "design": None,
+                "pre_registration": manifest.pre_registration,
+            }
+        ),
+        replace=True,
+    )
+    changed = read_study_manifest(study_dir).model_copy(
+        update={
+            "arms": (
+                *manifest.arms,
+                manifest.arms[0].model_copy(update={"arm_id": "gepa"}),
+            )
+        }
+    )
+    write_study_manifest(study_dir, changed, replace=True)
+    with bound_stage_environment(study_dir) as environment:
+        amended = run_stage0_into_manifest(
+            study_dir=study_dir,
+            environment=environment,
+            replace_design=True,
+        )
+    block = amended.manifest.pre_registration
+    assert block is not None
+    assert block.provenance == PROVENANCE_AMENDED
+    assert block.amended_from == original.design_hash
+
+
+def test_replace_design_is_refused_on_an_arm_stage(tmp_path: Path) -> None:
+    study_dir = _calibrated_study(tmp_path)
+    harness = _Harness(study_dir, scores={})
+    with (
+        pytest.raises(StageError, match="applies to stage0"),
+    ):
+        run_stage(
+            study_dir=study_dir,
+            stage="stage1",
+            environment=harness.environment(),
+            replace_design=True,
+        )

@@ -45,10 +45,14 @@ from whetstone_envs.optim.study.manifest import (
     COMPLETENESS_BACKSTOP,
     CORRECTION_FAMILY_SIZE,
     CORRECTION_HOLM_BONFERRONI,
+    PROVENANCE_AMENDED,
+    PROVENANCE_ORIGINAL,
     ArmRecord,
     DesignRecord,
+    PreRegistrationRecord,
     RunRecord,
     StudyManifest,
+    pre_registration_design_hash,
     read_study_manifest,
     write_study_manifest,
 )
@@ -165,7 +169,10 @@ class StageResult:
 
 
 def run_stage0_into_manifest(
-    *, study_dir: Path, environment: StageEnvironment
+    *,
+    study_dir: Path,
+    environment: StageEnvironment,
+    replace_design: bool = False,
 ) -> StageResult:
     """Calibrate the anchors, evaluate the gate, record the design.
 
@@ -174,8 +181,25 @@ def run_stage0_into_manifest(
     such -- not an error that erases the calibration it just paid for. What
     a failed gate does stop is the *next* stage, which
     :func:`run_arm_stage` refuses to start without a recorded design.
+
+    **Stage 0 pins the pre-registration, and a second Stage 0 refuses.**
+    The first run writes the frozen design block; a later one would restate
+    the study's power arithmetic after its own results existed, so it is
+    refused unless the caller passes ``replace_design``, which records the
+    replacement as an ``amended`` pre-registration naming the design hash it
+    replaced. Re-calibrating and keeping the same design is *not* an
+    amendment: an identical block is written back unchanged and the
+    manifest's own immutability check passes it.
     """
     manifest = read_study_manifest(study_dir)
+    pinned = manifest.pre_registration
+    if pinned is not None and not replace_design:
+        raise StageError(
+            "this study already pre-registered its design at "
+            f"{pinned.design_hash[:12]}; a second stage0 would restate the "
+            "power arithmetic after results exist. Pass --replace-design to "
+            "record a deliberate amendment"
+        )
     # Stage 0 records the *full* design, not the pilot's: ``k_run_by_arm``
     # is what the study pre-registered for Stage 2, and Stage 1 spends a
     # prefix of it rather than a different design.
@@ -196,14 +220,69 @@ def run_stage0_into_manifest(
         task_ids_by_role=environment.task_ids_by_role,
         pool_ceiling=environment.pool_ceiling,
     )
+    design = _design_record(spec, result)
+    pre_registration = _pre_registration_record(design, replaced=pinned)
     updated = manifest.model_copy(
-        update={"design": _design_record(spec, result)}
+        update={"design": design, "pre_registration": pre_registration}
     )
-    write_study_manifest(study_dir, updated, replace=True)
+    # An amendment is only an amendment when it actually changes the pinned
+    # block. A re-calibration that lands on the same design writes the
+    # original block back untouched, so it goes through the ordinary
+    # immutability path rather than being recorded as a design change that
+    # did not happen.
+    amending = (
+        pinned is not None
+        and pre_registration.provenance == PROVENANCE_AMENDED
+    )
+    write_study_manifest(
+        study_dir,
+        updated,
+        replace=True,
+        amend_pre_registration=amending,
+    )
     return StageResult(
         stage=StageId.STAGE0,
         manifest=read_study_manifest(study_dir),
         stage0=result,
+    )
+
+
+def _pre_registration_record(
+    design: DesignRecord, *, replaced: PreRegistrationRecord | None
+) -> PreRegistrationRecord:
+    """The frozen block for ``design``, amending ``replaced`` if it differs.
+
+    The hash is computed from the design's own values rather than copied,
+    so a design and its pinning cannot disagree at the moment they are
+    written.
+    """
+    design_hash = pre_registration_design_hash(
+        k_repeat=design.k_repeat,
+        k_run_by_arm=dict(design.k_run_by_arm),
+        ci_level=design.ci_level,
+        resamples=design.resamples,
+        bootstrap_seed=design.bootstrap_seed,
+        correction=design.correction,
+        m=design.m,
+        completeness_backstop=design.completeness_backstop,
+    )
+    if replaced is not None and replaced.design_hash == design_hash:
+        # Byte-identical to what is already pinned: keep the original
+        # provenance rather than relabelling an unchanged design as amended.
+        return replaced
+    amended = replaced is not None
+    return PreRegistrationRecord(
+        k_repeat=design.k_repeat,
+        k_run_by_arm=dict(design.k_run_by_arm),
+        ci_level=design.ci_level,
+        resamples=design.resamples,
+        bootstrap_seed=design.bootstrap_seed,
+        correction=design.correction,
+        m=design.m,
+        completeness_backstop=design.completeness_backstop,
+        design_hash=design_hash,
+        provenance=(PROVENANCE_AMENDED if amended else PROVENANCE_ORIGINAL),
+        amended_from=replaced.design_hash if replaced is not None else None,
     )
 
 
@@ -511,7 +590,11 @@ def _require[T](value: T | None) -> T:
 
 
 def run_stage(
-    *, study_dir: Path, stage: str, environment: StageEnvironment
+    *,
+    study_dir: Path,
+    stage: str,
+    environment: StageEnvironment,
+    replace_design: bool = False,
 ) -> StudyManifest:
     """Run one named stage and return the manifest it wrote.
 
@@ -519,6 +602,9 @@ def run_stage(
     environment bound by the caller. The manifest is returned rather than a
     path so the CLI reports what the stage recorded without re-reading a
     file the harness may still be writing.
+
+    ``replace_design`` reaches Stage 0 only; an arm stage never rewrites the
+    pre-registration, so accepting the flag there would suggest it could.
     """
     try:
         stage_id = StageId(stage)
@@ -526,8 +612,15 @@ def run_stage(
         raise StageError(f"unknown stage {stage!r}") from error
     if stage_id is StageId.STAGE0:
         return run_stage0_into_manifest(
-            study_dir=study_dir, environment=environment
+            study_dir=study_dir,
+            environment=environment,
+            replace_design=replace_design,
         ).manifest
+    if replace_design:
+        raise StageError(
+            f"{stage_id.value} does not record a design; --replace-design "
+            "applies to stage0"
+        )
     return run_arm_stage(
         study_dir=study_dir, stage=stage_id, environment=environment
     ).manifest

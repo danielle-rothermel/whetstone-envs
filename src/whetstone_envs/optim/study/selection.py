@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Protocol
 from whetstone.eval.analysis import bootstrap_paired_delta_ci, holm_adjust
 
 from whetstone_envs.optim.study.manifest import (
+    CORRECTION_FAMILY_SIZE,
     SELECTION_RULE_ARGMAX_OFFICIAL,
     read_study_manifest,
     write_study_manifest,
@@ -467,6 +468,7 @@ def analyze_arms(
     level: float = CI_LEVEL,
     resamples: int = RESAMPLES,
     seed: int = 0,
+    family_size: int = CORRECTION_FAMILY_SIZE,
 ) -> tuple[ArmStatistics, ...]:
     """Interval, p-value, and Holm correction for every real arm.
 
@@ -476,6 +478,16 @@ def analyze_arms(
     exactly when tripping it matters most. Pass only real arms here and read
     each null's uncorrected interval directly.
 
+    **``m`` is the pre-registered family size, not the number of arms in
+    hand.** The family was fixed before any spend, so a study that analyses
+    two of its four hypotheses -- a pilot, a partial resume, a stage that
+    lost an arm -- still corrects at ``m = 4``. Deriving ``m`` from
+    ``len(arms)`` would under-correct exactly the partial studies whose
+    multiplicity risk is unchanged, and would make the correction a function
+    of how far the study got rather than of what it pre-registered. Passing
+    more arms than the family declares is refused rather than silently
+    widening the family after the fact.
+
     An arm below the completeness backstop keeps its numbers -- they are
     still the best description of what was measured -- but ``claimed`` is
     false, so the report states the delta descriptively and makes no
@@ -483,6 +495,12 @@ def analyze_arms(
     """
     if not arms:
         return ()
+    if family_size < len(arms):
+        raise ValueError(
+            f"the pre-registered Holm family holds {family_size} "
+            f"hypotheses but {len(arms)} arms were analysed; a family is "
+            "fixed before spend, not widened to fit its results"
+        )
     intervals = tuple(
         bootstrap_paired_delta_ci(
             arm.naive_per_task,
@@ -493,7 +511,17 @@ def analyze_arms(
         )
         for arm in arms
     )
-    adjusted = holm_adjust(tuple(ci.p_value for ci in intervals))
+    # Holm at the pre-registered ``m``: the unanalysed members of the family
+    # enter as p = 1, which is the largest value any hypothesis can take, so
+    # they never displace an observed arm in the step-down ordering and the
+    # scaling factor stays ``m - rank`` for every arm actually measured.
+    # That is exactly Holm over the declared family with the missing arms
+    # unrejected, which is the honest reading of an arm the study did not
+    # measure.
+    padded = tuple(ci.p_value for ci in intervals) + (1.0,) * (
+        family_size - len(arms)
+    )
+    adjusted = holm_adjust(padded)[: len(arms)]
     return tuple(
         ArmStatistics(
             arm_id=arm.arm_id,

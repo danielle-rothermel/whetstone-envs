@@ -64,6 +64,7 @@ from whetstone_envs.reporting.study_report import (
     STUDY_MANIFEST_COPY,
     UNPRICED,
     VALIDATION_CHECKLIST,
+    VERDICT_INVALID,
     VERDICT_NO_IMPROVEMENT,
     VERDICT_NOT_VALIDATED,
     VERDICT_VALIDATED,
@@ -916,3 +917,97 @@ def test_a_real_run_supplies_its_trajectory_and_prompt_samples(
     assert "proposed prompt" in document
     for label, _text in samples:
         assert label in document
+
+
+# --------------------------------------------------------------------------
+# Leakage downgrades the headline and every verdict
+# --------------------------------------------------------------------------
+
+
+def _with_failed_leakage(manifest: StudyManifest) -> StudyManifest:
+    """The same study with one leakage rule failed."""
+    check = manifest.leakage_check
+    assert check is not None
+    failed = (
+        check.checks[0].model_copy(
+            update={
+                "passed": False,
+                "detail": "an optimizer resolved an official-split intent",
+            }
+        ),
+        *check.checks[1:],
+    )
+    return manifest.model_copy(
+        update={
+            "leakage_check": LeakageCheckRecord(passed=False, checks=failed)
+        }
+    )
+
+
+def test_a_clean_study_still_reports_its_improvement(
+    reported_manifest: StudyManifest,
+) -> None:
+    """The control for the two downgrade tests below."""
+    report = build_study_report(reported_manifest)
+    assert "improved held-out accuracy" in report.title
+    assert VERDICT_INVALID not in render_markdown(report)
+
+
+def test_a_failed_leakage_rule_downgrades_the_headline(
+    reported_manifest: StudyManifest,
+) -> None:
+    """A leaking study must not headline an improvement it cannot claim."""
+    report = build_study_report(_with_failed_leakage(reported_manifest))
+    assert "improved held-out accuracy" not in report.title
+    assert "leakage rule failed" in report.title
+    assert "claim" in report.title
+
+
+def test_a_failed_leakage_rule_invalidates_every_arm_verdict(
+    reported_manifest: StudyManifest,
+) -> None:
+    """Leakage is a property of the study, so no arm escapes it.
+
+    Not even the arm whose own fidelity audit passed and whose interval
+    excludes zero: the interval was measured through a procedure the study
+    could not establish.
+    """
+    leaking = _with_failed_leakage(reported_manifest)
+    report = build_study_report(leaking)
+    verdict_section = next(
+        section for section in report.sections if section.tag == "verdict"
+    )
+    verdicts = {
+        row.cells[-1].rendered() for row in verdict_section.tables[0].rows
+    }
+    assert verdicts == {VERDICT_INVALID}
+    assert VERDICT_VALIDATED not in verdicts
+    assert "Leakage gates everything" in verdict_section.paragraphs[0]
+
+
+def test_an_unrun_leakage_check_downgrades_exactly_as_a_failed_one(
+    reported_manifest: StudyManifest,
+) -> None:
+    """Unchecked and failed make the same claim to a reader: none."""
+    unchecked = reported_manifest.model_copy(update={"leakage_check": None})
+    report = build_study_report(unchecked)
+    assert "improved held-out accuracy" not in report.title
+    assert "never run" in report.title
+    verdict_section = next(
+        section for section in report.sections if section.tag == "verdict"
+    )
+    assert {
+        row.cells[-1].rendered() for row in verdict_section.tables[0].rows
+    } == {VERDICT_INVALID}
+
+
+def test_the_rendered_report_carries_the_downgrade(
+    reported_manifest: StudyManifest,
+) -> None:
+    """The downgrade reaches both emitters, not just the built model."""
+    report = build_study_report(_with_failed_leakage(reported_manifest))
+    markdown = render_markdown(report)
+    html = render_html(report)
+    for rendering in (markdown, html):
+        assert VERDICT_INVALID in rendering
+        assert "improved held-out accuracy" not in rendering.split("\n")[0]

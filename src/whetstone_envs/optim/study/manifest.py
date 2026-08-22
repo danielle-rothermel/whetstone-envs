@@ -28,7 +28,11 @@ import json
 from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING, Protocol
 
-from dr_store import CanonicalJsonFile, ObjectReference
+from dr_store import (
+    CanonicalJsonFile,
+    ObjectReference,
+    compute_content_hash,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -68,7 +72,11 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #:   *issued*, which a held-out row cannot: a row carries a Holm-corrected
 #:   p-value that does not exist until every arm is measured, so v1 left the
 #:   window between paying for an evaluation and recording it unguarded.
-STUDY_MANIFEST_SCHEMA_VERSION = 2
+#: v3 adds ``pre_registration``: the design fields that were fixed before
+#: any spend, plus the hash over them. v2 could record a design and then let
+#: a later write silently restate it, which would make every downstream
+#: "pre-registered" claim unfalsifiable.
+STUDY_MANIFEST_SCHEMA_VERSION = 3
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -115,6 +123,7 @@ class ManifestKey(StrEnum):
     POPULATION = "population"
     SPLITS = "splits"
     MODELS = "models"
+    PRE_REGISTRATION = "pre_registration"
     DESIGN = "design"
     GEPA_SIZING = "gepa_sizing"
     FANOUT_CHECK = "fanout_check"
@@ -344,6 +353,169 @@ class ModelsRecord(_StrictModel):
 # --------------------------------------------------------------------------
 # Design, sizing, fan-out
 # --------------------------------------------------------------------------
+
+
+#: The provenance a pre-registration carries. ``original`` is what Stage 0
+#: writes; ``amended`` is the only way a second Stage 0 may replace it, and
+#: it is recorded so an amended design can never read as the first one.
+PROVENANCE_ORIGINAL = "original"
+PROVENANCE_AMENDED = "amended"
+
+#: Every provenance value the manifest accepts.
+PROVENANCE_VALUES: tuple[str, ...] = (PROVENANCE_ORIGINAL, PROVENANCE_AMENDED)
+
+
+class PreRegistrationRecord(_StrictModel):
+    """The design fields fixed before any spend, and the hash over them.
+
+    This block exists because "pre-registered" is a claim about *when* a
+    value was chosen, and a document that can be rewritten records no such
+    thing. Stage 0 writes it once; :func:`write_study_manifest` then refuses
+    any later write that does not carry it back byte for byte, so every
+    number the report calls pre-registered is one no later stage could have
+    chosen after seeing a result.
+
+    The fields here are exactly the ones whose post-hoc adjustment would
+    change what the study is allowed to claim: the repeat counts and run
+    matrix that set the power, the interval settings and bootstrap seed that
+    set the intervals, the multiplicity family, and the completeness
+    backstop that decides which arms may claim at all. ``design_hash`` is
+    the content hash over the rest of this block, so a reader checks the
+    pinning arithmetically rather than trusting the writer.
+
+    ``provenance`` distinguishes the first pre-registration from a deliberate
+    amendment. An amendment is a different study design and says so; there
+    is no path that quietly replaces one with the other.
+    """
+
+    k_repeat: StrictInt
+    k_run_by_arm: dict[StrictStr, StrictInt]
+    ci_level: StrictFloat
+    resamples: StrictInt
+    bootstrap_seed: StrictInt
+    correction: StrictStr
+    m: StrictInt
+    completeness_backstop: StrictFloat
+    design_hash: StrictStr
+    provenance: StrictStr = PROVENANCE_ORIGINAL
+    amended_from: StrictStr | None = None
+
+    @model_validator(mode="after")
+    def _validate_pre_registration(self) -> PreRegistrationRecord:
+        if self.k_repeat < 1:
+            raise ValueError("K_REPEAT is at least 1")
+        if not self.k_run_by_arm:
+            raise ValueError("a pre-registration records at least one arm")
+        if any(value < 1 for value in self.k_run_by_arm.values()):
+            raise ValueError("every arm's K_RUN is at least 1")
+        if not 0.0 < self.ci_level < 1.0:
+            raise ValueError("the CI level is a proportion in (0, 1)")
+        if self.resamples < 1:
+            raise ValueError("bootstrap resamples must be positive")
+        if not self.correction.strip():
+            raise ValueError("a pre-registration names its correction")
+        if self.m < 1:
+            raise ValueError("the correction family holds at least one test")
+        if not 0.0 < self.completeness_backstop <= 1.0:
+            raise ValueError("the completeness backstop is in (0, 1]")
+        if self.provenance not in PROVENANCE_VALUES:
+            raise ValueError(
+                f"provenance is one of {PROVENANCE_VALUES}; "
+                f"got {self.provenance!r}"
+            )
+        if (self.provenance == PROVENANCE_AMENDED) != (
+            self.amended_from is not None
+        ):
+            # An amendment that does not name what it replaced erases the
+            # design it amended, which is the same as not recording one.
+            raise ValueError(
+                "an amended pre-registration names the design hash it "
+                "replaced, and an original one names none"
+            )
+        expected = pre_registration_design_hash(
+            k_repeat=self.k_repeat,
+            k_run_by_arm=self.k_run_by_arm,
+            ci_level=self.ci_level,
+            resamples=self.resamples,
+            bootstrap_seed=self.bootstrap_seed,
+            correction=self.correction,
+            m=self.m,
+            completeness_backstop=self.completeness_backstop,
+        )
+        if self.design_hash != expected:
+            raise ValueError(
+                "the pre-registration's design hash does not cover its own "
+                f"fields: expected {expected}, got {self.design_hash}"
+            )
+        return self
+
+    def pinned_fields(self) -> dict[str, JsonValue]:
+        """The hashed fields, as the hash sees them."""
+        return _pre_registration_payload(
+            k_repeat=self.k_repeat,
+            k_run_by_arm=self.k_run_by_arm,
+            ci_level=self.ci_level,
+            resamples=self.resamples,
+            bootstrap_seed=self.bootstrap_seed,
+            correction=self.correction,
+            m=self.m,
+            completeness_backstop=self.completeness_backstop,
+        )
+
+
+def _pre_registration_payload(  # noqa: PLR0913
+    *,
+    k_repeat: int,
+    k_run_by_arm: dict[str, int],
+    ci_level: float,
+    resamples: int,
+    bootstrap_seed: int,
+    correction: str,
+    m: int,
+    completeness_backstop: float,
+) -> dict[str, JsonValue]:
+    """The exact document the design hash is taken over.
+
+    Spelled as an explicit dict rather than derived from the model's fields:
+    the hash is stored identity, and deriving it from field names would let
+    a rename silently change every recorded design hash.
+    """
+    return {
+        "k_repeat": k_repeat,
+        "k_run_by_arm": dict(sorted(k_run_by_arm.items())),
+        "ci_level": ci_level,
+        "resamples": resamples,
+        "bootstrap_seed": bootstrap_seed,
+        "correction": correction,
+        "m": m,
+        "completeness_backstop": completeness_backstop,
+    }
+
+
+def pre_registration_design_hash(  # noqa: PLR0913
+    *,
+    k_repeat: int,
+    k_run_by_arm: dict[str, int],
+    ci_level: float,
+    resamples: int,
+    bootstrap_seed: int,
+    correction: str,
+    m: int,
+    completeness_backstop: float,
+) -> str:
+    """The content hash pinning one pre-registered design."""
+    return compute_content_hash(
+        _pre_registration_payload(
+            k_repeat=k_repeat,
+            k_run_by_arm=k_run_by_arm,
+            ci_level=ci_level,
+            resamples=resamples,
+            bootstrap_seed=bootstrap_seed,
+            correction=correction,
+            m=m,
+            completeness_backstop=completeness_backstop,
+        )
+    )
 
 
 class DesignRecord(_StrictModel):
@@ -794,6 +966,55 @@ class C18Record(_StrictModel):
 # --------------------------------------------------------------------------
 
 
+def _validate_design_matches_pre_registration(
+    *,
+    pre_registration: PreRegistrationRecord | None,
+    design: DesignRecord | None,
+) -> None:
+    """Refuse a design that contradicts the pinned pre-registration.
+
+    The two blocks overlap deliberately: ``design`` is what Stage 0
+    measured, and ``pre_registration`` is the subset of it that was fixed
+    before any spend. Letting them disagree would make the pinning
+    decorative -- a later stage could restate the design and leave the
+    frozen block untouched -- so the overlap is checked rather than
+    assumed.
+    """
+    if pre_registration is None or design is None:
+        return
+    mismatches = [
+        f"{name}: design {design_value!r} vs pre-registration {pinned!r}"
+        for name, design_value, pinned in (
+            ("k_repeat", design.k_repeat, pre_registration.k_repeat),
+            (
+                "k_run_by_arm",
+                dict(sorted(design.k_run_by_arm.items())),
+                dict(sorted(pre_registration.k_run_by_arm.items())),
+            ),
+            ("ci_level", design.ci_level, pre_registration.ci_level),
+            ("resamples", design.resamples, pre_registration.resamples),
+            (
+                "bootstrap_seed",
+                design.bootstrap_seed,
+                pre_registration.bootstrap_seed,
+            ),
+            ("correction", design.correction, pre_registration.correction),
+            ("m", design.m, pre_registration.m),
+            (
+                "completeness_backstop",
+                design.completeness_backstop,
+                pre_registration.completeness_backstop,
+            ),
+        )
+        if design_value != pinned
+    ]
+    if mismatches:
+        raise ValueError(
+            "the design contradicts the pinned pre-registration: "
+            + "; ".join(mismatches)
+        )
+
+
 class StudyManifest(_StrictModel):
     """``study.json``: everything the report is allowed to print.
 
@@ -819,6 +1040,7 @@ class StudyManifest(_StrictModel):
     population: PopulationRecord
     splits: SplitsRecord
     models: ModelsRecord
+    pre_registration: PreRegistrationRecord | None = None
     design: DesignRecord | None = None
     gepa_sizing: GepaSizingRecord | None = None
     fanout_check: FanoutCheckRecord | None = None
@@ -855,6 +1077,9 @@ class StudyManifest(_StrictModel):
         )
         if any(not value.strip() for value in identifiers):
             raise ValueError("a manifest's provenance fields are nonblank")
+        _validate_design_matches_pre_registration(
+            pre_registration=self.pre_registration, design=self.design
+        )
         arm_ids = [arm.arm_id for arm in self.arms]
         if len(set(arm_ids)) != len(arm_ids):
             raise ValueError("arm ids are distinct")
@@ -958,11 +1183,22 @@ def study_manifest_path(study_dir: Path) -> Path:
     return study_dir / STUDY_MANIFEST_NAME
 
 
+class PreRegistrationViolationError(ValueError):
+    """A write would have altered a pinned pre-registration.
+
+    A ``ValueError`` because every caller of :func:`write_study_manifest`
+    already treats one as a refusal to write, and this is exactly that: the
+    manifest on disk pre-registered a design and the document offered does
+    not carry it back unchanged.
+    """
+
+
 def write_study_manifest(
     study_dir: Path,
     manifest: StudyManifest,
     *,
     replace: bool = False,
+    amend_pre_registration: bool = False,
 ) -> Path:
     """Validate ``manifest``, then write it into ``study_dir``.
 
@@ -971,6 +1207,17 @@ def write_study_manifest(
     that will land re-validate. The directory must be outside every
     detected repository, because a study instance is a durable work
     document rather than a versioned deliverable.
+
+    **A pinned pre-registration survives every later write.** Once a
+    manifest on disk carries a ``pre_registration`` block, any write that
+    drops it or changes any of its bytes is refused with
+    :class:`PreRegistrationViolationError`. That refusal is what makes the
+    block a pre-registration rather than a field: Stage 1 and Stage 2 write
+    the manifest constantly, and without it a design could be restated after
+    its own results were known. ``amend_pre_registration`` is the single
+    deliberate exception, and the amended block must record its
+    ``amended`` provenance and the hash it replaced -- so an amendment is
+    always legible as one.
     """
     resolved = validate_output_root(study_dir)
     validated = StudyManifest.model_validate_json(
@@ -979,10 +1226,80 @@ def write_study_manifest(
     path = study_manifest_path(resolved)
     if path.exists() and not replace:
         raise ManifestExistsError(path)
+    if path.exists():
+        _require_preserved_pre_registration(
+            existing=read_study_manifest(path),
+            offered=validated,
+            amend=amend_pre_registration,
+        )
     resolved.mkdir(parents=True, exist_ok=True)
     document = _manifest_document(resolved)
     document.publish(validated.model_dump(mode="json", by_alias=True))
     return document.path
+
+
+def _require_preserved_pre_registration(
+    *,
+    existing: StudyManifest,
+    offered: StudyManifest,
+    amend: bool,
+) -> None:
+    """Refuse a write that would alter what a study pre-registered.
+
+    Compared as persisted documents rather than as objects, because what is
+    pinned is the bytes a reader will resolve the design hash against.
+    """
+    pinned = existing.pre_registration
+    if pinned is None:
+        # Nothing pinned yet: this write may be the Stage-0 write that pins
+        # it. Immutability starts once a block exists, not before.
+        return
+    offered_block = offered.pre_registration
+    if amend:
+        _require_valid_amendment(pinned=pinned, offered=offered_block)
+        return
+    if offered_block is None:
+        raise PreRegistrationViolationError(
+            "this study pre-registered its design at "
+            f"{pinned.design_hash[:12]} and this write drops the block "
+            "entirely; a pre-registration is preserved by every later write"
+        )
+    before = pinned.model_dump(mode="json", by_alias=True)
+    after = offered_block.model_dump(mode="json", by_alias=True)
+    if before != after:
+        changed = sorted(
+            key
+            for key in {*before, *after}
+            if before.get(key) != after.get(key)
+        )
+        raise PreRegistrationViolationError(
+            "this write would change the pinned pre-registration "
+            f"({', '.join(changed)}); pass amend_pre_registration to record "
+            "a deliberate amendment instead"
+        )
+
+
+def _require_valid_amendment(
+    *,
+    pinned: PreRegistrationRecord,
+    offered: PreRegistrationRecord | None,
+) -> None:
+    """An amendment names itself and the design it replaced."""
+    if offered is None:
+        raise PreRegistrationViolationError(
+            "an amendment replaces a pre-registration with another one; "
+            "this write carries no pre_registration block"
+        )
+    if offered.provenance != PROVENANCE_AMENDED:
+        raise PreRegistrationViolationError(
+            "an amended pre-registration records provenance "
+            f"{PROVENANCE_AMENDED!r}; got {offered.provenance!r}"
+        )
+    if offered.amended_from != pinned.design_hash:
+        raise PreRegistrationViolationError(
+            "an amendment names the design hash it replaced: expected "
+            f"{pinned.design_hash}, got {offered.amended_from}"
+        )
 
 
 def read_study_manifest(study_dir_or_file: Path) -> StudyManifest:
@@ -1110,6 +1427,9 @@ __all__ = [
     "CORRECTION_FAMILY_SIZE",
     "CORRECTION_HOLM_BONFERRONI",
     "MAX_MANIFEST_BYTES",
+    "PROVENANCE_AMENDED",
+    "PROVENANCE_ORIGINAL",
+    "PROVENANCE_VALUES",
     "SELECTION_RULE_ARGMAX_OFFICIAL",
     "STAGE_IDS",
     "STUDY_MANIFEST_NAME",
@@ -1135,6 +1455,8 @@ __all__ = [
     "PointerCheck",
     "PointerCheckReport",
     "PopulationRecord",
+    "PreRegistrationRecord",
+    "PreRegistrationViolationError",
     "RunRecord",
     "RunSpendRecord",
     "SelectionRecord",
@@ -1145,6 +1467,7 @@ __all__ = [
     "StudyManifest",
     "check_manifest_pointers",
     "format_pointer_report",
+    "pre_registration_design_hash",
     "read_study_manifest",
     "study_manifest_path",
     "write_study_manifest",

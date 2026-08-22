@@ -82,6 +82,7 @@ __all__ = [
     "UNPRICED",
     "VALIDATION_CHECKLIST",
     "VERDICT_INCOMPLETE",
+    "VERDICT_INVALID",
     "VERDICT_NOT_VALIDATED",
     "VERDICT_NO_IMPROVEMENT",
     "VERDICT_UNMEASURED",
@@ -97,6 +98,7 @@ __all__ = [
     "generate_study_report",
     "render_html",
     "render_markdown",
+    "study_leakage_failed",
 ]
 
 # --------------------------------------------------------------------------
@@ -386,6 +388,11 @@ VERDICT_NOT_VALIDATED = "not validated (fidelity)"
 VERDICT_NO_IMPROVEMENT = "no detected improvement"
 VERDICT_INCOMPLETE = "incomplete (not claimed)"
 VERDICT_UNMEASURED = "not measured"
+#: A leakage failure is not a property of one arm. It says the study's
+#: measurement procedure did not hold, so every number it produced is
+#: descriptive at best -- which is a stronger downgrade than a single arm's
+#: failed fidelity audit, and a separate one.
+VERDICT_INVALID = "invalid (leakage)"
 
 _STATUS_BY_VERDICT = {
     VERDICT_VALIDATED: "ok",
@@ -393,7 +400,19 @@ _STATUS_BY_VERDICT = {
     VERDICT_NO_IMPROVEMENT: "warn",
     VERDICT_INCOMPLETE: "warn",
     VERDICT_UNMEASURED: "warn",
+    VERDICT_INVALID: "bad",
 }
+
+
+def study_leakage_failed(manifest: StudyManifest) -> bool:
+    """Whether this study's leakage rules did not establish a clean run.
+
+    An **unrecorded** check counts as a failure, exactly as the CLI's
+    ``leakage-check`` treats an unchecked rule: from the reader's side, a
+    study whose leakage nobody verified and one whose leakage failed make
+    the same claim, and the report must not present either as a result.
+    """
+    return manifest.leakage_check is None or not manifest.leakage_check.passed
 
 
 def _arm_verdict(
@@ -401,14 +420,20 @@ def _arm_verdict(
     arm: ArmRecord,
     row: HeldOutRecord | None,
     backstop: float,
+    leakage_failed: bool = False,
 ) -> str:
-    """The arm's three-state verdict, fidelity first.
+    """The arm's verdict: leakage first, then fidelity, then efficacy.
 
-    Fidelity is checked before efficacy and cannot be outweighed by it. An
-    arm with no runs, or with any run whose audit failed, is *not validated*
-    and its held-out number is descriptive only. Only then does the interval
-    decide between an improvement and none.
+    The order is the gating order and no later check can overturn an
+    earlier one. A failed or unrun leakage check invalidates the study's
+    whole measurement procedure, so it outranks even a passing fidelity
+    audit: an arm measured correctly against a contaminated split still
+    reports a number nobody may claim. Fidelity comes next -- an arm with no
+    runs, or with any run whose audit failed, is *not validated* -- and only
+    then does the interval decide between an improvement and none.
     """
+    if leakage_failed:
+        return VERDICT_INVALID
     if not arm.runs or not all(run.audit_passed for run in arm.runs):
         return VERDICT_NOT_VALIDATED
     if row is None:
@@ -647,10 +672,16 @@ def _verdict_section(manifest: StudyManifest) -> Section:
         if manifest.design is not None
         else 1.0
     )
+    leakage_failed = study_leakage_failed(manifest)
     rows: list[Row] = []
     for index, arm in enumerate(manifest.arms):
         row = _arm_held_out(manifest, arm)
-        verdict = _arm_verdict(arm=arm, row=row, backstop=backstop)
+        verdict = _arm_verdict(
+            arm=arm,
+            row=row,
+            backstop=backstop,
+            leakage_failed=leakage_failed,
+        )
         path = f"held_out[{arm.arm_id}]"
         rows.append(
             Row(
@@ -685,19 +716,7 @@ def _verdict_section(manifest: StudyManifest) -> Section:
     return Section(
         heading="Which optimizers improved held-out accuracy?",
         tag="verdict",
-        paragraphs=(
-            (
-                "Fidelity gates efficacy. An arm whose audit failed is "
-                "reported *not validated* and its held-out number is "
-                "descriptive only, never a claim, whatever its interval says."
-            ),
-            (
-                "Three states only: **validated** (audit passed and the "
-                "uncorrected 95% interval excludes zero), **not validated "
-                "(fidelity)** (an audit failed), and **no detected "
-                "improvement** (audit passed, interval includes zero)."
-            ),
-        ),
+        paragraphs=_verdict_paragraphs(leakage_failed=leakage_failed),
         tables=(
             Table(
                 headers=(
@@ -716,6 +735,44 @@ def _verdict_section(manifest: StudyManifest) -> Section:
                     "column is empty by design rather than by omission."
                 ),
             ),
+        ),
+    )
+
+
+def _verdict_paragraphs(*, leakage_failed: bool) -> tuple[str, ...]:
+    """What the verdict column means, given whether leakage held.
+
+    Stated conditionally rather than as fixed prose: a table whose every
+    row reads *invalid (leakage)* beside a paragraph describing three
+    efficacy states would misdescribe its own contents.
+    """
+    if leakage_failed:
+        return (
+            (
+                "**Leakage gates everything.** This study's leakage rules "
+                "did not establish a clean separation between the split its "
+                "optimizers saw and the split it reports from, so every arm "
+                "is reported **invalid (leakage)** and no number below is a "
+                "claim -- whatever its interval or its fidelity audit says."
+            ),
+            (
+                "The deltas and intervals are still printed, because "
+                "withholding them would hide what was measured. They "
+                "describe a run whose measurement procedure is not "
+                "established, and nothing more."
+            ),
+        )
+    return (
+        (
+            "Fidelity gates efficacy. An arm whose audit failed is "
+            "reported *not validated* and its held-out number is "
+            "descriptive only, never a claim, whatever its interval says."
+        ),
+        (
+            "Three states only: **validated** (audit passed and the "
+            "uncorrected 95% interval excludes zero), **not validated "
+            "(fidelity)** (an audit failed), and **no detected "
+            "improvement** (audit passed, interval includes zero)."
         ),
     )
 
@@ -1844,6 +1901,20 @@ def _title(manifest: StudyManifest) -> str:
         return (
             "This study has run no held-out evaluation, so it claims "
             "nothing yet"
+        )
+    if study_leakage_failed(manifest):
+        # The strongest downgrade the title can state, and the reason it
+        # comes before every per-arm reading: a leak means the numbers
+        # below describe a procedure that did not hold, so no headline may
+        # report an improvement, however wide the interval.
+        if manifest.leakage_check is None:
+            return (
+                "This study's leakage rules were never run, so none of its "
+                "held-out numbers may be claimed"
+            )
+        return (
+            "A pre-registered leakage rule failed, so this study's held-out "
+            "numbers are descriptive only and claim nothing"
         )
     backstop = (
         manifest.design.completeness_backstop

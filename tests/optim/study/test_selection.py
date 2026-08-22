@@ -332,3 +332,72 @@ def test_unaligned_paired_vectors_are_refused() -> None:
             arm_per_task=(1.0, 1.0),
             naive_per_task=(0.0,),
         )
+
+
+# --------------------------------------------------------------------------
+# Holm's family size is pre-registered, not counted
+# --------------------------------------------------------------------------
+
+
+def _one_sided_arm(arm_id: str, *, delta: float) -> ArmDelta:
+    return ArmDelta(
+        arm_id=arm_id,
+        arm_per_task=(delta,) * 40,
+        naive_per_task=(0.0,) * 40,
+    )
+
+
+def test_holm_corrects_at_the_pre_registered_family_size() -> None:
+    """A partial study corrects at m = 4, not at however many arms ran.
+
+    The family was fixed before spend. Deriving ``m`` from the number of
+    arms in hand would under-correct exactly the partial studies -- a
+    pilot, a resumed stage, an arm that failed -- whose multiplicity risk
+    is unchanged by how far the study got.
+    """
+    two_of_four = analyze_arms(
+        (
+            _one_sided_arm("copro", delta=1.0),
+            _one_sided_arm("gepa", delta=1.0),
+        ),
+        resamples=200,
+        seed=7,
+    )
+    all_four = analyze_arms(
+        tuple(
+            _one_sided_arm(arm_id, delta=1.0)
+            for arm_id in ("copro", "gepa", "miprov2", "codex")
+        ),
+        resamples=200,
+        seed=7,
+    )
+    # Both corrections scale the smallest p-value by m = 4, so the partial
+    # study's leading adjusted p-value matches the full study's rather than
+    # being the halved value an m = 2 correction would produce.
+    assert two_of_four[0].p_holm == pytest.approx(all_four[0].p_holm)
+    assert two_of_four[0].p_holm == pytest.approx(
+        min(1.0, 4 * two_of_four[0].p_bootstrap)
+    )
+
+
+def test_an_explicit_family_size_overrides_the_default() -> None:
+    stats = analyze_arms(
+        (_one_sided_arm("copro", delta=1.0),),
+        resamples=200,
+        seed=7,
+        family_size=1,
+    )
+    assert stats[0].p_holm == pytest.approx(stats[0].p_bootstrap)
+
+
+def test_more_arms_than_the_family_declares_is_refused() -> None:
+    """A family is fixed before spend, never widened to fit its results."""
+    with pytest.raises(ValueError, match="fixed before spend"):
+        analyze_arms(
+            tuple(
+                _one_sided_arm(arm_id, delta=1.0)
+                for arm_id in ("a", "b", "c", "d", "e")
+            ),
+            resamples=200,
+            seed=7,
+        )

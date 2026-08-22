@@ -57,6 +57,12 @@ def reported_numbers_resolve(evidence: RunEvidence) -> AuditFinding:
     eval evidence for one, and demanding it would make honest refusal look
     like infidelity. This is the generic invariant every optimizer shares --
     the per-optimizer modules add the algorithm-specific ones on top.
+
+    **Zero completed evaluations is never a pass.** A run whose steps
+    completed no intent failed to report the numbers this invariant governs,
+    and a run with no steps at all has nothing to govern; the first is a
+    ``FAIL`` and the second ``NOT_APPLICABLE``. Reporting either as "all 0
+    of 0 resolve" would let an empty run read as audited fidelity.
     """
     unresolved: list[str] = []
     refs = []
@@ -110,6 +116,35 @@ def reported_numbers_resolve(evidence: RunEvidence) -> AuditFinding:
                 f"not resolve to eval evidence: {'; '.join(unresolved[:3])}"
             ),
             evidence_refs=tuple(refs),
+        )
+    if not checked:
+        # "All 0 of 0 resolve" is not a check. A run that reported no
+        # evaluation at all resolved nothing, and a PASS here would read as
+        # audited fidelity on a run whose numbers nobody verified -- the
+        # same vacuity ``invariants_for`` refuses for an unregistered
+        # optimizer. Which of the two it is depends on whether the run has
+        # any steps at all: a run with steps that completed no intent is a
+        # defect, and a run with no steps has nothing this invariant
+        # governs.
+        if evidence.steps:
+            return AuditFinding(
+                invariant_id=InvariantId.REPORTED_NUMBERS_RESOLVE,
+                status=AuditStatus.FAIL,
+                detail=(
+                    f"this run persisted {len(evidence.steps)} step(s) but "
+                    "completed no evaluation intent and no search "
+                    "evaluation, so no reported number was checked"
+                ),
+                evidence_refs=(),
+            )
+        return AuditFinding(
+            invariant_id=InvariantId.REPORTED_NUMBERS_RESOLVE,
+            status=AuditStatus.NOT_APPLICABLE,
+            detail=(
+                "this run persisted no steps, so it reported no evaluation "
+                "number for this invariant to resolve"
+            ),
+            evidence_refs=(),
         )
     return AuditFinding(
         invariant_id=InvariantId.REPORTED_NUMBERS_RESOLVE,

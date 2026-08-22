@@ -114,11 +114,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   while the schema recomputed 0.0, called the row a lie, and refused the
   whole report: publication failed for the entire run over a check that was
   wrong rather than a score that was. The check now routes through
-  `FamilySpec.eval_runner`, the registry's single owner of how a family's
+  `whetstone_envs.scoring.families`, the single owner of how a family's
   generation becomes a score, so it keeps its purpose — a reported score
   must equal what the family's own scorer yields for that row — without
   restating any family's rule. Found by the real-Codex ladder's c18 rung;
   the fake transport replies with bare gold, which both rules score alike.
+
+- **Reading a scored report no longer requires the stack that wrote it.**
+  Routing that same check through the *optimizer's* family registry pulled
+  in whetstone-ai, which the `optim` extra installs only on Python 3.13+, so
+  validating any report with a scored observation raised
+  `ModuleNotFoundError: dr_providers` on a base install. The per-family
+  scoring rule is pure, so it now lives in `whetstone_envs/scoring/families.py`
+  and imports nothing from `optim`; both eval-node runners and the schema's
+  check call the same `family_score`, and a golden test pins that they agree
+  for representative outputs of both families.
+
+- **The Codex arm's preflight probes the model the arm will actually use.**
+  The study stage passed the run's `task_model` to `preflight_codex_session`,
+  which is an OpenRouter route the Codex CLI cannot run at all — so the guard
+  cleared a session no arm would ever open, and a real study would have failed
+  on the Codex arm's turn, after COPRO, MIPROv2, and GEPA had been paid for.
+  Both the runner and the preflight now resolve the agent model through one
+  shared `resolve_codex_agent_model`.
+
+- **A rejected trajectory row keeps the reason it was rejected.** The
+  projection dropped `terminal_failure.message` for a call rejected after
+  admission. The structured failure is evidence the schema forbids on such a
+  row, but the message is not, and it was the only account of why a paid-for
+  call scored nothing that reached the projected trajectory.
+
+- **The real-Codex ladder reports what it observed, not that pytest exited
+  0.** `RESULT: all rungs passed` was derived from the exit status, and pytest
+  exits 0 on a fully skipped session — which live-skips on rungs 2/6/7/8 make
+  the expected path. The footer is now gated on the parsed rung table (every
+  row PASSED, and as many rows as the ladder has rungs, counted by collection
+  rather than pinned), and a ladder that was not fully observed exits 1. The
+  parser feeding that table also stopped misreading `::test_rungN` printed
+  inside temp paths and tracebacks, and no longer files a verdict against the
+  wrong rung.
+
+- **The ladder's seed-preference skip no longer swallows adapter bugs.**
+  `_skip_if_agent_chose_the_seed` matched any `codex_selection_contract`
+  failure, including the `base is None` bookkeeping site — a genuine defect
+  reported as the known, accepted risk. It now additionally requires no
+  accepted candidates, no retained candidate, and the mutation-diff message.
+  whetstone-ai 0.1.9 (#138) treats a seed-identical selection as
+  `seed_retained`, so this skip becomes unnecessary once the envs pin moves
+  to 0.1.9/0.1.10.
+
+- **The ladder's tripwire exception is scoped to ladder-only sessions.** A
+  mixed `-m ""` session that collected rungs alongside ordinary tests
+  disarmed `WHETSTONE_ENVS_FORBID_REAL_CODEX` for all of them; the claim now
+  requires the session to have collected nothing but rungs.
+
+- The Python 3.12 CI job went red on `ty`: `tests/real_codex/**` was missing
+  from the unresolved-import overrides. `tests/optim/test_real_codex_preconditions.py`
+  also hard-errored at collection there, because it reached the ladder's
+  decision function through a conftest that imports the optimizer stack — so
+  the coverage that stops an all-skipped ladder being reported as green was
+  itself invisible on the job most likely to lose it. The pure decision now
+  lives in `tests/real_codex/preconditions.py`.
 
 - `stage0 --replace-design` that records an amendment discards the previous
   Stage-1 call-count verdict: a pilot gate describes the design it was

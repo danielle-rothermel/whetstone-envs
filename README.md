@@ -415,8 +415,21 @@ deselected by default through `addopts`, and every rung is skipped unless
 `WHETSTONE_ENVS_REAL_CODEX=1`. Once opted in, an unmet precondition —
 non-macOS host, missing `sandbox-exec`, missing binary, no session, or a
 missing spend opt-in — is a loud failure rather than a skip, because pytest
-exits 0 on a fully skipped session and the runner script would report that
-as "all rungs passed".
+exits 0 on a fully skipped session. The runner script does not trust that
+exit status either: it reports `all rungs passed` only when every rung
+reached the table with a PASSED verdict and the table holds as many rungs as
+the ladder collects, and otherwise reports `ladder not fully observed` and
+exits 1.
+
+A rung can still live-skip for one known reason: an agent that decides the
+seed template is best may say so by *selecting* a call whose template equals
+the seed, which whetstone-ai 0.1.8 refuses as a selection-contract
+violation. That is the agent's taste rather than a harness defect, so the
+rung skips instead of failing. whetstone-ai 0.1.9 ([#138]) treats a
+seed-identical selection as `seed_retained`, so the skip disappears once the
+envs pin moves to 0.1.9/0.1.10.
+
+[#138]: https://github.com/danielle-rothermel/whetstone-ai/pull/138
 
 ```bash
 scripts/check-real-codex.sh              # whole ladder, stop at first break

@@ -35,9 +35,9 @@ from tests.real_codex.preconditions import (
 #: decision function, and
 #: ``test_the_conftest_passes_the_real_spend_opt_in`` pins that these two
 #: literals still match their owners wherever whetstone-ai is installed.
-ALLOW_REAL_CODEX_ENV = 'WHETSTONE_ENVS_ALLOW_REAL_CODEX'
-ALLOW_REAL_CODEX_ENV_VALUE = '1'
-CODEX_AUTH_FILENAMES = ('auth.json', '.credentials.json')
+ALLOW_REAL_CODEX_ENV = "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
+ALLOW_REAL_CODEX_ENV_VALUE = "1"
+CODEX_AUTH_FILENAMES = ("auth.json", ".credentials.json")
 
 _AUTH_HOME = Path("/home/someone/.codex")
 

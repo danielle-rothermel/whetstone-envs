@@ -28,6 +28,8 @@ from whetstone_envs.optim.study.cli import (
     EXIT_CHECK_FAILED,
     EXIT_ERROR,
     EXIT_OK,
+    MEASURED_BASIS_BY_ARM,
+    MEASURED_BASIS_DEFAULT,
     MEASURED_LABEL,
     MEASURED_TASK_CALLS_BY_ARM,
     NO_ESTIMATE,
@@ -680,6 +682,28 @@ def test_plan_states_the_null_identity_basis_as_the_harness() -> None:
     ]
     assert null_basis, text
     assert "report harness only" in null_basis[0]
+
+
+def test_the_gepa_measurement_says_it_was_scaled() -> None:
+    """73 is not a number read off a run, and the label must not imply it.
+
+    The run was measured at the retired 732-call budget; what the plan
+    prints is that measurement scaled to the pinned 200, so its provenance
+    names both budgets rather than claiming a direct measurement.
+    """
+
+    class _GepaSpec(_Spec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.arm_ids = ("gepa",)
+            self.k_run_by_arm = {"gepa": 5}
+
+    text = "\n".join(plan_lines(_GepaSpec()))
+    assert MEASURED_BASIS_BY_ARM["gepa"] in text
+    assert "scaled to the pinned 200" in text
+    assert "max_metric_calls=732" in text
+    # And the generic line is not what GEPA printed.
+    assert MEASURED_BASIS_DEFAULT not in text
 
 
 def test_the_measured_arms_are_the_ones_wave_3_actually_ran() -> None:

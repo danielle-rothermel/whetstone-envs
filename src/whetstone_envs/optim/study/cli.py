@@ -33,7 +33,9 @@ from dr_store.sync import open_sqlite
 
 from whetstone_envs.optim.study.environment import bound_stage_environment
 from whetstone_envs.optim.study.gates import (
+    GEPA_MAX_METRIC_CALLS_PINNED,
     GEPA_MEASURED_TASK_CALLS_AT_PIN,
+    MEASURED_GEPA_TASK_CALLS,
     MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
     estimate_optimizer_calls,
 )
@@ -249,6 +251,20 @@ MEASURED_TASK_CALLS_BY_ARM = {
     "gepa": GEPA_MEASURED_TASK_CALLS_AT_PIN,
 }
 
+#: The default provenance line for a measured arm, and the arms whose
+#: provenance differs from it. GEPA's number is the measurement *scaled* to
+#: the pinned budget rather than a figure read straight off a run, and a
+#: label that did not say so would overstate what was measured.
+MEASURED_BASIS_DEFAULT = "measured on fake transport at these splits (Wave 3)"
+MEASURED_BASIS_BY_ARM = {
+    "gepa": (
+        f"measured at max_metric_calls=732 "
+        f"({MEASURED_GEPA_TASK_CALLS} rows) on fake transport at these "
+        f"splits, scaled to the pinned {GEPA_MAX_METRIC_CALLS_PINNED} "
+        f"(Wave 3, D3)"
+    ),
+}
+
 
 def _optimizer_budget_lines(
     spec: StudySpecLike,
@@ -299,8 +315,8 @@ def _optimizer_budget_lines(
                 f"  {MEASURED_LABEL}"
             )
             lines.append(
-                f"{'':<24}basis: measured on fake transport at these "
-                f"splits (Wave 3)"
+                f"{'':<24}basis: "
+                + MEASURED_BASIS_BY_ARM.get(arm_id, MEASURED_BASIS_DEFAULT)
             )
     lines.extend(
         ("", f"total optimizer-side calls: {_range(total_low, total_high)}")

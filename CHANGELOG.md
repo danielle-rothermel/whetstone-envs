@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `whetstone_envs.optim.audit`: offline fidelity audits over one optimizer
+  run's durable evidence. `audit_run(run_dir)` reads `result.json` and
+  `runtime.sqlite` through whetstone-ai's public API and returns an
+  `AuditReport`; `python -m whetstone_envs.optim.audit <run_dir>` writes it
+  to `audit.json` beside the result. An audit performs no network access, no
+  re-execution, and no re-scoring, so it is equally valid in CI against
+  fake-transport artifacts and against a paid run later. Exit codes separate
+  a fidelity failure (`1`, an invariant was violated) from unreadable
+  evidence (`2`, nothing was judged).
+- The audit result contract (`AuditReport`, `AuditFinding`, `InvariantId`,
+  `AuditStatus`, `EvidenceRef`) is a persisted format owned by
+  `optim/audit/schema.py`, with its wire literals pinned by golden tests.
+  `AuditReport.passed` is derived from the findings rather than stored, so a
+  report cannot disagree with its own evidence.
+- `registry.py` is the single place an invariant is enumerated, mapping each
+  optimizer to its invariant tuple. It ships one worked invariant,
+  `REPORTED_NUMBERS_RESOLVE` (every reported evaluation resolves to eval
+  evidence in the run's own store), wired end to end with a negative fixture;
+  the per-optimizer invariant sets follow.
+- `_mutate.py` builds a negative fixture by copying a real fake-transport run
+  and violating one named evidence field. It re-seals `OptimResult`'s
+  self-verifying step wrapper refs and request chain, so a fixture stays
+  schema-valid and fails only the semantic invariant under test, and it
+  refuses a no-op rewrite that would let a negative test pass for the wrong
+  reason.
+
 ### Changed
 
 - The C19 optimizer runner is now a family-agnostic runner. `C19RunSpec`

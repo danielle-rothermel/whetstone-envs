@@ -612,6 +612,76 @@ def test_plan_prints_measured_numbers_beside_the_estimates() -> None:
     assert all(MEASURED_LABEL not in line for line in copro_lines)
 
 
+def test_plan_prints_the_corrected_per_arm_estimates() -> None:
+    """Golden pin: the numbers ``plan`` reports, in task-model rows.
+
+    Both corrections are visible here. GEPA prints 200 rows -- the D3 pin
+    -- rather than the 732 metric calls the auto budget resolves to, and
+    null-identity prints the report harness rather than COPRO's search
+    shape. The split sizes are deliberately *not* the protocol's, because
+    at ``(88, 132, 220)`` with ``K_REPEAT = 3`` the harness formula and
+    COPRO's shape coincide at 1,056 by accident and the pin would not
+    discriminate.
+    """
+
+    class _AllArmSpec(_Spec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.arm_ids = ("copro", "miprov2", "gepa", "null-identity")
+            self.k_run_by_arm = {
+                "copro": 1,
+                "miprov2": 1,
+                "gepa": 1,
+                "null-identity": 1,
+            }
+            self.k_repeat = 3
+            self.split_sizes = (88, 10, 20)
+
+    lines = plan_lines(_AllArmSpec())
+    # Scope to the optimizer-side table; the selection table above it has
+    # one row per arm too, and those are a different quantity.
+    start = lines.index(OPTIMIZER_BUDGET_HEADING)
+    optimizer_lines = lines[start:]
+
+    def _row(arm: str) -> str:
+        return next(line for line in optimizer_lines if line.startswith(arm))
+
+    # COPRO: (depth 1 + 1) x breadth 2 x 88 internal x 3 repeats.
+    assert "1056" in _row("copro")
+    # MIPROv2: its own control budget, 1870-2458, independent of the splits.
+    assert "1870-2458" in _row("miprov2")
+    # GEPA: the pinned 200 rows, not 732 metric calls.
+    gepa = _row("gepa")
+    assert "200" in gepa
+    assert "732" not in gepa
+    # Null-B: 1 official pass x 10 + 1 held-out pass x 20, at K_REPEAT 3.
+    assert "90" in _row("null-identity")
+
+
+def test_plan_states_the_gepa_basis_in_rows_not_metric_calls() -> None:
+    """The unit is what went wrong, so the printed basis has to name it."""
+
+    class _GepaSpec(_Spec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.arm_ids = ("gepa",)
+            self.k_run_by_arm = {"gepa": 5}
+
+    text = "\n".join(plan_lines(_GepaSpec()))
+    assert "bounds task rows at 200" in text
+    assert "no optimizer run" not in text
+
+
+def test_plan_states_the_null_identity_basis_as_the_harness() -> None:
+    """Null-B's printed derivation must not describe a search it never runs."""
+    text = "\n".join(plan_lines(_Spec()))
+    null_basis = [
+        line for line in plan_lines(_Spec()) if "no optimizer run" in line
+    ]
+    assert null_basis, text
+    assert "report harness only" in null_basis[0]
+
+
 def test_the_measured_arms_are_the_ones_wave_3_actually_ran() -> None:
     """Only measured arms carry a measurement; the rest say estimate."""
     assert set(MEASURED_TASK_CALLS_BY_ARM) == {"miprov2", "gepa"}

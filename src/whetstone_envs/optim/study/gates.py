@@ -3,8 +3,14 @@
 The study's row-derived budget -- runs times tasks times repeats -- prices
 only what *selection and reporting* cost. It says nothing about what an
 optimizer spends internally, which is where the study's money actually goes:
-GEPA's 732 metric calls and MIPROv2's bootstrap walk dwarf the official and
-held-out passes.
+MIPROv2's bootstrap walk and GEPA's search dwarf the official and held-out
+passes.
+
+**Every estimate here is in task-model rows**, because that is the unit
+``cost.json`` reports and the unit the Stage-1 gate receives. Keeping one
+unit is not a formatting preference: GEPA's budget is denominated in
+*metric calls*, and quoting it directly made the gate compare two different
+quantities and reject a healthy run. See ``GEPA_TASK_CALL_CEILING``.
 
 This module is the one named place those numbers live. Each constant carries
 its derivation in its docstring, because every one of them was wrong at least
@@ -25,7 +31,8 @@ estimate is what was wrong. Three of them disagreed materially:
 * **F10 -- the 28-616 bootstrap bound does not apply.** The runner gives
   MIPROv2 a one-task trainset, so bootstrapping costs 1-2 rows per run.
 * **F9 / D3 -- GEPA is pinned to 200 metric calls.** A measured 732-call run
-  produced a 1.73 GB store and a 766 MB result document.
+  produced a 1.73 GB store and a 766 MB result document. The pin is also the
+  source of GEPA's gated estimate, in rows.
 
 The estimates are kept rather than replaced. The Stage-1 gate divides by an
 upper bound, and a loose upper bound cannot false-abort a run, whereas a
@@ -42,8 +49,13 @@ __all__ = [
     "COPRO_DEFAULT_BREADTH",
     "COPRO_DEFAULT_DEPTH",
     "GEPA_MAX_METRIC_CALLS_PINNED",
+    "GEPA_MEASURED_FULL_VALSET_PASSES",
+    "GEPA_MEASURED_REFLECTION_MINIBATCHES",
+    "GEPA_MEASURED_TASK_CALLS_AT_PIN",
     "GEPA_PIN_REASON",
+    "GEPA_REFLECTION_MINIBATCH_TASKS",
     "GEPA_RESOLVED_MAX_METRIC_CALLS",
+    "GEPA_TASK_CALL_CEILING",
     "MEASURED_FANOUT_RATIO",
     "MEASURED_GEPA_DISTINCT_EVALUATIONS",
     "MEASURED_GEPA_RESULT_JSON_BYTES",
@@ -71,9 +83,12 @@ __all__ = [
     "MIPROV2_FEWSHOT_TASK_CALL_FLOOR",
     "MIPROV2_FULL_EVAL_CALLS",
     "MIPROV2_MINIBATCH_CALLS",
+    "NULL_IDENTITY_HELD_OUT_PASSES",
+    "NULL_IDENTITY_OFFICIAL_PASSES",
     "STAGE1_CALL_COUNT_TOLERANCE",
     "OptimizerCallEstimate",
     "estimate_optimizer_calls",
+    "null_identity_report_rows",
 ]
 
 # --------------------------------------------------------------------------
@@ -141,10 +156,13 @@ MIPROV2_FEWSHOT_TASK_CALL_CEILING = (
 #:
 #: ``gepa_auto_budget(num_predictors=1, num_candidates=6, valset_size=88,
 #: minibatch_size=35, full_eval_steps=5)`` resolves to 732: ``num_trials``
-#: is 10, and the total is ``88 + 30 + 350 + 3 * 88``. Because
-#: ``run_one_gepa_iteration`` advances the budget by one call per whetstone
-#: step, 732 metric calls is also **732 whetstone steps** -- which is why
-#: F9 measures wall time before Stage 1 rather than after.
+#: is 10, and the total is ``88 + 30 + 350 + 3 * 88``.
+#:
+#: **This is a metric-call count, not a task-call count.** It is retained
+#: for provenance -- it is what ``gepa_auto_budget`` returns -- but it is
+#: *not* what the Stage-1 gate compares against; see
+#: :data:`GEPA_TASK_CALL_CEILING` for the gated quantity and the unit
+#: derivation.
 GEPA_RESOLVED_MAX_METRIC_CALLS = 732
 
 # --------------------------------------------------------------------------
@@ -189,27 +207,57 @@ class OptimizerCallEstimate:
             )
 
 
-def estimate_optimizer_calls(
+def estimate_optimizer_calls(  # noqa: PLR0913
     optimizer: str,
     *,
     internal_size: int,
     k_repeat: int,
     copro_breadth: int = COPRO_DEFAULT_BREADTH,
     copro_depth: int = COPRO_DEFAULT_DEPTH,
+    official_size: int = 0,
+    held_out_size: int = 0,
 ) -> OptimizerCallEstimate:
     """Estimated evaluation calls for one run of ``optimizer``.
+
+    **Every estimate is in task-model rows**, the unit ``cost.json`` reports
+    as ``task_model.calls`` and the unit ``call_count_within_estimate``
+    receives. An estimate expressed in any other unit -- GEPA's metric calls
+    being the one that got this wrong -- is not comparable to the thing it
+    is gated against.
 
     COPRO is the only arm whose count follows from the study's own split
     sizes, because its search shape is fully configured: ``depth + 1`` steps
     of ``breadth`` candidates, each scored over the whole internal split at
-    ``K_REPEAT`` repeats. MIPROv2 and GEPA carry their own internal budgets,
-    so their estimates are the pinned constants above rather than a function
-    of the splits. The nulls make no provider proposal call and evaluate
-    exactly as COPRO does.
+    ``K_REPEAT`` repeats. ``null-random`` perturbs the anchor but still
+    drives the same selection machinery, so it shares COPRO's shape.
+    MIPROv2 and GEPA carry their own internal budgets, so their estimates
+    are the pinned constants above rather than a function of the splits.
+
+    ``null-identity`` is the exception: it runs **no optimizer at all**, so
+    its estimate is the report harness's official and held-out passes, which
+    is why it needs ``official_size`` and ``held_out_size``. See
+    :func:`null_identity_report_rows`.
     """
     if internal_size < 0 or k_repeat < 1:
         raise ValueError("internal_size >= 0 and k_repeat >= 1 are required")
-    if optimizer in {"copro", "null-random", "null-identity"}:
+    if optimizer == "null-identity":
+        rows = null_identity_report_rows(
+            official_size=official_size,
+            held_out_size=held_out_size,
+            k_repeat=k_repeat,
+        )
+        return OptimizerCallEstimate(
+            optimizer=optimizer,
+            low=rows,
+            high=rows,
+            basis=(
+                f"no optimizer run; report harness only: "
+                f"{NULL_IDENTITY_OFFICIAL_PASSES} official pass x "
+                f"{official_size} tasks + {NULL_IDENTITY_HELD_OUT_PASSES} "
+                f"held-out pass x {held_out_size} tasks, x {k_repeat} repeats"
+            ),
+        )
+    if optimizer in {"copro", "null-random"}:
         steps = copro_depth + 1
         rows = steps * copro_breadth * internal_size * k_repeat
         return OptimizerCallEstimate(
@@ -236,11 +284,13 @@ def estimate_optimizer_calls(
     if optimizer == "gepa":
         return OptimizerCallEstimate(
             optimizer=optimizer,
-            low=GEPA_RESOLVED_MAX_METRIC_CALLS,
-            high=GEPA_RESOLVED_MAX_METRIC_CALLS,
+            low=GEPA_TASK_CALL_CEILING,
+            high=GEPA_TASK_CALL_CEILING,
             basis=(
-                f"gepa_auto_budget resolves to "
-                f"{GEPA_RESOLVED_MAX_METRIC_CALLS} metric calls"
+                f"pinned budget of {GEPA_MAX_METRIC_CALLS_PINNED} metric "
+                f"calls bounds task rows at {GEPA_TASK_CALL_CEILING} (D3); "
+                f"measured 732-call run scaled to the pin is "
+                f"{GEPA_MEASURED_TASK_CALLS_AT_PIN} rows"
             ),
         )
     if optimizer == "codex":
@@ -448,3 +498,127 @@ GEPA_PIN_REASON = (
     "766 MB result.json across 556 steps; per-step prefix replay makes "
     "both superlinear in the step count"
 )
+
+
+# --------------------------------------------------------------------------
+# The unit correction: metric calls are not task calls
+# --------------------------------------------------------------------------
+
+#: **The unit the Stage-1 gate compares in: task-model rows.**
+#:
+#: ``call_count_within_estimate`` receives ``observed_task_calls``, which
+#: ``_observed_task_calls`` counts as *rows* -- one per task per completed
+#: evaluation -- and which ``cost.json`` independently reports as
+#: ``task_model.calls``. GEPA's ``max_metric_calls``, by contrast, counts
+#: upstream **per-example metric invocations**. The two are different
+#: units, and comparing a row count against a metric-call ceiling is what
+#: made a real GEPA run trip the 1.5x gate.
+#:
+#: The Wave 3 measurement decomposes exactly, which is what makes this a
+#: derivation rather than a fitted ratio. The ``w3-gepa-full`` run at
+#: ``max_metric_calls = 732`` executed **91 distinct evaluations** totalling
+#: **265 task rows**, and 91 and 265 have exactly one decomposition into
+#: this control's two evaluation shapes:
+#:
+#:     2 full-valset passes x 88 tasks  +  89 reflection minibatches x 1 task
+#:       = 176 + 89
+#:       = 265 rows,  across 2 + 89 = 91 evaluations.
+#:
+#: (``build_gepa_control`` sets ``reflection_minibatch_size=1`` and passes
+#: ``valset_task_hashes=None``, so the valset is the whole internal split.
+#: Those are the only two shapes a run of this control can produce.)
+#:
+#: Note that ``2 * 88 + 89`` is *also* 265: upstream charges one metric
+#: call per example, so a run's distinct rows and the metric calls those
+#: distinct evaluations cost are the same number. The budget consumed 732
+#: rather than 265 because ``run_one_gepa_iteration`` restarts ``optimize()``
+#: every whetstone step and replays the whole prefix; upstream re-charges
+#: each replayed invocation while the durable effect cache serves it
+#: without re-executing a row.
+#:
+#: Two consequences, and the second is the one the gate needs:
+#:
+#: 1. Distinct task rows can never exceed the metric-call budget, because
+#:    every row costs at least one metric call. The budget is therefore a
+#:    sound *upper bound* on rows in the gate's own unit.
+#: 2. The bound is loose by exactly the replay factor -- 732 / 265 = 2.76x
+#:    on the measured run -- and a loose upper bound cannot false-abort,
+#:    which is the property the Stage-1 gate is built on.
+GEPA_MEASURED_FULL_VALSET_PASSES = 2
+GEPA_MEASURED_REFLECTION_MINIBATCHES = 89
+GEPA_REFLECTION_MINIBATCH_TASKS = 1
+
+#: GEPA's per-run task-row ceiling at the **pinned** budget, in the gate's
+#: unit. This is what ``estimate_optimizer_calls`` returns for GEPA.
+#:
+#: The source is ``GEPA_MAX_METRIC_CALLS_PINNED`` -- the Wave 3 D3 decision
+#: -- and not the 732 the auto budget resolves to, because 200 is what
+#: Stage 1 and Stage 2 actually run. Per consequence 1 above, the budget
+#: bounds the rows, so the ceiling is the pinned budget itself: a run that
+#: is charged 200 metric calls cannot have executed more than 200 distinct
+#: task rows.
+#:
+#: Scaling the measurement to the pin as a cross-check: the measured run
+#: executed 265 rows for 732 charged calls, so the same replay factor at
+#: 200 predicts ``265 * 200 / 732 = 72.4`` rows -- comfortably inside this
+#: ceiling, as an upper bound should be.
+GEPA_TASK_CALL_CEILING = GEPA_MAX_METRIC_CALLS_PINNED
+
+#: The measured run's rows scaled to the pinned budget, kept as the
+#: cross-check the ceiling is sanity-checked against rather than as the
+#: gate's denominator. Ceiling division: a partial row is still a row.
+GEPA_MEASURED_TASK_CALLS_AT_PIN = -(
+    -MEASURED_GEPA_TASK_CALLS
+    * GEPA_MAX_METRIC_CALLS_PINNED
+    // GEPA_RESOLVED_MAX_METRIC_CALLS
+)
+
+
+# --------------------------------------------------------------------------
+# The null-B correction: a control is not an optimizer run
+# --------------------------------------------------------------------------
+
+#: **``null-identity`` runs no optimizer, so it has no optimizer-side cost.**
+#:
+#: The estimate this replaces gave null-B COPRO's full search shape --
+#: ``(depth + 1) x breadth x internal x K_REPEAT`` -- which is the cost of a
+#: search null-B never performs. ``StudyOptimizerRunner._run_null`` does not
+#: call ``run_optimizer`` at all: it emits the naive anchor unchanged as its
+#: terminal candidate and reports ``observed_task_calls=0``.
+#:
+#: What null-B does cost is the *report harness*, which every arm pays and
+#: which ``report_arm`` issues identically for controls and optimizers (L4):
+#: one official scoring pass per run, then one held-out pass for the
+#: selected representative. Null-B takes ``K_RUN_NULL_B = 1``, so that is
+#: one official pass and one held-out pass.
+#:
+#: This is deliberately *not* folded into the other arms' estimates. The
+#: gate compares ``observed_task_calls``, which is projected from the
+#: **run's** own evidence and excludes the report harness entirely, so an
+#: optimizer arm's estimate must stay optimizer-side to stay in the same
+#: unit as the thing it is compared against. Null-B is the one arm whose
+#: run-side cost is zero, which is why its estimate is the harness cost
+#: instead of a search it does not run.
+NULL_IDENTITY_OFFICIAL_PASSES = 1
+NULL_IDENTITY_HELD_OUT_PASSES = 1
+
+
+def null_identity_report_rows(
+    *, official_size: int, held_out_size: int, k_repeat: int
+) -> int:
+    """Task rows one ``null-identity`` arm costs through the report harness.
+
+    One official scoring pass over the official split plus one held-out
+    pass over the held-out split, each at ``K_REPEAT`` repeats. See
+    :data:`NULL_IDENTITY_OFFICIAL_PASSES` for why this, and not COPRO's
+    search shape, is null-B's estimate.
+    """
+    if official_size < 0 or held_out_size < 0 or k_repeat < 1:
+        raise ValueError(
+            "official_size >= 0, held_out_size >= 0 and k_repeat >= 1 "
+            "are required"
+        )
+    return k_repeat * (
+        NULL_IDENTITY_OFFICIAL_PASSES * official_size
+        + NULL_IDENTITY_HELD_OUT_PASSES * held_out_size
+    )

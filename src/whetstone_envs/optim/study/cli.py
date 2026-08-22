@@ -33,7 +33,7 @@ from dr_store.sync import open_sqlite
 
 from whetstone_envs.optim.study.environment import bound_stage_environment
 from whetstone_envs.optim.study.gates import (
-    MEASURED_GEPA_TASK_CALLS,
+    GEPA_MEASURED_TASK_CALLS_AT_PIN,
     MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
     estimate_optimizer_calls,
 )
@@ -165,9 +165,9 @@ def plan_lines(spec: StudySpecLike) -> tuple[str, ...]:
       does not imply.
     * The **optimizer-side** budget is *estimated*: what each arm spends
       internally, from the control defaults in
-      :mod:`whetstone_envs.optim.study.gates`. It dominates the total --
-      GEPA's 732 metric calls and MIPROv2's bootstrap walk dwarf the
-      official and held-out passes.
+      :mod:`whetstone_envs.optim.study.gates`. Every figure is in
+      task-model rows, the same unit as the selection budget above, so the
+      two columns add up; MIPROv2's bootstrap walk is what dominates it.
 
       Wave 3 measured two of these arms on fake transport at these very
       splits, so where a measurement exists the plan prints it beside the
@@ -212,7 +212,11 @@ def plan_lines(spec: StudySpecLike) -> tuple[str, ...]:
     )
     lines.extend(
         _optimizer_budget_lines(
-            spec, internal_size=internal, k_repeat=spec.k_repeat
+            spec,
+            internal_size=internal,
+            k_repeat=spec.k_repeat,
+            official_size=official,
+            held_out_size=held_out,
         )
     )
     return tuple(lines)
@@ -239,12 +243,20 @@ NO_ESTIMATE = "no estimate"
 #: ``num_seeds=1``; see ``gates.py`` for each number's provenance.
 MEASURED_TASK_CALLS_BY_ARM = {
     "miprov2": MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
-    "gepa": MEASURED_GEPA_TASK_CALLS,
+    # GEPA was measured at ``max_metric_calls = 732``; Stage 1 and Stage 2
+    # run the pinned 200 (D3), so the plan prints the measurement scaled to
+    # the budget the study actually spends rather than the one it retired.
+    "gepa": GEPA_MEASURED_TASK_CALLS_AT_PIN,
 }
 
 
 def _optimizer_budget_lines(
-    spec: StudySpecLike, *, internal_size: int, k_repeat: int
+    spec: StudySpecLike,
+    *,
+    internal_size: int,
+    k_repeat: int,
+    official_size: int = 0,
+    held_out_size: int = 0,
 ) -> tuple[str, ...]:
     """Per-arm optimizer call estimates, plus the study-wide range."""
     lines = [
@@ -260,7 +272,11 @@ def _optimizer_budget_lines(
         k_run = spec.k_run_by_arm[arm_id]
         try:
             estimate = estimate_optimizer_calls(
-                arm_id, internal_size=internal_size, k_repeat=k_repeat
+                arm_id,
+                internal_size=internal_size,
+                k_repeat=k_repeat,
+                official_size=official_size,
+                held_out_size=held_out_size,
             )
         except ValueError:
             lines.append(f"{arm_id:<24}{k_run:>8}{NO_ESTIMATE:>20}{'':>22}")

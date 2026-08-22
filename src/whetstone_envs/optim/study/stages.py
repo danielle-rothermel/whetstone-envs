@@ -630,6 +630,8 @@ def _check_call_counts(
             observed_task_calls=result.observed_task_calls,
             internal_size=internal_size,
             k_repeat=design.k_repeat,
+            official_size=spec.official.size,
+            held_out_size=spec.held_out.size,
         )
     ]
     if overruns:
@@ -752,26 +754,42 @@ def _seed_note(arm: ArmSpec) -> str:
     return SEED_NOTE_CONTROL_FIELD
 
 
-def call_count_within_estimate(
+def call_count_within_estimate(  # noqa: PLR0913
     *,
     optimizer: str,
     observed_task_calls: int,
     internal_size: int,
     k_repeat: int,
     tolerance: float = STAGE1_CALL_COUNT_TOLERANCE,
+    official_size: int = 0,
+    held_out_size: int = 0,
 ) -> bool:
     """Whether a run's measured calls land near its pre-spend estimate.
 
-    This is the Stage-1 budget gate, applied per run. Codex is exempt by
-    construction: its estimate carries ``gated=False`` because its agent
-    chooses how much of its cap to spend, and applying a fan-out detector to
-    a non-deterministic agent invites a false abort (OQ3). The comparison is
-    against the estimate's **ceiling**, so a low-accuracy anchor -- which
-    makes MIPROv2 bootstrap more rows, not fewer -- does not read as an
-    overrun (F10).
+    This is the Stage-1 budget gate, applied per run. **Both sides are
+    task-model rows**: ``observed_task_calls`` is what the run's own
+    evidence counted, and the estimate is in the same unit by construction
+    (see :mod:`~whetstone_envs.optim.study.gates`). A GEPA estimate stated
+    in metric calls would not be comparable to it, and a real GEPA run
+    would trip the tolerance on the unit mismatch alone.
+
+    Codex is exempt by construction: its estimate carries ``gated=False``
+    because its agent chooses how much of its cap to spend, and applying a
+    fan-out detector to a non-deterministic agent invites a false abort
+    (OQ3). The comparison is against the estimate's **ceiling**, so a
+    low-accuracy anchor -- which makes MIPROv2 bootstrap more rows, not
+    fewer -- does not read as an overrun (F10).
+
+    ``official_size`` and ``held_out_size`` are needed only by
+    ``null-identity``, whose estimate is the report harness rather than an
+    optimizer search.
     """
     estimate = estimate_optimizer_calls(
-        optimizer, internal_size=internal_size, k_repeat=k_repeat
+        optimizer,
+        internal_size=internal_size,
+        k_repeat=k_repeat,
+        official_size=official_size,
+        held_out_size=held_out_size,
     )
     if not estimate.gated:
         return True

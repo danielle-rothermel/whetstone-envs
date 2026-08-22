@@ -13,8 +13,13 @@ import pytest
 
 from whetstone_envs.optim.study.gates import (
     GEPA_MAX_METRIC_CALLS_PINNED,
+    GEPA_MEASURED_FULL_VALSET_PASSES,
+    GEPA_MEASURED_REFLECTION_MINIBATCHES,
+    GEPA_MEASURED_TASK_CALLS_AT_PIN,
     GEPA_PIN_REASON,
+    GEPA_REFLECTION_MINIBATCH_TASKS,
     GEPA_RESOLVED_MAX_METRIC_CALLS,
+    GEPA_TASK_CALL_CEILING,
     MEASURED_FANOUT_RATIO,
     MEASURED_GEPA_DISTINCT_EVALUATIONS,
     MEASURED_GEPA_RESULT_JSON_BYTES,
@@ -41,8 +46,11 @@ from whetstone_envs.optim.study.gates import (
     MIPROV2_FEWSHOT_TASK_CALL_FLOOR,
     MIPROV2_FULL_EVAL_CALLS,
     MIPROV2_MINIBATCH_CALLS,
+    NULL_IDENTITY_HELD_OUT_PASSES,
+    NULL_IDENTITY_OFFICIAL_PASSES,
     STAGE1_CALL_COUNT_TOLERANCE,
     estimate_optimizer_calls,
+    null_identity_report_rows,
 )
 from whetstone_envs.optim.study.spec import CODEX_EVALUATE_CALL_CAP
 from whetstone_envs.optim.study.stages import call_count_within_estimate
@@ -97,12 +105,87 @@ def test_copro_is_derived_from_its_configured_search_shape() -> None:
     assert estimate.gated
 
 
-@pytest.mark.parametrize("optimizer", ["null-random", "null-identity"])
-def test_the_nulls_evaluate_exactly_as_copro_does(optimizer: str) -> None:
-    """A null shares COPRO's selection machinery, so it shares its cost."""
-    null = estimate_optimizer_calls(optimizer, internal_size=88, k_repeat=3)
+def test_null_random_evaluates_exactly_as_copro_does() -> None:
+    """Null-A perturbs the anchor but drives the same search machinery."""
+    null = estimate_optimizer_calls(
+        "null-random", internal_size=88, k_repeat=3
+    )
     copro = estimate_optimizer_calls("copro", internal_size=88, k_repeat=3)
     assert (null.low, null.high) == (copro.low, copro.high)
+
+
+def test_null_identity_is_the_report_harness_not_an_optimizer_run() -> None:
+    """Null-B runs no search, so COPRO's shape was never its cost.
+
+    ``StudyOptimizerRunner._run_null`` never calls ``run_optimizer``: it
+    emits the naive anchor unchanged and reports ``observed_task_calls=0``.
+    What null-B costs is the report harness every arm pays.
+    """
+    null = estimate_optimizer_calls(
+        "null-identity",
+        internal_size=88,
+        k_repeat=3,
+        official_size=132,
+        held_out_size=220,
+    )
+    # One official pass over 132 and one held-out pass over 220, at K=3.
+    assert null.low == null.high == 3 * (132 + 220) == 1_056
+    assert null.gated
+    assert "no optimizer run" in null.basis
+    # And it does not track the internal split, which it never evaluates.
+    wider = estimate_optimizer_calls(
+        "null-identity",
+        internal_size=8_800,
+        k_repeat=3,
+        official_size=132,
+        held_out_size=220,
+    )
+    assert wider.low == null.low
+
+
+def test_null_identity_no_longer_borrows_copros_search_shape() -> None:
+    """The regression this replaces: null-B priced as a COPRO run.
+
+    Split sizes where the two formulas genuinely differ, because at the
+    protocol's own ``(88, 132, 220)`` at ``K_REPEAT = 3`` they coincide at
+    1,056 by arithmetic accident.
+    """
+    null = estimate_optimizer_calls(
+        "null-identity",
+        internal_size=88,
+        k_repeat=3,
+        official_size=10,
+        held_out_size=20,
+    )
+    copro = estimate_optimizer_calls("copro", internal_size=88, k_repeat=3)
+    assert null.low == 3 * (10 + 20) == 90
+    assert null.low != copro.low
+
+
+def test_the_null_identity_harness_formula_is_one_pass_each() -> None:
+    assert NULL_IDENTITY_OFFICIAL_PASSES == 1
+    assert NULL_IDENTITY_HELD_OUT_PASSES == 1
+    assert (
+        null_identity_report_rows(
+            official_size=132, held_out_size=220, k_repeat=3
+        )
+        == 1_056
+    )
+
+
+@pytest.mark.parametrize(
+    ("official", "held_out", "k_repeat"),
+    [(-1, 1, 1), (1, -1, 1), (1, 1, 0)],
+)
+def test_the_harness_formula_refuses_impossible_inputs(
+    official: int, held_out: int, k_repeat: int
+) -> None:
+    with pytest.raises(ValueError, match="are required"):
+        null_identity_report_rows(
+            official_size=official,
+            held_out_size=held_out,
+            k_repeat=k_repeat,
+        )
 
 
 def test_miprov2_carries_its_own_budget_not_the_splits() -> None:
@@ -113,9 +196,17 @@ def test_miprov2_carries_its_own_budget_not_the_splits() -> None:
     assert large.high == MIPROV2_FEWSHOT_TASK_CALL_CEILING
 
 
-def test_gepa_reports_its_resolved_metric_call_ceiling() -> None:
+def test_gepa_is_estimated_in_task_rows_at_the_pinned_budget() -> None:
+    """The unit fix: rows bounded by the pin, not the 732 auto budget.
+
+    Comparing a row count against a metric-call ceiling is what made a real
+    GEPA run trip the 1.5x gate, so the estimate is denominated in the same
+    unit ``observed_task_calls`` carries.
+    """
     estimate = estimate_optimizer_calls("gepa", internal_size=88, k_repeat=3)
-    assert estimate.low == estimate.high == GEPA_RESOLVED_MAX_METRIC_CALLS
+    assert estimate.low == estimate.high == GEPA_TASK_CALL_CEILING == 200
+    assert estimate.high != GEPA_RESOLVED_MAX_METRIC_CALLS
+    assert "metric calls bounds task rows" in estimate.basis
 
 
 def test_codex_is_a_cap_and_is_not_gated() -> None:
@@ -178,7 +269,7 @@ def test_a_fanned_out_gepa_run_trips_the_gate() -> None:
     """The gate exists to catch a fan-out bug, so it must catch one."""
     assert not call_count_within_estimate(
         optimizer="gepa",
-        observed_task_calls=GEPA_RESOLVED_MAX_METRIC_CALLS * 3,
+        observed_task_calls=GEPA_TASK_CALL_CEILING * 3,
         internal_size=88,
         k_repeat=3,
     )
@@ -308,3 +399,116 @@ def test_the_gepa_store_blew_the_sizing_bar() -> None:
     assert 0.7 * one_gigabyte < MEASURED_GEPA_RESULT_JSON_BYTES
     # And the wall time did *not* trigger it: under the 60-minute bar.
     assert MEASURED_GEPA_WALL_SECONDS < 60 * 60
+
+
+# --------------------------------------------------------------------------
+# The unit correction: metric calls are not task calls
+# --------------------------------------------------------------------------
+
+
+def test_the_measured_gepa_run_decomposes_into_its_two_eval_shapes() -> None:
+    """What makes the unit relation a derivation, not a fitted ratio.
+
+    ``build_gepa_control`` sets ``reflection_minibatch_size=1`` and passes
+    ``valset_task_hashes=None``, so a run of this control produces exactly
+    two evaluation shapes: a full pass over the 88-task internal split, and
+    a one-task reflection minibatch. The measured 91 evaluations and 265
+    rows have exactly one decomposition into those shapes.
+    """
+    valset = 88
+    assert GEPA_MEASURED_FULL_VALSET_PASSES == 2
+    assert GEPA_MEASURED_REFLECTION_MINIBATCHES == 89
+    assert GEPA_REFLECTION_MINIBATCH_TASKS == 1
+    assert (
+        GEPA_MEASURED_FULL_VALSET_PASSES + GEPA_MEASURED_REFLECTION_MINIBATCHES
+        == MEASURED_GEPA_DISTINCT_EVALUATIONS
+        == 91
+    )
+    assert (
+        GEPA_MEASURED_FULL_VALSET_PASSES * valset
+        + GEPA_MEASURED_REFLECTION_MINIBATCHES
+        * GEPA_REFLECTION_MINIBATCH_TASKS
+        == MEASURED_GEPA_TASK_CALLS
+        == 265
+    )
+
+
+def test_metric_calls_and_task_rows_are_different_units() -> None:
+    """The finding: 732 metric calls bought 265 rows, a 2.76x replay factor.
+
+    Every distinct row costs at least one metric call, so the budget is a
+    sound upper bound on rows -- and a loose one, which is the property the
+    Stage-1 gate needs.
+    """
+    assert MEASURED_GEPA_TASK_CALLS < GEPA_RESOLVED_MAX_METRIC_CALLS
+    replay_factor = GEPA_RESOLVED_MAX_METRIC_CALLS / MEASURED_GEPA_TASK_CALLS
+    assert replay_factor == pytest.approx(2.76, abs=0.01)
+
+
+def test_the_gepa_ceiling_is_sourced_from_the_d3_pin() -> None:
+    """D3 pinned 200, so 200 is what the gate bounds -- not the retired 732."""
+    assert GEPA_TASK_CALL_CEILING == GEPA_MAX_METRIC_CALLS_PINNED == 200
+    assert GEPA_TASK_CALL_CEILING != GEPA_RESOLVED_MAX_METRIC_CALLS
+
+
+def test_the_measured_run_scaled_to_the_pin_is_inside_the_ceiling() -> None:
+    """The cross-check: an upper bound must sit above the scaled measurement.
+
+    265 rows at 732 charged calls scales to 72.4 rows at the pinned 200,
+    rounded up to 73.
+    """
+    assert GEPA_MEASURED_TASK_CALLS_AT_PIN == 73
+    assert GEPA_MEASURED_TASK_CALLS_AT_PIN < GEPA_TASK_CALL_CEILING
+
+
+def test_the_wave3_gepa_run_scaled_to_the_pin_passes_the_gate() -> None:
+    """**The bug this fixes.** A real GEPA run must not trip the gate.
+
+    Before the unit fix the estimate was 732 *metric calls* while the
+    observed quantity was *task rows*; the run that produced 265 rows at
+    the retired budget scales to 73 at the pinned one, and both the scaled
+    figure and the raw 265 must be accepted.
+    """
+    assert call_count_within_estimate(
+        optimizer="gepa",
+        observed_task_calls=GEPA_MEASURED_TASK_CALLS_AT_PIN,
+        internal_size=88,
+        k_repeat=3,
+    )
+    # The unscaled measurement is inside 1.5x of the ceiling too, so a run
+    # that spent the whole retired budget would not false-abort either.
+    assert call_count_within_estimate(
+        optimizer="gepa",
+        observed_task_calls=MEASURED_GEPA_TASK_CALLS,
+        internal_size=88,
+        k_repeat=3,
+    )
+
+
+def test_a_gepa_run_above_the_tolerance_is_still_rejected() -> None:
+    """The gate must keep its teeth: 1.5x of the ceiling is the boundary."""
+    boundary = int(GEPA_TASK_CALL_CEILING * STAGE1_CALL_COUNT_TOLERANCE)
+    assert call_count_within_estimate(
+        optimizer="gepa",
+        observed_task_calls=boundary,
+        internal_size=88,
+        k_repeat=3,
+    )
+    assert not call_count_within_estimate(
+        optimizer="gepa",
+        observed_task_calls=boundary + 1,
+        internal_size=88,
+        k_repeat=3,
+    )
+
+
+def test_null_identity_reports_zero_calls_and_passes_its_gate() -> None:
+    """A control's run-side cost is zero, which is inside any harness bound."""
+    assert call_count_within_estimate(
+        optimizer="null-identity",
+        observed_task_calls=0,
+        internal_size=88,
+        k_repeat=3,
+        official_size=132,
+        held_out_size=220,
+    )

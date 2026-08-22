@@ -265,6 +265,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   beside the control-derived estimates, labelling each row `MEASURED` or
   `ESTIMATE`. Arms Wave 3 did not measure print only their estimate.
 
+### Fixed
+
+- **The Stage-1 budget gate compared two different units, and a real GEPA
+  run would have tripped it.** `estimate_optimizer_calls` returned GEPA's
+  732 *metric calls* while `call_count_within_estimate` receives
+  `observed_task_calls`, which is a count of *task-model rows* — the unit
+  `cost.json` reports as `task_model.calls`. Every estimate is now
+  denominated in task rows, with the relation between the two units derived
+  rather than fitted: the Wave 3 `w3-gepa-full` run's 91 distinct
+  evaluations and 265 rows have exactly one decomposition into the two
+  shapes this control can produce (`2` full 88-task valset passes plus `89`
+  one-task reflection minibatches, since `build_gepa_control` sets
+  `reflection_minibatch_size=1` and `valset_task_hashes=None`). Because
+  upstream charges one metric call per example, a run's distinct rows can
+  never exceed its metric-call budget, so the budget is a sound and
+  deliberately loose upper bound on rows — the 732 charged against 265
+  executed is the per-step prefix-replay factor, which the durable effect
+  cache serves without re-executing a row. GEPA's gated estimate is now
+  sourced from `GEPA_MAX_METRIC_CALLS_PINNED = 200`, the Wave 3 D3
+  decision and the budget Stage 1 and Stage 2 actually run, rather than
+  from the retired 732.
+- **`null-identity` was priced as a COPRO search it never runs.** Null-B's
+  estimate was `(depth + 1) × breadth × internal × K_REPEAT`, but
+  `StudyOptimizerRunner._run_null` never calls `run_optimizer`: it emits the
+  naive anchor unchanged and reports `observed_task_calls=0`. Null-B is the
+  seed carried through the *report harness*, so its per-run estimate is now
+  the official and held-out passes every arm pays — one of each, at
+  `K_REPEAT` — via the new `null_identity_report_rows`. `null-random` keeps
+  COPRO's shape, which it genuinely shares. The corrected per-arm estimates
+  are golden-pinned with their derivations, and `whetstone-study plan`
+  prints them; its GEPA row now reports the measurement scaled to the pinned
+  budget rather than to the retired one.
+
 ### Notes
 
 - `COPRO_TERMINAL_PROVENANCE` ships narrower than the Step 10 assignment's

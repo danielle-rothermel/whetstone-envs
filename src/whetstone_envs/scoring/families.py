@@ -26,7 +26,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Final
 
-from whetstone_envs.c18.oracle import score_gold as _c18_score_gold
 from whetstone_envs.scoring.exact_match import exact_match as _c19_exact_match
 
 __all__ = [
@@ -52,8 +51,18 @@ def _c18_score(output_text: str, gold: str) -> float:
     line, so exact match over the whole reply would score every reasoned
     answer zero. :func:`whetstone_envs.c18.oracle.score_gold` owns the
     extraction and the comparison.
+
+    Imported inside the function because ``c18.oracle`` imports
+    ``whetstone_envs.scoring`` for :func:`exact_match`, and this module is
+    re-exported from that package's ``__init__``. Importing it at module
+    scope closes the cycle and leaves ``c18.oracle`` partially
+    initialized. Nothing here reaches the optimizer stack either way --
+    the whole point of this registry -- so the deferral costs one lookup
+    per call and keeps both import orders working.
     """
-    return float(_c18_score_gold(output_text, gold))
+    from whetstone_envs.c18.oracle import score_gold  # noqa: PLC0415
+
+    return float(score_gold(output_text, gold))
 
 
 #: Every family's scoring rule, keyed by the family name a persisted report

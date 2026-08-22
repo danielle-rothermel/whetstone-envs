@@ -44,6 +44,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+
+# Every rung drives the production run path, so this whole package needs
+# whetstone-ai -- which the `optim` extra installs only on Python 3.13+.
+# Collecting it on a base install would otherwise be a hard error rather
+# than a skip, taking down the entire session: the rungs are deselected by
+# marker there, but a conftest is imported before any marker is consulted.
+pytest.importorskip("whetstone.optim.codex.containment")
+
 from whetstone.optim.codex.containment import CODEX_AUTH_FILENAMES
 from whetstone.optim.tools.admission import _ENTRY_TABLE, ToolCallState
 from whetstone.optim.tools.contracts import RefusalClass

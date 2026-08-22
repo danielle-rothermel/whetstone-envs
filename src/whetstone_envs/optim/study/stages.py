@@ -324,6 +324,12 @@ def run_stage0_into_manifest(
         pinned is not None
         and pre_registration.provenance == PROVENANCE_AMENDED
     )
+    if amending:
+        # The pilot's call-count verdict was computed against the design it
+        # replaced. Carrying it across an amendment would let Stage 2 spend
+        # the full design on a gate that never saw this design's arms, run
+        # counts, or splits, so the amended study owes a fresh Stage 1.
+        updated = updated.model_copy(update={"call_count_gate": None})
     write_study_manifest(
         study_dir,
         updated,

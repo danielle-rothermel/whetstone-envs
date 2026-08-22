@@ -25,6 +25,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
     ArmRecord,
+    CallCountGateRecord,
     EvidencePointer,
     RunRecord,
     read_study_manifest,
@@ -42,6 +43,7 @@ from whetstone_envs.optim.study.spec import StageId, spec_from_manifest
 from whetstone_envs.optim.study.stages import (
     SEED_NOTE_CONTROL_FIELD,
     SEED_NOTE_PROVIDER_ONLY,
+    STAGE1_CALL_COUNT_TOLERANCE,
     ArmRunResult,
     StageEnvironment,
     StageError,
@@ -1142,6 +1144,77 @@ def test_replace_design_records_an_amendment(tmp_path: Path) -> None:
     assert block is not None
     assert block.provenance == PROVENANCE_AMENDED
     assert block.amended_from == original.design_hash
+
+
+def test_an_amendment_discards_the_previous_pilot_gate(
+    tmp_path: Path,
+) -> None:
+    """A pilot verdict describes the design it was computed against.
+
+    Once ``--replace-design`` records an amendment, the recorded Stage-1
+    gate no longer describes the study, and Stage 2 must not be able to
+    spend against it. An identical re-calibration keeps the verdict: the
+    design did not change, so neither did what the pilot measured.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        first = run_stage0_into_manifest(
+            study_dir=study_dir, environment=environment
+        )
+    original = first.manifest.pre_registration
+    assert original is not None
+    gate = CallCountGateRecord(
+        stage=StageId.STAGE1.value,
+        passed=True,
+        tolerance=STAGE1_CALL_COUNT_TOLERANCE,
+        overruns=(),
+    )
+    manifest = read_study_manifest(study_dir)
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(update={"call_count_gate": gate}),
+        replace=True,
+    )
+
+    with bound_stage_environment(study_dir) as environment:
+        again = run_stage0_into_manifest(
+            study_dir=study_dir,
+            environment=environment,
+            replace_design=True,
+        )
+    assert again.manifest.call_count_gate == gate
+
+    manifest = read_study_manifest(study_dir)
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "design": None,
+                "pre_registration": manifest.pre_registration,
+            }
+        ),
+        replace=True,
+    )
+    changed = read_study_manifest(study_dir).model_copy(
+        update={
+            "arms": (
+                *manifest.arms,
+                manifest.arms[0].model_copy(update={"arm_id": "gepa"}),
+            )
+        }
+    )
+    write_study_manifest(study_dir, changed, replace=True)
+    with bound_stage_environment(study_dir) as environment:
+        amended = run_stage0_into_manifest(
+            study_dir=study_dir,
+            environment=environment,
+            replace_design=True,
+        )
+    block = amended.manifest.pre_registration
+    assert block is not None
+    assert block.provenance == PROVENANCE_AMENDED
+    assert amended.manifest.call_count_gate is None
 
 
 def test_replace_design_is_refused_on_an_arm_stage(tmp_path: Path) -> None:

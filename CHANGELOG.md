@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- `stage0 --replace-design` that records an amendment discards the previous
+  Stage-1 call-count verdict: a pilot gate describes the design it was
+  computed against, so Stage 2 owes the amended study a fresh pilot.
 
 - **Stage 2 requires a Stage 1 whose call-count gate passed.** The gate
   catches a fan-out bug — an optimizer whose minibatch intents silently

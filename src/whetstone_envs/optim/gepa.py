@@ -21,6 +21,7 @@ from whetstone.optim.proposal.proposer import (
 from whetstone.provider.language_model import PlainPromptAdapter
 
 from whetstone_envs.optim.experiment import provider_call_config_ref
+from whetstone_envs.optim.split import require_disjoint_split
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -97,6 +98,8 @@ def build_gepa_control(  # noqa: PLR0913
     policy_identity_hash: str,
     seed: int = 0,
     max_metric_calls: int | None = None,
+    trainset_task_hashes: tuple[str, ...],
+    valset_task_hashes: tuple[str, ...],
 ):
     """Resolve one family's GEPA control over the engine's internal split.
 
@@ -104,11 +107,26 @@ def build_gepa_control(  # noqa: PLR0913
     control. ``max_metric_calls`` pins the paid metric-call ceiling; ``None``
     keeps the default of one full pass over the trainset plus one reflection
     minibatch, which is what a smoke run needs.
+
+    ``trainset_task_hashes`` and ``valset_task_hashes`` are required and
+    must be disjoint subsets of the internal split. GEPA reflects over the
+    trainset and selects its Pareto frontier on the valset, so a valset
+    that repeated the trainset would score candidates on the very tasks
+    their reflection was written from -- the selection would then reward
+    memorization rather than generalization.
     """
     prompt_adapter = PlainPromptAdapter()
-    task_hashes = experiment.eval_configs.internal.task_set.task_hashes
-    if engine.sampling.task_hashes != task_hashes:
+    internal_task_hashes = (
+        experiment.eval_configs.internal.task_set.task_hashes
+    )
+    if engine.sampling.task_hashes != internal_task_hashes:
         raise ValueError("GEPA trainset must be the internal eval split")
+    trainset, valset = require_disjoint_split(
+        trainset_task_hashes=trainset_task_hashes,
+        valset_task_hashes=valset_task_hashes,
+        task_hashes=tuple(internal_task_hashes),
+        optimizer="GEPA",
+    )
     return configure_gepa(
         reflection_model=ProposerConfig(
             provider_call_config=provider_call_config_ref(experiment),
@@ -126,13 +144,15 @@ def build_gepa_control(  # noqa: PLR0913
         task_model_identity_hash=engine.task_model_identity_hash(),
         prompt_format_identity_hash=prompt_services.descriptor.identity_hash(),
         prompt_binding_identity_hash=prompt_services.binding.identity_hash(),
-        trainset_task_hashes=task_hashes,
-        valset_task_hashes=None,
+        trainset_task_hashes=trainset,
+        valset_task_hashes=valset,
         component_names=(GEPA_COMPONENT_NAME,),
         num_predictors=1,
         # One full pass to score the seed, plus one reflection minibatch.
+        # With a distinct valset the seed is scored on both sets, so the
+        # full pass is train + val rather than the trainset alone.
         max_metric_calls=(
-            len(task_hashes) + 1
+            len(trainset) + len(valset) + 1
             if max_metric_calls is None
             else max_metric_calls
         ),
@@ -160,6 +180,8 @@ def build_gepa_adapter(  # noqa: PLR0913
     proposer_transport: ProposerTransport | None,
     seed: int = 0,
     max_metric_calls: int | None = None,
+    trainset_task_hashes: tuple[str, ...],
+    valset_task_hashes: tuple[str, ...],
 ) -> GepaHarnessAdapter:
     """Assemble one family's GEPA adapter on the public factory surface."""
     prompt_adapter = PlainPromptAdapter()
@@ -173,6 +195,8 @@ def build_gepa_adapter(  # noqa: PLR0913
         policy_identity_hash=policy_identity_hash,
         seed=seed,
         max_metric_calls=max_metric_calls,
+        trainset_task_hashes=trainset_task_hashes,
+        valset_task_hashes=valset_task_hashes,
     )
     return build_gepa_harness_adapter(
         store=store,

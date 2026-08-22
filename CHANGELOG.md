@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Every optimizer with a train/val concept runs on an explicit disjoint
+  split.** `--train-size` and `--val-size` are required for
+  `--optimizer miprov2` and `--optimizer gepa` and refused on the
+  optimizers that have no such concept. They partition the internal split
+  deterministically — trainset first, valset next — so the two sets are
+  disjoint and reproducible from the spec alone, and both are recorded on
+  the control the run persists. MIPROv2 bootstraps its demonstrations from
+  the trainset and GEPA writes its reflections from it, while both score
+  on the valset: an overlapping split would let demonstration or
+  instruction memorization read as an in-search improvement, which is not
+  a distinction the study can afford to lose while the setup is being
+  debugged. There is no default, because a run that did not state its
+  partition could not be audited for this. `ArmSpec` carries the two sizes
+  as design fields, so they enter the pre-registration hash, and
+  `default_arms` pins the protocol's 44/44 of the internal 88 — an even
+  split keeps one full valset pass affordable while leaving the bootstrap
+  a 44-task trainset. Two new audit invariants,
+  `mipro_train_val_disjoint` and `gepa_train_val_disjoint`, check the
+  persisted control's two sets are disjoint and that every evaluation the
+  run paid for touched only those tasks.
 - **The Codex arm runs.** `--optimizer codex` drives the study's
   foreign-agent arm through the same `run_optimizer` every other arm uses:
   `whetstone_envs.optim.codex` builds a `CodexControl` and a `CodexAdapter`
@@ -360,16 +380,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   as positive and refused on any other optimizer, and `ArmSpec` carries
   them so a study arm can request the protocol's shape. Defaults are
   unchanged, which keeps the fake-transport end-to-end runs fast.
-- **The MIPROv2 trainset/valset split is selectable.** `build_miprov2_control`
-  sliced `trainset=task_hashes[:1]`, so every bootstrapped demonstration was
-  drawn from a single task at every split size — a substantive design
-  question Wave 3 flagged, not just a budget one. The partition is now the
-  `Miprov2Split` setting behind `--miprov2-split`: `single-task` is today's
-  one-task trainset and `internal` is DSPy's own default of
-  trainset = valset = the whole internal split. `single-task` remains the
-  default pending a decision on whether the one-task trainset is intended,
-  and the choice is documented where it is made rather than implied by a
-  slice literal.
 
 ### Fixed
 

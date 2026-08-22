@@ -62,6 +62,7 @@ from whetstone_envs.optim.audit._mutate import (
     mutate_json_field,
     put_record,
     reseal_all,
+    reseal_run_binding,
 )
 from whetstone_envs.optim.audit.gepa import (
     EVALUATE_EFFECT,
@@ -273,14 +274,16 @@ def _rewrite_artifact(
 # --- the invariant set -----------------------------------------------------
 
 
-def test_gepa_registers_exactly_eight_invariants() -> None:
-    """Eight, not the protocol's nine: F5 deleted GEPA_REFLECTION_MINIBATCH.
+def test_gepa_registers_exactly_nine_invariants() -> None:
+    """Nine: the protocol's eight less F5, plus train/val disjointness.
 
-    Nothing persisted witnesses a reflection's minibatch size, so it ships
-    not at all rather than as a permanent NOT_APPLICABLE.
-    ``GEPA_TERMINAL_ARTIFACT_PRESENT`` replaces it.
+    F5 deleted GEPA_REFLECTION_MINIBATCH -- nothing persisted witnesses a
+    reflection's minibatch size, so it ships not at all rather than as a
+    permanent NOT_APPLICABLE, and ``GEPA_TERMINAL_ARTIFACT_PRESENT``
+    replaces it. ``GEPA_TRAIN_VAL_DISJOINT`` is the ninth, added with the
+    required train/val split.
     """
-    assert len(GEPA_INVARIANTS) == 8
+    assert len(GEPA_INVARIANTS) == 9
     assert {invariant.__name__ for invariant in GEPA_INVARIANTS} == {
         "gepa_terminal_artifact_present",
         "gepa_pareto_front",
@@ -290,6 +293,7 @@ def test_gepa_registers_exactly_eight_invariants() -> None:
         "gepa_step_evidence_present",
         "gepa_no_forged_terminal",
         "gepa_platform_resume_identity",
+        "gepa_train_val_disjoint",
     }
 
 
@@ -319,6 +323,63 @@ def test_every_gepa_invariant_is_registered(gepa_run_dir) -> None:
     assert len(report.findings) == len(registered)
 
 
+@pytest.fixture
+def overlapping_split_run(gepa_run_dir, tmp_path) -> Path:
+    """A control whose valset repeats its trainset.
+
+    This is DSPy's own trainset = valset default, which is exactly what
+    the required-partition contract refuses at build time -- so the only
+    way to witness the audit catching it is to rewrite the persisted
+    control after the fact.
+    """
+    from whetstone.core.identity import TypedRef
+    from whetstone.optim.gepa.control import (
+        GEPA_CONTROL_SCHEMA,
+        GepaControl,
+    )
+
+    run_dir = copy_run(gepa_run_dir, tmp_path / "overlapping-split")
+    document = _read(run_dir)
+    ref = TypedRef.model_validate(
+        document["run"]["record"]["optimizer_config"]["record_ref"]
+    )
+    with open_sqlite(str(run_dir / "runtime.sqlite")) as store:
+        control = GepaControl.model_validate(store.get(ref.reference))
+    variant = control.model_copy(
+        update={
+            "valset_task_hashes": control.trainset_task_hashes,
+            "source_valset_task_hashes": control.trainset_task_hashes,
+        }
+    )
+    if variant == control:
+        raise MutationError("the control was already overlapping")
+    document["run"]["record"]["optimizer_config"] = {
+        "record_ref": put_record(
+            run_dir, GEPA_CONTROL_SCHEMA, variant.model_dump(mode="json")
+        ),
+        "record_hash": variant.identity_hash(),
+    }
+    reseal_run_binding(document)
+    return _write(run_dir, document)
+
+
+def test_an_overlapping_train_val_split_fails(
+    overlapping_split_run,
+) -> None:
+    """Fails-before evidence for the disjointness invariant."""
+    statuses = _statuses(overlapping_split_run)
+    assert statuses[InvariantId.GEPA_TRAIN_VAL_DISJOINT] is AuditStatus.FAIL
+    detail = _detail(
+        overlapping_split_run, InvariantId.GEPA_TRAIN_VAL_DISJOINT
+    )
+    assert "share" in detail
+
+
+def test_a_faithful_run_passes_the_train_val_invariant(gepa_run_dir) -> None:
+    statuses = _statuses(gepa_run_dir)
+    assert statuses[InvariantId.GEPA_TRAIN_VAL_DISJOINT] is AuditStatus.PASS
+
+
 def test_gepa_invariant_wire_values_are_pinned() -> None:
     """``audit.json`` is cited by content hash, so these are stored identity.
 
@@ -341,6 +402,7 @@ def test_gepa_invariant_wire_values_are_pinned() -> None:
         "GEPA_STEP_EVIDENCE_PRESENT": "gepa_step_evidence_present",
         "GEPA_NO_FORGED_TERMINAL": "gepa_no_forged_terminal",
         "GEPA_PLATFORM_RESUME_IDENTITY": "gepa_platform_resume_identity",
+        "GEPA_TRAIN_VAL_DISJOINT": "gepa_train_val_disjoint",
     }
 
 
@@ -460,15 +522,30 @@ def test_a_missing_artifact_fails_every_dependent_rather_than_crashing(
     """FAIL, never crash, and never a flattering NOT_APPLICABLE.
 
     Losing the artifact loses the whole search record, so every GEPA
-    invariant reports the defect. This is the one mutation permitted to move
-    more than one invariant, because the precondition is what the others
-    read *through*: reporting them PASS on absent evidence would be the
-    fabrication this package exists to prevent.
+    invariant that reads *through* the artifact reports the defect. This
+    is the one mutation permitted to move more than one invariant,
+    because the precondition is what those others read through: reporting
+    them PASS on absent evidence would be the fabrication this package
+    exists to prevent.
+
+    ``gepa_train_val_disjoint`` is exempt: it reads the persisted control,
+    not the terminal artifact, so a lost artifact genuinely does not stop
+    it from judging the declared partition. Asserting it FAILs here would
+    be asserting a dependency it does not have.
     """
     statuses = _statuses(no_terminal_artifact_run)
-    for invariant in GEPA_INVARIANTS:
+    artifact_dependent = tuple(
+        invariant
+        for invariant in GEPA_INVARIANTS
+        if invariant.__name__ != "gepa_train_val_disjoint"
+    )
+    assert len(artifact_dependent) == len(GEPA_INVARIANTS) - 1
+    for invariant in artifact_dependent:
         member = InvariantId(invariant.__name__)
         assert statuses[member] is AuditStatus.FAIL, member
+    assert statuses[InvariantId.GEPA_TRAIN_VAL_DISJOINT] is AuditStatus.PASS, (
+        "the split invariant reads the control, not the artifact"
+    )
     assert (
         statuses[InvariantId.REPORTED_NUMBERS_RESOLVE] is AuditStatus.PASS
     ), "the shared invariant reads none of the GEPA artifact"

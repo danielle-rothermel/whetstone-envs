@@ -26,11 +26,9 @@ from whetstone_envs.optim.run import (
     DEFAULT_COPRO_DEPTH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
     DEFAULT_SPLIT_SIZES,
     GEPA_DEFAULT_SEED,
     MIPROV2_DEFAULT_SEED,
-    MIPROV2_SPLITS,
     OPTIMIZERS,
     SEED_DISPOSITION_CONTROL_FIELD,
     SEED_DISPOSITION_PROVIDER_ONLY,
@@ -260,6 +258,8 @@ def test_an_explicit_seed_reaches_the_gepa_control(tmp_path) -> None:
                 output_dir=tmp_path / "gepa-seeded",
                 run_id="gepa-seeded",
                 seed=3001,
+                train_size=1,
+                val_size=1,
             )
         )
     assert seen == [3001]
@@ -289,6 +289,8 @@ def test_an_explicit_seed_reaches_the_miprov2_control(tmp_path) -> None:
                 output_dir=tmp_path / "miprov2-seeded",
                 run_id="miprov2-seeded",
                 seed=2001,
+                train_size=1,
+                val_size=1,
             )
         )
     assert seen == [2001]
@@ -447,6 +449,8 @@ def test_gepa_metric_call_ceiling_reaches_the_control(tmp_path) -> None:
                 output_dir=tmp_path / "gepa-ceiling",
                 run_id="gepa-ceiling",
                 gepa_max_metric_calls=3,
+                train_size=1,
+                val_size=1,
             )
         )
     assert seen == [3]
@@ -617,7 +621,9 @@ def test_the_miprov2_shape_defaults_are_the_runners_own() -> None:
     spec = _spec()
     assert spec.miprov2_num_trials == DEFAULT_MIPROV2_NUM_TRIALS == 2
     assert spec.miprov2_num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES == 3
-    assert spec.miprov2_split == DEFAULT_MIPROV2_SPLIT.value == "single-task"
+    # The split has no default: a run must state what it trained on.
+    assert spec.train_size is None
+    assert spec.val_size is None
 
 
 @pytest.mark.parametrize(
@@ -635,18 +641,66 @@ def test_the_miprov2_shape_flags_reach_the_spec(
     assert getattr(spec, field) == int(value)
 
 
-@pytest.mark.parametrize("split", MIPROV2_SPLITS)
-def test_every_miprov2_split_reaches_the_spec(split: str) -> None:
-    spec = _captured_spec(["--optimizer", "miprov2", "--miprov2-split", split])
-    assert spec.miprov2_split == split
+@pytest.mark.parametrize("optimizer", ["miprov2", "gepa"])
+def test_the_train_val_split_reaches_the_spec(optimizer: str) -> None:
+    spec = _captured_spec(
+        [
+            "--optimizer",
+            optimizer,
+            "--train-size",
+            "1",
+            "--val-size",
+            "1",
+        ]
+    )
+    assert (spec.train_size, spec.val_size) == (1, 1)
 
 
-def test_an_unknown_miprov2_split_is_refused_at_the_parser() -> None:
+@pytest.mark.parametrize("optimizer", ["miprov2", "gepa"])
+def test_an_optimizer_with_a_train_val_concept_requires_one(
+    optimizer: str,
+) -> None:
+    """No default: an unstated split is refused rather than guessed."""
+    spec = _spec(optimizer=optimizer)
+    with pytest.raises(ValueError, match="requires an explicit"):
+        run_optimizer(spec)
+
+
+@pytest.mark.parametrize("optimizer", ["miprov2", "gepa"])
+@pytest.mark.parametrize("overrides", [{"train_size": 1}, {"val_size": 1}])
+def test_half_a_train_val_split_is_refused(
+    optimizer: str, overrides: dict[str, object]
+) -> None:
+    """Both sizes or neither; one alone cannot name a partition."""
+    spec = replace(_spec(optimizer=optimizer), **overrides)
+    with pytest.raises(ValueError, match="requires an explicit"):
+        run_optimizer(spec)
+
+
+def test_a_split_exceeding_the_internal_split_is_refused() -> None:
+    spec = _spec(optimizer="miprov2", train_size=2, val_size=2)
+    with pytest.raises(ValueError, match="exceeds the internal split of 2"):
+        run_optimizer(spec)
+
+
+@pytest.mark.parametrize("optimizer", ["copro", "codex"])
+def test_a_train_val_split_is_refused_on_an_optimizer_without_one(
+    optimizer: str,
+) -> None:
+    """COPRO and Codex-direct have no train/val concept."""
+    spec = _spec(optimizer=optimizer, train_size=1, val_size=1)
+    with pytest.raises(ValueError, match="apply only to --optimizer"):
+        run_optimizer(spec)
+
+
+@pytest.mark.parametrize("flag", ["--train-size", "--val-size"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_a_non_positive_train_val_size_is_refused(
+    flag: str, value: str
+) -> None:
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(
-            ["--optimizer", "miprov2", "--miprov2-split", "nope"]
-        )
+        parser.parse_args(["--optimizer", "miprov2", flag, value])
 
 
 @pytest.mark.parametrize(
@@ -666,7 +720,6 @@ def test_a_non_positive_miprov2_shape_is_refused(
     [
         {"miprov2_num_trials": 10},
         {"miprov2_num_candidates": 6},
-        {"miprov2_split": "internal"},
     ],
 )
 def test_miprov2_settings_are_refused_on_another_optimizer(
@@ -686,7 +739,6 @@ def test_miprov2_settings_are_refused_on_another_optimizer(
             {"miprov2_num_candidates": 0},
             "miprov2_num_candidates must be at least 1",
         ),
-        ({"miprov2_split": "nope"}, "miprov2_split must be one of"),
     ],
 )
 def test_invalid_miprov2_settings_are_refused_at_spec_validation(

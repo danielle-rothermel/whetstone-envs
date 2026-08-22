@@ -17,11 +17,9 @@ from whetstone_envs.optim.run import (
     DEFAULT_MIPROV2_MINIBATCH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
     DEFAULT_SPLIT_SIZES,
     DEMO_MODES,
     MIN_COPRO_BREADTH,
-    MIPROV2_SPLITS,
     OPTIMIZERS,
     TRANSPORTS,
     CodexReasoningEffort,
@@ -239,13 +237,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--miprov2-split",
-        choices=MIPROV2_SPLITS,
-        default=DEFAULT_MIPROV2_SPLIT.value,
+        "--train-size",
+        type=_positive_int,
+        default=None,
         help=(
-            "How MIPROv2 partitions the internal split. 'single-task' "
-            "bootstraps from a one-task trainset; 'internal' is DSPy's "
-            "default of trainset = valset = the whole internal split."
+            "Tasks from the internal split used as the trainset. Required "
+            "for --optimizer miprov2 and gepa, which bootstrap or reflect "
+            "on the trainset and score on a disjoint valset; refused on "
+            "the optimizers that have no train/val concept."
+        ),
+    )
+    parser.add_argument(
+        "--val-size",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Tasks from the internal split used as the valset, taken "
+            "after the trainset so the two are disjoint. Required "
+            "alongside --train-size."
         ),
     )
     parser.add_argument(
@@ -336,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 miprov2_num_trials=arguments.miprov2_num_trials,
                 miprov2_num_candidates=arguments.miprov2_num_candidates,
-                miprov2_split=arguments.miprov2_split,
+                train_size=arguments.train_size,
+                val_size=arguments.val_size,
                 codex_capacity=arguments.codex_capacity,
                 codex_binary=arguments.codex_binary,
                 codex_model=arguments.codex_model,

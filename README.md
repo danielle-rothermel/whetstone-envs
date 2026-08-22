@@ -69,9 +69,19 @@ public surface, with no private imports and no adapter subclassing:
 | Optimizer | Constructed by | Modes | Notes |
 | --- | --- | --- | --- |
 | `copro` | `configure_copro` + `CoproAdapter` | — | Proposal-only search over the mutation field. |
-| `gepa` | `build_gepa_harness_adapter` | — | Reflection search; the trainset is the internal eval split. A run that finds no improvement reports the retained seed rather than substituting a candidate. |
-| `miprov2` | `configure_miprov2` + `Miprov2Adapter` | `--demo-mode fewshot\|zeroshot\|ground_only` | Also binds an opening durable state (labeled trainset, proposal examples, RNG checkpoint). |
+| `gepa` | `build_gepa_harness_adapter` | — | Reflection search over a required disjoint train/val split of the internal eval split. A run that finds no improvement reports the retained seed rather than substituting a candidate. |
+| `miprov2` | `configure_miprov2` + `Miprov2Adapter` | `--demo-mode fewshot\|zeroshot\|ground_only` | Bootstraps demonstrations from a required disjoint train/val split of the internal eval split. Also binds an opening durable state (labeled trainset, proposal examples, RNG checkpoint). |
 | `codex` | `configure_codex` + `CodexAdapter` | — | The foreign-agent arm: the Codex CLI searches out of process under dr-exec containment and reaches exactly one MCP tool, which evaluates a candidate on the internal split. One opaque step; whetstone runs no search of its own. macOS only — the containment profile is `sandbox-exec`. |
+
+`--train-size` and `--val-size` are **required** for `--optimizer miprov2`
+and `--optimizer gepa`, and refused on the optimizers that have no train/val
+concept. They partition the internal split deterministically -- the trainset
+is its first `--train-size` tasks and the valset the next `--val-size` -- so
+the two sets are disjoint and reproducible from the spec alone. There is no
+default: MIPROv2 bootstraps demonstrations from the trainset and GEPA writes
+its reflections from it, while both score on the valset, so an overlapping
+split would let memorization read as an in-search improvement. The study
+protocol pins 44/44 of the internal 88.
 
 `--demo-mode` selects MIPROv2's demonstration regime and is ignored by COPRO
 and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
@@ -127,10 +137,11 @@ Runs happen in-process; artifacts write under
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer copro --transport fake --split-sizes 2,2,0
 uv run --extra optim python scripts/run-optim.py \
-  --family c19 --optimizer gepa --transport fake --split-sizes 2,2,0
+  --family c19 --optimizer gepa --transport fake --split-sizes 2,2,0 \
+  --train-size 1 --val-size 1
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer miprov2 --demo-mode fewshot \
-  --transport fake --split-sizes 2,2,0
+  --transport fake --split-sizes 2,2,0 --train-size 1 --val-size 1
 uv run --extra optim python scripts/run-optim.py \
   --family c18 --optimizer copro --transport fake --split-sizes 2,2,0 \
   --n-per-stratum 1

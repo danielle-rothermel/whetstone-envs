@@ -400,7 +400,8 @@ class StudyOptimizerRunner:
                 for field, value in (
                     ("miprov2_num_trials", arm.miprov2_num_trials),
                     ("miprov2_num_candidates", arm.miprov2_num_candidates),
-                    ("miprov2_split", arm.miprov2_split),
+                    ("train_size", arm.train_size),
+                    ("val_size", arm.val_size),
                 )
                 if value is not None
             },

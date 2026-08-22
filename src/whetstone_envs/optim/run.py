@@ -26,9 +26,7 @@ from whetstone.coordination.runtime_bootstrap import (
     prepare_miprov2_run,
 )
 from whetstone.core.identity import (
-    IdentityRef,
     compute_identity_hash,
-    typed_ref_for_record,
 )
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.core.roles import EvalRole
@@ -91,11 +89,8 @@ from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_MINIBATCH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
     DEMO_MODES,
-    MIPROV2_SPLITS,
     Miprov2DemoMode,
-    Miprov2Split,
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
@@ -108,6 +103,10 @@ from whetstone_envs.optim.provider import (
     openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.run_cost import project_run_cost, write_run_cost
+from whetstone_envs.optim.split import (
+    TRAIN_VAL_OPTIMIZERS,
+    partition_internal_split,
+)
 from whetstone_envs.reporting.projection import project_trajectory_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
@@ -218,12 +217,16 @@ class RunSpec:
     #: MIPROv2 instruction/fewshot candidates per component. The default is
     #: below the protocol's auto-light 6, for the same reason.
     miprov2_num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES
-    #: How MIPROv2 partitions the internal split into trainset and valset.
-    #: ``single-task`` -- the default -- gives bootstrapping a one-task
-    #: trainset; ``internal`` is DSPy's default of trainset = valset = the
-    #: whole internal split. The default is retained pending a decision on
-    #: whether drawing every demonstration from one task is intended.
-    miprov2_split: str = DEFAULT_MIPROV2_SPLIT.value
+    #: The explicit train/val partition of the internal split, required by
+    #: every optimizer with a train/val concept (``miprov2`` and ``gepa``)
+    #: and refused on the others. The trainset is the first ``train_size``
+    #: tasks of the internal split and the valset the next ``val_size``, so
+    #: the two sets are disjoint and reproducible from the spec alone. They
+    #: have no default: an in-search improvement measured on tasks the
+    #: optimizer trained on cannot be told apart from memorization, so a
+    #: run must state the partition it is claiming.
+    train_size: int | None = None
+    val_size: int | None = None
     #: Extra scripted proposer bodies for a fake-transport run, appended to
     #: the family's own. The family scripts a ceiling draft and the naive
     #: seed; the seed is rejected as a no-op mutation, so a fake round can
@@ -286,7 +289,6 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
         != DEFAULT_MIPROV2_FULL_EVAL_STEPS
         or spec.miprov2_num_trials != DEFAULT_MIPROV2_NUM_TRIALS
         or spec.miprov2_num_candidates != DEFAULT_MIPROV2_NUM_CANDIDATES
-        or spec.miprov2_split != DEFAULT_MIPROV2_SPLIT.value
     )
     if non_default and spec.optimizer != "miprov2":
         raise ValueError("miprov2 settings apply only to --optimizer miprov2")
@@ -303,9 +305,43 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
         raise ValueError("miprov2_num_trials must be at least 1")
     if spec.miprov2_num_candidates < 1:
         raise ValueError("miprov2_num_candidates must be at least 1")
-    if spec.miprov2_split not in MIPROV2_SPLITS:
+
+
+def _validate_train_val_split(spec: RunSpec) -> None:
+    """Refuse a train/val split the run cannot honestly claim.
+
+    Required for every optimizer in :data:`TRAIN_VAL_OPTIMIZERS` and
+    refused on the others, for the same reason the other optimizer-scoped
+    settings are: a size that looks honoured but is not is how a study
+    comes to misdescribe its own arm.
+
+    Both sizes are checked against the *internal* split, which is the only
+    split these optimizers may see -- the official and held-out splits are
+    not theirs to train on. Refused here, at pure spec validation, so an
+    unrunnable partition never reaches the durable run boundary.
+    """
+    supplied = spec.train_size is not None or spec.val_size is not None
+    if spec.optimizer not in TRAIN_VAL_OPTIMIZERS:
+        if supplied:
+            raise ValueError(
+                "train_size and val_size apply only to "
+                f"--optimizer {{{', '.join(TRAIN_VAL_OPTIMIZERS)}}}"
+            )
+        return
+    if spec.train_size is None or spec.val_size is None:
         raise ValueError(
-            f"miprov2_split must be one of {list(MIPROV2_SPLITS)}"
+            f"--optimizer {spec.optimizer} requires an explicit "
+            "--train-size and --val-size partition of the internal split"
+        )
+    if spec.train_size < 1:
+        raise ValueError("train_size must be at least 1")
+    if spec.val_size < 1:
+        raise ValueError("val_size must be at least 1")
+    internal = spec.split_sizes[0]
+    if spec.train_size + spec.val_size > internal:
+        raise ValueError(
+            f"train_size {spec.train_size} + val_size {spec.val_size} "
+            f"exceeds the internal split of {internal}"
         )
 
 
@@ -447,6 +483,7 @@ def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
         if spec.gepa_max_metric_calls < 1:
             raise ValueError("gepa_max_metric_calls must be at least 1")
     _validate_miprov2_settings(spec)
+    _validate_train_val_split(spec)
     if spec.extra_proposal_bodies and spec.transport != "fake":
         raise ValueError(
             "extra_proposal_bodies applies only to --transport fake"
@@ -574,6 +611,15 @@ def _bind_optimizer(  # noqa: PLR0913
                 extra_proposal_bodies=spec.extra_proposal_bodies,
             ),
         )
+    # Both remaining optimizers take a train/val split; ``_validate_spec``
+    # has already proven the two sizes are present and fit the internal
+    # split, so this is a pure re-derivation of the same partition the
+    # spec names.
+    trainset_task_hashes, valset_task_hashes = partition_internal_split(
+        tuple(engine.sampling.task_hashes),
+        train_size=cast("int", spec.train_size),
+        val_size=cast("int", spec.val_size),
+    )
     if spec.optimizer == "gepa":
         gepa_adapter = build_gepa_adapter(
             store=store,
@@ -584,6 +630,8 @@ def _bind_optimizer(  # noqa: PLR0913
             proposer_transport=proposer_transport,
             max_metric_calls=spec.gepa_max_metric_calls,
             seed=GEPA_DEFAULT_SEED if spec.seed is None else spec.seed,
+            trainset_task_hashes=trainset_task_hashes,
+            valset_task_hashes=valset_task_hashes,
         )
         return _BoundOptimizer(
             adapter_key=GEPA_ADAPTER_KEY,
@@ -601,7 +649,8 @@ def _bind_optimizer(  # noqa: PLR0913
         minibatch_full_eval_steps=spec.miprov2_minibatch_full_eval_steps,
         num_trials=spec.miprov2_num_trials,
         num_candidates=spec.miprov2_num_candidates,
-        split=Miprov2Split(spec.miprov2_split),
+        trainset_task_hashes=trainset_task_hashes,
+        valset_task_hashes=valset_task_hashes,
     )
     miprov2_adapter = build_miprov2_adapter(
         store=store,
@@ -1034,21 +1083,19 @@ __all__ = [
     "DEFAULT_MIPROV2_MINIBATCH",
     "DEFAULT_MIPROV2_NUM_CANDIDATES",
     "DEFAULT_MIPROV2_NUM_TRIALS",
-    "DEFAULT_MIPROV2_SPLIT",
     "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_SPLIT_SIZES",
     "DEMO_MODES",
     "GEPA_DEFAULT_SEED",
     "KNOWN_FAMILY_IDS",
     "MIPROV2_DEFAULT_SEED",
-    "MIPROV2_SPLITS",
     "OPTIMIZERS",
     "SEED_DISPOSITION_CONTROL_FIELD",
     "SEED_DISPOSITION_PROVIDER_ONLY",
+    "TRAIN_VAL_OPTIMIZERS",
     "TRANSPORTS",
     "CodexReasoningEffort",
     "CodexTestSeam",
-    "Miprov2Split",
     "RealCodexRefusedError",
     "RunSpec",
     "default_output_dir",

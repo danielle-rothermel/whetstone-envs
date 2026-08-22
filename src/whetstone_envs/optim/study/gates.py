@@ -396,17 +396,21 @@ MEASURED_MIPROV2_MINIBATCH_TASKS = 35
 #: splits. These are the ``miprov2_bootstrap`` evaluations' planned rows.
 #:
 #: **These are not the 28-616 range above, and the difference is not a
-#: measurement error.** ``build_miprov2_control`` splits the internal
-#: 88-task set as ``trainset=task_hashes[:1]``, ``valset=task_hashes[1:]``
-#: -- a **one-task trainset** and an 87-task validation split, at every
-#: split size. Bootstrapping is a single cursor walk over the trainset, so
-#: one task is a hard ceiling of one row per bootstrapping plan.
+#: measurement error.** When these runs were measured,
+#: ``build_miprov2_control`` split the internal 88-task set as
+#: ``trainset=task_hashes[:1]``, ``valset=task_hashes[1:]`` -- a
+#: **one-task trainset** and an 87-task validation split, at every split
+#: size. Bootstrapping is a single cursor walk over the trainset, so one
+#: task was a hard ceiling of one row per bootstrapping plan.
 #:
-#: That partition is now the ``Miprov2Split.SINGLE_TASK`` setting rather
-#: than a slice literal, and it remains the default -- so these numbers
-#: still describe a default run. ``Miprov2Split.INTERNAL`` gives
-#: bootstrapping the whole internal split and would raise them; an arm that
-#: selects it has not been measured.
+#: **These rows are Wave 3 measurement provenance and are not a current
+#: description of the runner.** A run now takes an explicit disjoint
+#: train/val partition of the internal split, and the protocol pins
+#: 44/44 -- so a current MIPROv2 run bootstraps from 44 tasks, not one,
+#: and these bootstrap-row counts no longer bound it. They are retained
+#: because the Stage-1 ceiling below was derived against them; the
+#: ceiling stays a loose upper bound, which is what keeps it unable to
+#: false-abort a run.
 #:
 #: Two further corrections to F10's derivation, both verified against the
 #: whetstone-ai code the runs executed:
@@ -431,10 +435,14 @@ MEASURED_MIPROV2_BOOTSTRAP_ROWS_FEWSHOT = 1
 MEASURED_MIPROV2_BOOTSTRAP_ROWS_ZEROSHOT = 2
 MEASURED_MIPROV2_BOOTSTRAP_ROWS_GROUND_ONLY = 1
 
-#: The one-task MIPROv2 trainset the runner configures, at any split size.
-#: Named because it is the reason the measured bootstrap cost is 1 row and
-#: not hundreds, and because it is a runner choice that a future change
-#: could move without anyone noticing the budget implication.
+#: The one-task MIPROv2 trainset in force when Wave 3 measured, at any
+#: split size. Named because it is the reason the *measured* bootstrap
+#: cost is 1 row and not hundreds.
+#:
+#: Measurement provenance, not the current runner: MIPROv2 now takes an
+#: explicit train/val partition with no default, and the protocol pins a
+#: 44-task trainset. Kept at 1 because rewriting it would misstate what
+#: Wave 3 actually ran.
 MEASURED_MIPROV2_TRAINSET_TASKS = 1
 
 # --------------------------------------------------------------------------

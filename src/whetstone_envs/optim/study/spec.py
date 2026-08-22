@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import UNIQUE, StrEnum, auto, verify
 from typing import TYPE_CHECKING
 
-from whetstone_envs.optim.miprov2 import MIPROV2_SPLITS
+from whetstone_envs.optim.split import TRAIN_VAL_OPTIMIZERS
 from whetstone_envs.optim.study.manifest import read_study_manifest
 
 if TYPE_CHECKING:
@@ -43,6 +43,8 @@ __all__ = [
     "K_RUN_PILOT",
     "K_RUN_STAGE2",
     "NULL_ARM_IDS",
+    "PROTOCOL_TRAIN_SIZE",
+    "PROTOCOL_VAL_SIZE",
     "REAL_OPTIMIZER_ARM_IDS",
     "RESAMPLES",
     "SEED_RANGE_BY_OPTIMIZER",
@@ -217,7 +219,13 @@ class ArmSpec:
     #: honoured but is not is how a study comes to misdescribe its own arm.
     miprov2_num_trials: int | None = None
     miprov2_num_candidates: int | None = None
-    miprov2_split: str | None = None
+    #: The arm's explicit train/val partition of the internal split,
+    #: required for every optimizer with a train/val concept and refused on
+    #: the others. Design fields, not runtime knobs: they enter the
+    #: pre-registration hash, so an arm cannot quietly change what it
+    #: trained and scored on between pre-registration and the run.
+    train_size: int | None = None
+    val_size: int | None = None
 
     def __post_init__(self) -> None:
         if not self.arm_id.strip():
@@ -225,7 +233,6 @@ class ArmSpec:
         miprov2_settings = (
             self.miprov2_num_trials,
             self.miprov2_num_candidates,
-            self.miprov2_split,
         )
         if (
             any(value is not None for value in miprov2_settings)
@@ -247,13 +254,28 @@ class ArmSpec:
                 f"arm {self.arm_id!r} miprov2_num_candidates must be at "
                 "least 1"
             )
-        if (
-            self.miprov2_split is not None
-            and self.miprov2_split not in MIPROV2_SPLITS
-        ):
+        split_supplied = (
+            self.train_size is not None or self.val_size is not None
+        )
+        if self.optimizer in TRAIN_VAL_OPTIMIZERS:
+            if self.train_size is None or self.val_size is None:
+                raise ValueError(
+                    f"arm {self.arm_id!r} runs optimizer "
+                    f"{self.optimizer!r} and must declare train_size and "
+                    "val_size"
+                )
+            if self.train_size < 1:
+                raise ValueError(
+                    f"arm {self.arm_id!r} train_size must be at least 1"
+                )
+            if self.val_size < 1:
+                raise ValueError(
+                    f"arm {self.arm_id!r} val_size must be at least 1"
+                )
+        elif split_supplied:
             raise ValueError(
-                f"arm {self.arm_id!r} miprov2_split must be one of "
-                f"{list(MIPROV2_SPLITS)}"
+                f"arm {self.arm_id!r} sets a train/val split but runs "
+                f"optimizer {self.optimizer!r}"
             )
         if self.k_run < 1:
             raise ValueError(f"arm {self.arm_id!r} must run at least once")
@@ -266,11 +288,28 @@ class ArmSpec:
             raise ValueError(f"arm {self.arm_id!r} repeats a seed")
 
 
+#: The protocol's train/val partition of the internal 88: half and half.
+#:
+#: An even split is the cheapest partition that keeps both halves
+#: meaningful. MIPROv2 evaluates every trial on the whole valset by
+#: default and GEPA scores its Pareto frontier there, so the valset is the
+#: per-trial cost driver -- 44 keeps one full pass affordable while still
+#: leaving the bootstrap a 44-task trainset to draw demonstrations from.
+#: Splitting 88 any further would buy trainset size at the price of a
+#: valset too small to separate arms.
+PROTOCOL_TRAIN_SIZE = 44
+PROTOCOL_VAL_SIZE = 44
+
+
 def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
     """Every arm the study runs at ``stage``, in report order.
 
     Nulls are never dropped, so they are built from the same table as the
     real optimizers rather than appended conditionally.
+
+    The optimizers with a train/val concept carry the protocol's pinned
+    partition; the others must not carry one at all, so the sizes are
+    forwarded per arm rather than set for every arm.
     """
     arms: list[ArmSpec] = []
     for optimizer in (*REAL_OPTIMIZER_ARM_IDS, *NULL_ARM_IDS):
@@ -279,6 +318,14 @@ def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
             if optimizer in set(REAL_OPTIMIZER_ARM_IDS)
             else ArmKind.NULL
         )
+        splits = (
+            {
+                "train_size": PROTOCOL_TRAIN_SIZE,
+                "val_size": PROTOCOL_VAL_SIZE,
+            }
+            if optimizer in TRAIN_VAL_OPTIMIZERS
+            else {}
+        )
         arms.append(
             ArmSpec(
                 arm_id=optimizer,
@@ -286,6 +333,7 @@ def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
                 kind=kind,
                 k_run=k_run_for(optimizer, stage=stage),
                 seeds=arm_seeds(optimizer, stage=stage),
+                **splits,
             )
         )
     return tuple(arms)

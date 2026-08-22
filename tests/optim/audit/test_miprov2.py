@@ -96,6 +96,7 @@ from whetstone_envs.optim.audit.miprov2 import (
     miprov2_ground_only_deviation,
     miprov2_minibatch_sizing,
     miprov2_periodic_full_eval,
+    miprov2_train_val_disjoint,
     miprov2_zeroshot_grounding,
     zeroshot_grounding_problems,
 )
@@ -165,6 +166,8 @@ def _run(  # noqa: PLR0913
             miprov2_minibatch=minibatch,
             miprov2_minibatch_size=minibatch_size,
             miprov2_minibatch_full_eval_steps=minibatch_full_eval_steps,
+            train_size=split_sizes[0] // 2,
+            val_size=split_sizes[0] - split_sizes[0] // 2,
         )
     )
 
@@ -339,12 +342,13 @@ MIPROV2_INVARIANT_IDS = (
     InvariantId.MIPRO_PERIODIC_FULL_EVAL,
     InvariantId.MIPRO_BOOTSTRAP_THROUGH_ENGINE,
     InvariantId.MIPRO_TRIALS_MATCH_CONTROL,
+    InvariantId.MIPRO_TRAIN_VAL_DISJOINT,
 )
 
 
-def test_the_assignment_names_eight_miprov2_invariants() -> None:
-    assert len(MIPROV2_INVARIANTS) == 8
-    assert len(MIPROV2_INVARIANT_IDS) == 8
+def test_the_assignment_names_nine_miprov2_invariants() -> None:
+    assert len(MIPROV2_INVARIANTS) == 9
+    assert len(MIPROV2_INVARIANT_IDS) == 9
 
 
 def test_every_miprov2_invariant_is_registered() -> None:
@@ -363,6 +367,7 @@ def test_persisted_invariant_ids_are_pinned() -> None:
         "mipro_periodic_full_eval",
         "mipro_bootstrap_through_engine",
         "mipro_trials_match_control",
+        "mipro_train_val_disjoint",
     ]
 
 
@@ -558,6 +563,98 @@ def _assert_isolated_failure(
     assert not changed, changed
     assert not report.passed
     return finding
+
+
+class _StateView:
+    """A MIPROv2 state with one substituted control, and nothing else."""
+
+    def __init__(self, state, control):
+        self._state = state
+        self.control = control
+
+    def __getattr__(self, name):
+        return getattr(self._state, name)
+
+
+def _terminal_state_of(evidence):
+    """The last step's MIPROv2 state, as the invariants themselves read it."""
+    for entry in reversed(evidence.steps):
+        state = entry.miprov2_state()
+        if state is not None:
+            return state
+    raise AssertionError("the run persisted no MIPROv2 state")
+
+
+def _evidence_with_control(evidence, control):
+    """``evidence`` with every step's state carrying ``control``.
+
+    Substituting on loaded evidence rather than on disk: the persisted
+    state cross-seals the control, so an on-disk rewrite cannot produce
+    this defect (see the test below).
+    """
+    from dataclasses import replace as replace_dataclass
+
+    class _Entry:
+        def __init__(self, entry):
+            self._entry = entry
+
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
+
+        def miprov2_state(self):
+            state = self._entry.miprov2_state()
+            if state is None:
+                return None
+            # ``model_copy`` would re-run the state's cross-validators,
+            # which is precisely what makes this defect unreachable on
+            # disk; a thin view swaps only the field under test.
+            return _StateView(state, control)
+
+    return replace_dataclass(
+        evidence, steps=tuple(_Entry(entry) for entry in evidence.steps)
+    )
+
+
+def test_an_overlapping_train_val_split_fails(miprov2_runs) -> None:
+    """Fails-before evidence for the disjointness invariant.
+
+    Driven against ``RunEvidence`` rather than a mutated run directory on
+    purpose. ``Miprov2State`` binds the control into the run reference,
+    the runtime-input hash, the durable bindings, the bootstrap-plan
+    replay, and the study transcript's own evaluation derivation -- so a
+    control rewritten on disk is rejected by whetstone's validators long
+    before an audit reads it, and no negative *fixture* of this defect can
+    exist. Substituting the control on already-loaded evidence isolates
+    exactly the predicate under test.
+    """
+    evidence = load_run_evidence(miprov2_runs["fewshot"])
+    state = _terminal_state_of(evidence)
+    control = state.control
+    overlapped = (
+        control.valset_task_hashes[0],
+        *control.trainset_task_hashes[1:],
+    )
+    overlapping = control.model_copy(
+        update={
+            "trainset_task_hashes": overlapped,
+            "source_trainset_task_hashes": overlapped,
+        }
+    )
+    assert set(overlapping.trainset_task_hashes) & set(
+        overlapping.valset_task_hashes
+    )
+    finding = miprov2_train_val_disjoint(
+        _evidence_with_control(evidence, overlapping)
+    )
+    assert finding.status is AuditStatus.FAIL, finding.detail
+    assert "share" in finding.detail
+
+
+def test_a_faithful_run_passes_the_train_val_invariant(
+    miprov2_runs,
+) -> None:
+    statuses = _statuses(miprov2_runs["fewshot"])
+    assert statuses[InvariantId.MIPRO_TRAIN_VAL_DISJOINT] is AuditStatus.PASS
 
 
 def test_bootstrap_after_proposal_fails(miprov2_runs, tmp_path) -> None:

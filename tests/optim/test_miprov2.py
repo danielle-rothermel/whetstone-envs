@@ -24,12 +24,9 @@ from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
     DEMO_MODES,
     MIPROV2_COMPONENT_ID,
-    MIPROV2_SPLITS,
     Miprov2DemoMode,
-    Miprov2Split,
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
@@ -80,6 +77,16 @@ def engine_and_store(tmp_path, prepared):
         yield engine, store
 
 
+def _halves(engine) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The one valid partition of this fixture's two-task internal split.
+
+    The control now requires an explicit disjoint train/val split, so every
+    call that is not itself testing the partition takes the trivial one.
+    """
+    task_hashes = tuple(engine.sampling.task_hashes)
+    return task_hashes[:1], task_hashes[1:2]
+
+
 def test_demo_modes_cover_the_whetstone_enumeration() -> None:
     assert set(DEMO_MODES) == {mode.value for mode in Miprov2DemoMode}
     assert DEMO_MODES == ("fewshot", "zeroshot", "ground_only")
@@ -95,6 +102,8 @@ def test_control_binds_the_c19_mutation_surface(
         experiment=prepared.experiment,
         family=C19,
         demo_mode=demo_mode,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
     )
     assert control.mutation_field == C19_MUTATION_FIELD
     assert control.template_render_contract == c19_render_contract()
@@ -116,6 +125,8 @@ def test_zeroshot_carries_zero_demo_maxima(engine_and_store, prepared) -> None:
         experiment=prepared.experiment,
         family=C19,
         demo_mode=Miprov2DemoMode.ZEROSHOT,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
     )
     assert control.max_bootstrapped_demos == 0
     assert control.max_labeled_demos == 0
@@ -189,7 +200,11 @@ def test_adapter_and_opening_state_bind_the_exact_run(
 ) -> None:
     engine, store = engine_and_store
     control = build_miprov2_control(
-        engine=engine, experiment=prepared.experiment, family=C19
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
     )
     adapter = build_miprov2_adapter(
         store=store, engine=engine, control=control, family=C19
@@ -248,10 +263,15 @@ def test_control_requires_two_tasks_to_split(tmp_path) -> None:
                 )
             ),
         )
-        assert len(engine.sampling.task_hashes) == 1
+        task_hashes = tuple(engine.sampling.task_hashes)
+        assert len(task_hashes) == 1
         with pytest.raises(ValueError, match="at least two tasks"):
             build_miprov2_control(
-                engine=engine, experiment=single.experiment, family=C19
+                engine=engine,
+                experiment=single.experiment,
+                family=C19,
+                trainset_task_hashes=task_hashes,
+                valset_task_hashes=task_hashes,
             )
 
 
@@ -260,7 +280,11 @@ def test_prompt_model_binds_the_experiment_provider_call_config(
 ) -> None:
     engine, _store = engine_and_store
     control = build_miprov2_control(
-        engine=engine, experiment=prepared.experiment, family=C19
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
     )
     expected = provider_call_config_ref(prepared.experiment)
     assert control.prompt_model.provider_call_config == expected
@@ -270,7 +294,11 @@ def test_labeled_demos_carry_the_task_gold(engine_and_store, prepared) -> None:
     """FAILS-BEFORE probe for empty labeled demo outputs."""
     engine, store = engine_and_store
     control = build_miprov2_control(
-        engine=engine, experiment=prepared.experiment, family=C19
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
     )
     adapter = build_miprov2_adapter(
         store=store, engine=engine, control=control, family=C19
@@ -318,7 +346,11 @@ def test_the_default_search_shape_is_this_runners_own(
     """
     engine, _store = engine_and_store
     control = build_miprov2_control(
-        engine=engine, experiment=prepared.experiment, family=C19
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
     )
     assert DEFAULT_MIPROV2_NUM_TRIALS == 2
     assert DEFAULT_MIPROV2_NUM_CANDIDATES == 3
@@ -337,6 +369,8 @@ def test_the_protocol_shape_reaches_the_control(
         family=C19,
         num_trials=10,
         num_candidates=6,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
     )
     assert control.num_trials == 10
     assert control.num_candidates == 6
@@ -366,71 +400,62 @@ def test_a_non_positive_search_shape_is_refused(
             family=C19,
             num_trials=num_trials,
             num_candidates=num_candidates,
+            trainset_task_hashes=_halves(engine)[0],
+            valset_task_hashes=_halves(engine)[1],
         )
 
 
-def test_the_split_names_cover_the_enumeration() -> None:
-    assert set(MIPROV2_SPLITS) == {split.value for split in Miprov2Split}
-    assert DEFAULT_MIPROV2_SPLIT is Miprov2Split.SINGLE_TASK
-
-
-def test_single_task_split_keeps_the_one_task_trainset(
+def test_the_control_carries_the_partition_it_was_given(
     engine_and_store, prepared
 ) -> None:
-    """Today's behaviour, retained as the default pending a decision.
-
-    Bootstrapping is a cursor walk over the trainset, so a one-task
-    trainset means every demonstration is drawn from one task -- which is
-    what Wave 3 measured as 1-2 bootstrap rows and flagged as substantive.
-    """
+    """The two sets reach the control exactly as the caller named them."""
     engine, _store = engine_and_store
+    task_hashes = tuple(engine.sampling.task_hashes)
     control = build_miprov2_control(
         engine=engine,
         experiment=prepared.experiment,
         family=C19,
-        split=Miprov2Split.SINGLE_TASK,
+        trainset_task_hashes=task_hashes[:1],
+        valset_task_hashes=task_hashes[1:2],
     )
-    task_hashes = tuple(engine.sampling.task_hashes)
     assert control.trainset_task_hashes == task_hashes[:1]
-    assert control.valset_task_hashes == task_hashes[1:]
+    assert control.valset_task_hashes == task_hashes[1:2]
     assert not set(control.trainset_task_hashes) & set(
         control.valset_task_hashes
     )
 
 
-def test_internal_split_is_dspys_own_default(
+def test_an_overlapping_partition_is_refused(
     engine_and_store, prepared
 ) -> None:
-    """``internal`` means trainset = valset = the whole internal split."""
+    """DSPy's trainset = valset default is exactly what this refuses.
+
+    Bootstrapped demonstrations would then be scored on their own tasks,
+    so an in-search gain could be memorization rather than search.
+    """
     engine, _store = engine_and_store
-    control = build_miprov2_control(
-        engine=engine,
-        experiment=prepared.experiment,
-        family=C19,
-        split=Miprov2Split.INTERNAL,
-    )
     task_hashes = tuple(engine.sampling.task_hashes)
-    assert control.trainset_task_hashes == task_hashes
-    assert control.valset_task_hashes == task_hashes
+    with pytest.raises(ValueError, match="must be disjoint"):
+        build_miprov2_control(
+            engine=engine,
+            experiment=prepared.experiment,
+            family=C19,
+            trainset_task_hashes=task_hashes,
+            valset_task_hashes=task_hashes,
+        )
 
 
-def test_the_split_choice_moves_the_bootstrap_surface(
+def test_a_partition_outside_the_internal_split_is_refused(
     engine_and_store, prepared
 ) -> None:
-    """The two splits are different experiments, not two spellings of one."""
+    """A valset the engine cannot evaluate is refused, not silently kept."""
     engine, _store = engine_and_store
-    single = build_miprov2_control(
-        engine=engine,
-        experiment=prepared.experiment,
-        family=C19,
-        split=Miprov2Split.SINGLE_TASK,
-    )
-    internal = build_miprov2_control(
-        engine=engine,
-        experiment=prepared.experiment,
-        family=C19,
-        split=Miprov2Split.INTERNAL,
-    )
-    assert len(internal.trainset_task_hashes) > len(
-        single.trainset_task_hashes
-    )
+    task_hashes = tuple(engine.sampling.task_hashes)
+    with pytest.raises(ValueError, match="subset of the internal split"):
+        build_miprov2_control(
+            engine=engine,
+            experiment=prepared.experiment,
+            family=C19,
+            trainset_task_hashes=task_hashes[:1],
+            valset_task_hashes=("not-a-task-in-the-split",),
+        )

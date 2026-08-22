@@ -18,7 +18,6 @@ pytest.importorskip("whetstone.experiment.env")
 from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
 )
 from whetstone_envs.optim.study.arms import StudyOptimizerRunner
 from whetstone_envs.optim.study.spec import ArmKind, ArmSpec
@@ -47,7 +46,8 @@ def _arm(
     *,
     miprov2_num_trials: int | None = None,
     miprov2_num_candidates: int | None = None,
-    miprov2_split: str | None = None,
+    train_size: int = 1,
+    val_size: int = 1,
 ) -> ArmSpec:
     return ArmSpec(
         arm_id="miprov2",
@@ -57,7 +57,8 @@ def _arm(
         seeds=(2000,),
         miprov2_num_trials=miprov2_num_trials,
         miprov2_num_candidates=miprov2_num_candidates,
-        miprov2_split=miprov2_split,
+        train_size=train_size,
+        val_size=val_size,
     )
 
 
@@ -70,24 +71,20 @@ def test_an_unset_arm_leaves_the_runner_defaults_in_place(
     )
     assert spec.miprov2_num_trials == DEFAULT_MIPROV2_NUM_TRIALS
     assert spec.miprov2_num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES
-    assert spec.miprov2_split == DEFAULT_MIPROV2_SPLIT.value
+    # The split is not a runner default: the arm always states it.
+    assert (spec.train_size, spec.val_size) == (1, 1)
 
 
 def test_an_arms_miprov2_settings_reach_the_run_spec(
     tmp_path: Path,
 ) -> None:
     """The protocol's auto-light shape, requested by the arm."""
-    arm = _arm(
-        miprov2_num_trials=10,
-        miprov2_num_candidates=6,
-        miprov2_split="internal",
-    )
+    arm = _arm(miprov2_num_trials=10, miprov2_num_candidates=6)
     spec = _runner(tmp_path)._spec_for(
         arm, seed=2000, run_dir=tmp_path / "run"
     )
     assert spec.miprov2_num_trials == 10
     assert spec.miprov2_num_candidates == 6
-    assert spec.miprov2_split == "internal"
     # And the resulting spec is one the runner accepts.
     assert spec.optimizer == "miprov2"
 
@@ -100,7 +97,6 @@ def test_a_partially_set_arm_forwards_only_what_it_set(
     )
     assert spec.miprov2_num_trials == 10
     assert spec.miprov2_num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES
-    assert spec.miprov2_split == DEFAULT_MIPROV2_SPLIT.value
 
 
 # --------------------------------------------------------------------------

@@ -97,6 +97,9 @@ def _gepa_run(
     split_sizes: tuple[int, int, int] = (2, 2, 0),
     gepa_max_metric_calls: int | None = None,
 ) -> Path:
+    # An even split of whatever internal size this fixture asked for; the
+    # control now requires an explicit disjoint partition.
+    train = split_sizes[0] // 2
     return run_optimizer(
         RunSpec(
             optimizer="gepa",
@@ -105,6 +108,8 @@ def _gepa_run(
             run_id=run_id,
             split_sizes=split_sizes,
             gepa_max_metric_calls=gepa_max_metric_calls,
+            train_size=train,
+            val_size=split_sizes[0] - train,
         )
     )
 

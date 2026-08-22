@@ -243,14 +243,24 @@ def _family_string_literals(path: Path) -> set[str]:
     }
 
 
-#: The one place the shared path may name a family: the CLI's default
-#: choice of which family an unparameterised run drives. A default is not a
-#: branch -- ``run_optimizer`` resolves it through ``family_spec`` like any
-#: other value -- but it is still a family literal, so it is enumerated here
-#: rather than tolerated by a loose rule. ``RunSpec.family`` defaults to
-#: ``FamilyId.C19.value``, a reference to the registry's own enumeration
-#: rather than an inlined string, so it does not appear here.
-ALLOWED_FAMILY_DEFAULTS = {"cli.py": {"c19"}}
+#: Where the shared path may name a family, and why each is not a branch.
+#:
+#: ``cli.py``: the CLI's default choice of which family an unparameterised
+#: run drives. A default is not a branch -- ``run_optimizer`` resolves it
+#: through ``family_spec`` like any other value -- but it is still a family
+#: literal, so it is enumerated here rather than tolerated by a loose rule.
+#: ``RunSpec.family`` defaults to ``FamilyId.C19.value``, a reference to the
+#: registry's own enumeration rather than an inlined string, so it does not
+#: appear here.
+#:
+#: ``manifest.py``: the study manifest's ``c18`` block, which records the
+#: C3 generalization evidence. This is a *persisted wire key*, not a
+#: dispatch on family: nothing in the manifest branches on it, and it names
+#: the block rather than selecting an adapter. It is spelled as a literal
+#: on purpose -- ``tests/optim/study/test_manifest.py`` golden-pins the
+#: block names, and deriving a persisted key from an enum elsewhere is how
+#: a stored format drifts silently when that enum is renamed.
+ALLOWED_FAMILY_DEFAULTS = {"cli.py": {"c19"}, "manifest.py": {"c18"}}
 
 
 def test_the_shared_path_names_a_family_only_as_a_default() -> None:

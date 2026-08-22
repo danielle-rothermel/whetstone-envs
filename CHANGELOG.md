@@ -56,6 +56,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reads the configured search from the content-addressed control the run
   binds itself to rather than from a state-delta echo written by the code
   path under audit.
+- The eight MIPROv2 fidelity invariants (`optim/audit/miprov2.py`), each a
+  pure function over one run's durable evidence with cited evidence refs:
+  demonstrations are bootstrapped before any instruction is proposed;
+  `zeroshot` still runs DSPy's 3/0 grounding bootstrap and ships no demo
+  set; `ground_only` is flagged `demo_mode:ground_only` rather than claiming
+  frozen DSPy faithfulness; the recorded trials replay from a fresh seeded
+  Optuna TPE sampler; every trial evaluation drew its scheduled batch from
+  the validation split; the incumbent is re-evaluated on the full split on
+  the configured cadence; bootstrap generations are paid through the
+  evaluation engine rather than the proposer transport; and the observed
+  trial count matches the configured budget unless a terminal failure
+  truncated the run. Each reports FAIL rather than raising when its evidence
+  is absent, so a run that persisted nothing is judged rather than skipped.
+- The minibatch-sizing invariant doubles as the F16 fan-out assertion: a
+  trial intent whose task set covers the whole validation split is the
+  deferral row-expansion defect F16 names, and it fails there.
+- Every MIPROv2 invariant ships a negative fixture built from a real
+  fake-transport run in all three demo modes, plus one run with minibatching
+  enabled so the periodic-full-evaluation invariant is exercised rather than
+  permanently `NOT_APPLICABLE`.
 
 ### Notes
 

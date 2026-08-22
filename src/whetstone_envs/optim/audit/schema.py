@@ -63,6 +63,30 @@ class InvariantId(StrEnum):
     COPRO_NO_SEARCH_EVALS = "copro_no_search_evals"
     #: The terminal candidate was minted in this run, or honestly retained.
     COPRO_TERMINAL_PROVENANCE = "copro_terminal_provenance"
+    #: MIPROv2: demonstrations are bootstrapped before any instruction is
+    #: proposed, so proposals are grounded in observed behaviour.
+    MIPRO_BOOTSTRAP_BEFORE_PROPOSAL = "mipro_bootstrap_before_proposal"
+    #: MIPROv2: ``zeroshot`` still runs DSPy's 3/0 grounding bootstrap and
+    #: ships no demonstration set on any candidate.
+    MIPRO_ZEROSHOT_GROUNDING = "mipro_zeroshot_grounding"
+    #: MIPROv2: ``ground_only`` is flagged as a whetstone deviation rather
+    #: than claiming frozen DSPy faithfulness.
+    MIPRO_GROUND_ONLY_DEVIATION = "mipro_ground_only_deviation"
+    #: MIPROv2: the recorded trials replay from a fresh seeded Optuna TPE
+    #: sampler in order.
+    MIPRO_TPE_SELECTION = "mipro_tpe_selection"
+    #: MIPROv2: every trial evaluation drew its scheduled batch from the
+    #: validation split.
+    MIPRO_MINIBATCH_SIZING = "mipro_minibatch_sizing"
+    #: MIPROv2: the incumbent is re-evaluated on the full validation split
+    #: on the configured cadence.
+    MIPRO_PERIODIC_FULL_EVAL = "mipro_periodic_full_eval"
+    #: MIPROv2: bootstrap generations are paid through the evaluation
+    #: engine, not the proposer transport.
+    MIPRO_BOOTSTRAP_THROUGH_ENGINE = "mipro_bootstrap_through_engine"
+    #: MIPROv2: the observed trial count matches the configured budget
+    #: unless a terminal failure truncated the run.
+    MIPRO_TRIALS_MATCH_CONTROL = "mipro_trials_match_control"
 
 
 class _StrictModel(BaseModel):

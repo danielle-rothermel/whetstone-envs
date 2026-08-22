@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import os
 import re
 import shutil
@@ -24,6 +25,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = PROJECT_ROOT / "dist"
 PACKAGE_DIR = PROJECT_ROOT / "src" / "whetstone_envs"
 DISTRIBUTION_NAME = "whetstone-envs"
+CONSOLE_SCRIPTS = {
+    "whetstone-eval": "whetstone_envs.reporting.cli:main",
+}
 CHANGELOG = PROJECT_ROOT / "CHANGELOG.md"
 LICENSE_EXPRESSION = "MIT AND Apache-2.0"
 LICENSE_FILES = [
@@ -140,6 +144,24 @@ def _wheel_data(wheel: Path) -> tuple[Message, set[str]]:
     return metadata, names
 
 
+def _validate_console_scripts(wheel: Path, names: set[str]) -> None:
+    entry_points_name = _one_metadata_name(
+        names,
+        ".dist-info/entry_points.txt",
+        wheel,
+    )
+    with zipfile.ZipFile(wheel) as archive:
+        raw = archive.read(entry_points_name).decode("utf-8")
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(raw)
+    actual = dict(parser.items("console_scripts"))
+    if actual != CONSOLE_SCRIPTS:
+        _fail(
+            f"{wheel.name} has console scripts {actual!r}; "
+            f"expected {CONSOLE_SCRIPTS!r}"
+        )
+
+
 def _sdist_data(sdist: Path) -> tuple[Message, set[str], str]:
     with tarfile.open(sdist, mode="r:gz") as archive:
         names = {
@@ -250,6 +272,23 @@ installed = distribution("whetstone-envs")
 actual = installed.version
 if actual != expected:
     raise SystemExit(f"installed version {actual!r}; expected {expected!r}")
+scripts = {
+    entry.name: entry
+    for entry in installed.entry_points
+    if entry.group == "console_scripts"
+}
+expected_scripts = {
+    "whetstone-eval": "whetstone_envs.reporting.cli:main",
+}
+if {name: entry.value for name, entry in scripts.items()} != expected_scripts:
+    raise SystemExit(f"installed console scripts disagree: {scripts!r}")
+try:
+    scripts["whetstone-eval"].load()(["--help"])
+except SystemExit as error:
+    if error.code != 0:
+        raise
+else:
+    raise SystemExit("whetstone-eval --help did not exit through argparse")
 installation_root = Path(installed.locate_file("")).resolve()
 for module_name in os.environ["SMOKE_MODULES"].split(","):
     module = importlib.import_module(module_name)
@@ -312,6 +351,7 @@ def main() -> None:
     sdist_metadata, sdist_names, sdist_root = _sdist_data(sdist)
     _validate_metadata(wheel_metadata, wheel, expected_version)
     _validate_metadata(sdist_metadata, sdist, expected_version)
+    _validate_console_scripts(wheel, wheel_names)
 
     expected_files = _expected_source_files()
     wheel_package_files = {

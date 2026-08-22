@@ -41,12 +41,16 @@ dependencies = [
     "rfc8785==0.1.4",
 ]
 
+[project.scripts]
+whetstone-eval = "whetstone_envs.reporting.cli:main"
+
 [project.optional-dependencies]
 c18 = [
     "numpy==2.5.1",
     "scipy==1.18.0",
 ]
 optim = [
+    "rich==15.0.0",
     "whetstone-ai==0.1.2; python_version >= '3.13' and python_version < '3.15'",
 ]
 
@@ -148,6 +152,7 @@ ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/whetstone_envs/c18/probes.py" = ["E501"]
+"src/whetstone_envs/reporting/cli.py" = ["PLC0415"]
 "tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
 
@@ -168,9 +173,15 @@ include = [
     "src/whetstone_envs/optim/gepa.py",
     "src/whetstone_envs/optim/provider.py",
     "src/whetstone_envs/optim/run.py",
+    "src/whetstone_envs/reporting/cli.py",
+    "src/whetstone_envs/reporting/execution.py",
+    "src/whetstone_envs/reporting/projection.py",
+    "src/whetstone_envs/reporting/rich_views.py",
     "tests/optim/test_e2e.py",
     "tests/optim/test_experiment.py",
     "tests/optim/test_provider.py",
+    "tests/reporting/test_projection.py",
+    "tests/reporting/test_views.py",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

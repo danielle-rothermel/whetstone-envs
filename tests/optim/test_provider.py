@@ -8,8 +8,8 @@ from dr_providers import RequestControl
 
 from whetstone_envs.c19 import PROBES, generate_pool
 from whetstone_envs.optim.experiment import (
-    build_c19_experiment,
     c19_render_contract,
+    prepare_c19_experiment,
 )
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
@@ -25,11 +25,11 @@ def test_openrouter_preset_advertises_seed() -> None:
 
 def test_fake_transport_emits_gold_for_ceiling_prompt() -> None:
     pytest.importorskip("whetstone.experiment.env")
-    experiment = build_c19_experiment(
+    experiment = prepare_c19_experiment(
         generate_pool(n_per_stratum=2, seed_start=765_432),
         split_sizes=(2, 2, 0),
         num_seeds=1,
-    )
+    ).experiment
     task = experiment.eval_configs.internal.tasks[0]
     gold = getattr(task, "gold", None)
     inputs = getattr(task, "prompt_inputs", None)

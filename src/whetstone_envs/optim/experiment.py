@@ -44,9 +44,10 @@ from whetstone.experiment.sampling import (
 
 from whetstone_envs.c19 import PROBES
 from whetstone_envs.optim.rows import TaskRow, task_rows_from_instances
+from whetstone_envs.pools import PoolSplit
 
 if TYPE_CHECKING:
-    from whetstone_envs.pools import PoolSplit, TaskPool
+    from whetstone_envs.pools import TaskPool
 
 C19_NAMESPACE = "whetstone_envs.c19"
 C19_DATASET_REVISION = "c19/v1"
@@ -69,6 +70,12 @@ class _C19RolloutGraph:
     @property
     def procedure_config_hash(self) -> str:
         return self.procedure_hash
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedC19Experiment:
+    experiment: Experiment
+    split: PoolSplit
 
 
 def c19_render_contract() -> TemplateRenderContract:
@@ -169,7 +176,9 @@ def _reference_aggregation():
     )
 
 
-def _c19_candidate(*, candidate_id: str, template: str) -> Candidate:
+def c19_candidate(*, candidate_id: str, template: str) -> Candidate:
+    """Build one validated C19 prompt candidate."""
+    c19_render_contract().validate_template(template)
     root_ref = typed_ref_for_record(C19_ROOT_BASE_SCHEMA, {"kind": "root"})
     candidate = Candidate(
         candidate_id=candidate_id,
@@ -190,14 +199,14 @@ def _rows_from_split(
     return internal, official
 
 
-def build_c19_experiment(
+def prepare_c19_experiment(
     pool: TaskPool,
     *,
     split_sizes: tuple[int, int, int],
     num_seeds: int = 1,
     provider_call_config: ProviderCallConfig | None = None,
-) -> Experiment:
-    """Build an Experiment from a C19 pool split and its public probes."""
+) -> PreparedC19Experiment:
+    """Prepare an Experiment and retain its authoritative source split."""
     if num_seeds < 1:
         raise ValueError("num_seeds must be at least 1")
     split = pool.split(*split_sizes)
@@ -243,14 +252,14 @@ def build_c19_experiment(
         policy_name="c19-exact-match",
         terms=(RewardTerm(name="score", weight=1.0),),
     )
-    return Experiment(
+    experiment = Experiment(
         env_name=C19_NAMESPACE,
         rollout_graph=rollout_graph,
-        initial_candidate=_c19_candidate(
+        initial_candidate=c19_candidate(
             candidate_id="c19-initial",
             template=resolved_initial,
         ),
-        ceiling_candidate=_c19_candidate(
+        ceiling_candidate=c19_candidate(
             candidate_id="c19-ceiling",
             template=resolved_ceiling,
         ),
@@ -258,6 +267,7 @@ def build_c19_experiment(
         reward_policy=reward_policy,
         completeness_policy=CompletenessPolicy(),
     )
+    return PreparedC19Experiment(experiment=experiment, split=split)
 
 
 def probe_candidates_from_templates(
@@ -270,8 +280,8 @@ def probe_candidates_from_templates(
     render_contract.validate_template(naive_template)
     render_contract.validate_template(ceiling_template)
     return (
-        _c19_candidate(candidate_id="c19-initial", template=naive_template),
-        _c19_candidate(candidate_id="c19-ceiling", template=ceiling_template),
+        c19_candidate(candidate_id="c19-initial", template=naive_template),
+        c19_candidate(candidate_id="c19-ceiling", template=ceiling_template),
     )
 
 
@@ -286,8 +296,10 @@ __all__ = [
     "C19_MUTATION_FIELD",
     "C19_NAMESPACE",
     "C19_PROMPT_FIELDS",
-    "build_c19_experiment",
+    "PreparedC19Experiment",
+    "c19_candidate",
     "c19_render_contract",
+    "prepare_c19_experiment",
     "probe_candidates_from_templates",
     "reward_policy_for_exact_match",
 ]

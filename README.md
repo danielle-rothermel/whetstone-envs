@@ -34,6 +34,8 @@ execution-contract code:
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
   string transformations across four ISL and OSL strata.
+- [**Reporting**][reporting-source] owns strict local evaluation and
+  optimization-trajectory reports plus read-only terminal inspection.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
@@ -73,6 +75,41 @@ uv run --extra optim python scripts/run-optim.py \
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer gepa --transport fake --split-sizes 2,2,0
 ```
+
+## Evaluation and trajectory reports
+
+Explain C19, run a standalone fake evaluation, and inspect the saved report:
+
+```bash
+uv run --extra optim whetstone-eval info c19 --show-templates
+uv run --extra optim whetstone-eval run \
+  --family c19 --candidate naive --candidate ceiling \
+  --transport fake --role internal --split-sizes 20,20,0 --repeats 1
+uv run --extra optim whetstone-eval summary RUN_DIR
+uv run --extra optim whetstone-eval failures RUN_DIR
+uv run --extra optim whetstone-eval task RUN_DIR TASK_ID
+uv run --extra optim whetstone-eval compare RUN_DIR naive ceiling
+```
+
+`--candidate-file NAME=PATH` adds a validated UTF-8 prompt template. An
+official run uses `--role official`; official evidence intentionally carries
+no reward. Standalone runs publish `runtime.sqlite` and a bounded 128 MiB
+canonical `eval-report.json`. COPRO and GEPA runs additionally publish
+`trajectory-report.json` under the same bound, inspected with:
+
+```bash
+uv run --extra optim whetstone-eval trajectory RUN_DIR
+uv run --extra optim whetstone-eval trajectory RUN_DIR --show-candidates
+```
+
+Inspection reads report JSON only and never opens SQLite. Reports are private
+local debugging artifacts: they contain gold, prompt inputs, rendered prompts,
+model outputs, component traces, and complete candidate text. They never
+contain credentials, authorization headers, ambient environment values, or
+SQLite bytes. Provider failures retain only allowlisted classification and
+typed transport status metadata; raw provider messages, response bodies,
+headers, and metadata are excluded. Keep reports outside every Git repository
+and do not publish them casually.
 
 ## Instances
 
@@ -515,3 +552,4 @@ uv run python -m whetstone_envs.c19.regenerate
 [scoring-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/scoring
 [c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23
 [optim-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/optim
+[reporting-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/reporting

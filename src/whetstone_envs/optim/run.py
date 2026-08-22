@@ -32,16 +32,23 @@ from whetstone.provider.language_model import PlainPromptAdapter
 from whetstone_envs.c19 import PROBES, generate_pool
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
-    build_c19_experiment,
     c19_render_contract,
+    prepare_c19_experiment,
 )
 from whetstone_envs.optim.gepa import build_c19_gepa_adapter
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
+    c19_fake_gold_by_prompt,
     c19_fake_transport_factory,
     openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
+from whetstone_envs.reporting.projection import project_trajectory_report
+from whetstone_envs.reporting.publication import (
+    durable_run_boundary,
+    prepare_output_root,
+    publish_trajectory_report,
+)
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -70,24 +77,6 @@ class C19RunSpec:
 
 def default_output_dir(run_id: str) -> Path:
     return DEFAULT_OUTPUT_ROOT / run_id
-
-
-def _git_root(start: Path) -> Path | None:
-    for parent in (start, *start.parents):
-        if (parent / ".git").exists():
-            return parent
-    return None
-
-
-def _repository_roots() -> tuple[Path, ...]:
-    roots: list[Path] = []
-    seen: set[Path] = set()
-    for start in (Path.cwd().resolve(), Path(__file__).resolve()):
-        root = _git_root(start)
-        if root is not None and root not in seen:
-            seen.add(root)
-            roots.append(root)
-    return tuple(roots)
 
 
 def _provider_config_resolver(experiment: Experiment):
@@ -121,52 +110,28 @@ def _c19_proposal_contract() -> CoproProposalContractRecord:
     )
 
 
-def _resolve_run_layout(spec: C19RunSpec) -> tuple[str, Path]:
-    resolved_run_id = spec.run_id or (
-        f"c19-{spec.optimizer}-{uuid4().hex[:8]}"
-    )
-    resolved_output = (
-        spec.output_dir or default_output_dir(resolved_run_id)
-    ).resolve()
-    repo_roots = _repository_roots()
-    if any(resolved_output.is_relative_to(root) for root in repo_roots):
-        raise ValueError("run artifacts must not be written inside the repo")
-    resolved_output.mkdir(parents=True, exist_ok=True)
-    return resolved_run_id, resolved_output
-
-
-def _ceiling_gold_by_prompt(experiment: Experiment) -> dict[str, str]:
-    contract = c19_render_contract()
-    gold_by_prompt: dict[str, str] = {}
-    for task in experiment.eval_configs.internal.tasks:
-        gold = getattr(task, "gold", None)
-        inputs = getattr(task, "prompt_inputs", None)
-        if not isinstance(gold, str) or not isinstance(inputs, dict):
-            raise TypeError("internal task must expose prompt_inputs and gold")
-        gold_by_prompt[contract.render(PROBES.ceiling_template, inputs)] = gold
-    return gold_by_prompt
-
-
 def run_c19_optimizer(spec: C19RunSpec) -> Path:
     """Run COPRO or GEPA on a small C19 split and write artifacts off-repo."""
     if spec.optimizer not in {"copro", "gepa"}:
         raise ValueError(f"unsupported optimizer {spec.optimizer!r}")
     if spec.transport not in {"fake", "openrouter"}:
         raise ValueError(f"unsupported transport {spec.transport!r}")
-    resolved_run_id, resolved_output = _resolve_run_layout(spec)
-    sqlite_path = resolved_output / "runtime.sqlite"
+    resolved_run_id = spec.run_id or (
+        f"c19-{spec.optimizer}-{uuid4().hex[:8]}"
+    )
     provider = None
     api_key_env = "WHETSTONE_TOY_API_KEY"
     if spec.transport == "openrouter":
         provider = openrouter_seeded_call_config(model=spec.model)
         api_key_env = "OPENROUTER_API_KEY"
     pool = generate_pool(n_per_stratum=2, seed_start=765_432)
-    experiment = build_c19_experiment(
+    prepared = prepare_c19_experiment(
         pool,
         split_sizes=spec.split_sizes,
         num_seeds=1,
         provider_call_config=provider,
     )
+    experiment = prepared.experiment
     if spec.transport == "openrouter":
         runtime_config = ReferenceEvalRuntimeConfig(
             transport_api_key_env=api_key_env,
@@ -183,9 +148,16 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
         )
     else:
         transport_factory = c19_fake_transport_factory(
-            gold_by_prompt=_ceiling_gold_by_prompt(experiment)
+            gold_by_prompt=c19_fake_gold_by_prompt(experiment)
         )
-    with open_sqlite(str(sqlite_path)) as store:
+    resolved_output = prepare_output_root(
+        spec.output_dir or default_output_dir(resolved_run_id)
+    )
+    sqlite_path = resolved_output / "runtime.sqlite"
+    with (
+        durable_run_boundary(resolved_output),
+        open_sqlite(str(sqlite_path)) as store,
+    ):
         engine = runtime_config.build_engine(
             cast("ObjectStore", store),
             experiment=experiment,
@@ -280,6 +252,16 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
             result.model_dump_json(indent=2),
             encoding="utf-8",
         )
+        trajectory = project_trajectory_report(
+            store=cast("ObjectStore", store),
+            prepared=prepared,
+            result_ref=result_ref,
+            result=result,
+            transport=spec.transport,
+            model=spec.model,
+            split_sizes=spec.split_sizes,
+        )
+        publish_trajectory_report(resolved_output, trajectory)
     return resolved_output
 
 

@@ -1,0 +1,922 @@
+from __future__ import annotations
+
+import json
+from collections import Counter
+from dataclasses import dataclass
+from importlib.metadata import version
+from typing import TYPE_CHECKING, cast
+
+from pydantic import JsonValue
+from whetstone.core.identity import TypedRef
+from whetstone.eval import (
+    EvalEvidence,
+    EvalEvidenceWithRef,
+    EvalFailureEvidence,
+    EvalOutputRow,
+    EvalOutputsRecord,
+    EvalTraces,
+)
+from whetstone.eval import (
+    EvalRejected as WhetstoneEvalRejected,
+)
+from whetstone.experiment.candidate import CandidateRef, candidate_reference
+from whetstone.experiment.reward import RewardRef
+from whetstone.optim.contracts import (
+    IntentResolution,
+    OptimResult,
+    optimization_result_reference,
+)
+
+from whetstone_envs.probes import normalize
+from whetstone_envs.reporting.schema import (
+    EVAL_REPORT_SCHEMA,
+    TRAJECTORY_REPORT_SCHEMA,
+    CandidateRecord,
+    CandidateSource,
+    EvalFailed,
+    EvalRejected,
+    EvalReport,
+    EvalRoleName,
+    EvalRun,
+    EvalSuccess,
+    EvaluationResult,
+    Observation,
+    ObservationState,
+    ProviderErrorProjection,
+    ReportedEvidence,
+    ReportRef,
+    RowAccounting,
+    StratumSummary,
+    TaskRecord,
+    TrajectoryCandidate,
+    TrajectoryReport,
+    TrajectoryResolution,
+    TrajectoryStep,
+)
+
+if TYPE_CHECKING:
+    from dr_store import ObjectStore
+    from whetstone.eval import EvalResult
+
+    from whetstone_envs.instances import Instance
+    from whetstone_envs.optim.experiment import PreparedC19Experiment
+
+
+def _ref(value: TypedRef | None) -> ReportRef | None:
+    if value is None:
+        return None
+    return ReportRef(
+        schema_name=value.schema_name,
+        content_hash=str(value.content_hash),
+    )
+
+
+def _required_ref(value: TypedRef) -> ReportRef:
+    result = _ref(value)
+    assert result is not None
+    return result
+
+
+def _instances_for_role(
+    prepared: PreparedC19Experiment, role: EvalRoleName
+) -> tuple[Instance, ...]:
+    if role == "internal":
+        return prepared.split.internal_eval
+    if role == "official":
+        return prepared.split.official
+    raise ValueError(f"unsupported evaluation role {role!r}")
+
+
+def _candidate_record(
+    *, name: str, source: CandidateSource, candidate: CandidateRef
+) -> CandidateRecord:
+    template = candidate.record.payload.get("prompt_template")
+    if type(template) is not str:
+        raise ValueError(
+            f"candidate {candidate.record.candidate_id!r} at "
+            f"{candidate.record_ref.content_hash} has no strict string "
+            "prompt_template"
+        )
+    return CandidateRecord(
+        name=name,
+        candidate_id=candidate.record.candidate_id,
+        source=source,
+        record_ref=_required_ref(candidate.record_ref),
+        identity_hash=str(candidate.identity_hash),
+        payload=candidate.record.payload.to_json(),
+        prompt_template=template,
+    )
+
+
+def _row_state(row: EvalOutputRow) -> ObservationState:
+    if row.score is not None:
+        return ObservationState.SCORED
+    if row.failed:
+        return ObservationState.FAILED
+    if row.missing:
+        return ObservationState.MISSING
+    if row.invalid:
+        return ObservationState.INVALID
+    raise ValueError("output row has no reportable state")
+
+
+def _provider_error_projection(
+    value: object | None,
+) -> ProviderErrorProjection | None:
+    if value is None:
+        return None
+    to_json = getattr(value, "to_json", None)
+    if not callable(to_json):
+        raise TypeError("provider error is not a JSON object")
+    payload = to_json()
+    if not isinstance(payload, dict):
+        raise TypeError("provider error is not a JSON object")
+    failure_class = payload.get("failure_class")
+    transport_failure = payload.get("transport_failure")
+    rejected_response = payload.get("rejected_response")
+    if isinstance(transport_failure, dict) == isinstance(
+        rejected_response, dict
+    ):
+        raise ValueError(
+            "provider error requires exactly one typed failure source"
+        )
+    if isinstance(transport_failure, dict):
+        return ProviderErrorProjection.model_validate(
+            {
+                "failure_class": failure_class,
+                "source": "transport_failure",
+                "recoverability": transport_failure.get("recoverability"),
+                "status_code": transport_failure.get("status_code"),
+                "timeout_containment": transport_failure.get("containment"),
+            }
+        )
+    return ProviderErrorProjection.model_validate(
+        {
+            "failure_class": failure_class,
+            "source": "rejected_response",
+        }
+    )
+
+
+def _accounting(observations: tuple[Observation, ...]) -> RowAccounting:
+    counts = Counter(row.state for row in observations)
+    return RowAccounting(
+        planned=len(observations),
+        present=counts[ObservationState.SCORED],
+        missing=counts[ObservationState.MISSING],
+        failed=counts[ObservationState.FAILED],
+        invalid=counts[ObservationState.INVALID],
+    )
+
+
+def _summaries(
+    observations: tuple[Observation, ...], tasks: tuple[TaskRecord, ...]
+) -> tuple[StratumSummary, ...]:
+    task_by_id = {task.task_id: task for task in tasks}
+    labels = tuple(
+        dict.fromkeys(label for task in tasks for label in task.strata)
+    )
+    summaries: list[StratumSummary] = []
+    for label in labels:
+        rows = tuple(
+            row
+            for row in observations
+            if label in task_by_id[row.task_id].strata
+        )
+        accounting = _accounting(rows)
+        numerator = sum(row.score == 1.0 for row in rows)
+        summaries.append(
+            StratumSummary(
+                stratum=label,
+                numerator=numerator,
+                denominator=len(rows),
+                accounting=accounting,
+                score=(
+                    numerator / len(rows)
+                    if accounting.present == len(rows)
+                    else None
+                ),
+            )
+        )
+    return tuple(summaries)
+
+
+def _success_projection(
+    *,
+    store: ObjectStore,
+    name: str,
+    result: EvalEvidenceWithRef,
+    instances: tuple[Instance, ...],
+) -> tuple[EvalSuccess, tuple[TaskRecord, ...], tuple[Observation, ...]]:
+    evidence = result.evidence
+    if not isinstance(evidence, EvalEvidence):
+        raise TypeError("success projection requires EvalEvidence")
+    outputs = EvalOutputsRecord.model_validate_json(
+        json.dumps(store.get(evidence.outputs_ref.reference))
+    )
+    traces = EvalTraces.model_validate_json(
+        json.dumps(store.get(evidence.traces_ref.reference))
+    )
+    if outputs.traces_ref != evidence.traces_ref:
+        raise ValueError("outputs do not cite the evidence trace record")
+    if (
+        outputs.candidate != evidence.candidate
+        or traces.candidate != evidence.candidate
+    ):
+        raise ValueError(
+            "evidence, outputs, and traces must cite one candidate"
+        )
+    if (
+        outputs.task_hashes != evidence.task_hashes
+        or traces.task_hashes != evidence.task_hashes
+    ):
+        raise ValueError("evidence task plans disagree")
+    if len(instances) != len(outputs.task_hashes):
+        raise ValueError("source split does not match evidence task count")
+
+    tasks: list[TaskRecord] = []
+    for index, (instance, task_hash) in enumerate(
+        zip(instances, outputs.task_hashes, strict=True)
+    ):
+        output = outputs.outputs[index * outputs.num_seeds]
+        if output.task_id != instance.id or output.task_hash != task_hash:
+            raise ValueError(
+                "evidence task does not exactly join source instance"
+            )
+        tasks.append(
+            TaskRecord(
+                task_id=instance.id,
+                task_hash=task_hash,
+                seed=instance.seed,
+                strata=instance.strata,
+                prompt_inputs=dict(instance.prompt_inputs),
+                gold=instance.gold,
+            )
+        )
+
+    observations: list[Observation] = []
+    for output, trace_row in zip(outputs.outputs, traces.rows, strict=True):
+        if output.task_trial_key() != trace_row.task_trial_key():
+            raise ValueError("output and trace coordinates disagree")
+        state = _row_state(output)
+        observations.append(
+            Observation(
+                candidate_name=name,
+                task_id=output.task_id,
+                task_hash=output.task_hash,
+                task_index=output.task_index,
+                seed_index=output.seed_index,
+                rendered_prompt=output.rendered_prompt,
+                output_text=output.output_text,
+                normalized_output=(
+                    normalize(output.output_text)
+                    if output.output_text is not None
+                    else None
+                ),
+                score=output.score,
+                state=state,
+                trace_state=trace_row.trace.row_state.value,
+                failure_code=output.failure_code,
+                finish_reason=output.finish_reason,
+                provider_error=_provider_error_projection(
+                    output.provider_error
+                ),
+                max_budget=output.max_budget,
+                over_budget=output.over_budget,
+                submission_result=(
+                    None
+                    if output.submission_result is None
+                    else output.submission_result.model_dump(mode="json")
+                ),
+                component_trace=tuple(
+                    step.model_dump(mode="json")
+                    for step in trace_row.trace.trace_steps
+                ),
+            )
+        )
+    projected = tuple(observations)
+    accounting = _accounting(projected)
+    reported = RowAccounting.model_validate(
+        evidence.row_accounting.model_dump(mode="json")
+    )
+    if accounting != reported:
+        raise ValueError("recomputed row accounting disagrees with evidence")
+    numerator = sum(row.score == 1.0 for row in projected)
+    score = (
+        numerator / len(projected)
+        if accounting.present == len(projected)
+        else None
+    )
+    if evidence.aggregate_value != score:
+        raise ValueError("recomputed aggregate disagrees with evidence")
+    if (
+        evidence.reward_ref is not None
+        and evidence.reward_ref.record.value != score
+    ):
+        raise ValueError("recomputed score disagrees with evidence reward")
+    success = EvalSuccess(
+        kind="success",
+        candidate_name=name,
+        classification="measured",
+        message="evaluation completed",
+        evidence=ReportedEvidence(
+            evidence_ref=_required_ref(result.evidence_ref),
+            outputs_ref=_required_ref(evidence.outputs_ref),
+            traces_ref=_required_ref(evidence.traces_ref),
+            aggregate_ref=_required_ref(evidence.aggregate_ref),
+            reward_ref=(
+                None
+                if evidence.reward_ref is None
+                else _required_ref(evidence.reward_ref.record_ref)
+            ),
+            aggregate_name=evidence.aggregate_name,
+            aggregate_value=evidence.aggregate_value,
+            aggregate_status=evidence.aggregate_status,
+            row_accounting=reported,
+        ),
+        accounting=accounting,
+        numerator=numerator,
+        denominator=len(projected),
+        score=score,
+        strata=_summaries(projected, tuple(tasks)),
+    )
+    return success, tuple(tasks), projected
+
+
+def project_eval_report(  # noqa: PLR0913
+    *,
+    store: ObjectStore,
+    prepared: PreparedC19Experiment,
+    run_id: str,
+    transport: str,
+    model: str,
+    role: EvalRoleName,
+    split_sizes: tuple[int, int, int],
+    candidates: tuple[tuple[str, CandidateSource, CandidateRef], ...],
+    results: tuple[EvalResult, ...],
+    task_hashes: tuple[str, ...] | None = None,
+) -> EvalReport:
+    if len(candidates) != len(results):
+        raise ValueError("candidate/result counts disagree")
+    all_instances = _instances_for_role(prepared, role)
+    candidate_records = tuple(
+        _candidate_record(name=name, source=source, candidate=candidate)
+        for name, source, candidate in candidates
+    )
+    projected_results: list[EvaluationResult] = []
+    report_observations: list[Observation] = []
+    graph_hash = prepared.experiment.rollout_graph.graph_hash
+    eval_split = (
+        prepared.experiment.eval_configs.internal
+        if role == "internal"
+        else prepared.experiment.eval_configs.official
+    )
+    all_tasks = tuple(
+        zip(
+            all_instances,
+            eval_split.tasks,
+            eval_split.task_set.task_hashes,
+            strict=True,
+        )
+    )
+    if task_hashes is None:
+        selected_tasks = all_tasks
+    else:
+        by_hash = {
+            task_hash: (instance, row, task_hash)
+            for instance, row, task_hash in all_tasks
+        }
+        if len(by_hash) != len(all_tasks):
+            raise ValueError("prepared evaluation task hashes must be unique")
+        try:
+            selected_tasks = tuple(
+                by_hash[task_hash] for task_hash in task_hashes
+            )
+        except KeyError as error:
+            raise ValueError(
+                "evaluation evidence cites a task outside the prepared split"
+            ) from error
+        if len(set(task_hashes)) != len(task_hashes):
+            raise ValueError("evaluation evidence task hashes must be unique")
+    instances = tuple(instance for instance, _row, _hash in selected_tasks)
+    report_task_records: list[TaskRecord] = []
+    for instance, row, task_hash in selected_tasks:
+        if row.task_id != instance.id:
+            raise ValueError("prepared task does not match source instance")
+        report_task_records.append(
+            TaskRecord(
+                task_id=instance.id,
+                task_hash=task_hash,
+                seed=instance.seed,
+                strata=instance.strata,
+                prompt_inputs=dict(instance.prompt_inputs),
+                gold=instance.gold,
+            )
+        )
+    report_tasks = tuple(report_task_records)
+    for (name, _source, _candidate), result in zip(
+        candidates, results, strict=True
+    ):
+        if isinstance(result, WhetstoneEvalRejected):
+            projected_results.append(
+                EvalRejected(
+                    kind="rejected",
+                    candidate_name=name,
+                    classification=result.detail.classification.value,
+                    message=result.detail.message,
+                )
+            )
+            continue
+        if isinstance(result.evidence, EvalFailureEvidence):
+            projected_results.append(
+                EvalFailed(
+                    kind="failed",
+                    candidate_name=name,
+                    classification="execution",
+                    message=result.evidence.message,
+                    evidence_ref=_required_ref(result.evidence_ref),
+                    exception_type=result.evidence.exception_type,
+                )
+            )
+            continue
+        success, tasks, observations = _success_projection(
+            store=store,
+            name=name,
+            result=result,
+            instances=instances,
+        )
+        if report_tasks != tasks:
+            raise ValueError(
+                "candidate evaluations do not share one exact task plan"
+            )
+        projected_results.append(success)
+        report_observations.extend(observations)
+    return EvalReport(
+        schema_version=EVAL_REPORT_SCHEMA,
+        run=EvalRun(
+            run_id=run_id,
+            family="c19",
+            transport=transport,
+            model=model,
+            role=role,
+            split_sizes=split_sizes,
+            repeats=eval_split.seed_plan.num_seeds,
+            dataset_revision="c19/v1",
+            graph_hash=graph_hash,
+            eval_config_hash=eval_split.eval_config.config_hash,
+            package_version=version("whetstone-envs"),
+        ),
+        candidates=candidate_records,
+        tasks=report_tasks,
+        observations=tuple(report_observations),
+        results=tuple(projected_results),
+    )
+
+
+def _dispositions_append(
+    dispositions: dict[TypedRef, list[str]], ref: TypedRef, value: str
+) -> None:
+    values = dispositions.setdefault(ref, [])
+    if value not in values:
+        values.append(value)
+
+
+def _comparison(
+    parent: EvalReport | None, current: EvalReport | None
+) -> tuple[int | None, int | None, int | None]:
+    if parent is None or current is None:
+        return None, None, None
+    prior = {
+        (row.task_id, row.task_hash, row.seed_index): row
+        for row in parent.observations
+    }
+    present = {
+        (row.task_id, row.task_hash, row.seed_index): row
+        for row in current.observations
+    }
+    planned = tuple(
+        dict.fromkeys(
+            (
+                task.task_id,
+                task.task_hash,
+                seed_index,
+            )
+            for report in (parent, current)
+            for task in report.tasks
+            for seed_index in range(report.run.repeats)
+        )
+    )
+    gains = regressions = mismatches = 0
+    for coordinate in planned:
+        other = prior.get(coordinate)
+        row = present.get(coordinate)
+        if (
+            row is None
+            or other is None
+            or row.state is not ObservationState.SCORED
+            or other.state is not ObservationState.SCORED
+        ):
+            mismatches += 1
+        elif other.score == 0.0 and row.score == 1.0:
+            gains += 1
+        elif other.score == 1.0 and row.score == 0.0:
+            regressions += 1
+    return gains, regressions, mismatches
+
+
+class _TrajectoryEvaluationHistory:
+    def __init__(self) -> None:
+        self._latest: dict[TypedRef, EvalReport] = {}
+
+    def compare_then_remember(
+        self,
+        *,
+        candidate_ref: TypedRef,
+        base_ref: TypedRef,
+        report: EvalReport | None,
+    ) -> tuple[int | None, int | None, int | None]:
+        comparison = _comparison(self._latest.get(base_ref), report)
+        if report is not None:
+            self._latest[candidate_ref] = report
+        return comparison
+
+
+@dataclass(frozen=True, slots=True)
+class _TrajectoryResolutionSource:
+    candidate: CandidateRef
+    request_id: str
+    outcome: str
+    eval_result_ref: TypedRef | None
+    reward_ref: RewardRef | None
+    classification: str | None
+    message: str | None
+    terminal_failure: dict[str, JsonValue] | None
+
+
+def _intent_resolution_source(
+    resolution: IntentResolution,
+) -> _TrajectoryResolutionSource:
+    return _TrajectoryResolutionSource(
+        candidate=candidate_reference(
+            resolution.optim_eval_request.eval_request.candidate
+        ),
+        request_id=resolution.optim_eval_request.eval_request.request_id,
+        outcome=resolution.outcome.value,
+        eval_result_ref=resolution.eval_result_ref,
+        reward_ref=resolution.reward_ref,
+        classification=resolution.detail.classification.value,
+        message=resolution.detail.message,
+        terminal_failure=(
+            None
+            if resolution.terminal_failure is None
+            else cast(
+                "dict[str, JsonValue]",
+                resolution.terminal_failure.model_dump(mode="json"),
+            )
+        ),
+    )
+
+
+def _gepa_transcript_sources(  # noqa: PLR0912
+    *, store: ObjectStore, optimizer_result: OptimResult
+) -> tuple[tuple[int, int, _TrajectoryResolutionSource], ...]:
+    from whetstone.optim.gepa.contracts import (  # noqa: PLC0415
+        GEPA_EVALUATION_REQUEST_RECORD_SCHEMA,
+        GEPA_EVALUATION_RESULT_RECORD_SCHEMA,
+        GepaEffectTranscript,
+        GepaEvaluationEffectRequest,
+        GepaEvaluationEffectResult,
+    )
+    from whetstone.optim.gepa.harness_adapter import (  # noqa: PLC0415
+        GEPA_TERMINAL_ARTIFACT_KEY,
+    )
+    from whetstone.optim.gepa.result_artifact import (  # noqa: PLC0415
+        GEPA_RUN_RESULT_ARTIFACT_SCHEMA,
+        GepaRunResultArtifact,
+    )
+
+    if not optimizer_result.step_results:
+        return ()
+    history_ref = optimizer_result.step_results[-1].record.history_ref
+    if history_ref is None:
+        return ()
+    history = store.get(history_ref.reference)
+    if not isinstance(history, dict):
+        raise TypeError("optimizer history snapshot must be a JSON object")
+    raw_artifact_ref = history.get(GEPA_TERMINAL_ARTIFACT_KEY)
+    if raw_artifact_ref is None:
+        return ()
+    artifact_ref = TypedRef.model_validate(raw_artifact_ref)
+    if artifact_ref.schema_name != GEPA_RUN_RESULT_ARTIFACT_SCHEMA:
+        raise ValueError("GEPA terminal artifact ref has the wrong schema")
+    artifact = GepaRunResultArtifact.model_validate_json(
+        json.dumps(store.get(artifact_ref.reference))
+    )
+    transcript = GepaEffectTranscript.model_validate_json(
+        json.dumps(store.get(artifact.effect_transcript_ref.reference))
+    )
+    if artifact.context != transcript.context:
+        raise ValueError("GEPA artifact and transcript contexts disagree")
+    if transcript.context.run_id != optimizer_result.run_id:
+        raise ValueError("GEPA transcript belongs to another optimizer run")
+    sources: list[tuple[int, int, _TrajectoryResolutionSource]] = []
+    for entry in transcript.entries:
+        if entry.effect_kind != "evaluate":
+            continue
+        if (
+            entry.request_ref.schema_name
+            != GEPA_EVALUATION_REQUEST_RECORD_SCHEMA
+            or entry.result_ref.schema_name
+            != GEPA_EVALUATION_RESULT_RECORD_SCHEMA
+        ):
+            raise ValueError("GEPA evaluation effect refs have wrong schemas")
+        request = GepaEvaluationEffectRequest.model_validate_json(
+            json.dumps(store.get(entry.request_ref.reference))
+        )
+        effect_result = GepaEvaluationEffectResult.model_validate_json(
+            json.dumps(store.get(entry.result_ref.reference))
+        )
+        if (
+            request.slot.context != transcript.context
+            or request.slot.invocation_ordinal != entry.invocation_ordinal
+            or effect_result.request_hash != request.identity_hash()
+            or tuple(row.data for row in effect_result.rows) != request.data
+        ):
+            raise ValueError("GEPA transcript evaluation binding disagrees")
+        if effect_result.resolution is None:
+            raise ValueError(
+                "GEPA transcript evaluation has no harness resolution"
+            )
+        resolution = effect_result.resolution
+        if (
+            str(resolution.optim_eval_request.optim_run_id)
+            != transcript.context.run_id
+        ):
+            raise ValueError(
+                "GEPA evaluation belongs to another optimizer run"
+            )
+        step_index = int(resolution.optim_eval_request.optim_step_index)
+        if step_index < 0 or step_index >= len(optimizer_result.step_results):
+            raise ValueError("GEPA evaluation cites an unknown optimizer step")
+        sources.append(
+            (
+                step_index,
+                entry.invocation_ordinal,
+                _intent_resolution_source(resolution),
+            )
+        )
+    return tuple(sources)
+
+
+def project_trajectory_report(  # noqa: PLR0912, PLR0913, PLR0915
+    *,
+    store: ObjectStore,
+    prepared: PreparedC19Experiment,
+    result_ref: TypedRef,
+    result: OptimResult,
+    transport: str,
+    model: str,
+    split_sizes: tuple[int, int, int],
+) -> TrajectoryReport:
+    if optimization_result_reference(result) != result_ref:
+        raise ValueError(
+            "terminal OptimResult reference does not address result"
+        )
+    ordered: list[CandidateRef] = []
+    dispositions: dict[TypedRef, list[str]] = {}
+    first_step: dict[TypedRef, int] = {}
+
+    def discover(candidate: CandidateRef, step: int, disposition: str) -> None:
+        ref = candidate.record_ref
+        if ref not in first_step:
+            first_step[ref] = step
+            ordered.append(candidate)
+        _dispositions_append(dispositions, ref, disposition)
+
+    trajectory_steps: list[TrajectoryStep] = []
+    trajectory_resolutions: list[TrajectoryResolution] = []
+    evaluation_history = _TrajectoryEvaluationHistory()
+    gepa_sources = _gepa_transcript_sources(
+        store=store, optimizer_result=result
+    )
+    for step_ref in result.step_results:
+        step = step_ref.record
+        request_candidates = tuple(
+            candidate_reference(candidate)
+            for candidate in step.request.record.candidates
+        )
+        for candidate in request_candidates:
+            discover(candidate, step.step_index, "requested")
+        for candidate in step.proposed_candidates:
+            discover(candidate, step.step_index, "proposed")
+        for candidate in step.accepted_candidates:
+            discover(candidate, step.step_index, "accepted")
+        accepted_refs = {
+            candidate.record_ref for candidate in step.accepted_candidates
+        }
+        for candidate in step.proposed_candidates:
+            if candidate.record_ref not in accepted_refs:
+                _dispositions_append(
+                    dispositions, candidate.record_ref, "rejected"
+                )
+        resolution_indexes: list[int] = []
+        resolution_sources = tuple(
+            (index, _intent_resolution_source(resolution))
+            for index, resolution in enumerate(step.resolved_intents)
+        ) + tuple(
+            (invocation_ordinal, source)
+            for source_step, invocation_ordinal, source in gepa_sources
+            if source_step == step.step_index
+        )
+        if len({index for index, _source in resolution_sources}) != len(
+            resolution_sources
+        ):
+            raise ValueError("trajectory resolution indexes overlap")
+        for resolution_index, resolution in resolution_sources:
+            candidate = resolution.candidate
+            discover(candidate, step.step_index, "evaluated")
+            if resolution.outcome in {"rejected", "failed"}:
+                _dispositions_append(
+                    dispositions,
+                    candidate.record_ref,
+                    resolution.outcome,
+                )
+            resolution_indexes.append(resolution_index)
+            embedded: EvalReport | None = None
+            raw_result = None
+            selected_task_hashes: tuple[str, ...] | None = None
+            if resolution.eval_result_ref is not None:
+                raw = store.get(resolution.eval_result_ref.reference)
+                if resolution.outcome == "completed":
+                    evidence = EvalEvidence.model_validate_json(
+                        json.dumps(raw)
+                    )
+                    raw_result = EvalEvidenceWithRef(
+                        evidence, resolution.eval_result_ref
+                    )
+                    selected_task_hashes = evidence.task_hashes
+                else:
+                    failure = EvalFailureEvidence.model_validate_json(
+                        json.dumps(raw)
+                    )
+                    raw_result = EvalEvidenceWithRef(
+                        failure, resolution.eval_result_ref
+                    )
+            if raw_result is not None:
+                embedded = project_eval_report(
+                    store=store,
+                    prepared=prepared,
+                    run_id=f"{result.run_id}:{step.step_index}:{resolution_index}",
+                    transport=transport,
+                    model=model,
+                    role="internal",
+                    split_sizes=split_sizes,
+                    candidates=(
+                        (
+                            candidate.record.candidate_id,
+                            "optimized",
+                            candidate,
+                        ),
+                    ),
+                    results=(raw_result,),
+                    task_hashes=selected_task_hashes,
+                )
+            embedded_result = None if embedded is None else embedded.results[0]
+            classification = resolution.classification
+            message = resolution.message
+            if classification is None:
+                classification = (
+                    resolution.outcome
+                    if embedded_result is None
+                    else embedded_result.classification
+                )
+            if message is None:
+                message = (
+                    f"search evaluation {resolution.outcome}"
+                    if embedded_result is None
+                    else embedded_result.message
+                )
+            if (
+                embedded is not None
+                and resolution.reward_ref is not None
+                and isinstance(embedded.results[0], EvalSuccess)
+                and embedded.results[0].score
+                != resolution.reward_ref.record.value
+            ):
+                raise ValueError(
+                    "recomputed evaluation score disagrees with "
+                    "resolution reward"
+                )
+            gains, regressions, mismatches = (
+                evaluation_history.compare_then_remember(
+                    candidate_ref=candidate.record_ref,
+                    base_ref=candidate.record.base_ref,
+                    report=embedded,
+                )
+            )
+            trajectory_resolutions.append(
+                TrajectoryResolution(
+                    step_index=step.step_index,
+                    resolution_index=resolution_index,
+                    request_id=resolution.request_id,
+                    candidate_ref=_required_ref(candidate.record_ref),
+                    outcome=resolution.outcome,
+                    classification=classification,
+                    message=message,
+                    eval_result_ref=_ref(resolution.eval_result_ref),
+                    reward_ref=(
+                        None
+                        if resolution.reward_ref is None
+                        else _required_ref(resolution.reward_ref.record_ref)
+                    ),
+                    reward=(
+                        None
+                        if resolution.reward_ref is None
+                        else resolution.reward_ref.record.value
+                    ),
+                    terminal_failure=(
+                        None
+                        if resolution.terminal_failure is None
+                        else resolution.terminal_failure
+                    ),
+                    eval_report=embedded,
+                    gains=gains,
+                    regressions=regressions,
+                    execution_mismatches=mismatches,
+                )
+            )
+        trajectory_steps.append(
+            TrajectoryStep(
+                step_index=step.step_index,
+                status=step.status.value,
+                request_candidates=tuple(
+                    _required_ref(item.record_ref)
+                    for item in request_candidates
+                ),
+                proposed_candidates=tuple(
+                    _required_ref(item.record_ref)
+                    for item in step.proposed_candidates
+                ),
+                accepted_candidates=tuple(
+                    _required_ref(item.record_ref)
+                    for item in step.accepted_candidates
+                ),
+                resolution_indexes=tuple(resolution_indexes),
+                budget_delta_consumed=step.budget_delta.consumed.to_json(),
+                budget_cumulative_consumed=step.budget.consumed.to_json(),
+                budget_remaining=step.budget.remaining.to_json(),
+                terminal_failure=(
+                    None
+                    if step.terminal_failure is None
+                    else step.terminal_failure.model_dump(mode="json")
+                ),
+            )
+        )
+    for proposal in result.proposals:
+        discover(proposal.candidate, len(result.step_results) - 1, "terminal")
+
+    exact_by_ref = {candidate.record_ref: candidate for candidate in ordered}
+    candidates: list[TrajectoryCandidate] = []
+    for candidate in ordered:
+        mutation = candidate.record.payload.get(
+            result.run.record.mutation_field
+        )
+        if type(mutation) is not str:
+            raise ValueError(
+                f"candidate {candidate.record.candidate_id!r} at "
+                f"{candidate.record_ref.content_hash} has malformed mutation "
+                f"field {result.run.record.mutation_field!r}"
+            )
+        base = exact_by_ref.get(candidate.record.base_ref)
+        candidates.append(
+            TrajectoryCandidate(
+                first_step=first_step[candidate.record_ref],
+                candidate_id=candidate.record.candidate_id,
+                record_ref=_required_ref(candidate.record_ref),
+                identity_hash=str(candidate.identity_hash),
+                base_ref=_required_ref(candidate.record.base_ref),
+                base_candidate_ref=(
+                    None if base is None else _required_ref(base.record_ref)
+                ),
+                payload=candidate.record.payload.to_json(),
+                mutation_text=mutation,
+                dispositions=tuple(dispositions[candidate.record_ref]),
+            )
+        )
+    return TrajectoryReport(
+        schema_version=TRAJECTORY_REPORT_SCHEMA,
+        result_ref=_required_ref(result_ref),
+        run_id=result.run_id,
+        mutation_field=result.run.record.mutation_field,
+        terminal_status=result.status.value,
+        candidates=tuple(candidates),
+        steps=tuple(trajectory_steps),
+        resolutions=tuple(trajectory_resolutions),
+        terminal_candidate_refs=tuple(
+            _required_ref(proposal.candidate.record_ref)
+            for proposal in result.proposals
+        ),
+    )
+
+
+__all__ = ["project_eval_report", "project_trajectory_report"]

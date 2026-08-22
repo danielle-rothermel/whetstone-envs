@@ -36,6 +36,7 @@ from whetstone.experiment.graph.rollout_template import (
 )
 from whetstone.experiment.reward import RewardPolicy, RewardTerm
 from whetstone.experiment.sampling import (
+    HELD_OUT,
     INTERNAL_EVAL,
     OFFICIAL,
     EvalConfigs,
@@ -236,12 +237,26 @@ def prepare_c19_experiment(
         num_seeds=num_seeds,
     )
     held_out_rows = task_rows_from_instances(split.held_out)
+    held_out = (
+        derive_eval_split(
+            namespace=C19_NAMESPACE,
+            dataset_revision=C19_DATASET_REVISION,
+            split_role=HELD_OUT,
+            tasks=held_out_rows,
+            task_hash_of=_task_hash,
+            procedure=procedure,
+            aggregation=aggregation,
+            num_seeds=num_seeds,
+        )
+        if held_out_rows
+        else None
+    )
     eval_configs = EvalConfigs(
         env_name=C19_NAMESPACE,
         procedure_config_hash=procedure_hash,
         internal=internal,
         official=official,
-        held_out_task_hashes=tuple(row.task_hash for row in held_out_rows),
+        held_out=held_out,
     )
     resolved_initial = PROBES.naive_template
     resolved_ceiling = PROBES.ceiling_template

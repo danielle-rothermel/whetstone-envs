@@ -4,6 +4,8 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from whetstone.experiment.sampling import HELD_OUT, INTERNAL_EVAL, OFFICIAL
+
 from whetstone_envs.c19 import PROBES, generate_pool
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
@@ -72,3 +74,32 @@ def test_prepare_c19_experiment_records_held_out_hashes() -> None:
     assert experiment.eval_configs.held_out_task_hashes == tuple(
         row.task_hash for row in task_rows_from_instances(split.held_out)
     )
+
+
+def test_held_out_is_a_derived_split_under_its_own_role() -> None:
+    """Held-out rows become a full EvalSplit, not a bare hash tuple."""
+    pool = _small_pool()
+    configs = prepare_c19_experiment(
+        pool, split_sizes=(1, 1, 1), num_seeds=1
+    ).experiment.eval_configs
+    held_out = configs.held_out
+    assert held_out is not None
+    assert held_out.split_role == HELD_OUT
+    assert configs.split_for(HELD_OUT) is held_out
+    assert set(configs.splits()) == {INTERNAL_EVAL, OFFICIAL, HELD_OUT}
+    # Construction enforces disjointness, so the roles cannot share a task.
+    covered = [
+        set(split.task_set.task_hashes) for split in configs.splits().values()
+    ]
+    assert not covered[0] & covered[1]
+    assert not covered[0] & covered[2]
+    assert not covered[1] & covered[2]
+
+
+def test_experiment_without_held_out_rows_leaves_the_split_absent() -> None:
+    configs = prepare_c19_experiment(
+        _small_pool(), split_sizes=(2, 2, 0), num_seeds=1
+    ).experiment.eval_configs
+    assert configs.held_out is None
+    assert configs.held_out_task_hashes == ()
+    assert set(configs.splits()) == {INTERNAL_EVAL, OFFICIAL}

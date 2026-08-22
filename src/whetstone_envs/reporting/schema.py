@@ -22,6 +22,7 @@ EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v1"
 TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
 CandidateSource = Literal["naive", "ceiling", "custom", "optimized"]
 EvalRoleName = Literal["internal", "official"]
+RoleSpendName = Literal["task_model", "proposer"]
 
 
 class _StrictModel(BaseModel):
@@ -471,6 +472,67 @@ class EvalReport(_StrictModel):
         return self
 
 
+class RoleSpend(_StrictModel):
+    """What one provider role cost a run.
+
+    ``usd`` is present only when every contributing call carried a
+    provider-reported price; otherwise the priced/unpriced split shows what a
+    total would have covered. Callers render the absent case as
+    ``"unpriced"`` rather than as a zero.
+    """
+
+    role: RoleSpendName
+    calls: StrictInt
+    cached_calls: StrictInt
+    input_tokens: StrictInt
+    output_tokens: StrictInt
+    priced_calls: StrictInt
+    unpriced_calls: StrictInt
+    rows_missing_token_breakdown: StrictInt
+    usd: StrictFloat | None
+
+    @model_validator(mode="after")
+    def _validate_role_spend(self) -> RoleSpend:
+        counts = (
+            self.calls,
+            self.cached_calls,
+            self.input_tokens,
+            self.output_tokens,
+            self.priced_calls,
+            self.unpriced_calls,
+            self.rows_missing_token_breakdown,
+        )
+        if any(value < 0 for value in counts):
+            raise ValueError("spend counters must be non-negative")
+        if self.priced_calls + self.unpriced_calls != self.calls:
+            raise ValueError(
+                "priced and unpriced calls must exhaust billable calls"
+            )
+        if self.usd is not None and self.usd < 0:
+            raise ValueError("reported spend must be non-negative")
+        if self.usd is not None and self.unpriced_calls:
+            raise ValueError(
+                "a run with unpriced calls reports no total spend"
+            )
+        return self
+
+
+class RunSpend(_StrictModel):
+    """The run's cost report, one entry per provider role."""
+
+    schema_version: StrictInt
+    task_model: RoleSpend
+    proposer: RoleSpend
+
+    @model_validator(mode="after")
+    def _validate_roles(self) -> RunSpend:
+        if self.task_model.role != "task_model":
+            raise ValueError("task model spend must carry the task_model role")
+        if self.proposer.role != "proposer":
+            raise ValueError("proposer spend must carry the proposer role")
+        return self
+
+
 class TrajectoryCandidate(_StrictModel):
     first_step: StrictInt
     candidate_id: StrictStr
@@ -576,6 +638,7 @@ class TrajectoryReport(_StrictModel):
     steps: tuple[TrajectoryStep, ...]
     resolutions: tuple[TrajectoryResolution, ...]
     terminal_candidate_refs: tuple[ReportRef, ...]
+    spend: RunSpend | None = None
 
     @model_validator(mode="after")
     def _validate_order(self) -> TrajectoryReport:  # noqa: PLR0912

@@ -24,6 +24,16 @@ from whetstone_envs.reporting.publication import (
     load_trajectory_report,
 )
 
+#: MIPROv2 cannot run against a C19 experiment until whetstone-ai stops
+#: hardcoding the toy mutation field. ``_materialize_bootstrap_teacher``
+#: reads ``payload["user_prompt_template"]`` instead of
+#: ``state.control.mutation_field``, so every demo mode raises KeyError on
+#: the first bootstrap teacher. Every mode bootstraps, so no mode escapes it.
+MIPROV2_UPSTREAM_BLOCKER = (
+    "whetstone-ai miprov2/runtime.py:_materialize_bootstrap_teacher "
+    "hardcodes the 'user_prompt_template' mutation field"
+)
+
 
 @pytest.mark.parametrize("optimizer", ["copro", "gepa"])
 def test_fake_transport_completes(  # noqa: PLR0915
@@ -225,3 +235,105 @@ def test_run_refuses_in_repo_output_when_cwd_is_elsewhere(
                 output_dir=repo_root / "artifacts" / "c19-run",
             )
         )
+
+
+@pytest.mark.parametrize("demo_mode", ["fewshot", "zeroshot", "ground_only"])
+@pytest.mark.xfail(reason=MIPROV2_UPSTREAM_BLOCKER, strict=True)
+def test_miprov2_fake_transport_completes(tmp_path, demo_mode: str) -> None:
+    """MIPROv2 completes on the fake transport in every demonstration mode.
+
+    Demonstrations reach the candidate through MIPROv2's own composed
+    ``### Demonstrations`` section: ``fewshot`` renders the selected demo set
+    there, while ``zeroshot`` and ``ground_only`` leave it empty.
+    """
+    output = tmp_path / f"miprov2-{demo_mode}-run"
+    code = main(
+        [
+            "--family",
+            "c19",
+            "--optimizer",
+            "miprov2",
+            "--demo-mode",
+            demo_mode,
+            "--transport",
+            "fake",
+            "--split-sizes",
+            "2,2,0",
+            "--run-id",
+            f"c19-miprov2-{demo_mode}-e2e",
+            "--output",
+            str(output),
+        ]
+    )
+    assert code == 0
+    result = OptimResult.model_validate_json(
+        (output / "result.json").read_text(encoding="utf-8")
+    )
+    assert result.step_results
+    assert result.terminal_failure is None
+    assert result.step_results[-1].record.status.value == "complete"
+    # MIPROv2 drives its search through Steps, not SearchEvidence.
+    assert all(not step.record.search_evidence for step in result.step_results)
+    assert any(step.record.proposer_usage for step in result.step_results)
+
+    trajectory = load_trajectory_report(output)
+    assert trajectory.terminal_status == "complete"
+    spend = trajectory.spend
+    assert spend is not None
+    assert spend.proposer.calls > 0
+    assert spend.task_model.calls > 0
+
+
+def test_runner_rejects_unknown_demo_mode(tmp_path) -> None:
+    with pytest.raises(ValueError, match="unsupported demo mode"):
+        run_c19_optimizer(
+            C19RunSpec(
+                optimizer="miprov2",
+                transport="fake",
+                output_dir=tmp_path / "bad-demo-mode",
+                demo_mode="handful",
+            )
+        )
+
+
+def test_runner_rejects_non_positive_num_seeds(tmp_path) -> None:
+    with pytest.raises(ValueError, match="num_seeds must be at least 1"):
+        run_c19_optimizer(
+            C19RunSpec(
+                optimizer="copro",
+                transport="fake",
+                output_dir=tmp_path / "bad-num-seeds",
+                num_seeds=0,
+            )
+        )
+
+
+@pytest.mark.parametrize("optimizer", ["copro", "gepa"])
+def test_fake_transport_reports_run_spend(tmp_path, optimizer: str) -> None:
+    """Every optimizer's trajectory report carries the run's spend."""
+    output = tmp_path / f"{optimizer}-spend"
+    assert (
+        main(
+            [
+                "--optimizer",
+                optimizer,
+                "--transport",
+                "fake",
+                "--run-id",
+                f"c19-{optimizer}-spend",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    trajectory = load_trajectory_report(output)
+    spend = trajectory.spend
+    assert spend is not None
+    assert spend.task_model.role == "task_model"
+    assert spend.proposer.role == "proposer"
+    for role in (spend.task_model, spend.proposer):
+        assert role.priced_calls + role.unpriced_calls == role.calls
+        # A fake transport reports no price, so no total is presented.
+        if role.unpriced_calls:
+            assert role.usd is None

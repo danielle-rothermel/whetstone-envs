@@ -30,7 +30,7 @@ dependencies = [
     "absl-py==2.5.0",
     "dr-graph==0.1.3",
     "dr-serialize==0.1.2",
-    "dr-store==0.2.5",
+    "dr-store==0.2.6",
     "gymnasium==1.3.0",
     "immutabledict==4.3.1",
     "langdetect==1.0.9",
@@ -51,7 +51,7 @@ c18 = [
 ]
 optim = [
     "rich==15.0.0",
-    "whetstone-ai==0.1.2; python_version >= '3.13' and python_version < '3.15'",
+    "whetstone-ai==0.1.6; python_version >= '3.13' and python_version < '3.15'",
 ]
 
 [project.urls]
@@ -175,6 +175,7 @@ include = [
     "src/whetstone_envs/optim/cli.py",
     "src/whetstone_envs/optim/experiment.py",
     "src/whetstone_envs/optim/gepa.py",
+    "src/whetstone_envs/optim/miprov2.py",
     "src/whetstone_envs/optim/provider.py",
     "src/whetstone_envs/optim/run.py",
     "src/whetstone_envs/reporting/cli.py",
@@ -184,8 +185,10 @@ include = [
     "src/whetstone_envs/reporting/html.py",
     "tests/optim/test_e2e.py",
     "tests/optim/test_experiment.py",
+    "tests/optim/test_miprov2.py",
     "tests/optim/test_provider.py",
     "tests/reporting/test_projection.py",
+    "tests/reporting/test_schema.py",
     "tests/reporting/test_browser.py",
     "tests/reporting/test_views.py",
 ]

@@ -347,7 +347,21 @@ function trajectorySurfaces() {
     const control = button(`${candidate.candidate_id}${terminal ? ' · terminal' : ''}\n${candidate.dispositions.join(', ')}\nparent ${parent}`, () => { state.trajectoryCandidateRef = reference; saveFragment(); render(); });
     if (state.trajectoryCandidateRef === reference) control.classList.add('selected'); lineageGrid.append(control);
   }
-  lineage.append(lineageGrid); outer.append(timeline, lineage); return outer;
+  lineage.append(lineageGrid); outer.append(timeline, lineage);
+  const spend = spendPanel(); if (spend) outer.append(spend);
+  return outer;
+}
+function spendUsd(role) {
+  // A total appears only when every billable call carried a price.
+  return role.usd === null || role.usd === undefined ? `unpriced (${role.unpriced_calls}/${role.calls})` : `$${role.usd.toFixed(6)}`;
+}
+function spendPanel() {
+  if (!report.spend) return null;
+  const surface = panel('Run spend'); const grid = node('div', { className: 'lineage' });
+  for (const role of [report.spend.task_model, report.spend.proposer]) {
+    grid.append(node('pre', { className: 'mono', text: `${role.role}\ncalls ${role.calls} (cached ${role.cached_calls})\ntokens in ${role.input_tokens} / out ${role.output_tokens}\npriced ${role.priced_calls} · unpriced ${role.unpriced_calls}\nrows missing token breakdown ${role.rows_missing_token_breakdown}\nusd ${spendUsd(role)}` }));
+  }
+  surface.append(grid); return surface;
 }
 function trajectoryDiagnosis(resolution, candidate) {
   const key = resolutionKey(resolution); const diagnosis = payload.view.diagnoses[key]; const step = report.steps[resolution.step_index]; const section = panel(`Observed change diagnosis · step ${key}`);

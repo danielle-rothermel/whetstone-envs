@@ -15,10 +15,18 @@ composed template still satisfies the family's placeholder requirement.
 section; ``zeroshot`` and ``ground_only`` keep the section empty while still
 bootstrapping demos to ground instruction proposals.
 
-Minibatching is off. Every family's internal split is the valset, and
-``configure_miprov2`` refuses a ``minibatch_size`` exceeding it -- C18's
-internal split of 24 is below MIPROv2's default 35 -- so a study that turns
-minibatching on must size it against the run's own valset.
+Minibatching is off by default. The valset is the internal split less the
+trainset -- see :class:`Miprov2Split` for the two partitions and why the
+choice is substantive -- and ``configure_miprov2`` refuses a
+``minibatch_size`` exceeding it. C18's internal split of 24 is below
+MIPROv2's default 35, so a study that turns minibatching on must size it
+against the run's own valset.
+
+The search shape (``num_trials``, ``num_candidates``) and the split are
+parameters rather than literals, so a study arm can request the protocol's
+auto-light configuration without editing this module. The defaults are this
+runner's own, smaller shape, which is what keeps the fake-transport
+end-to-end runs fast.
 """
 
 from __future__ import annotations

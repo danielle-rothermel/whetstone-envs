@@ -402,14 +402,22 @@ MEASURED_MIPROV2_MINIBATCH_TASKS = 35
 #: split size. Bootstrapping is a single cursor walk over the trainset, so
 #: one task is a hard ceiling of one row per bootstrapping plan.
 #:
+#: That partition is now the ``Miprov2Split.SINGLE_TASK`` setting rather
+#: than a slice literal, and it remains the default -- so these numbers
+#: still describe a default run. ``Miprov2Split.INTERNAL`` gives
+#: bootstrapping the whole internal split and would raise them; an arm that
+#: selects it has not been measured.
+#:
 #: Two further corrections to F10's derivation, both verified against the
 #: whetstone-ai code the runs executed:
 #:
 #: 1. The plan count is ``num_candidates - 2`` for the demo modes that
 #:    emit a LABELS_ONLY plan, and ``num_candidates - 1`` for ``zeroshot``,
-#:    which does not. It is not a fixed 7. This runner's
+#:    which does not. It is not a fixed 7. This runner's default
 #:    ``num_candidates`` is 3, giving 1 bootstrapping plan (2 for
-#:    ``zeroshot``) -- which is exactly what was measured.
+#:    ``zeroshot``) -- which is exactly what was measured. It is now a
+#:    setting (``DEFAULT_MIPROV2_NUM_CANDIDATES``); the protocol's
+#:    auto-light 6 would give 4 plans.
 #: 2. There is no ``/p_accept`` inflation. ``max_rounds`` is 1, so a
 #:    rejected attempt still advances the cursor; a low acceptance rate
 #:    collects fewer demos but never costs more rows. F10's claim that "the

@@ -96,6 +96,10 @@ from whetstone_envs.optim.miprov2 import (
     build_miprov2_state,
     miprov2_run_ref,
 )
+from whetstone_envs.optim.nulls import (
+    NULL_RANDOM_OPTIMIZER,
+    NullRandomTransport,
+)
 from whetstone_envs.optim.provider import (
     bind_openrouter_transport,
     fake_gold_by_prompt,
@@ -132,12 +136,27 @@ DEFAULT_OUTPUT_ROOT = (
 
 #: Every optimizer the shared runner can drive today.
 #:
-#: ``null-random`` and ``null-identity`` are named by the study protocol but
-#: are controls rather than optimizers -- they run through
-#: :mod:`whetstone_envs.optim.nulls`, not this runner -- so they are absent
-#: here. Admitting a name the runner cannot drive would fail late, inside a
-#: durable run boundary, instead of at spec validation.
-OPTIMIZERS = ("codex", "copro", "gepa", "miprov2")
+#: ``null-random`` (null-A) is here because it is a *control for selection*:
+#: it must spend the same proposal budget and fill the same slots as the
+#: optimizer it stands in for, and it must produce the same evidence -- a
+#: result, a store, an audit, priced cost rows -- or it cannot be compared
+#: against the arms it controls. It is COPRO's own search shape with
+#: :class:`~whetstone_envs.optim.nulls.NullRandomTransport` substituted for
+#: the proposer, so it reaches that evidence through this runner rather than
+#: through a parallel path of its own.
+#:
+#: ``null-identity`` (null-B) is absent: it proposes nothing, so it has no
+#: search to drive and no optimizer-fidelity invariant to audit. The study
+#: harness synthesizes its record directly. Admitting a name the runner
+#: cannot drive would fail late, inside a durable run boundary, instead of
+#: at spec validation.
+OPTIMIZERS = ("codex", "copro", "gepa", "miprov2", NULL_RANDOM_OPTIMIZER)
+
+#: The optimizers whose search shape is COPRO's: COPRO itself and the
+#: control that stands in for it. Named once so the two cannot drift apart
+#: -- a null that searched a different shape would control for the wrong
+#: thing.
+COPRO_SHAPED_OPTIMIZERS = ("copro", NULL_RANDOM_OPTIMIZER)
 TRANSPORTS = ("fake", "openrouter")
 
 #: Retained COPRO search shape: two drafts per step, one step of depth.
@@ -151,6 +170,10 @@ MIN_COPRO_BREADTH = 2
 #: default to, so an unseeded run keeps the control identity it always had.
 GEPA_DEFAULT_SEED = 0
 MIPROV2_DEFAULT_SEED = 9
+#: null-A's own seed default. It matches the study spec's ``null-random``
+#: arm seed, so a single run reproduces the control the study would have
+#: drawn at that arm's first seed.
+NULL_RANDOM_DEFAULT_SEED = 5000
 
 #: The default split, kept small so an unparameterised run stays a smoke run.
 DEFAULT_SPLIT_SIZES = (2, 2, 0)
@@ -619,14 +642,35 @@ def _bind_optimizer(  # noqa: PLR0913
             ),
             codex_control=codex_control,
         )
-    if spec.optimizer == "copro":
+    if spec.optimizer in COPRO_SHAPED_OPTIMIZERS:
+        # null-A is COPRO's search shape with an uninformative proposer.
+        # Substituting only the transport is what makes it a control for
+        # *selection*: the budget, the slots, the selection rule, and the
+        # recorded evidence are COPRO's own, and the single thing that
+        # differs is that the drafts carry no information.
+        bound_transport = proposer_transport
+        if spec.optimizer == NULL_RANDOM_OPTIMIZER:
+            bound_transport = NullRandomTransport(
+                seed=(
+                    NULL_RANDOM_DEFAULT_SEED
+                    if spec.seed is None
+                    else spec.seed
+                ),
+                render_contract=validated.family.render_contract(),
+                execution_policy_hash=(
+                    engine.execution_policy_identity_hash()
+                ),
+                prompt_adapter_identity_hash=prompt_adapter_identity_hash(
+                    prompt_adapter
+                ),
+            )
         return _BoundOptimizer(
             adapter_key=COPRO_ADAPTER_KEY,
             adapter=_copro_adapter(
                 engine=engine,
                 control=copro_control,
                 prompt_adapter=prompt_adapter,
-                proposer_transport=proposer_transport,
+                proposer_transport=bound_transport,
                 family=validated.family,
                 extra_proposal_bodies=spec.extra_proposal_bodies,
             ),

@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the `PreparedExperiment` protocol they actually read, removing the
   `cast("PreparedC19Experiment", ...)` the runner carried. The concrete
   dataclass both families return is now `PreparedSplitExperiment`.
+- MIPROv2 runs complete on whetstone-ai 0.1.6. The upstream bootstrap teacher
+  no longer hardcodes the `user_prompt_template` mutation field, so
+  `test_miprov2_fake_transport_completes` runs as an ordinary passing test in
+  every demonstration mode; its `xfail(strict=True)` marker and the
+  `MIPROV2_UPSTREAM_BLOCKER` reason it carried are gone.
 
 ### Added
 

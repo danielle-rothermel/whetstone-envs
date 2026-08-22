@@ -65,6 +65,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the role by name before creating a run directory rather than falling back to
   another split.
 
+
+- The study's two null optimizers, in `whetstone_envs.optim.nulls`, as
+  `ProposerTransport` implementations so they reach the optimizer through the
+  same surface a real proposer does. `NullRandomTransport` (null-A) is the
+  selection-on-noise control: it perturbs the base candidate's template with a
+  seeded RNG — swapping, deleting, and duplicating whitespace-delimited tokens
+  at `NULL_PERTURBATION_RATE` — and returns the results as ordinary drafts, so
+  best-on-internal selection runs over candidates carrying no information. The
+  perturber treats every `{field}` placeholder as atomic and immovable and
+  re-validates against the run's `TemplateRenderContract` before returning, so
+  a required field is never dropped; a draw the contract rejects, that repeats
+  the base, or that collides with an earlier slot in the same batch is retried
+  from the same seeded stream, bounded, then falls back to the base unchanged
+  with `identity_fallback` recorded on the draft. Perturbation is deterministic
+  in the run seed and the proposal request, so a null-A run replays exactly.
+  `NullIdentityTransport` (null-B) is the pipeline-overhead control: it
+  proposes the base unchanged. Neither null makes a provider call, so every
+  draft reports `proposer_calls: 0` with no call id and no price, and run cost
+  records no proposer spend for a null arm rather than a zero-dollar phantom
+  call.
+
+  Two upstream contracts shape null-B and are pinned by its tests. A
+  *successful* draft repeating its base is not representable — `diff_check`
+  rejects a mutation equal to its base, because a no-op is not a proposal — so
+  null-B reports an unfilled slot, which is how a real proposer that returned
+  nothing reports it. What an optimizer does with that is the optimizer's
+  contract: GEPA and MIPROv2 set `terminal_proposal_count` on their step
+  contracts and so may terminalize `seed_retained` when their search accepts
+  nothing over the seed, while COPRO does not set it, so under COPRO's control
+  shape an unfilled round is a `copro_proposal_cardinality` terminal failure
+  whose result still names the seed as the run's outcome.
 - The C19 optimizer CLI and runner accept `--optimizer gepa` and
   `--optimizer miprov2` through the same shared runner path as COPRO.
 - `--num-seeds` on the CLI and `RunSpec.num_seeds` make repeats per task

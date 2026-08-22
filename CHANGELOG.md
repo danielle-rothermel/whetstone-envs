@@ -27,20 +27,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   leaves no half-initialized study directory and exits non-zero. The key is
   checked for presence only and never reaches an error message; a wrong key
   is the provider's refusal to make.
-- **Each stage records the transport it ran on, and a study will not mix
-  them.** The manifest gains a `stages` block (schema `v6`) with one
-  `StageRecord` per stage naming its transport and its spend. Like the
+- **Each stage and each run records the transport it ran on, and a study
+  will not mix them.** The manifest gains a `stages` block with one
+  `StageRecord` per stage naming its transport and its spend, and every
+  `RunRecord` carries its own `transport` (schema `v7`). Like the
   real-Codex authorization the transport is an invocation property and
   stays out of the pre-registration hash, so two studies differing only in
   it pre-register identically — but it is recorded, because a stage run on
   the fake transport and a stage run against a provider are different
-  evidence for the same claim. A study whose Stage 0 calibrated on one
-  transport refuses to run an arm stage on the other, **before any arm
-  runs**: every held-out delta is paired against those anchors, so a
-  cross-transport subtraction is not a comparison and no flag makes it one.
-  A toy re-runs Stage 0 under `--replace-design`. A re-run replaces its
-  stage record rather than appending a second one, and the manifest refuses
-  two records for one stage.
+  evidence for the same claim. An arm stage is refused **before any arm
+  runs** unless three things agree with the requested transport: Stage 0's
+  anchors, the stage's own recorded transport, and every surviving arm run.
+  A run's transport is its own evidence rather than its stage's — a resumed
+  stage keeps runs an earlier invocation paid for, so a stage row can agree
+  while the runs beneath it do not, and checking only Stage 0 let a paid
+  arg-max run over free runs. A toy re-runs Stage 0 under
+  `--replace-design`. A re-run replaces its stage record rather than
+  appending a second one, and the manifest refuses two records for one
+  stage.
+- **`stage0 --replace-design` across transports drops the stale evidence
+  and records the drop.** Re-calibrating onto a transport other than the
+  recorded Stage 0 invalidates the arm stages twice over — the design they
+  ran against is being replaced, and their evidence was measured somewhere
+  else — but v6 left the `stage1`/`stage2` records and every arm run in
+  place, so a Stage 2 on the paid transport reused fake runs against
+  freshly bought anchors. Those records, their runs, the selections over
+  them, the held-out claims and rows, and the pilot's call-count gate are
+  now dropped, and what was dropped is recorded in a new `amendments`
+  block the report surfaces rather than deleted silently. The arms survive
+  with empty run lists, because an arm is design rather than evidence.
+  **Paid evidence is never discarded automatically**: a drop that would
+  remove any run measured on a billed transport is refused instead, before
+  the calibration spends, naming the runs and the recovery.
 - **Stage 0's anchors produce a spend record, and every stage total is
   printed.** Anchor evaluations reach the provider through the evaluation
   engine rather than through an optimizer run, so they had no
@@ -54,10 +72,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   evaluation once. `whetstone-study plan` prints the measured ledger
   beneath its estimated budget, `run` echoes the stage's transport and
   ledger, and the report prints each stage's transport and spend in its
-  stage history. A fake-transport stage records no spend at all: its rows
-  are real rows, so the shared row rule counts them as billable and
-  unpriced — right for a provider row, and a bill nobody owes for a stage
-  that reached no provider.
+  stage history.
+- **An arm stage records what its runs spent.** An arm stage spends through
+  optimizer runs rather than through the engine, and each run already
+  re-derived its own per-role bill — but the stage record ignored them, so
+  a fully paid Stage 1 or Stage 2 recorded an empty `spend` and the ledger
+  rendered it, under a MEASURED heading, as a stage that reached no
+  provider. The stage total is now the fold of the per-role records the
+  runs *this invocation executed* reported; a run an earlier stage paid for
+  stays billed on that stage's row, so the ledger's rows do not sum to more
+  than the study spent. The fold re-applies the honesty rule rather than
+  carrying it: one unpriced run withholds the whole role's total.
+- **The ledger never calls a paid stage a free one.** An empty spend record
+  means one of two opposite things and now reads as two: a fake-transport
+  stage reports `no provider reached (fake transport)`, because its rows
+  are real rows the shared row rule counts as billable-and-unpriced — right
+  for a provider row, and a bill nobody owes for a stage that called
+  nobody. A **paid** stage with no records reports a loud `UNLEDGERED`,
+  because it reached a provider and lost track of what it bought: its bill
+  is unknown, not zero.
+- **The ledger states what it does not cover.** Official-selection scoring
+  and held-out evaluation reach the provider through the evaluation engine
+  outside any optimizer run, so no run record and no anchor evidence
+  carries them and no stage total includes them. `plan`, `run`, the report,
+  and the README now say so explicitly, so a printed total reads as the
+  lower bound it is rather than as the whole bill. Full ledgering of those
+  calls is Phase E.
+- **The fake path's Eval Config hashes are pinned.** A golden test fixes
+  the three role config hashes the fake toy study binds, so a change that
+  let provider call configuration leak onto the fake path — the way the
+  paid path seeds one — would fail the pin rather than silently rebase
+  every recorded config and turn L1 into a check that always agrees with
+  whatever just ran.
 
 ### Fixed
 - `stage0 --replace-design` that records an amendment discards the previous

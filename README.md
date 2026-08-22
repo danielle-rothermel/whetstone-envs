@@ -305,18 +305,69 @@ against those anchors, so a cross-transport subtraction is not a comparison
 and there is no flag that makes it one — a toy study that wants the other
 transport re-runs Stage 0 on it under `--replace-design`.
 
+The refusal checks three things, because a study can hold evidence from two
+transports in three ways: Stage 0's transport, **the target stage's own
+recorded transport**, and **the transport of every surviving arm run**. A
+run records its own transport, because a resumed stage keeps the runs an
+earlier invocation paid for — so a stage row can agree while the runs
+beneath it do not.
+
+`stage0 --replace-design` onto a *different* transport than the recorded
+Stage 0 drops the Stage 1 and Stage 2 records, their arm runs, the
+selections over those runs, the held-out claims and rows, and the pilot's
+call-count gate: the design changed and the evidence came from another
+experiment. Nothing is deleted silently — the drop is recorded as an
+`amendments` entry naming every run id it removed, and the report surfaces
+it. The arms themselves survive with empty run lists, because an arm is
+part of the design rather than evidence for it. **Paid evidence is never
+discarded automatically**: if any dropped run was measured on a billed
+transport the command refuses instead, before the calibration spends, and
+names the recovery (archive the study directory and calibrate the new
+transport in a fresh one).
+
 Each stage record also carries what the stage spent, one entry per provider
-role, in the same shape a run reports. Stage 0's anchors evaluate through
-the engine rather than through an optimizer run, so their spend is
-re-derived from the persisted output rows the evaluations left behind —
+role, in the same shape a run reports. The two kinds of stage measure it by
+the route they spend by: Stage 0's anchors evaluate through the engine, so
+their spend is re-derived from the persisted output rows the evaluations
+left behind; an arm stage spends through optimizer runs, so its total is
+the fold of the per-run records those runs already carry. Both are
 measured, never accumulated while the stage ran. `whetstone-study plan`
 prints that ledger beneath its estimated budget, `run` echoes it, and the
 report prints it beside each stage's transport. A role with any unpriced
 call reports no USD total at all rather than a partial sum that would look
-authoritative. A fake-transport stage records no spend at all: its rows are
-real rows and the shared row rule counts them as billable-and-unpriced,
-which is right for a provider row and wrong for a stage that reached no
-provider.
+authoritative.
+
+An empty spend record means one of two opposite things, and the ledger
+never conflates them. A **fake-transport** stage reports `no provider
+reached (fake transport)`: its rows are real rows and the shared row rule
+counts them as billable-and-unpriced, which is right for a provider row and
+wrong for a stage that called nobody. A **paid** stage that recorded no
+spend reports `UNLEDGERED` — it reached a provider and lost track of what
+it bought, so its bill is unknown rather than zero, and that is a defect to
+act on rather than a free stage.
+
+**What the ledger does not yet cover.** Official-selection scoring and
+held-out evaluation calls are not ledgered: they reach the provider through
+the evaluation engine outside any optimizer run, so no `RunRecord` and no
+anchor evidence carries them and no stage total includes them. Every
+printed total is therefore a lower bound, and `plan`, `run`, and the report
+each say so. Full ledgering of those calls is Phase E.
+
+### Reading the ledger before authorizing a paid stage
+
+**Measure before you authorize.** On the toy Stage 0, `gpt-5-nano` spent
+roughly **4,500 completion (reasoning) tokens per call** — about 7× the
+planning figure the protocol budgeted — at a measured **$0.00168 per
+call**. Carried forward at that rate, Stage 0 costs roughly **$9** and
+Stage 2 roughly **$210**, against a protocol estimate built on the smaller
+per-call figure.
+
+The rate is a property of the model and the prompts, not a fixed constant,
+so it is not a number to plan from twice. Run Stage 0, then read
+`whetstone-study plan`'s **measured** per-stage ledger — not the estimated
+budget above it — and authorize Stage 1 against what Stage 0 actually
+spent. Remember that the measured total excludes official-selection and
+held-out scoring, so treat it as a floor.
 
 ## Evaluation and trajectory reports
 

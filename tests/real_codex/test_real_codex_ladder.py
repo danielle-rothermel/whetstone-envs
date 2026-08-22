@@ -137,10 +137,47 @@ def _skip_if_agent_chose_the_seed(result: OptimResult) -> None:
 
     This is deliberately a skip and not a pass: the rung genuinely did
     not observe what it exists to observe, and a green ladder must not
-    imply it did. It disappears the moment the underlying risk is fixed.
+    imply it did.
+
+    The match is deliberately narrow. ``CODEX_SELECTION_CONTRACT_CODE``
+    covers two unrelated outcomes, and only one of them is this risk:
+
+    * the mutation-diff refusal below -- the agent selected a call whose
+      template equals its base -- which is the seed-preference this skip
+      exists for; and
+    * a bookkeeping failure where the selected call binds no Step Request
+      candidate as its base (``base is None``), which is a real defect in
+      the adapter or the rung and must never be skipped past.
+
+    Matching the code alone would have swallowed the second as though it
+    were the first, turning an adapter bug into a quiet skip on a green
+    ladder. So an empty accepted-candidate set, an absent retained
+    candidate, and the mutation-diff error text are all required.
+
+    Upstream fix: whetstone-ai 0.1.9 (#138) treats a seed-identical
+    selection as ``seed_retained`` rather than a contract violation. Once
+    the envs pin moves to 0.1.9/0.1.10 this skip becomes unreachable and
+    should be deleted along with its helper.
     """
     failure = result.terminal_failure
     if failure is None or failure.code != CODEX_SELECTION_CONTRACT_CODE:
+        return
+    accepted = tuple(
+        candidate
+        for step in result.step_results
+        for candidate in step.record.accepted_candidates
+    )
+    retained = tuple(
+        step.record.retained_candidate_ref
+        for step in result.step_results
+        if step.record.retained_candidate_ref is not None
+    )
+    details = str(failure.details)
+    if accepted or retained or "must differ from its base" not in details:
+        # Not the seed-preference outcome: a selection-contract failure
+        # that reached here with evaluated work behind it, or with the
+        # bookkeeping message, is a genuine defect and must fail the rung
+        # rather than be skipped past.
         return
     pytest.skip(
         "the agent selected a candidate identical to the seed, which "

@@ -182,12 +182,17 @@ def test_the_agent_model_defaults_to_a_codex_model_not_the_task_model(
     properties that actually matter -- the default is the named agent
     model, and it is not the task model.
     """
-    from whetstone_envs.optim.codex import CODEX_DEFAULT_AGENT_MODEL
+    from whetstone_envs.optim.codex import (
+        CODEX_DEFAULT_AGENT_MODEL,
+        resolve_codex_agent_model,
+    )
     from whetstone_envs.optim.run import RunSpec
 
     spec = RunSpec(optimizer="codex", transport="fake", family="c19")
     assert spec.codex_model is None
-    resolved = spec.codex_model or CODEX_DEFAULT_AGENT_MODEL
+    # Through the shared resolver the runner and the study preflight both
+    # use, so this pins the value both of them will actually send.
+    resolved = resolve_codex_agent_model(spec.codex_model)
     assert resolved == CODEX_DEFAULT_AGENT_MODEL
     assert resolved != spec.model, (
         "the Codex agent model resolved to the task model, which a "
@@ -207,7 +212,7 @@ def test_the_agent_model_defaults_to_a_codex_model_not_the_task_model(
 
 def test_an_explicit_agent_model_overrides_the_default() -> None:
     """The §6 run pins its own agent model through ``--codex-model``."""
-    from whetstone_envs.optim.codex import CODEX_DEFAULT_AGENT_MODEL
+    from whetstone_envs.optim.codex import resolve_codex_agent_model
     from whetstone_envs.optim.run import RunSpec
 
     spec = RunSpec(
@@ -216,7 +221,29 @@ def test_an_explicit_agent_model_overrides_the_default() -> None:
         family="c19",
         codex_model="gpt-5.4",
     )
-    assert (spec.codex_model or CODEX_DEFAULT_AGENT_MODEL) == "gpt-5.4"
+    assert resolve_codex_agent_model(spec.codex_model) == "gpt-5.4"
+
+
+def test_the_default_agent_model_is_the_pinned_literal() -> None:
+    """The agent model is a golden literal, not whatever the code says.
+
+    The fake CLI ignores ``--model`` entirely, so no run in this suite can
+    tell a correct agent model from a wrong one -- every assertion that
+    compares the constant against itself passes whatever it holds. A
+    subscription session is the only thing that rejects a bad value, and
+    it does so after the run has started spending.
+
+    So the value is pinned here as a literal. Changing the agent model is
+    then a deliberate edit to this expectation, which is what a fact the
+    tests cannot otherwise falsify requires.
+    """
+    from whetstone_envs.optim.codex import (
+        CODEX_DEFAULT_AGENT_MODEL,
+        resolve_codex_agent_model,
+    )
+
+    assert CODEX_DEFAULT_AGENT_MODEL == "gpt-5.6-sol"
+    assert resolve_codex_agent_model(None) == "gpt-5.6-sol"
 
 
 def test_the_reasoning_efforts_are_the_enum_projection() -> None:

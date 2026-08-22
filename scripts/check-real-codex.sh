@@ -38,7 +38,24 @@ mkdir -p "$output_dir"
 
 log="$output_dir/pytest.log"
 report="$output_dir/rungs.txt"
+table="$output_dir/rung-table.txt"
 codex_binary="${WHETSTONE_ENVS_REAL_CODEX_BINARY:-/opt/homebrew/bin/codex}"
+ladder_file="tests/real_codex/test_real_codex_ladder.py"
+
+# How many rungs this ladder *is*, asked of pytest rather than pinned here,
+# so adding a rung cannot leave the completeness check silently checking
+# the old number. Collection is free: it spawns no Codex and spends
+# nothing.
+expected_rungs="$(
+    WHETSTONE_ENVS_REAL_CODEX=1 \
+        .venv/bin/python -m pytest "$ladder_file" \
+        -m real_codex --collect-only -q -p no:cacheprovider 2>/dev/null \
+        | grep -c "::test_rung" || true
+)"
+if [ -z "$expected_rungs" ] || [ "$expected_rungs" -eq 0 ]; then
+    echo "could not determine the ladder's rung count; refusing to run" >&2
+    exit 1
+fi
 
 echo "envs real-Codex ladder"
 echo "  repo:    $repo_root"
@@ -84,14 +101,28 @@ set -e
     # to arrive as "<file>::test_rungN...". A bare "test_rungN" appearing
     # in a traceback, a temp path, or this very table would otherwise be
     # read as another rung starting.
-    awk '
-        match($0, /::test_rung[0-9a-c]+[a-z0-9_]*/) {
-            name = substr($0, RSTART + 2, RLENGTH - 2)
-            rung = name
-            sub(/^test_/, "", rung)
-            sub(/_.*$/, "", rung)
-            pending_name = name
-            pending_rung = rung
+    #
+    # Anchored at the start of the line and required to carry the ladder
+    # file's own prefix. pytest emits a collected item as
+    # "tests/real_codex/test_real_codex_ladder.py::test_rungN ...", and
+    # nothing else legitimately starts that way -- while an unanchored
+    # match accepted "::test_rung9" anywhere on a line, including inside
+    # a temp path or a traceback frame that -s had printed.
+    #
+    # And a name is taken only while no rung is pending. Last-seen-wins
+    # let a later mention overwrite the rung actually awaiting a verdict,
+    # so the next PASSED/SKIPPED token was filed against the wrong rung.
+    awk -v ladder="$ladder_file" '
+        index($0, ladder "::test_rung") == 1 {
+            if (pending_name == "") {
+                match($0, /::test_rung[0-9a-c]+[a-z0-9_]*/)
+                name = substr($0, RSTART + 2, RLENGTH - 2)
+                rung = name
+                sub(/^test_/, "", rung)
+                sub(/_.*$/, "", rung)
+                pending_name = name
+                pending_rung = rung
+            }
         }
         /(PASSED|FAILED|ERROR|SKIPPED)/ {
             if (pending_name != "") {
@@ -101,20 +132,51 @@ set -e
                 pending_name = ""
             }
         }
-    ' "$log" || echo "(no rung results parsed; see pytest.log)"
+    ' "$log" > "$table" || true
+    if [ ! -s "$table" ]; then
+        echo "(no rung results parsed; see pytest.log)"
+    fi
+    cat "$table"
     echo
     # Rung 7 prints the full-size artifact sizes; carry them into the table
     # so a reader does not have to open the transcript for the one number
     # the §6 run has to budget disk against.
     grep -E '^rung7 scale:' "$log" || true
     echo
-    if [ "$status" -eq 0 ]; then
+    # The verdict comes from the parsed table, never from pytest's exit
+    # status alone. pytest exits 0 on a session where every rung SKIPPED,
+    # and live-skips on rungs 2/6/7/8 make a partly-skipped ladder the
+    # *expected* path -- so "all rungs passed" from $status was a claim
+    # the run had not earned and could not support.
+    observed="$(wc -l < "$table" | tr -d ' ')"
+    passed="$(awk '$2 == "PASSED"' "$table" | wc -l | tr -d ' ')"
+    not_passed="$(awk '$2 != "PASSED"' "$table" | wc -l | tr -d ' ')"
+    echo "rungs: $passed passed, $not_passed not passed, of $expected_rungs"
+    if [ "$status" -eq 0 ] \
+        && [ "$not_passed" -eq 0 ] \
+        && [ "$observed" -eq "$expected_rungs" ]; then
         echo "RESULT: all rungs passed"
-    else
+    elif [ "$status" -ne 0 ]; then
         echo "RESULT: ladder stopped (exit $status) — see pytest.log"
+    else
+        # Exit 0 but the ladder was not fully observed: skipped rungs, or
+        # rungs that never reached the table at all.
+        awk '$2 != "PASSED" { printf "  %s: %s\n", $1, $2 }' "$table"
+        if [ "$observed" -ne "$expected_rungs" ]; then
+            echo "  $((expected_rungs - observed)) rung(s) produced no verdict"
+        fi
+        echo "RESULT: ladder not fully observed"
     fi
 } | tee "$report"
 
 echo
 echo "transcript + rung table: $output_dir"
-exit "$status"
+# A ladder that was not fully observed fails the check even when pytest
+# exited 0, so a fully-skipped session can never be read as a green run.
+if [ "$status" -ne 0 ]; then
+    exit "$status"
+fi
+if grep -q '^RESULT: all rungs passed$' "$report"; then
+    exit 0
+fi
+exit 1

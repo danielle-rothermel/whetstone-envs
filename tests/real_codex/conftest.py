@@ -139,7 +139,15 @@ def pytest_collection_modifyitems(
     """
     ladder_items = _ladder_items(items)
     if os.environ.get(REAL_CODEX_ENV) == "1":
-        if ladder_items:
+        # The claim also requires that the session collected *nothing but*
+        # the ladder. A mixed session -- ``-m ""``, or an explicit path
+        # alongside the ladder -- would otherwise disarm the tripwire for
+        # every ordinary test running beside the rungs, which is exactly
+        # the state in which an authorization test that monkeypatches the
+        # allow variable can reach the real CLI. The ladder's exception is
+        # for the ladder, so a mixed session keeps the tripwire armed and
+        # the rungs refuse instead.
+        if ladder_items and len(ladder_items) == len(items):
             config.stash[REAL_CODEX_LADDER_SESSION] = True
         return
     skip = pytest.mark.skip(

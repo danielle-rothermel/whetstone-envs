@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -10,25 +11,32 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from dr_providers import ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 
 from whetstone_envs.optim.codex import (
+    ALLOW_REAL_CODEX_ENV,
+    ALLOW_REAL_CODEX_ENV_VALUE,
     CODEX_ADAPTER_KEY,
     CODEX_EVALUATE_CALL_CAP,
     CODEX_REASONING_EFFORTS,
     CODEX_RUN_ROOT_NAME,
     CodexReasoningEffort,
     CodexTestSeam,
+    RealCodexRefusedError,
     build_codex_adapter,
     build_codex_control,
     codex_run_root,
+    refuse_unauthorized_real_codex,
 )
 from whetstone_envs.optim.codex_runtime import (
     ENVS_CODEX_RUNTIME_CONFIG_CLASS,
     EnvsCodexRuntimeConfig,
 )
 from whetstone_envs.optim.families import family_spec
+from whetstone_envs.optim.provider import openrouter_seeded_call_config
+from whetstone_envs.optim.run import RunSpec, run_optimizer
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -208,6 +216,79 @@ def test_the_reference_config_alone_would_not_match(
         assert toy.eval_config_ref != engine.eval_config_ref
 
 
+def test_the_runtime_config_field_names_are_pinned() -> None:
+    """The golden the class docstring promises.
+
+    This model is validated out of a subprocess environment variable by
+    the MCP evaluation server, so its field spellings are a persisted
+    cross-process wire format, not internal naming. Renaming one is a
+    silent break: the server would refuse the config it was handed, and
+    the only symptom is a Codex run that never gets an engine. Deriving
+    the expectation from the class would assert nothing, so the literals
+    are written out.
+    """
+    assert tuple(EnvsCodexRuntimeConfig.model_fields) == (
+        "family_id",
+        "split_sizes",
+        "n_per_stratum",
+        "pool_seed_start",
+        "num_seeds",
+        "transport",
+        "model",
+        "partial_log_path",
+        "prompt_cache_path",
+        "row_job_entrypoint",
+        "unit_deadline_seconds",
+    )
+    # Frozen and closed: the server must not silently accept a config
+    # carrying a field this side never wrote.
+    assert EnvsCodexRuntimeConfig.model_config["frozen"] is True
+    assert EnvsCodexRuntimeConfig.model_config["extra"] == "forbid"
+
+
+def test_the_runtime_config_serialized_keys_are_the_field_names() -> None:
+    """What actually crosses the process boundary, pinned as JSON keys."""
+    config = EnvsCodexRuntimeConfig(
+        family_id="c19",
+        split_sizes=SPLIT_SIZES,
+        n_per_stratum=4,
+        pool_seed_start=765_432,
+        num_seeds=1,
+        transport="fake",
+        model="openai/gpt-4.1-nano",
+    )
+    assert set(json.loads(config.model_dump_json())) == {
+        "family_id",
+        "split_sizes",
+        "n_per_stratum",
+        "pool_seed_start",
+        "num_seeds",
+        "transport",
+        "model",
+        "partial_log_path",
+        "prompt_cache_path",
+        "row_job_entrypoint",
+        "unit_deadline_seconds",
+    }
+
+
+def test_the_runtime_config_class_path_literal_is_pinned() -> None:
+    """The ``module:Class`` string the runner records for the server.
+
+    It is resolved by import on the far side, so a module move or a class
+    rename breaks it with no compile-time signal. The docstring says a
+    golden test pins it; this is that test, and
+    ``test_the_runtime_config_class_path_resolves`` proves the string
+    still loads.
+    """
+    assert ENVS_CODEX_RUNTIME_CONFIG_CLASS == (
+        "whetstone_envs.optim.codex_runtime:EnvsCodexRuntimeConfig"
+    )
+    module, _, class_name = ENVS_CODEX_RUNTIME_CONFIG_CLASS.partition(":")
+    assert module == EnvsCodexRuntimeConfig.__module__
+    assert class_name == EnvsCodexRuntimeConfig.__name__
+
+
 def test_the_runtime_config_round_trips_through_json() -> None:
     """The MCP server validates this out of an environment variable."""
     config = EnvsCodexRuntimeConfig(
@@ -318,6 +399,115 @@ def test_the_adapter_refuses_a_runtime_config_that_would_not_match(
     assert calls == []
 
 
+def test_the_eval_config_alone_does_not_pin_the_model_route(
+    tmp_path,
+) -> None:
+    """Why the adapter checks the task model too, and not only the config.
+
+    On the openrouter transport the task model is carried by the provider
+    call config, not by the Eval Config -- so two runtime configs naming
+    different models rebuild to the *same* ``eval_config_ref``. A check
+    that stopped at the config would admit a run measured on a route the
+    study never asked for, and the run would complete and report a
+    perfectly coherent trajectory about the wrong model.
+    """
+
+    def rebuilt(model: str, name: str):
+        config = EnvsCodexRuntimeConfig(
+            family_id="c19",
+            split_sizes=SPLIT_SIZES,
+            n_per_stratum=family_spec("c19").default_n_per_stratum,
+            pool_seed_start=family_spec("c19").default_pool_seed_start,
+            num_seeds=1,
+            transport="openrouter",
+            model=model,
+        )
+        with open_sqlite(str(tmp_path / f"{name}.sqlite")) as store:
+            engine = config.build_engine(cast("ObjectStore", store))
+            return engine.eval_config_ref, engine.task_model_identity_hash()
+
+    asked_for = rebuilt("openai/gpt-4.1-nano", "asked")
+    drifted = rebuilt("openai/gpt-5-nano", "drifted")
+
+    assert asked_for[0] == drifted[0]
+    assert asked_for[1] != drifted[1]
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the Codex sandbox is macOS sandbox-exec only",
+)
+def test_the_adapter_refuses_a_runtime_config_on_another_model_route(
+    tmp_path,
+) -> None:
+    """A drifted model route is refused before anything is spawned.
+
+    The Eval Config agrees here -- that is the point -- so this is the
+    mismatch the ``eval_config_ref`` check cannot see, and the reason the
+    adapter asserts the task-model identity as well.
+    """
+    family = family_spec("c19")
+    pool = family.generate_pool(
+        n_per_stratum=family.default_n_per_stratum,
+        seed_start=family.default_pool_seed_start,
+    )
+    prepared = family.build_experiment(
+        pool,
+        split_sizes=SPLIT_SIZES,
+        num_seeds=1,
+        provider_call_config=openrouter_seeded_call_config(
+            model="openai/gpt-4.1-nano"
+        ),
+    )
+    experiment = prepared.experiment
+    drifted = EnvsCodexRuntimeConfig(
+        family_id="c19",
+        split_sizes=SPLIT_SIZES,
+        n_per_stratum=family.default_n_per_stratum,
+        pool_seed_start=family.default_pool_seed_start,
+        num_seeds=1,
+        transport="openrouter",
+        # The one difference: another model route, on an otherwise
+        # identical experiment.
+        model="openai/gpt-5-nano",
+    )
+    calls: list[str] = []
+    with open_sqlite(str(tmp_path / "world.sqlite")) as store:
+        engine = ReferenceEvalRuntimeConfig(
+            transport_api_key_env="OPENROUTER_API_KEY",
+            provider_kind=ProviderKind.OPENROUTER,
+        ).build_engine(
+            cast("ObjectStore", store),
+            experiment=experiment,
+            eval_runner=family.eval_runner(),
+            mutation_field=family.mutation_field,
+            render_contract=family.render_contract(),
+        )
+        control = build_codex_control(
+            engine=engine,
+            experiment=experiment,
+            family=family,
+            model="agent",
+        )
+        with pytest.raises(ValueError, match="different task model"):
+            build_codex_adapter(
+                store=cast("ObjectStore", store),
+                control=control,
+                engine=engine,
+                runtime_config=drifted,
+                reward_policy=experiment.reward_policy,
+                store_path=tmp_path / "store.sqlite",
+                run_root=tmp_path / "runs",
+                test_seam=CodexTestSeam(
+                    preflight=lambda **_kwargs: calls.append("preflight"),
+                    environment={},
+                ),
+            )
+
+    # Refused ahead of the preflight, like the Eval Config mismatch.
+    assert calls == []
+
+
 def test_the_adapter_key_is_whetstones_own() -> None:
     assert CODEX_ADAPTER_KEY == "codex"
 
@@ -367,39 +557,171 @@ def test_the_run_spec_carries_no_preflight_seam() -> None:
     assert not any("seam" in name or "preflight" in name for name in names)
 
 
-def test_no_test_drives_codex_without_the_scripted_seam() -> None:
-    """A test that runs Codex must not reach the real, paid CLI.
+# --------------------------------------------------------------------------
+# The real-Codex spend guard
+# --------------------------------------------------------------------------
 
-    ``run_optimizer`` spawns whatever ``codex_binary`` names, and the
-    default is the real binary on the run PATH -- correct for production
-    and a hazard in a suite. The hazard is not hypothetical: a test that
-    parametrized over ``OPTIMIZERS`` and called ``run_optimizer`` did
-    invoke the real CLI, and only its authentication preflight stopped
-    the run.
 
-    So every module that *calls* ``run_optimizer`` while naming the Codex
-    arm must also import the scripted seam. Checking the pairing rather
-    than each call site keeps the rule readable: a module holding one
-    without the other is the shape that goes wrong. A module that only
-    builds a spec, or only mentions the runner in prose, calls nothing
-    and is not the hazard.
+def _tripwire_binary(directory: Path) -> str:
+    """A "Codex CLI" that must never be reached at all.
+
+    The refusal has to happen before a subprocess exists, so the run is
+    pointed at a binary that only exists to be evidence: if the guard
+    regresses, the preflight resolves and spawns this instead of the real
+    ``codex``, which is what keeps the test itself off the paid CLI.
+
+    The spawn is proved absent by :func:`_assert_nothing_spawned` rather
+    than by a marker this script writes -- the Codex containment profile
+    is a sandbox, and a blocked write would look identical to never having
+    run.
     """
-    import re
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "codex"
+    script.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    script.chmod(0o755)
+    return str(script)
 
-    tests_root = Path(__file__).resolve().parent.parent
-    calls_runner = re.compile(r"run_optimizer\s*\(")
-    # A spec whose optimizer really is Codex. A module that only names the
-    # string -- to exclude it from a parametrization, say -- drives nothing.
-    drives_codex = re.compile(r"""optimizer\s*=\s*["']codex["']""")
-    seam = re.compile(r"codex_test_seam|CodexTestSeam")
-    unguarded = []
-    for path in sorted(tests_root.rglob("test_*.py")):
-        source = path.read_text(encoding="utf-8")
-        if not calls_runner.search(source):
-            continue
-        if not drives_codex.search(source):
-            continue
-        if seam.search(source):
-            continue
-        unguarded.append(str(path.relative_to(tests_root)))
-    assert unguarded == []
+
+def _assert_nothing_spawned(output_dir: Path) -> None:
+    """No subprocess, and nothing durable, came of a refused run.
+
+    ``build_codex_executor`` creates the run's ``codex-runs`` root before
+    it can spawn anything and writes one job record per spawn beneath it,
+    so an absent directory is positive evidence that no Codex process was
+    started. The output directory being absent says the refusal also
+    landed ahead of the durable run boundary, so a refused run leaves no
+    artifacts to clean up.
+    """
+    assert not output_dir.exists()
+    assert not (output_dir / CODEX_RUN_ROOT_NAME).exists()
+
+
+def _codex_spec(binary: str, output_dir: Path, **overrides) -> RunSpec:
+    return RunSpec(
+        optimizer="codex",
+        transport="fake",
+        family="c19",
+        split_sizes=SPLIT_SIZES,
+        output_dir=output_dir,
+        run_id="codex-guard",
+        codex_binary=binary,
+        **overrides,
+    )
+
+
+def test_the_env_var_name_matches_the_suites_own() -> None:
+    """The conftest fixture spells it rather than importing it.
+
+    ``tests/conftest.py`` loads for every suite, including an install
+    without the ``optim`` extra, so it cannot import the owning module.
+    Pinning the two spellings equal here is what keeps the fixture from
+    clearing a variable nobody reads.
+    """
+    from tests.conftest import (
+        ALLOW_REAL_CODEX_ENV as CONFTEST_ENV,
+    )
+
+    assert CONFTEST_ENV == ALLOW_REAL_CODEX_ENV
+    assert ALLOW_REAL_CODEX_ENV == "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
+    assert ALLOW_REAL_CODEX_ENV_VALUE == "1"
+
+
+def test_a_codex_run_without_a_seam_or_the_opt_in_is_refused(
+    tmp_path,
+) -> None:
+    """The default Codex run must never reach the real, billed CLI.
+
+    The authentication preflight is not a spend guard: it proves a session
+    by *spawning* the CLI, and on a machine with a Codex login that spawn
+    succeeds and is billed. So a run that names the Codex arm and supplies
+    nothing else is refused outright -- before any preflight, adapter,
+    admission authority, or subprocess exists.
+    """
+    binary = _tripwire_binary(tmp_path / "bin")
+    output_dir = tmp_path / "run"
+
+    with pytest.raises(RealCodexRefusedError, match="costs money"):
+        run_optimizer(_codex_spec(binary, output_dir))
+
+    _assert_nothing_spawned(output_dir)
+
+
+def test_the_flag_alone_does_not_authorize_a_paid_run(tmp_path) -> None:
+    """A serialized spec must not be able to buy a session by itself.
+
+    ``allow_real_codex`` travels in a spec, a study arm, or a copied
+    command line, so it is deliberately only half of the opt-in. The
+    session fixture guarantees the environment half is unset here.
+    """
+    binary = _tripwire_binary(tmp_path / "bin")
+    output_dir = tmp_path / "run"
+
+    with pytest.raises(RealCodexRefusedError):
+        run_optimizer(_codex_spec(binary, output_dir, allow_real_codex=True))
+
+    _assert_nothing_spawned(output_dir)
+
+
+def test_the_env_var_alone_does_not_authorize_a_paid_run(
+    tmp_path, monkeypatch
+) -> None:
+    """An exported variable must not turn every Codex run into a paid one."""
+    binary = _tripwire_binary(tmp_path / "bin")
+    output_dir = tmp_path / "run"
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
+
+    with pytest.raises(RealCodexRefusedError):
+        run_optimizer(_codex_spec(binary, output_dir))
+
+    _assert_nothing_spawned(output_dir)
+
+
+@pytest.mark.parametrize("value", ["", "0", "true", "yes", "TRUE"])
+def test_only_the_exact_env_value_opts_in(
+    tmp_path, monkeypatch, value: str
+) -> None:
+    """A half-remembered spelling refuses rather than spends."""
+    binary = _tripwire_binary(tmp_path / "bin")
+    output_dir = tmp_path / "run"
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, value)
+
+    with pytest.raises(RealCodexRefusedError):
+        run_optimizer(_codex_spec(binary, output_dir, allow_real_codex=True))
+
+    _assert_nothing_spawned(output_dir)
+
+
+def test_a_seam_admits_the_run_without_any_opt_in() -> None:
+    """The scripted path is the other admissible ground, and needs nothing.
+
+    Checked on the guard directly rather than by driving a whole run: the
+    e2e suite already proves a seamed run completes, and this states the
+    one fact the guard owns -- a seam is sufficient on its own.
+    """
+    seam = CodexTestSeam(preflight=lambda **_kwargs: None, environment={})
+    refuse_unauthorized_real_codex(test_seam=seam, allow_real_codex=False)
+
+
+def test_both_halves_of_the_opt_in_admit_the_run(monkeypatch) -> None:
+    """The deliberate paid path exists, and takes both halves to reach."""
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
+    refuse_unauthorized_real_codex(test_seam=None, allow_real_codex=True)
+
+
+def test_the_tool_input_schema_ordering_the_projection_unpacks() -> None:
+    """The projection destructures this tuple positionally, so pin it.
+
+    ``reporting/projection.py`` rebuilds a Codex run's evaluated candidate
+    from the Tool Call's args, reading the keys out of whetstone-ai's
+    ``CODEX_EVAL_INPUT_FIELDS`` rather than re-spelling them -- which is
+    what keeps the report and ``optim/audit/codex.py`` agreeing about the
+    surface the agent was handed. It unpacks the tuple positionally, so a
+    reordering upstream would silently swap ``base_ref`` and ``template``
+    and attribute every evaluation to the wrong candidate. Neither type
+    checking nor the arity check catches that, so the order is a golden.
+    """
+    from whetstone.optim.codex.mcp_bridge import (
+        CODEX_EVAL_INPUT_FIELDS,
+    )
+
+    assert CODEX_EVAL_INPUT_FIELDS == ("base_ref", "model_route", "template")

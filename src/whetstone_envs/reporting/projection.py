@@ -26,6 +26,7 @@ from whetstone.experiment.candidate import (
     candidate_reference,
 )
 from whetstone.experiment.reward import RewardRef
+from whetstone.optim.codex.mcp_bridge import CODEX_EVAL_INPUT_FIELDS
 from whetstone.optim.contracts import (
     IntentResolution,
     OptimResult,
@@ -647,14 +648,6 @@ def _evidence_reward_ref(
     return RewardRef.model_validate(reward)
 
 
-#: The two Tool Call argument keys this projection reads. They are the
-#: Tool's pinned input schema (``CODEX_EVAL_INPUT_FIELDS``), so they are
-#: a wire format crossing into a foreign agent -- named here rather than
-#: spelled at the call site, and pinned by a golden test.
-CODEX_TOOL_BASE_REF_ARG = "base_ref"
-CODEX_TOOL_TEMPLATE_ARG = "template"
-
-
 def _tool_evidence_sources(
     step: OptimStepResult, *, store: ObjectStore
 ) -> tuple[tuple[int, _TrajectoryResolutionSource], ...]:
@@ -692,20 +685,32 @@ def _tool_evidence_sources(
             continue
         record = evidence.result.record
         call = entry.tool_call.record
-        # The wire key is fixed by the Tool's input schema; the payload
-        # field it lands in is the run's mutation field, which the Tool
-        # Config names. They are different names for a reason and must
-        # not be conflated: ``EngineToolEvaluator`` reads the first and
-        # writes the second, and this reconstruction mirrors it.
+        # The wire keys are fixed by the Tool's input schema, whose one
+        # owner is whetstone-ai's ``CODEX_EVAL_INPUT_FIELDS`` -- the same
+        # constant ``optim/audit/codex.py`` checks the ledger against.
+        # Re-spelling them here would let this projection and the audit
+        # disagree about the surface a foreign agent was handed. The
+        # unpack pins the schema's arity as well as its names, so a
+        # widened or narrowed tool surface fails here rather than
+        # silently reading the wrong key.
+        #
+        # ``model_route`` is deliberately unread: it is the route the call
+        # asserted, which ``EngineToolEvaluator`` already validated
+        # against the engine, not part of the candidate being rebuilt.
+        #
+        # The wire key is not the payload field it lands in -- that is the
+        # run's mutation field, which the Tool Config names. They are
+        # different names for a reason and must not be conflated:
+        # ``EngineToolEvaluator`` reads the first and writes the second,
+        # and this reconstruction mirrors it.
+        base_ref_arg, _route_arg, template_arg = CODEX_EVAL_INPUT_FIELDS
         candidate = candidate_reference(
             Candidate(
                 candidate_id=str(call.call_id),
-                base_ref=TypedRef.model_validate(
-                    call.args[CODEX_TOOL_BASE_REF_ARG]
-                ),
+                base_ref=TypedRef.model_validate(call.args[base_ref_arg]),
                 payload={
                     str(call.tool_config.record.candidate_template_field): (
-                        call.args[CODEX_TOOL_TEMPLATE_ARG]
+                        call.args[template_arg]
                     )
                 },
             )

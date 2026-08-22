@@ -6,6 +6,8 @@ import traceback
 from pathlib import Path
 
 from whetstone_envs.optim.run import (
+    ALLOW_REAL_CODEX_ENV,
+    ALLOW_REAL_CODEX_ENV_VALUE,
     CODEX_DEFAULT_BINARY,
     CODEX_EVALUATE_CALL_CAP,
     CODEX_REASONING_EFFORTS,
@@ -287,6 +289,18 @@ def build_parser() -> argparse.ArgumentParser:
             "whetstone-ai's own."
         ),
     )
+    parser.add_argument(
+        "--allow-real-codex",
+        action="store_true",
+        help=(
+            "Opt in to spawning the real, billed Codex CLI. Half of the "
+            "opt-in: the run is still refused unless "
+            f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} is also "
+            "set in the environment. Without both, a Codex run is refused "
+            "before any session probe, because the authentication "
+            "preflight itself spawns the CLI and costs money."
+        ),
+    )
     return parser
 
 
@@ -328,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
                 codex_model=arguments.codex_model,
                 codex_reasoning_effort=arguments.codex_reasoning_effort,
                 codex_wall_seconds=arguments.codex_wall_seconds,
+                allow_real_codex=arguments.allow_real_codex,
             )
         )
     except DurableRunError as error:

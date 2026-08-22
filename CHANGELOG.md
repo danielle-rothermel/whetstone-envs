@@ -28,6 +28,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `sandbox-exec` only, so the spawning tests are Darwin-gated. Everything
   above the sandbox — the control, the runtime config, the capacity
   arithmetic, and the audit — runs everywhere.
+- **A real Codex run is refused unless it is deliberately opted in.** The
+  authentication preflight is not a spend guard: it proves a session by
+  *spawning* the Codex CLI, and on a machine with `~/.codex/auth.json` that
+  spawn succeeds and is billed. So "the caller passed no test seam" used to
+  mean "the run reaches the real, paid CLI" — which a study arm, a
+  parametrization over the optimizer list, or a plain `--optimizer codex`
+  could all trigger without meaning to buy anything. `run_optimizer` now
+  refuses a Codex run outright, raising `RealCodexRefusedError` before any
+  preflight, adapter, admission authority, or subprocess exists and before
+  the durable run boundary creates a directory, unless either a
+  `CodexTestSeam` is supplied or *both* halves of the opt-in are present:
+  `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1` in the environment and
+  `--allow-real-codex` (`RunSpec.allow_real_codex`). Requiring both means
+  neither a serialized spec nor an exported variable authorizes spend on its
+  own. A session-scoped autouse fixture asserts the variable is unset and
+  clears it, so no test can opt in.
+- **The pre-spawn identity assertion covers the model route and the task
+  set, not just the Eval Config.** `eval_config_ref` does not pin the task
+  model on the openrouter transport — the route is carried by the provider
+  call config — so a runtime config naming a different model rebuilt to the
+  *same* Eval Config and the run would have completed, reported a coherent
+  trajectory, and measured a model the study never asked for.
+  `build_codex_adapter` now proves `task_model_identity_hash()` and
+  `sampling.task_hashes` equal across the in-process engine and the rebuilt
+  runtime-config engine as well, refusing loudly on either mismatch.
 - **`whetstone_envs.optim.codex_runtime` carries the launch across the
   process boundary.** The Codex MCP evaluation server rebuilds its engine
   from one serialized config, and whetstone-ai's
@@ -378,6 +403,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   are golden-pinned with their derivations, and `whetstone-study plan`
   prints them; its GEPA row now reports the measurement scaled to the pinned
   budget rather than to the retired one.
+
+### Known limitations
+
+- **No real Codex run has been performed.** Every claim about the Codex arm
+  in this release rests on the scripted fake CLI. That stand-in is a real
+  subprocess speaking real MCP over HTTP to the real whetstone-hosted
+  evaluation server, so the production admission, lease, evaluation, and
+  ledger path *is* exercised end to end — only the agent's own decisions
+  are scripted. What remains unproven is the part only a live agent can
+  demonstrate: that a real Codex session reads its prompt, chooses its own
+  candidates, spends its capacity sensibly, and returns a `selected_call_id`
+  that resolves. The §6 "one real run" is therefore still open.
+
+  Performing it requires all of: `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1` and
+  `--allow-real-codex` (see the spend guard above), a live authenticated
+  Codex session, macOS, provider spend for the task-model evaluations it
+  buys, and an explicit go from Danielle. Until then, treat the arm as
+  mechanically complete and behaviorally unvalidated.
 
 ### Notes
 

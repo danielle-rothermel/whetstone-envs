@@ -62,15 +62,19 @@ from whetstone.optim.tools.facade import ToolAdmissionAuthority
 from whetstone.provider.language_model import PlainPromptAdapter
 
 from whetstone_envs.optim.codex import (
+    ALLOW_REAL_CODEX_ENV,
+    ALLOW_REAL_CODEX_ENV_VALUE,
     CODEX_ADAPTER_KEY,
     CODEX_DEFAULT_BINARY,
     CODEX_EVALUATE_CALL_CAP,
     CODEX_REASONING_EFFORTS,
     CodexReasoningEffort,
     CodexTestSeam,
+    RealCodexRefusedError,
     build_codex_adapter,
     build_codex_control,
     codex_run_root,
+    refuse_unauthorized_real_codex,
 )
 from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
 from whetstone_envs.optim.experiment import provider_call_config_ref
@@ -248,6 +252,15 @@ class RunSpec:
     #: The Codex agent's wall budget in seconds. ``None`` keeps
     #: whetstone-ai's own default.
     codex_wall_seconds: float | None = None
+    #: Half of the deliberate opt-in to a real, billed Codex session. A
+    #: Codex run without a test seam is refused unless this is set *and*
+    #: :data:`~whetstone_envs.optim.codex.ALLOW_REAL_CODEX_ENV` names the
+    #: opt-in in the process environment -- see
+    #: :func:`~whetstone_envs.optim.codex.refuse_unauthorized_real_codex`.
+    #: This field alone cannot authorize spend, which is why it is safe
+    #: for a serialized spec to carry it. Rejected on other optimizers,
+    #: like every other Codex-scoped setting.
+    allow_real_codex: bool = False
 
 
 #: How a run's ``seed`` reaches the optimizer, recorded per optimizer.
@@ -309,6 +322,7 @@ def _validate_codex_settings(spec: RunSpec) -> None:
         or spec.codex_model is not None
         or spec.codex_reasoning_effort != CodexReasoningEffort.MEDIUM.value
         or spec.codex_wall_seconds is not None
+        or spec.allow_real_codex
     )
     if non_default and spec.optimizer != "codex":
         raise ValueError("codex settings apply only to --optimizer codex")
@@ -797,10 +811,28 @@ def run_optimizer(
     Codex CLI. It is keyword-only, absent from :class:`RunSpec`, and has
     no CLI flag, so no production path or serialized spec can select one --
     see :class:`~whetstone_envs.optim.codex.CodexTestSeam`.
+
+    A Codex run that supplies neither a seam nor the deliberate real-Codex
+    opt-in is refused before any effect happens: the preflight spawns the
+    billed CLI to prove a session, so it cannot be the thing that stops an
+    accidental paid run. Every caller -- the CLI, a study arm, a
+    parametrized test -- reaches Codex through this function, so one gate
+    covers all of them.
+
+    The spend guard runs *after* spec validation and before anything else.
+    Both are pure and neither spends, so the order is only about which
+    message a caller gets: an unrunnable spec should be told what is wrong
+    with it rather than that it could not afford to run, and a spec that
+    is merely unaffordable has nothing else to report.
     """
     if codex_test_seam is not None and spec.optimizer != "codex":
         raise ValueError("codex_test_seam applies only to --optimizer codex")
     validated = _validate_spec(spec)
+    if spec.optimizer == "codex":
+        refuse_unauthorized_real_codex(
+            test_seam=codex_test_seam,
+            allow_real_codex=spec.allow_real_codex,
+        )
     family = validated.family
     resolved_run_id = spec.run_id or (
         f"{family.run_id_prefix}-{spec.optimizer}-{uuid4().hex[:8]}"
@@ -990,6 +1022,8 @@ def _proposer_config_resolver(
 
 
 __all__ = [
+    "ALLOW_REAL_CODEX_ENV",
+    "ALLOW_REAL_CODEX_ENV_VALUE",
     "CODEX_DEFAULT_BINARY",
     "CODEX_EVALUATE_CALL_CAP",
     "CODEX_REASONING_EFFORTS",
@@ -1015,6 +1049,7 @@ __all__ = [
     "CodexReasoningEffort",
     "CodexTestSeam",
     "Miprov2Split",
+    "RealCodexRefusedError",
     "RunSpec",
     "default_output_dir",
     "registered_family_ids",

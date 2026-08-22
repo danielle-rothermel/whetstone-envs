@@ -29,10 +29,21 @@ against this run's executor and process environment before it returns an
 adapter at all. The scripted stand-in lives in ``whetstone.testing`` and is
 reachable only through :class:`CodexTestSeam`, which no production path
 constructs.
+
+**A real Codex session costs money, so it is opt-in.** The preflight
+proves a session by *spawning the CLI*, which on an authenticated machine
+is itself a billed call -- so "no seam" is not the same as "no spend".
+:func:`refuse_unauthorized_real_codex` is the gate every Codex run passes
+through before any preflight, adapter, admission, or subprocess exists: a
+run either supplies a :class:`CodexTestSeam` or names the two-part opt-in
+(:data:`ALLOW_REAL_CODEX_ENV` set to :data:`ALLOW_REAL_CODEX_ENV_VALUE` in
+the process environment *and* ``RunSpec.allow_real_codex``), and anything
+else raises :class:`RealCodexRefusedError`.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -118,6 +129,72 @@ class CodexTestSeam:
     extra_environment_keys: frozenset[str] = frozenset()
 
 
+#: The process-environment half of the real-Codex opt-in. It is an
+#: environment variable rather than a flag alone because the flag lives in
+#: a serializable spec: a study manifest, a saved arm, or a copied command
+#: line can carry ``allow_real_codex=True`` into a machine that never
+#: intended to spend, and an environment variable does not travel with it.
+ALLOW_REAL_CODEX_ENV = "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
+
+#: The one value that opts in. Anything else -- unset, empty, ``"0"``,
+#: ``"true"`` -- is not the opt-in, so a half-remembered spelling refuses
+#: rather than spends.
+ALLOW_REAL_CODEX_ENV_VALUE = "1"
+
+
+class RealCodexRefusedError(RuntimeError):
+    """A Codex run would have spawned the real, billed CLI.
+
+    Raised before any preflight, adapter, admission authority, or
+    subprocess exists, so a refused run has spent nothing and left no
+    durable artifact behind.
+    """
+
+
+def refuse_unauthorized_real_codex(
+    *, test_seam: CodexTestSeam | None, allow_real_codex: bool
+) -> None:
+    """Refuse a Codex run that is neither scripted nor deliberately paid.
+
+    The preflight is not a spend guard. It proves a session by *spawning
+    the Codex CLI*, and on a machine with ``~/.codex/auth.json`` that
+    spawn succeeds -- and is billed. So "the caller passed no seam" used
+    to mean "the run reaches the real CLI", which is exactly the accident
+    this refuses: a suite, a study arm, or a parametrization that named
+    the Codex optimizer without meaning to buy a session.
+
+    A run is admitted on one of two grounds, and nothing else:
+
+    * a :class:`CodexTestSeam`, which points the run at the scripted fake
+      CLI and cannot be built from a spec or a flag; or
+    * the deliberate opt-in, which is *both*
+      :data:`ALLOW_REAL_CODEX_ENV` set to
+      :data:`ALLOW_REAL_CODEX_ENV_VALUE` in this process's environment and
+      ``allow_real_codex`` on the run's spec. Requiring both means neither
+      a serialized spec nor an exported variable can authorize a paid run
+      on its own.
+
+    The two grounds are mutually exclusive in practice but not checked as
+    such: a seam already means no real CLI is reachable, so an opt-in
+    alongside one buys nothing.
+    """
+    if test_seam is not None:
+        return
+    if (
+        allow_real_codex
+        and os.environ.get(ALLOW_REAL_CODEX_ENV) == ALLOW_REAL_CODEX_ENV_VALUE
+    ):
+        return
+    raise RealCodexRefusedError(
+        "a codex run would spawn the real Codex CLI, which costs money: "
+        "the authentication preflight is itself a billed session probe, so "
+        "it is not a spend guard. Drive the scripted fake CLI through a "
+        "CodexTestSeam, or opt in deliberately with both "
+        f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} in the "
+        "environment and --allow-real-codex (RunSpec.allow_real_codex)."
+    )
+
+
 def build_codex_control(  # noqa: PLR0913
     *,
     engine: EvalEngine,
@@ -200,6 +277,13 @@ def build_codex_adapter(  # noqa: PLR0913
     engine from, and ``engine`` is the in-process engine it must agree
     with -- see :mod:`whetstone_envs.optim.codex_runtime` for why envs
     ships its own rather than using whetstone-ai's toy-experiment one.
+    Three things are asserted equal across the two engines before
+    anything is spawned, and each is a distinct failure the run would
+    otherwise absorb silently: ``eval_config_ref`` (a mismatch refuses
+    every tool call), ``task_model_identity_hash()`` (a mismatch measures
+    another model route, which the Eval Config does not pin on the
+    openrouter transport), and ``sampling.task_hashes`` (a mismatch
+    measures another task set).
     """
     # The MCP evaluation server rebuilds its engine from this config
     # alone, in another process. Proving here that the rebuild lands on
@@ -213,6 +297,26 @@ def build_codex_adapter(  # noqa: PLR0913
             "the Codex MCP runtime config rebuilds a different Eval "
             "Config than the run's engine, so every tool call it admits "
             "would be refused"
+        )
+    # The Eval Config alone does not pin the model route. On the
+    # openrouter transport the task model is carried by the provider call
+    # config, so a runtime config naming a different model can rebuild to
+    # the *same* ``eval_config_ref`` and still evaluate on another route --
+    # the run would complete, report a coherent trajectory, and have
+    # measured a model the study never asked for. Checking the task-model
+    # identity closes that; checking the task hashes states the split
+    # agreement here rather than leaving it to the control builder alone.
+    if rebuilt.task_model_identity_hash() != engine.task_model_identity_hash():
+        raise ValueError(
+            "the Codex MCP runtime config rebuilds a different task model "
+            "than the run's engine, so the agent would be measured on a "
+            "route this run did not ask for"
+        )
+    if rebuilt.sampling.task_hashes != engine.sampling.task_hashes:
+        raise ValueError(
+            "the Codex MCP runtime config rebuilds a different task set "
+            "than the run's engine, so the agent would be measured on "
+            "tasks this run did not ask for"
         )
     executor = build_codex_executor(run_root=run_root)
     environment = dict(test_seam.environment) if test_seam else None
@@ -257,6 +361,8 @@ def codex_run_root(output_dir: Path) -> Path:
 
 
 __all__ = [
+    "ALLOW_REAL_CODEX_ENV",
+    "ALLOW_REAL_CODEX_ENV_VALUE",
     "CODEX_ADAPTER_KEY",
     "CODEX_DEFAULT_BINARY",
     "CODEX_EVALUATE_CALL_CAP",
@@ -264,7 +370,9 @@ __all__ = [
     "CODEX_RUN_ROOT_NAME",
     "CodexReasoningEffort",
     "CodexTestSeam",
+    "RealCodexRefusedError",
     "build_codex_adapter",
     "build_codex_control",
     "codex_run_root",
+    "refuse_unauthorized_real_codex",
 ]

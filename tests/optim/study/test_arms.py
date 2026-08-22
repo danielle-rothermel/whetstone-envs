@@ -180,3 +180,26 @@ def test_the_study_capacity_cap_agrees_with_the_arms_own() -> None:
     )
 
     assert BUILDER_CAP == STUDY_CAP == 8
+
+
+def test_the_study_cannot_dispatch_a_paid_codex_run(tmp_path: Path) -> None:
+    """A study arm has no seam to pass, so it must be refused, not billed.
+
+    ``StudyOptimizerRunner`` calls ``run_optimizer`` with a ``RunSpec``
+    and nothing else -- there is no ``codex_test_seam`` parameter on the
+    stage-harness protocol and no field on ``ArmSpec`` that could build
+    one. Before the spend guard, that meant running a study whose design
+    names the Codex arm reached the real, billed CLI through the
+    authentication preflight. Now the dispatch refuses, so a fake-transport
+    study cannot buy a Codex session by accident.
+
+    The refusal is the *arm's* to lift: a real Codex stage runs under the
+    two-part opt-in, deliberately, and this is what makes that deliberate
+    rather than default.
+    """
+    from whetstone_envs.optim.codex import RealCodexRefusedError
+
+    runner = _runner(tmp_path)
+    arm = _codex_arm()
+    with pytest.raises(RealCodexRefusedError):
+        runner(arm=arm, seed=4000, study_dir=tmp_path)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -11,6 +12,39 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from whetstone_envs.instances import Instance
+
+
+#: The real-Codex opt-in variable, spelled here rather than imported.
+#: This conftest loads for every suite, including installs without the
+#: optional ``optim`` extra, so it must not import
+#: ``whetstone_envs.optim.codex``. The two spellings are pinned equal by
+#: ``tests/optim/test_codex.py``.
+ALLOW_REAL_CODEX_ENV = "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_codex_opt_in() -> None:
+    """No test may opt in to spawning the real, billed Codex CLI.
+
+    ``run_optimizer`` refuses a Codex run that supplies neither a scripted
+    seam nor the two-part opt-in, and one part is this environment
+    variable. Clearing it for the whole session means the suite cannot
+    reach the paid path even if the developer's shell exports it, and
+    asserting it was unset first means a run that *would* have spent is
+    reported rather than silently corrected.
+
+    Session-scoped and autouse rather than per-test: the variable is
+    process state, and a test that set it would be opting the rest of the
+    session in.
+    """
+    present = os.environ.pop(ALLOW_REAL_CODEX_ENV, None)
+    if present is not None:
+        message = (
+            f"{ALLOW_REAL_CODEX_ENV}={present!r} is set in this process. "
+            "The suite must never be able to opt in to the real, billed "
+            "Codex CLI; unset it before running the tests."
+        )
+        raise RuntimeError(message)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

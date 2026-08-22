@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.6`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.7`.
 
 ## Installation
 
@@ -56,7 +56,7 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
-Codex against a task family. The extra pins published `whetstone-ai==0.1.6`
+Codex against a task family. The extra pins published `whetstone-ai==0.1.7`
 from PyPI:
 
 ```bash
@@ -88,7 +88,10 @@ defaults to the study's pre-registered 8. `--codex-binary` is the CLI to
 spawn (default: the real `codex` on the run PATH), and `--codex-model`,
 `--codex-reasoning-effort`, and `--codex-wall-seconds` configure the agent.
 A Codex run proves its session with an authentication preflight before it
-commits any capacity, and there is no flag that skips it.
+commits any capacity, and there is no flag that skips it. The preflight is
+not a spend guard, though — it proves a session by spawning the CLI — so a
+Codex run is refused outright unless it is scripted or deliberately opted
+in; see [Real Codex runs](#real-codex-runs).
 
 Two properties follow from the agent being foreign. A Codex run resolves no
 evaluation intent — every paid evaluation is admitted through the tool and
@@ -129,17 +132,49 @@ uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer miprov2 --demo-mode fewshot \
   --transport fake --split-sizes 2,2,0
 uv run --extra optim python scripts/run-optim.py \
-  --family c19 --optimizer codex --transport fake --split-sizes 2,2,0 \
-  --codex-capacity 8
-uv run --extra optim python scripts/run-optim.py \
   --family c18 --optimizer copro --transport fake --split-sizes 2,2,0 \
   --n-per-stratum 1
 ```
 
-The Codex line spawns the real Codex CLI and needs a working session; the
-suite covers the same path with a scripted stand-in that speaks real MCP to
-the real evaluation server, so everything above the agent's own decisions is
-exercised without a paid run.
+`--optimizer codex` is deliberately absent from that list — see below.
+
+### Real Codex runs
+
+A Codex run spawns the real Codex CLI, which costs money, so it is refused
+by default. The authentication preflight is not the thing that stops an
+accidental run: it proves a session by *spawning* the CLI, and on a machine
+with a Codex login that spawn succeeds and is billed. So `run_optimizer`
+refuses `--optimizer codex` outright, before any preflight, adapter,
+admission authority, or subprocess exists, unless one of two things is true:
+
+- a `CodexTestSeam` is supplied, which points the run at the scripted fake
+  CLI. It is keyword-only, absent from `RunSpec`, and has no flag, so only a
+  test reaches it; or
+- both halves of the opt-in are present:
+  `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1` in the environment **and**
+  `--allow-real-codex` (`RunSpec.allow_real_codex`). Requiring both means
+  neither a serialized spec nor an exported variable authorizes spend on its
+  own — a study arm or a copied command line carrying the flag still
+  refuses.
+
+Anything else raises `RealCodexRefusedError`, and the refused run leaves no
+run directory behind. A session-scoped `conftest.py` fixture asserts the
+environment variable is unset and clears it, so no test can opt in.
+
+A real run therefore requires all of: the opt-in variable, the flag, a live
+authenticated Codex session, macOS (the containment profile is
+`sandbox-exec`), provider spend for the task-model evaluations, and a go
+from Danielle. **No real Codex run has been performed yet** — every claim
+about the arm rests on the scripted stand-in, which speaks real MCP to the
+real evaluation server and so exercises the production admission, lease,
+evaluation, and ledger path. Only the agent's own decisions are scripted.
+
+```bash
+WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
+  python scripts/run-optim.py \
+  --family c19 --optimizer codex --transport fake --split-sizes 2,2,0 \
+  --codex-capacity 8 --allow-real-codex
+```
 
 ## Evaluation and trajectory reports
 

@@ -71,6 +71,7 @@ from whetstone_envs.reporting.study_report import (
     STUDY_MANIFEST_COPY,
     UNPRICED,
     VALIDATION_CHECKLIST,
+    VERDICT_INCOMPLETE,
     VERDICT_INVALID,
     VERDICT_NO_IMPROVEMENT,
     VERDICT_NOT_VALIDATED,
@@ -971,6 +972,51 @@ def test_a_clean_study_still_reports_its_improvement(
     report = build_study_report(reported_manifest)
     assert "improved held-out accuracy" in report.title
     assert VERDICT_INVALID not in render_markdown(report)
+
+
+def test_the_reports_anchor_name_matches_the_analysis_that_writes_it() -> None:
+    """Two spellings of one persisted candidate name, pinned equal.
+
+    The report spells it rather than importing it, so that rendering a
+    manifest does not pull in the optimizer stack. That is only safe while
+    the two agree: a rename on the writing side would otherwise leave the
+    report silently unable to find the anchor row.
+    """
+    from whetstone_envs.optim.study.analysis import NAIVE_CANDIDATE_NAME
+    from whetstone_envs.reporting.study_report import (
+        NAIVE_CANDIDATE_NAME as REPORT_NAME,
+    )
+
+    assert REPORT_NAME == NAIVE_CANDIDATE_NAME == "naive"
+
+
+def test_a_thin_anchor_is_visible_beside_the_paired_completeness(
+    reported_manifest: StudyManifest,
+) -> None:
+    """A downgraded row says which side of the pairing was thin.
+
+    Fails-before: the row carried only the arm's own completeness, so an
+    arm downgraded by *the anchor's* missing rows read as an arm that had
+    failed to measure itself. The paired number decides the verdict and
+    the anchor's own number is rendered beside it.
+    """
+    rows = tuple(
+        row.model_copy(
+            update={"completeness": 0.4, "anchor_completeness": 0.4}
+        )
+        if row.candidate_name == "copro"
+        else row
+        for row in reported_manifest.held_out
+    )
+    report = build_study_report(
+        reported_manifest.model_copy(update={"held_out": rows})
+    )
+    markdown = render_markdown(report)
+    assert "anchor completeness" in markdown
+    assert "completeness (paired)" in markdown
+    # The paired number is what the backstop reads, so the arm is reported
+    # incomplete rather than validated.
+    assert VERDICT_INCOMPLETE in markdown
 
 
 def test_a_failed_leakage_rule_downgrades_the_headline(

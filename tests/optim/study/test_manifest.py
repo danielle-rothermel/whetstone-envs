@@ -34,6 +34,7 @@ from whetstone_envs.optim.study.manifest import (
     ArmRecord,
     BalanceRecord,
     C18Record,
+    CallCountGateRecord,
     DesignRecord,
     EvidencePointer,
     FanoutCheckRecord,
@@ -199,6 +200,9 @@ def _full_manifest() -> StudyManifest:
             "fanout_check": FanoutCheckRecord(
                 passed=True, minibatch_intents=12, full_valset_intents=3
             ),
+            "call_count_gate": CallCountGateRecord(
+                stage="stage1", passed=True, tolerance=1.5
+            ),
             "arms": (
                 ArmRecord(
                     arm_id="copro",
@@ -276,8 +280,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 4
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v4"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 5
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v5"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -303,6 +307,7 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "design",
         "gepa_sizing",
         "fanout_check",
+        "call_count_gate",
         "arms",
         "selection",
         "held_out_claims",
@@ -384,6 +389,12 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "minibatch_intents",
         "full_valset_intents",
     ]
+    assert list(payload["call_count_gate"]) == [
+        "stage",
+        "passed",
+        "tolerance",
+        "overruns",
+    ]
     assert list(payload["arms"][0]) == [
         "arm_id",
         "optimizer",
@@ -443,6 +454,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "p_bootstrap",
         "p_holm",
         "completeness",
+        "anchor_completeness",
     ]
     assert list(payload["balance"]) == [
         "before_stage0_usd",
@@ -476,7 +488,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v5"
+    payload["schema"] = "whetstone_envs.step10_study/v6"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 

@@ -49,6 +49,7 @@ from whetstone_envs.optim.run_cost import (
 )
 from whetstone_envs.optim.study.anchors import EngineBinder
 from whetstone_envs.optim.study.fanout import planned_rows_in_directory
+from whetstone_envs.optim.study.gates import GEPA_MAX_METRIC_CALLS_PINNED
 from whetstone_envs.optim.study.manifest import (
     EvidencePointer,
     RunRecord,
@@ -417,6 +418,19 @@ class StudyOptimizerRunner:
                 )
                 if value is not None
             },
+            # The pinned metric-call budget, not the run's default. Left
+            # unset, ``build_gepa_control`` resolves ``auto`` to roughly
+            # ``train + val + 1`` -- about 89 on the study's 44/44 split --
+            # while the Stage-1 call-count gate and the power design are
+            # both built on ``GEPA_MAX_METRIC_CALLS_PINNED``. A GEPA arm
+            # that ran at the default would be judged against a ceiling it
+            # never had, so the pin is forwarded here rather than left to a
+            # default that agrees with it only by accident.
+            **(
+                {"gepa_max_metric_calls": GEPA_MAX_METRIC_CALLS_PINNED}
+                if arm.optimizer == "gepa"
+                else {}
+            ),
             **(
                 {"codex_capacity": self.codex_capacity}
                 if arm.optimizer == "codex" and self.codex_capacity is not None

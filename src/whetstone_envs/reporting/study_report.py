@@ -1459,6 +1459,38 @@ def _optimizer_section(
     )
 
 
+#: The candidate name the naive anchor is recorded under, spelled here
+#: rather than imported: this module reads persisted manifests and must not
+#: pull in the optimizer stack to render one. Pinned equal to
+#: ``optim.study.analysis.NAIVE_CANDIDATE_NAME`` by the reporting tests,
+#: which is what keeps the two spellings from drifting apart.
+NAIVE_CANDIDATE_NAME = "naive"
+
+
+def _anchor_completeness_cell(
+    manifest: StudyManifest, held: HeldOutRecord
+) -> Cell:
+    """The naive anchor's completeness, cited to the anchor's own vector.
+
+    The figure points at the *anchor's* ``per_task_scores_ref`` rather
+    than this row's: the number describes the anchor's evaluation, and
+    citing the candidate's vector for it would attach the wrong evidence
+    to a real measurement. Absent an anchor row -- or on the anchor's own
+    row, which has nothing to compare against -- there is nothing to cite
+    and the cell says so.
+    """
+    anchor = _held_out_by_name(manifest).get(NAIVE_CANDIDATE_NAME)
+    if held.anchor_completeness is None or anchor is None:
+        return Cell(text=MISSING)
+    return Cell(
+        figure=_pointer_figure(
+            _proportion(held.anchor_completeness),
+            f"held_out[{NAIVE_CANDIDATE_NAME}].completeness",
+            anchor.per_task_scores_ref,
+        )
+    )
+
+
 def _held_out_table(manifest: StudyManifest, arm: ArmRecord) -> Table:
     """The arm's held-out number against the anchors and the nulls.
 
@@ -1502,6 +1534,13 @@ def _held_out_table(manifest: StudyManifest, arm: ArmRecord) -> Table:
                             held.per_task_scores_ref,
                         )
                     ),
+                    # The paired completeness above can be low because the
+                    # anchor lost rows rather than this candidate, so the
+                    # anchor's own side is shown beside it -- pointed at
+                    # the anchor's own per-task vector, because it is a
+                    # measurement like any other and needs the same
+                    # provenance mark rather than being printed as prose.
+                    _anchor_completeness_cell(manifest, held),
                 )
             )
         )
@@ -1510,6 +1549,7 @@ def _held_out_table(manifest: StudyManifest, arm: ArmRecord) -> Table:
             Row(
                 cells=(
                     Cell(text=arm.arm_id),
+                    Cell(text=MISSING),
                     Cell(text=MISSING),
                     Cell(text=MISSING),
                     Cell(text=MISSING),
@@ -1523,7 +1563,8 @@ def _held_out_table(manifest: StudyManifest, arm: ArmRecord) -> Table:
             "held-out mean",
             "95% CI on delta",
             "delta vs naive",
-            "completeness",
+            "completeness (paired)",
+            "anchor completeness",
         ),
         rows=tuple(rows),
         caption=(

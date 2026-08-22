@@ -245,7 +245,24 @@ def write_held_out_analysis(  # noqa: PLR0913
                     p_holm=(
                         corrected[name].p_holm if name in corrected else None
                     ),
-                    completeness=measurement.completeness,
+                    # The *paired* completeness, which is what gated the
+                    # claim: the report's backstop check reads this field,
+                    # so a row carrying the candidate's own number would
+                    # re-accept exactly the comparison the paired minimum
+                    # just downgraded. The naive row has no pairing and
+                    # keeps its own. ``anchor_completeness`` carries the
+                    # other side, so a reader can tell a thin arm from a
+                    # thin anchor rather than reading both as the arm's.
+                    completeness=(
+                        measurement.completeness
+                        if name == NAIVE_CANDIDATE_NAME
+                        else deltas[name].completeness
+                    ),
+                    anchor_completeness=(
+                        None
+                        if name == NAIVE_CANDIDATE_NAME
+                        else naive.completeness
+                    ),
                 )
             )
 
@@ -295,13 +312,30 @@ def _delta_for(
     *measured* row count rather than one study-wide completeness spread
     evenly -- tasks do not fail evenly, and the whole point of the
     weighting is that a task which achieved fewer rows says less.
+
+    **Both sides count.** The delta is paired, so a task is only as
+    observed as its *less* observed side: an arm that achieved every row
+    against an anchor that lost most of its own is not a complete
+    comparison, and weighting by the arm's counts alone treated the
+    anchor's thin fallback mean as fully observed. That let a delta whose
+    anchor half was mostly missing clear the completeness backstop and be
+    claimed. The count per task is therefore the minimum of the two sides'
+    achieved rows, which is conservative by construction: it can only
+    lower a task's weight, never raise it.
     """
     if len(measurement.per_task) != len(naive.per_task):
         raise ValueError(
             f"candidate {arm_id!r} and the naive anchor measured different "
             "numbers of held-out tasks, so their comparison is not paired"
         )
-    achieved = _achieved_counts(measurement, k_repeat=k_repeat)
+    achieved = tuple(
+        min(arm_count, naive_count)
+        for arm_count, naive_count in zip(
+            _achieved_counts(measurement, k_repeat=k_repeat),
+            _achieved_counts(naive, k_repeat=k_repeat),
+            strict=True,
+        )
+    )
     weighted, completeness = weighted_per_task_delta(
         arm_per_task=measurement.per_task,
         naive_per_task=naive.per_task,

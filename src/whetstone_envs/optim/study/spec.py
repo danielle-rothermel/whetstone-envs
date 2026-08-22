@@ -19,7 +19,10 @@ from enum import UNIQUE, StrEnum, auto, verify
 from typing import TYPE_CHECKING
 
 from whetstone_envs.optim.split import TRAIN_VAL_OPTIMIZERS
-from whetstone_envs.optim.study.manifest import read_study_manifest
+from whetstone_envs.optim.study.manifest import (
+    PreRegistrationViolationError,
+    read_study_manifest,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -60,6 +63,7 @@ __all__ = [
     "k_run_for",
     "load_study_spec",
     "next_k_cal",
+    "require_pinned_arms",
     "spec_from_manifest",
 ]
 
@@ -495,7 +499,16 @@ def spec_from_manifest(
     Once Stage 0 has recorded a ``design`` block, that block wins: it is
     what the study actually pre-registered, including any adjustment the
     Stage-0 gate permitted.
+
+    **The rebuilt split is checked against the pinned one.** Each arm's
+    ``train_size``/``val_size`` are ordinary mutable record fields, while
+    ``pre_registration.split_by_arm`` is immutable and hashed. Reading the
+    runnable spec off the mutable side without comparing it to the pinned
+    side is what would let an edited ``ArmRecord`` run MIPROv2 or GEPA at a
+    partition the design never registered, under a design hash that still
+    validates. :func:`_require_pinned_split` refuses that.
     """
+    _require_pinned_split(manifest)
     design = manifest.design
     arms = tuple(
         ArmSpec(
@@ -535,6 +548,99 @@ def spec_from_manifest(
         resamples=RESAMPLES if design is None else design.resamples,
         arms=arms,
     )
+
+
+def _require_pinned_split(manifest: StudyManifest) -> None:
+    """Refuse arm records that disagree with the pinned ``split_by_arm``.
+
+    The pre-registration is the truth about what partition each arm was
+    registered at, and it is immutable: ``write_study_manifest`` refuses any
+    write that does not carry the block back byte for byte. An
+    ``ArmRecord``'s ``train_size``/``val_size`` carry no such protection --
+    they are rewritten every time a stage merges runs -- so the two can
+    drift apart, and every stage after Stage 0 rebuilds its runnable spec
+    from the *unprotected* side.
+
+    That drift is the same class of error
+    :class:`~whetstone_envs.optim.study.manifest.PreRegistrationViolationError`
+    exists for -- a study running a design other than the one it registered
+    -- so it is refused as one rather than as a generic value error. A
+    manifest with no pre-registration yet has nothing to disagree with,
+    which is the pre-Stage-0 state.
+
+    An arm the pinned block does not name is a *different* case and is
+    left to the caller. Adding an arm and then re-pinning is exactly how
+    ``stage0 --replace-design`` records an amendment, and Stage 0 rebuilds
+    the spec before it writes the new block -- so refusing an unnamed arm
+    here would break the one legitimate path that produces one.
+    :func:`require_pinned_arms` is the check for the stages that spend,
+    where an unpinned arm really would run unregistered.
+    """
+    pinned = manifest.pre_registration
+    if pinned is None:
+        return
+    disagreements = [
+        f"{arm.arm_id}: records {(arm.train_size, arm.val_size)}, "
+        f"pre-registered {pinned.split_by_arm[arm.arm_id]}"
+        for arm in manifest.arms
+        if arm.arm_id in pinned.split_by_arm
+        and _recorded_split(arm) != pinned.split_by_arm[arm.arm_id]
+    ]
+    if disagreements:
+        raise PreRegistrationViolationError(
+            "these arm records disagree with the pre-registered "
+            "split_by_arm, so the spec they rebuild is not the design this "
+            "study registered: " + "; ".join(disagreements)
+        )
+
+
+def require_pinned_arms(manifest: StudyManifest) -> None:
+    """Refuse a spending stage whose arms the pre-registration never named.
+
+    ``split_by_arm`` names exactly the arms the design declared, so an arm
+    present in the manifest and absent from it appeared *after* the design
+    was pinned. Running it would spend on an arm no pre-registration ever
+    fixed a partition, a run count, or a place in the correction family
+    for -- which is the drift the pinned block exists to prevent, in its
+    purest form.
+
+    Separate from :func:`_require_pinned_split` and called only by the arm
+    stages, because Stage 0 legitimately sees this state: adding an arm and
+    re-pinning is how ``--replace-design`` records an amendment, and Stage 0
+    rebuilds the spec before writing the new block.
+    """
+    pinned = manifest.pre_registration
+    if pinned is None:
+        return
+    unpinned = sorted(
+        arm.arm_id
+        for arm in manifest.arms
+        if arm.arm_id not in pinned.split_by_arm
+    )
+    if unpinned:
+        raise PreRegistrationViolationError(
+            f"these arms are not named by the pre-registration: {unpinned}. "
+            "They were declared after the design was pinned, so running "
+            "them would spend on a design this study never registered; "
+            "re-pin with stage0 --replace-design to record the amendment"
+        )
+
+
+def _recorded_split(arm: ArmRecord) -> tuple[int, int] | None:
+    """The arm record's partition in the pinned block's own shape.
+
+    An arm whose optimizer has no train/val concept records both as
+    ``None`` and is pinned as ``None``; a half-set record is neither, and
+    compares unequal to any pinned value rather than being coerced into
+    one.
+    """
+    if arm.train_size is None and arm.val_size is None:
+        return None
+    if arm.train_size is None or arm.val_size is None:
+        # Reported through the caller's message as a disagreement: a record
+        # naming one half of a partition names no partition at all.
+        return (-1, -1)
+    return (arm.train_size, arm.val_size)
 
 
 def _split_spec(role: str, record: SplitRecord) -> SplitSpec:

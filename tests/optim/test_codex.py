@@ -22,6 +22,7 @@ from whetstone_envs.optim.codex import (
     CODEX_EVALUATE_CALL_CAP,
     CODEX_REASONING_EFFORTS,
     CODEX_RUN_ROOT_NAME,
+    FORBID_REAL_CODEX_ENV,
     CodexReasoningEffort,
     CodexTestSeam,
     RealCodexRefusedError,
@@ -627,7 +628,7 @@ def test_the_env_var_name_matches_the_suites_own() -> None:
 
 
 def test_a_codex_run_without_a_seam_or_the_opt_in_is_refused(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
     """The default Codex run must never reach the real, billed CLI.
 
@@ -636,7 +637,14 @@ def test_a_codex_run_without_a_seam_or_the_opt_in_is_refused(
     succeeds and is billed. So a run that names the Codex arm and supplies
     nothing else is refused outright -- before any preflight, adapter,
     admission authority, or subprocess exists.
+
+    The session tripwire is lifted here so the refusal under test is the
+    *opt-in* one rather than the tripwire's, which would otherwise answer
+    first and leave this assertion unable to fail. The run is still
+    pointed at the tripwire binary, so a regression spawns evidence
+    instead of the real CLI.
     """
+    monkeypatch.delenv(FORBID_REAL_CODEX_ENV, raising=False)
     binary = _tripwire_binary(tmp_path / "bin")
     output_dir = tmp_path / "run"
 
@@ -703,9 +711,109 @@ def test_a_seam_admits_the_run_without_any_opt_in() -> None:
 
 
 def test_both_halves_of_the_opt_in_admit_the_run(monkeypatch) -> None:
-    """The deliberate paid path exists, and takes both halves to reach."""
+    """The deliberate paid path exists, and takes both halves to reach.
+
+    The session tripwire is lifted for this one assertion, because the
+    fact under test is precisely what the tripwire otherwise masks: that
+    the two halves together *do* admit a run. Nothing is spawned -- the
+    guard is called directly and returns without building anything.
+    """
+    monkeypatch.delenv(FORBID_REAL_CODEX_ENV, raising=False)
     monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
     refuse_unauthorized_real_codex(test_seam=None, allow_real_codex=True)
+
+
+# --------------------------------------------------------------------------
+# The test-process tripwire
+# --------------------------------------------------------------------------
+
+
+def test_the_forbid_var_name_matches_the_suites_own() -> None:
+    """The conftest arms the variable this module's gate reads."""
+    from tests.conftest import (
+        FORBID_REAL_CODEX_ENV as CONFTEST_ENV,
+    )
+
+    assert CONFTEST_ENV == FORBID_REAL_CODEX_ENV
+    assert FORBID_REAL_CODEX_ENV == "WHETSTONE_ENVS_FORBID_REAL_CODEX"
+
+
+def test_the_suite_arms_the_tripwire_for_its_whole_session() -> None:
+    """The fixture's effect, checked rather than assumed.
+
+    Every test below relies on the tripwire being armed by the time it
+    runs; if the fixture stopped setting it, those tests would keep
+    passing for the wrong reason.
+    """
+    import os
+
+    assert os.environ.get(FORBID_REAL_CODEX_ENV)
+
+
+def test_the_tripwire_refuses_even_both_opt_in_halves(
+    tmp_path, monkeypatch
+) -> None:
+    """The opt-in is process state, so it cannot be the last defence.
+
+    Fails-before: a test that monkeypatched the allow variable to prove a
+    gate lifts also lifted the real gate, and the study harness's early
+    session probe -- which runs *after* the opt-in is satisfied -- spawned
+    the real CLI. With the tripwire armed the same setup refuses.
+    """
+    binary = _tripwire_binary(tmp_path / "bin")
+    output_dir = tmp_path / "run"
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
+
+    with pytest.raises(RealCodexRefusedError, match="forbids it"):
+        run_optimizer(_codex_spec(binary, output_dir, allow_real_codex=True))
+
+    _assert_nothing_spawned(output_dir)
+
+
+def test_the_tripwire_also_covers_the_standalone_preflight(
+    tmp_path, monkeypatch
+) -> None:
+    """The study harness's early probe routes through the same gate.
+
+    The probe is a real session probe, so reaching it around the gate
+    would be exactly the bypass the tripwire exists to prevent. Pointed at
+    the tripwire binary, so a regression spawns evidence rather than the
+    real CLI.
+    """
+    from whetstone_envs.optim.codex import preflight_codex_session
+
+    scratch = tmp_path / "preflight"
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
+
+    with pytest.raises(RealCodexRefusedError, match="forbids it"):
+        preflight_codex_session(
+            scratch_root=scratch,
+            codex_binary=_tripwire_binary(tmp_path / "bin"),
+            allow_real_codex=True,
+        )
+
+    _assert_nothing_spawned(scratch)
+
+
+def test_the_tripwire_does_not_block_the_scripted_path(tmp_path) -> None:
+    """A seamed run reaches no real CLI, so there is nothing to forbid.
+
+    This is what keeps the tripwire from disarming the suite: every
+    scripted Codex test still runs under it.
+    """
+    from whetstone_envs.optim.codex import preflight_codex_session
+
+    seen: list[str] = []
+
+    def _record(**_kwargs: object) -> None:
+        seen.append("preflight")
+
+    preflight_codex_session(
+        scratch_root=tmp_path / "preflight",
+        codex_binary=_tripwire_binary(tmp_path / "bin"),
+        test_seam=CodexTestSeam(preflight=_record, environment={}),
+    )
+    assert seen == ["preflight"]
 
 
 def test_the_tool_input_schema_ordering_the_projection_unpacks() -> None:

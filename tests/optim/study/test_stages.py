@@ -60,6 +60,7 @@ from .conftest import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from whetstone_envs.optim.codex import CodexTestSeam
     from whetstone_envs.optim.study.spec import ArmSpec
 
 
@@ -202,6 +203,31 @@ class _Harness:
             observed_task_calls=self.task_calls,
         )
 
+    def load_recorded_run(
+        self, *, arm: ArmSpec, run: RunRecord
+    ) -> ArmRunResult | None:
+        """Re-read a run an earlier stage recorded.
+
+        Stage 2 selects over the union of its own seeds and Stage 1's, so a
+        harness driving Stage 2 after a real Stage 1 has to hand back the
+        earlier runs. It is rebuilt from the record rather than re-run,
+        which is what the production loader does from artifacts.
+        """
+        del arm
+        if run.seed is None:
+            return None
+        self.events.append(f"load:{run.run_id}")
+        return ArmRunResult(
+            candidate=RunCandidate(
+                run_id=run.run_id,
+                seed=run.seed,
+                candidate_name=run.run_id,
+                template="{grid} {command} {question}",
+            ),
+            record=run,
+            observed_task_calls=self.task_calls,
+        )
+
     def score_official(self, candidate: RunCandidate) -> CandidateScore:
         self.events.append(f"official:{candidate.run_id}")
         return CandidateScore(
@@ -238,7 +264,10 @@ class _Harness:
         )
 
     def environment(
-        self, *, real_codex_authorized: bool = False
+        self,
+        *,
+        real_codex_authorized: bool = False,
+        codex_test_seam: CodexTestSeam | None = None,
     ) -> StageEnvironment:
         with bound_stage_environment(self.study_dir) as base:
             return StageEnvironment(
@@ -250,7 +279,9 @@ class _Harness:
                 run_optimizer=self.run_optimizer,
                 score_official=self.score_official,
                 evaluate_held_out=self.evaluate_held_out,
+                load_recorded_run=self.load_recorded_run,
                 real_codex_authorized=real_codex_authorized,
+                codex_test_seam=codex_test_seam,
             )
 
 
@@ -260,6 +291,25 @@ def _calibrated_study(tmp_path: Path) -> Path:
     write_study_manifest(study_dir, toy_manifest())
     with bound_stage_environment(study_dir) as environment:
         run_stage0_into_manifest(study_dir=study_dir, environment=environment)
+    return study_dir
+
+
+def _piloted_study(tmp_path: Path) -> Path:
+    """A study whose Stage 1 ran and cleared the call-count gate.
+
+    Stage 2 requires exactly that, so every Stage-2 test that is not about
+    the prerequisite itself starts from here rather than from Stage 0.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=_Harness(study_dir, scores=scores).environment(),
+    )
     return study_dir
 
 
@@ -454,16 +504,51 @@ def test_an_authorized_codex_stage_still_needs_the_environment_half(
     assert harness.events == []
 
 
+def _scripted_preflight_seam() -> CodexTestSeam:
+    """A seam whose preflight succeeds without any Codex at all.
+
+    The early guard's probe is a *real session probe* on the production
+    path, so a test that satisfies the opt-in and supplies no seam spawns
+    the real CLI -- which is exactly what happened before this seam
+    existed. Naming the scripted preflight keeps the test about the gate.
+    """
+    from whetstone.testing.runtime import scripted_codex_preflight
+
+    from whetstone_envs.optim.codex import CodexTestSeam
+
+    return CodexTestSeam(
+        preflight=lambda **_kwargs: scripted_codex_preflight(),
+        environment={},
+    )
+
+
+def _failing_preflight_seam(message: str) -> CodexTestSeam:
+    """A seam standing in for a Codex this machine cannot run.
+
+    An unsupported platform, an absent binary, and an expired session all
+    reach the guard as a raising preflight, so one raising stand-in covers
+    the class without needing a real broken Codex to reproduce.
+    """
+    from whetstone.optim.codex.preflight import CodexPreflightError
+
+    from whetstone_envs.optim.codex import CodexTestSeam
+
+    def _raise(**_kwargs: object) -> None:
+        raise CodexPreflightError(message)
+
+    return CodexTestSeam(preflight=_raise, environment={})
+
+
 def test_both_halves_of_the_opt_in_lift_the_early_refusal(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """With both halves present the stage dispatches its arms.
+    """With both halves present and a usable session, the stage runs.
 
-    The Codex arm's own run still goes through the injected runner rather
-    than a real session -- this test is about the *gate*, not about
-    spawning a CLI -- so nothing here reaches a provider or a subprocess.
-    Its point is that the gate, once satisfied, stops refusing: without
-    this the flag would be unfalsifiable.
+    The Codex arm's own run goes through the injected runner and the
+    guard's session probe goes through the scripted seam, so nothing here
+    reaches a provider or spawns a CLI. Its point is that the gate, once
+    satisfied, stops refusing: without this the flag would be
+    unfalsifiable.
     """
     from whetstone_envs.optim.codex import (
         ALLOW_REAL_CODEX_ENV,
@@ -483,10 +568,55 @@ def test_both_halves_of_the_opt_in_lift_the_early_refusal(
     run_arm_stage(
         study_dir=study_dir,
         stage=StageId.STAGE1,
-        environment=harness.environment(real_codex_authorized=True),
+        environment=harness.environment(
+            real_codex_authorized=True,
+            codex_test_seam=_scripted_preflight_seam(),
+        ),
     )
 
     assert any(event.startswith("run:codex-") for event in harness.events)
+
+
+def test_an_unusable_codex_refuses_before_any_arm_runs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Authorization is not usability, and the difference costs money.
+
+    Fails-before: both opt-in halves present, the stage proceeded and
+    discovered an unusable Codex -- unsupported platform, missing binary,
+    expired session -- only when the Codex arm's own turn arrived, after
+    COPRO, MIPROv2, and GEPA had been paid for. The empty event list is
+    what makes "before any arm runs" checkable rather than asserted.
+    """
+    from whetstone_envs.optim.codex import (
+        ALLOW_REAL_CODEX_ENV,
+        ALLOW_REAL_CODEX_ENV_VALUE,
+    )
+
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
+    study_dir = _codex_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores)
+
+    with pytest.raises(StageError, match="cannot run a Codex session") as exc:
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=harness.environment(
+                real_codex_authorized=True,
+                codex_test_seam=_failing_preflight_seam("no auth source"),
+            ),
+        )
+
+    assert harness.events == []
+    # The preflight's own diagnosis survives as the cause rather than
+    # being replaced by the stage's summary of it, so an operator can act
+    # on *why* the session is unusable.
+    assert "no auth source" in str(exc.value)
+    assert exc.value.__cause__ is not None
 
 
 def test_a_stage_with_no_codex_arm_needs_no_authorization(
@@ -611,12 +741,15 @@ def test_rerunning_a_finished_stage_refuses_rather_than_repaying(
         [event for event in harness.events if event.startswith("run:")]
     )
 
+    # A stage given *no* loader is the case under test, so the loader the
+    # harness otherwise supplies is dropped explicitly rather than by
+    # relying on it being absent by default.
     resumed = _Harness(study_dir, scores=scores)
     with pytest.raises(StageError, match="no way to load them"):
         run_arm_stage(
             study_dir=study_dir,
             stage=StageId.STAGE1,
-            environment=resumed.environment(),
+            environment=replace(resumed.environment(), load_recorded_run=None),
         )
     # Nothing was re-executed: the recorded seeds were skipped, so the
     # crashed-and-resumed path never re-pays for a run it already has.
@@ -790,12 +923,117 @@ def test_stage1_refuses_a_run_that_looks_like_a_fanned_out_one(
     ]
 
 
+def test_stage1_records_its_call_count_verdict(tmp_path: Path) -> None:
+    """The verdict outlives the process that reached it.
+
+    Fails-before: the gate was evaluated inside Stage 1 and its result was
+    kept nowhere, so nothing downstream could tell a cleared pilot from a
+    pilot that never ran.
+    """
+    study_dir = _piloted_study(tmp_path)
+    gate = read_study_manifest(study_dir).call_count_gate
+    assert gate is not None
+    assert gate.stage == StageId.STAGE1.value
+    assert gate.passed
+    assert gate.overruns == ()
+
+
+def test_a_failed_stage1_gate_is_recorded_with_its_overruns(
+    tmp_path: Path,
+) -> None:
+    """A failed gate is a finding the study records, not an absence.
+
+    Recording it is what lets the Stage-2 refusal below say the pilot
+    *failed* rather than reporting the same missing-pilot message it would
+    for a study that never ran one.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores, task_calls=10**6)
+    with pytest.raises(StageError, match="fan-out bug"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=harness.environment(),
+        )
+    gate = read_study_manifest(study_dir).call_count_gate
+    assert gate is not None
+    assert not gate.passed
+    assert gate.overruns
+
+
+def test_stage2_refuses_when_no_stage1_gate_was_recorded(
+    tmp_path: Path,
+) -> None:
+    """The pilot is a prerequisite, not a suggestion.
+
+    Fails-before: a Stage 2 invoked directly after Stage 0 ran the full
+    five-run design without the call-count gate ever having been
+    evaluated, which is exactly the five-times-over bill the pilot exists
+    to prevent. Asserting the harness recorded no events is what makes
+    "before dispatch, zero spend" checkable.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores)
+    with pytest.raises(StageError, match="recorded no such gate"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE2,
+            environment=harness.environment(),
+        )
+    assert harness.events == []
+
+
+def test_stage2_refuses_behind_a_stage1_whose_gate_failed(
+    tmp_path: Path,
+) -> None:
+    """A failed pilot blocks the full design rather than being skipped.
+
+    Fails-before: the Stage-1 failure aborted that stage only. Re-invoking
+    the command at Stage 2 skipped ``_check_call_counts`` entirely -- it
+    returns early for any stage but Stage 1 -- and paid for the whole
+    design behind a gate that had already caught a fan-out.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    failed = _Harness(study_dir, scores=scores, task_calls=10**6)
+    with pytest.raises(StageError, match="fan-out bug"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=failed.environment(),
+        )
+    harness = _Harness(study_dir, scores=scores)
+    with pytest.raises(StageError, match="pilot failed it"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE2,
+            environment=harness.environment(),
+        )
+    assert harness.events == []
+
+
 def test_stage2_does_not_re_gate_what_the_pilot_already_established(
     tmp_path: Path,
 ) -> None:
     """Stage 1 is where a fan-out bug is caught; re-reporting it at Stage 2
-    would just restate a fact the pilot already settled."""
-    study_dir = _calibrated_study(tmp_path)
+    would just restate a fact the pilot already settled.
+
+    The pilot here passed, so Stage 2 runs -- and it runs even though this
+    harness reports call counts that *would* fail the gate, which is the
+    point: the gate is the pilot's, not Stage 2's.
+    """
+    study_dir = _piloted_study(tmp_path)
     spec = spec_from_manifest(read_study_manifest(study_dir))
     scores = {
         f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds

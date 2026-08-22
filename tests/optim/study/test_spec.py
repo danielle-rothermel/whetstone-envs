@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from whetstone_envs.optim.study.spec import (
@@ -26,6 +28,9 @@ from whetstone_envs.optim.study.spec import (
     next_k_cal,
     spec_from_manifest,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _spec(
@@ -397,3 +402,123 @@ def test_an_arm_without_a_train_val_concept_refuses_a_split() -> None:
             train_size=2,
             val_size=2,
         )
+
+
+# --------------------------------------------------------------------------
+# The rebuilt spec must match the pinned split
+# --------------------------------------------------------------------------
+
+
+def _pinned_study(tmp_path: Path) -> Path:
+    """A study whose Stage 0 pinned a pre-registration.
+
+    The arm carrying the split is MIPROv2 rather than the toy manifest's
+    COPRO: COPRO has no train/val concept, so ``ArmSpec`` refuses a split
+    on it outright and a mismatch test built on it would pass on that
+    unrelated refusal whether or not the pinned-split check existed.
+    """
+    pytest.importorskip("whetstone.experiment.env")
+    from whetstone_envs.optim.study.environment import bound_stage_environment
+    from whetstone_envs.optim.study.manifest import (
+        ArmRecord,
+        write_study_manifest,
+    )
+    from whetstone_envs.optim.study.stages import run_stage0_into_manifest
+
+    from .conftest import TOY_TRAIN_SIZE, TOY_VAL_SIZE, toy_arms, toy_manifest
+
+    miprov2 = ArmRecord(
+        arm_id="miprov2",
+        optimizer="miprov2",
+        demo_mode=None,
+        train_size=TOY_TRAIN_SIZE,
+        val_size=TOY_VAL_SIZE,
+        control_identity_hash="a" * 64,
+        seed_note="provider-seed-control-only",
+        runs=(),
+    )
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest(arms=(*toy_arms(), miprov2)))
+    with bound_stage_environment(study_dir) as environment:
+        run_stage0_into_manifest(study_dir=study_dir, environment=environment)
+    return study_dir
+
+
+def test_arm_records_disagreeing_with_the_pinned_split_are_refused(
+    tmp_path: Path,
+) -> None:
+    """The pinned block is the truth; the arm record is not protected.
+
+    Fails-before: Stages 1 and 2 rebuilt each arm's runnable spec from
+    ``ArmRecord.train_size``/``val_size`` -- ordinary mutable fields,
+    rewritten every time a stage merges runs -- while
+    ``pre_registration.split_by_arm`` is immutable and hashed, and the two
+    were never compared. An edited record therefore ran MIPROv2 or GEPA at
+    a partition the design never registered, under a design hash that
+    still validated.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        PreRegistrationViolationError,
+        read_study_manifest,
+    )
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    pinned = manifest.pre_registration
+    assert pinned is not None
+    # Rewrite the MIPROv2 arm's recorded partition without touching the
+    # pinned block, which is exactly the drift the check exists to catch.
+    # The rewritten split is still a legal one for this optimizer, so the
+    # only thing that can refuse it is the comparison under test.
+    assert pinned.split_by_arm["miprov2"] == (2, 2)
+    edited = tuple(
+        arm.model_copy(update={"train_size": 1, "val_size": 3})
+        if arm.arm_id == "miprov2"
+        else arm
+        for arm in manifest.arms
+    )
+    with pytest.raises(PreRegistrationViolationError, match="split_by_arm"):
+        spec_from_manifest(manifest.model_copy(update={"arms": edited}))
+
+
+def test_an_arm_the_pre_registration_never_named_is_refused(
+    tmp_path: Path,
+) -> None:
+    """An arm added after pinning would spend on an unregistered design.
+
+    ``split_by_arm`` names exactly the arms the design declared, so an arm
+    absent from it has no pinned partition, run count, or place in the
+    correction family. Checked separately from the split comparison
+    because Stage 0 legitimately sees this state while writing an
+    amendment.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        PreRegistrationViolationError,
+        read_study_manifest,
+    )
+    from whetstone_envs.optim.study.spec import require_pinned_arms
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    added = manifest.model_copy(
+        update={
+            "arms": (
+                *manifest.arms,
+                manifest.arms[0].model_copy(update={"arm_id": "gepa"}),
+            )
+        }
+    )
+    with pytest.raises(PreRegistrationViolationError, match="not named"):
+        require_pinned_arms(added)
+    # The loader itself stays permissive, which is what keeps
+    # ``stage0 --replace-design`` able to rebuild a spec over the new arm
+    # before it writes the block that pins it.
+    assert spec_from_manifest(added).arms
+
+
+def test_a_manifest_agreeing_with_its_pinned_split_still_loads(
+    tmp_path: Path,
+) -> None:
+    """The control: the check refuses drift, not every pinned study."""
+    from whetstone_envs.optim.study.manifest import read_study_manifest
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    assert spec_from_manifest(manifest).arms

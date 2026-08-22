@@ -141,6 +141,23 @@ ALLOW_REAL_CODEX_ENV = "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
 #: rather than spends.
 ALLOW_REAL_CODEX_ENV_VALUE = "1"
 
+#: The test-process tripwire: while this names any non-empty value, no
+#: opt-in of any kind reaches a real Codex session.
+#:
+#: The opt-in above is *process* state, and a test can set process state.
+#: ``monkeypatch.setenv`` is the ordinary way to prove a gate lifts, and a
+#: test that lifts the authorization half in order to check the next
+#: decision would -- without this -- also lift the last thing standing
+#: between the suite and a billed session. That is not hypothetical: the
+#: study harness's early guard runs a session probe once the opt-in is
+#: satisfied, so an authorization test that supplied no seam spawned the
+#: real CLI.
+#:
+#: So the suite sets this for the whole session and the gate honours it
+#: above every other input. A test may monkeypatch the allow variable; it
+#: cannot reach a real session while this one is present.
+FORBID_REAL_CODEX_ENV = "WHETSTONE_ENVS_FORBID_REAL_CODEX"
+
 
 class RealCodexRefusedError(RuntimeError):
     """A Codex run would have spawned the real, billed CLI.
@@ -177,9 +194,32 @@ def refuse_unauthorized_real_codex(
     The two grounds are mutually exclusive in practice but not checked as
     such: a seam already means no real CLI is reachable, so an opt-in
     alongside one buys nothing.
+
+    **The test-process tripwire outranks both.** When
+    :data:`FORBID_REAL_CODEX_ENV` names any non-empty value, this refuses
+    regardless of the opt-in halves and regardless of any ``monkeypatch``
+    that set them: the suite sets it once per session, so a test may lift
+    the authorization half to prove a gate lifts and still cannot reach a
+    real session. A seam is unaffected, because a seamed run reaches no
+    real CLI to forbid -- which is what keeps the scripted path, and the
+    tests that drive it, fully exercisable under the tripwire.
+
+    This is the single gate every production path to the real preflight or
+    adapter passes through, including the study harness's early stage
+    guard, so the tripwire cannot be routed around by reaching the
+    preflight another way.
     """
     if test_seam is not None:
         return
+    forbidden = os.environ.get(FORBID_REAL_CODEX_ENV)
+    if forbidden:
+        raise RealCodexRefusedError(
+            "a codex run would spawn the real Codex CLI, and "
+            f"{FORBID_REAL_CODEX_ENV}={forbidden!r} forbids it in this "
+            "process. This is the test-process tripwire: the opt-in is "
+            "process state a test can set, so it is not the last line of "
+            "defence. Drive the scripted fake CLI through a CodexTestSeam."
+        )
     if (
         allow_real_codex
         and os.environ.get(ALLOW_REAL_CODEX_ENV) == ALLOW_REAL_CODEX_ENV_VALUE
@@ -355,6 +395,60 @@ def build_codex_adapter(  # noqa: PLR0913
     return CodexAdapter(runner, store=store)
 
 
+def preflight_codex_session(
+    *,
+    scratch_root: Path,
+    codex_binary: str = CODEX_DEFAULT_BINARY,
+    model: str = "",
+    allow_real_codex: bool = False,
+    test_seam: CodexTestSeam | None = None,
+) -> None:
+    """Prove a usable Codex session ahead of a stage that will need one.
+
+    This is :func:`build_codex_adapter`'s own preflight, reachable without
+    an engine, a store, or a control. A study stage whose design names the
+    Codex arm needs the answer *before* it starts paying for the arms
+    ordered ahead of it: an unsupported platform, a missing binary, or an
+    expired session is otherwise discovered on the Codex arm's turn, after
+    COPRO, MIPROv2, and GEPA have already been bought.
+
+    It runs the same ``codex_auth_preflight`` through the same executor and
+    the same containment path a real run would, so a session it admits is
+    one the run can use, and ``test_seam`` substitutes it exactly as it
+    does for the adapter -- no production caller can construct one.
+
+    The probe is itself a billed session probe, so this routes through
+    :func:`refuse_unauthorized_real_codex` before building anything --
+    that gate is where the two-part opt-in and the test-process tripwire
+    live, and reaching a real probe around it would be exactly the
+    bypass the tripwire exists to prevent. ``allow_real_codex`` is the
+    caller's authorization; an unauthorized or forbidden call raises
+    :class:`RealCodexRefusedError` here, and an authorized one raises
+    whatever the preflight raises, which for the real one is
+    ``CodexPreflightError``.
+    """
+    refuse_unauthorized_real_codex(
+        test_seam=test_seam, allow_real_codex=allow_real_codex
+    )
+    executor = build_codex_executor(run_root=scratch_root)
+    runner = SubprocessCodexRunner(
+        executor=executor,
+        codex_binary=codex_binary,
+        model=model,
+        environment=dict(test_seam.environment) if test_seam else None,
+        extra_environment_keys=(
+            test_seam.extra_environment_keys if test_seam else frozenset()
+        ),
+    )
+    preflight = test_seam.preflight if test_seam else codex_auth_preflight
+    preflight(
+        executor=executor,
+        codex_binary=codex_binary,
+        environment=runner.codex_process_environment(),
+        model=model,
+    )
+
+
 def codex_run_root(output_dir: Path) -> Path:
     """Where one Codex run's dr-exec job records live."""
     return output_dir / CODEX_RUN_ROOT_NAME
@@ -368,11 +462,13 @@ __all__ = [
     "CODEX_EVALUATE_CALL_CAP",
     "CODEX_REASONING_EFFORTS",
     "CODEX_RUN_ROOT_NAME",
+    "FORBID_REAL_CODEX_ENV",
     "CodexReasoningEffort",
     "CodexTestSeam",
     "RealCodexRefusedError",
     "build_codex_adapter",
     "build_codex_control",
     "codex_run_root",
+    "preflight_codex_session",
     "refuse_unauthorized_real_codex",
 ]

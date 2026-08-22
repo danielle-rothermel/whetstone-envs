@@ -6,6 +6,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stage 2 requires a Stage 1 whose call-count gate passed.** The gate
+  catches a fan-out bug — an optimizer whose minibatch intents silently
+  expanded to the full valset — for the price of one run per arm, which is
+  the whole reason the pilot exists. Its verdict was evaluated inside the
+  Stage-1 process and recorded nowhere, so a Stage 2 invoked directly after
+  Stage 0, or re-invoked after a Stage 1 whose gate had failed, skipped the
+  check entirely and paid for the full five-run design behind it. Stage 1
+  now records the verdict — passing or failing, with the overrunning runs
+  named — in a new `call_count_gate` manifest block, and Stage 2 refuses
+  before dispatching any arm when it is missing or failed, naming which of
+  the two it is because the actions differ. The manifest schema is `v5`
+  accordingly.
+- **A held-out delta is only as complete as its thinner side.** The paired
+  completeness weighting read the optimizer's achieved row counts alone, so
+  an arm that measured every row against a naive anchor whose own held-out
+  evaluation had lost most of its repeats reported completeness `1.0`: the
+  anchor's thin fallback mean was treated as fully observed, and the delta
+  cleared the 90% backstop and was claimed on evidence that was mostly
+  missing on one side. Completeness is now the per-task **minimum** of both
+  sides' achieved counts — conservative by construction, and the minimum
+  rather than the product because the weight is a fraction of a planned
+  sample, so two fully observed sides must still weight `1.0`. The held-out
+  row records the paired figure, which is what the report's backstop reads,
+  and carries the anchor's own completeness beside it as
+  `anchor_completeness` so a downgraded arm is not misread as having failed
+  to measure itself.
+- **A Codex-bearing stage proves the session before it buys anything
+  else.** The early guard checked only *authorization*, so a stage with
+  both opt-in halves present still discovered an unusable Codex — an
+  unsupported platform, a binary absent from the run's PATH, an expired or
+  missing session — when the Codex arm's own turn arrived, after COPRO,
+  MIPROv2, and GEPA had been paid for. The same preflight `run_optimizer`
+  reaches now runs at the guard, before any arm is dispatched, and a
+  failure refuses the stage with the preflight's own diagnosis preserved as
+  the cause.
+- **GEPA study arms run at the pre-registered metric-call budget.** The
+  arm's `RunSpec` carried no `gepa_max_metric_calls`, so `build_gepa_control`
+  resolved its own `auto` default — roughly `train + val + 1`, about 89 on
+  the study's 44/44 split — while the Stage-1 call-count gate and the power
+  design are both built on the pinned `GEPA_MAX_METRIC_CALLS_PINNED = 200`.
+  A GEPA arm was therefore judged against a ceiling it never ran at. The
+  runner now forwards the pin, and on GEPA arms only.
+- **A stage refuses arm records that disagree with the pinned split.**
+  Stages 1 and 2 rebuild each arm's runnable spec from `ArmRecord`'s
+  mutable `train_size`/`val_size` while `pre_registration.split_by_arm` is
+  the immutable, hashed truth, and the two were never compared — so an
+  edited record could run MIPROv2 or GEPA at a partition the design never
+  registered, under a design hash that still validated. Loading a spec now
+  raises `PreRegistrationViolationError` when they disagree, and an arm
+  stage additionally refuses arms the pinned block does not name at all —
+  an arm declared after the design was pinned has no registered partition,
+  run count, or place in the correction family. Stage 0 stays permissive
+  there, because adding an arm and re-pinning is exactly how
+  `stage0 --replace-design` records an amendment.
+
+### Security
+
+- **The test suite cannot reach a real Codex session, even under
+  `monkeypatch`.** The two-part opt-in is process state, and setting the
+  environment half is the ordinary way to test that a gate lifts — so an
+  authorization test that supplied no scripted seam could reach the real
+  CLI by way of a session probe that runs *after* the opt-in is satisfied.
+  `refuse_unauthorized_real_codex` now honours a new
+  `WHETSTONE_ENVS_FORBID_REAL_CODEX` above every other input, and the
+  suite's session fixture arms it for the whole run: a test may
+  monkeypatch the allow variable and still cannot reach a real session,
+  while scripted runs through a `CodexTestSeam` are unaffected because they
+  reach no real CLI to forbid. Every production path to the real preflight
+  or adapter — including the study harness's early stage guard — routes
+  through that one gate, so the tripwire cannot be bypassed by reaching a
+  preflight another way.
+
 ### Changed
 - Pins published whetstone-ai 0.1.8, whose Codex-direct optimizer is the
   first to have produced evaluations against the real `codex` CLI: the
@@ -29,8 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   partition could not be audited for this. `ArmSpec` carries the two sizes
   as design fields; `ArmRecord` records them and the pre-registration
   hashes them per arm as `split_by_arm`, so an arm rerun at a different
-  partition is a different pinned design rather than the same one. The
-  manifest schema is `v4` accordingly. `default_arms` pins the protocol's
+  partition is a different pinned design rather than the same one, which
+  the manifest schema records from `v4` on. `default_arms` pins the protocol's
   44/44 of the internal 88 — an even split keeps one full valset pass
   affordable while leaving the bootstrap a 44-task trainset, and the two
   cover the internal split exactly, which GEPA requires. Two new audit

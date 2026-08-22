@@ -356,7 +356,14 @@ COMPLETENESS_BACKSTOP = 0.90
 
 #: How a task's achieved sample count enters the estimate. Persisted, so the
 #: report states the rule it applied rather than describing one.
-COMPLETENESS_RULE = "achieved-count-weighted-per-task-delta"
+#:
+#: A paired delta is only as observed as its *less* observed side, so the
+#: count a task contributes is the per-task minimum of the arm's achieved
+#: rows and the anchor's. The minimum rather than the product because the
+#: weight is a fraction of a planned sample, not a joint probability:
+#: two sides each at 3/3 must weight 1.0, and a product of fractions would
+#: punish a fully observed pair the moment either side is ragged.
+COMPLETENESS_RULE = "achieved-count-weighted-per-task-delta-paired-minimum"
 
 
 def weighted_per_task_delta(

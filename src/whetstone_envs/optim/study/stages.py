@@ -55,6 +55,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVENANCE_ORIGINAL,
     STUDY_STORE_NAME,
     ArmRecord,
+    CallCountGateRecord,
     DesignRecord,
     PreRegistrationRecord,
     RunRecord,
@@ -77,6 +78,7 @@ from whetstone_envs.optim.study.spec import (
     CODEX_ARM_ID,
     StageId,
     arm_seeds,
+    require_pinned_arms,
     spec_from_manifest,
 )
 
@@ -88,6 +90,7 @@ if TYPE_CHECKING:
 __all__ = [
     "SEED_NOTE_CONTROL_FIELD",
     "SEED_NOTE_PROVIDER_ONLY",
+    "STAGE_PREFLIGHT_ROOT_NAME",
     "ArmRunResult",
     "OptimizerRunner",
     "StageEnvironment",
@@ -98,6 +101,13 @@ __all__ = [
     "run_stage",
     "run_stage0_into_manifest",
 ]
+
+
+#: Where the early Codex guard's preflight keeps its dr-exec job records,
+#: beneath the study directory. A stage's session probe is the study's own
+#: evidence rather than any one run's, so it lives beside ``study.json``
+#: instead of inside a run directory the stage may never create.
+STAGE_PREFLIGHT_ROOT_NAME = "codex-preflight"
 
 
 class StageError(RuntimeError):
@@ -190,6 +200,23 @@ class StageEnvironment:
     #: thing that actually gates the spend, together with the opt-in
     #: environment variable.
     real_codex_authorized: bool = False
+    #: How a test points the harness's Codex preflight at the scripted
+    #: fake CLI instead of a real session.
+    #:
+    #: ``None`` on every production path -- ``bound_stage_environment``
+    #: never sets one, nothing reads it off the manifest, and no CLI flag
+    #: builds one -- so the early guard reaches the real
+    #: ``codex_auth_preflight``.
+    #:
+    #: Typed as ``object`` rather than naming
+    #: :class:`~whetstone_envs.optim.codex.CodexTestSeam`, because this
+    #: module deliberately does not import the optimizer stack -- the one
+    #: place it needs Codex, the guard, imports inside the function. The
+    #: seam is a concrete frozen record rather than a behavioural port, so
+    #: a local Protocol would restate its fields rather than describe a
+    #: contract; the guard passes it straight through to
+    #: ``preflight_codex_session``, which names the real type.
+    codex_test_seam: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,7 +483,11 @@ def _design_record(spec: StudySpec, result: Stage0Result) -> DesignRecord:
 
 
 def _refuse_unauthorized_codex_arm(
-    *, spec: StudySpec, stage: StageId, environment: StageEnvironment
+    *,
+    spec: StudySpec,
+    stage: StageId,
+    study_dir: Path,
+    environment: StageEnvironment,
 ) -> None:
     """Refuse a Codex-bearing stage before any arm runs, or not at all.
 
@@ -473,15 +504,27 @@ def _refuse_unauthorized_codex_arm(
     environment variable. Checking both here means this guard cannot report
     a stage as authorized that the runner would then refuse.
 
+    **Authorization is not usability.** A stage that clears the opt-in can
+    still have no Codex to run: an unsupported platform, a binary that is
+    not on the run's PATH, an expired or absent session. Those were
+    discovered when the adapter was built, on the Codex arm's turn -- again
+    after the other arms were paid for -- so the same preflight
+    ``run_optimizer`` reaches is run here instead, while the stage has
+    spent nothing on the arms ahead of it. The probe is itself a billed
+    session probe, which is why it runs strictly *after* the opt-in check
+    and never before it.
+
     Imported inside the function rather than at module scope: this module
     takes its provider-touching collaborators as callables and does not
-    import the optimizer stack, and the two constants it needs live beside
-    the guard that enforces them.
+    import the optimizer stack, and the constants it needs live beside the
+    guard that enforces them.
     """
     from whetstone_envs.optim.codex import (  # noqa: PLC0415
         ALLOW_REAL_CODEX_ENV,
         ALLOW_REAL_CODEX_ENV_VALUE,
+        CodexTestSeam,
         RealCodexRefusedError,
+        preflight_codex_session,
     )
 
     codex_arms = tuple(
@@ -493,16 +536,50 @@ def _refuse_unauthorized_codex_arm(
         environment.real_codex_authorized
         and os.environ.get(ALLOW_REAL_CODEX_ENV) == ALLOW_REAL_CODEX_ENV_VALUE
     )
-    if authorized:
-        return
-    raise RealCodexRefusedError(
-        f"{stage.value} declares the Codex arm {list(codex_arms)}, whose "
-        "runs spawn a real, billed Codex session, and this invocation is "
-        "not authorized to spend on one. Refusing before any arm runs, so "
-        "the stage buys nothing it cannot finish. Authorize it with "
-        f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} in the "
-        "environment and --allow-real-codex on the run command."
-    )
+    if not authorized:
+        raise RealCodexRefusedError(
+            f"{stage.value} declares the Codex arm {list(codex_arms)}, whose "
+            "runs spawn a real, billed Codex session, and this invocation is "
+            "not authorized to spend on one. Refusing before any arm runs, "
+            "so the stage buys nothing it cannot finish. Authorize it with "
+            f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} in the "
+            "environment and --allow-real-codex on the run command."
+        )
+    seam = environment.codex_test_seam
+    if seam is not None and not isinstance(seam, CodexTestSeam):
+        # ``StageEnvironment`` types this loosely to keep the optimizer
+        # stack out of the module, so the one place that has the real type
+        # is the one place that checks it. A wrong object here would
+        # otherwise reach the preflight and be read as "no seam", which is
+        # the production path.
+        raise StageError(
+            "codex_test_seam must be a CodexTestSeam; got "
+            f"{type(seam).__name__}"
+        )
+    try:
+        preflight_codex_session(
+            scratch_root=study_dir / STAGE_PREFLIGHT_ROOT_NAME,
+            model=spec.task_model,
+            allow_real_codex=environment.real_codex_authorized,
+            test_seam=seam,
+        )
+    except RealCodexRefusedError:
+        # The gate's own refusal -- an unauthorized call, or the test
+        # tripwire -- is already the right error with the right message,
+        # so it travels as itself rather than being reworded as a stage
+        # failure.
+        raise
+    except Exception as error:
+        # Re-raised as a stage refusal so the caller sees which stage
+        # declined and why, with the preflight's own message preserved as
+        # the cause rather than replaced by it.
+        raise StageError(
+            f"{stage.value} declares the Codex arm {list(codex_arms)}, and "
+            "this machine cannot run a Codex session: "
+            f"{error}. Refusing before any arm runs, so the stage does not "
+            "pay for COPRO, MIPROv2, and GEPA and then discover it can "
+            "never finish"
+        ) from error
 
 
 def run_arm_stage(
@@ -540,9 +617,21 @@ def run_arm_stage(
     spec = spec_from_manifest(manifest, stage=stage)
     if not spec.arms:
         raise StageError(f"{stage.value} has no arms to run")
+    # An arm declared after the design was pinned would spend on a design
+    # nobody registered. Stage 0 tolerates that state -- it is how an
+    # amendment is written -- so the check belongs here, not in the loader.
+    require_pinned_arms(manifest)
+    # Both refusals are before dispatch and cost nothing, so the order is
+    # about which one a reader should see first. An unauthorized Codex arm
+    # is a property of the invocation the operator can fix now; a missing
+    # pilot is a property of the study that takes a whole stage to fix.
     _refuse_unauthorized_codex_arm(
-        spec=spec, stage=stage, environment=environment
+        spec=spec,
+        stage=stage,
+        study_dir=study_dir,
+        environment=environment,
     )
+    _require_passed_stage1_gate(manifest=manifest, stage=stage)
 
     arm_records, run_results = _run_every_arm(
         spec=spec,
@@ -558,7 +647,11 @@ def run_arm_stage(
     )
 
     _check_call_counts(
-        spec=spec, stage=stage, run_results=run_results, design=manifest.design
+        study_dir=study_dir,
+        spec=spec,
+        stage=stage,
+        run_results=run_results,
+        design=manifest.design,
     )
 
     # One ledger per stage: the pilot's selection and the full design's are
@@ -778,6 +871,7 @@ def _run_every_arm(
 
 def _check_call_counts(
     *,
+    study_dir: Path,
     spec: StudySpec,
     stage: StageId,
     run_results: dict[str, tuple[ArmRunResult, ...]],
@@ -791,6 +885,13 @@ def _check_call_counts(
     it at the pilot is the whole point and re-running it at Stage 2 would
     just re-report a fact the pilot already established.
 
+    **The verdict is recorded before it is raised on.** Stage 2 requires a
+    passed gate to run at all, and a verdict that lived only in this
+    process could not be required of a Stage 2 started in a fresh one. The
+    record is written for a failed gate too: that is the finding, and it is
+    what lets the Stage-2 refusal say the pilot failed rather than that the
+    pilot is missing.
+
     Codex is exempt by construction, because its estimate carries
     ``gated=False``: its agent chooses how much of its cap to spend, and a
     bug detector pointed at a non-deterministic agent invites a false abort
@@ -799,7 +900,7 @@ def _check_call_counts(
     if stage is not StageId.STAGE1:
         return
     internal_size = spec.internal.size
-    overruns = [
+    overruns = tuple(
         f"{arm.arm_id}/{result.candidate.run_id}: "
         f"{result.observed_task_calls} calls"
         for arm in spec.arms
@@ -812,12 +913,62 @@ def _check_call_counts(
             official_size=spec.official.size,
             held_out_size=spec.held_out.size,
         )
-    ]
+    )
+    manifest = read_study_manifest(study_dir)
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "call_count_gate": CallCountGateRecord(
+                    stage=StageId.STAGE1.value,
+                    passed=not overruns,
+                    tolerance=STAGE1_CALL_COUNT_TOLERANCE,
+                    overruns=overruns,
+                )
+            }
+        ),
+        replace=True,
+    )
     if overruns:
         raise StageError(
             "these runs exceeded "
             f"{STAGE1_CALL_COUNT_TOLERANCE}x their pre-spend call estimate, "
             "which is what a fan-out bug looks like: " + "; ".join(overruns)
+        )
+
+
+def _require_passed_stage1_gate(
+    *, manifest: StudyManifest, stage: StageId
+) -> None:
+    """Stage 2 runs only behind a Stage 1 whose call-count gate passed.
+
+    The pilot is not a formality: it is the one place a fan-out bug is
+    caught for the price of one run per arm instead of five. A Stage 2
+    invoked directly after Stage 0, or after a Stage 1 that failed the
+    gate, spent the full design without that check ever having cleared --
+    exactly the bill the pilot exists to avoid.
+
+    Refused before dispatch, so a study in either state pays nothing. The
+    two cases are named separately because they need different actions: a
+    missing pilot has to be run, and a failed one has to be diagnosed.
+    """
+    if stage is not StageId.STAGE2:
+        return
+    gate = manifest.call_count_gate
+    if gate is None:
+        raise StageError(
+            "stage2 requires a completed stage1 whose call-count gate "
+            "passed, and this study has recorded no such gate; run stage1 "
+            "first. Refusing before any arm runs, so the full design buys "
+            "nothing the pilot was supposed to clear it for"
+        )
+    if not gate.passed:
+        raise StageError(
+            "stage2 requires a stage1 whose call-count gate passed, and "
+            "this study's pilot failed it: "
+            + "; ".join(gate.overruns)
+            + ". Refusing before any arm runs; diagnose the fan-out the "
+            "pilot caught rather than paying for it five times over"
         )
 
 

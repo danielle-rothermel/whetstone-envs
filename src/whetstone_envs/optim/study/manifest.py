@@ -82,7 +82,13 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: MIPROv2 or GEPA arm could be rerun at a different train/val split under
 #: an unchanged design hash -- the one post-hoc adjustment the block was
 #: supposed to forbid and did not.
-STUDY_MANIFEST_SCHEMA_VERSION = 4
+#: v5 adds ``call_count_gate``: Stage 1's call-count verdict, recorded where
+#: Stage 2 can read it. v4 evaluated that gate inside the Stage-1 process and
+#: kept the verdict nowhere, so a Stage 2 invoked straight after Stage 0 --
+#: or after a Stage 1 whose gate failed -- ran the full five-run design
+#: without the pilot ever having cleared the fan-out check the pilot exists
+#: to perform.
+STUDY_MANIFEST_SCHEMA_VERSION = 5
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -138,6 +144,7 @@ class ManifestKey(StrEnum):
     DESIGN = "design"
     GEPA_SIZING = "gepa_sizing"
     FANOUT_CHECK = "fanout_check"
+    CALL_COUNT_GATE = "call_count_gate"
     ARMS = "arms"
     SELECTION = "selection"
     HELD_OUT_CLAIMS = "held_out_claims"
@@ -677,6 +684,48 @@ class FanoutCheckRecord(_StrictModel):
         return self
 
 
+class CallCountGateRecord(_StrictModel):
+    """Stage 1's call-count verdict, durable so Stage 2 can require it.
+
+    The pilot exists to catch a fan-out bug -- an optimizer whose minibatch
+    intents silently expanded to the full valset -- before the full design
+    pays five times over for the same defect. A verdict that lived only
+    inside the Stage-1 process bought none of that for a Stage 2 started in
+    a fresh process: nothing downstream could tell a cleared pilot from a
+    pilot that never ran.
+
+    ``passed`` is recorded whether or not it did. A failed gate is a
+    finding the study reports rather than an absence, and recording it is
+    what lets Stage 2 name *which* prerequisite is missing instead of
+    reporting the same "run stage1 first" for both cases.
+
+    ``overruns`` names each run that exceeded its pre-spend estimate, in the
+    same ``arm/run_id: N calls`` form the refusal prints, so the manifest
+    carries the evidence and not merely the verdict.
+    """
+
+    stage: StrictStr
+    passed: StrictBool
+    tolerance: StrictFloat
+    overruns: tuple[StrictStr, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_call_count_gate(self) -> CallCountGateRecord:
+        if self.stage != StageId.STAGE1.value:
+            # Only the pilot runs this gate; a record naming another stage
+            # would assert a check that stage never performed.
+            raise ValueError(
+                f"the call-count gate is Stage 1's; got {self.stage!r}"
+            )
+        if self.tolerance <= 0.0:
+            raise ValueError("the call-count tolerance is positive")
+        if self.passed and self.overruns:
+            raise ValueError("a passed call-count gate names no overruns")
+        if not self.passed and not self.overruns:
+            raise ValueError("a failed call-count gate names its overruns")
+        return self
+
+
 # --------------------------------------------------------------------------
 # Arms and runs
 # --------------------------------------------------------------------------
@@ -980,6 +1029,17 @@ class HeldOutRecord(_StrictModel):
     p_bootstrap: StrictFloat
     p_holm: StrictFloat | None
     completeness: StrictFloat
+    #: The naive anchor's own completeness, carried on every row whose
+    #: delta is measured against it.
+    #:
+    #: The delta is paired, so a row's ``completeness`` -- the paired
+    #: minimum this candidate's comparison achieved -- can be low for two
+    #: quite different reasons: this candidate lost rows, or the anchor
+    #: did. Recording the anchor's side means a reader can tell which,
+    #: rather than reading a downgraded arm as the arm's own failure. It
+    #: is ``None`` on the anchor's own row, which has no anchor to compare
+    #: against, and on a row written before an anchor was measured.
+    anchor_completeness: StrictFloat | None = None
 
     @model_validator(mode="after")
     def _validate_held_out(self) -> HeldOutRecord:
@@ -991,6 +1051,7 @@ class HeldOutRecord(_StrictModel):
             ("p_bootstrap", self.p_bootstrap),
             ("p_holm", self.p_holm),
             ("completeness", self.completeness),
+            ("anchor_completeness", self.anchor_completeness),
         ):
             if value is not None and not 0.0 <= value <= 1.0:
                 raise ValueError(f"{label} is a proportion in [0, 1]")
@@ -1169,6 +1230,7 @@ class StudyManifest(_StrictModel):
     design: DesignRecord | None = None
     gepa_sizing: GepaSizingRecord | None = None
     fanout_check: FanoutCheckRecord | None = None
+    call_count_gate: CallCountGateRecord | None = None
     arms: tuple[ArmRecord, ...] = ()
     selection: tuple[SelectionRecord, ...] = ()
     held_out_claims: tuple[HeldOutClaimRecord, ...] = ()
@@ -1576,6 +1638,7 @@ __all__ = [
     "ArmRecord",
     "BalanceRecord",
     "C18Record",
+    "CallCountGateRecord",
     "DesignRecord",
     "EvidencePointer",
     "EvidenceStore",

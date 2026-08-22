@@ -146,9 +146,28 @@ def test_fake_transport_completes(  # noqa: PLR0915
             for _step, _ordinal, _request, candidate, _tasks in expected
         )
         assert any(count > 1 for count in candidate_counts.values())
-        assert len(trajectory.resolutions) < sum(
-            len(step.record.search_evidence) for step in result.step_results
+        # Per-step ``search_evidence`` is incremental: a Step records only
+        # the evaluations no ancestor Step already recorded, so the run's
+        # evidence is linear in evaluations rather than quadratic in Steps.
+        # The sum across Steps therefore counts each evaluation exactly
+        # once, and the trajectory projects exactly those evaluations as
+        # resolutions -- same requests, same order.
+        evidence_request_ids = [
+            evidence.eval_request_id
+            for step in result.step_results
+            for evidence in step.record.search_evidence
+        ]
+        assert len(set(evidence_request_ids)) == len(evidence_request_ids)
+        assert [row.request_id for row in trajectory.resolutions] == (
+            evidence_request_ids
         )
+        # Each entry is bound to the Step that caused it, so a Step never
+        # re-reports a prefix its predecessors already paid for.
+        for step in result.step_results:
+            assert all(
+                evidence.optim_step_index == step.record.step_index
+                for evidence in step.record.search_evidence
+            )
     else:
         assert tuple(step.step_index for step in trajectory.steps) == (0, 1)
         assert tuple(

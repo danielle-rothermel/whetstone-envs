@@ -340,7 +340,7 @@ def test_each_leak_trips_exactly_its_own_rule(
 
 
 def test_held_out_growth_requires_the_smaller_split_to_be_nested() -> None:
-    """D5: held-220 must be contained in held-440 to grow safely."""
+    """D5: held-220 is a prefix of the pre-registered held-440."""
     smaller = tuple(f"h-{i}" for i in range(220))
     larger = tuple(f"h-{i}" for i in range(440))
     assert check_held_out_nesting(smaller=smaller, larger=larger).passed

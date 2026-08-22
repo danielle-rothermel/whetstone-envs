@@ -118,7 +118,7 @@ and nothing on the shared path names one:
 
 | Family | Placeholders | Scoring | Protocol splits | Registered by |
 | --- | --- | --- | --- | --- |
-| `c19` | `{grid}`, `{command}`, `{question}` | exact match on the whole reply | `88,132,220` | `optim/experiment.py` |
+| `c19` | `{grid}`, `{command}`, `{question}` | exact match on the whole reply | `88,132,440` | `optim/experiment.py` |
 | `c18` | `{question}`, `{query}` | terminal `True`/`False` verdict, via `c18.score_gold` | `24,48,48` | `optim/c18_experiment.py` |
 
 C18's splits come from its own `SplitPlan` at `n_per_stratum=30` over four

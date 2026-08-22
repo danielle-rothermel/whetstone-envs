@@ -381,6 +381,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   them so a study arm can request the protocol's shape. Defaults are
   unchanged, which keeps the fake-transport end-to-end runs fast.
 
+### Changed
+
+- **The pre-registered held-out split is 440, not 220.** The c19 protocol
+  splits are now internal 88 / official 132 / held-out 440, using 660 of
+  the 704 available instances. Doubling the reporting split halves the
+  variance term the Stage-0 gate inverts, so the pre-registered MDE row
+  the study is judged against moves with it. `MEASUREMENT_SPLIT_SIZES`
+  stays `(88, 132, 220)`: that is what Wave 3 actually measured, and
+  rewriting it would misstate the provenance of every measured number
+  derived from those runs. Because the split is deterministic, held-220
+  remains a prefix of held-440, so `check_held_out_nesting` keeps its
+  meaning — but it is now an invariant the construction guarantees rather
+  than a growth decision taken at the Stage-0 gate, and its docstring says
+  so.
+
 ### Fixed
 
 - **The Stage-1 budget gate compared two different units, and a real GEPA

@@ -71,7 +71,7 @@ class _Spec:
             "null-identity": 1,
         }
         self.k_repeat = 3
-        self.split_sizes = (88, 132, 220)
+        self.split_sizes = (88, 132, 440)
 
 
 # --------------------------------------------------------------------------
@@ -104,12 +104,12 @@ def test_plan_lines_derive_the_budget_from_the_matrix() -> None:
     lines = plan_lines(_Spec())
     text = "\n".join(lines)
     assert "study: step10-fixture" in text
-    assert "splits: internal=88 official=132 held_out=220" in text
+    assert "splits: internal=88 official=132 held_out=440" in text
     # 5 runs x 132 official tasks x 3 repeats, and 1 x 132 x 3.
     assert "total official rows: 2376" in text
-    # One representative candidate per arm on held-out: 2 x 220 x 3.
-    assert "total held-out rows: 1320" in text
-    assert "total selection+report rows: 3696" in text
+    # One representative candidate per arm on held-out: 2 x 440 x 3.
+    assert "total held-out rows: 2640" in text
+    assert "total selection+report rows: 5016" in text
 
 
 def test_plan_prints_the_matrix(tmp_path: Path, capsys) -> None:
@@ -121,7 +121,7 @@ def test_plan_prints_the_matrix(tmp_path: Path, capsys) -> None:
     out = capsys.readouterr().out
     assert "copro" in out
     assert "null-identity" in out
-    assert "total selection+report rows: 3696" in out
+    assert "total selection+report rows: 5016" in out
 
 
 def test_plan_passes_the_study_directory_to_its_loader(

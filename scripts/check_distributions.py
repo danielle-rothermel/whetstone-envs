@@ -265,6 +265,7 @@ def _smoke_test_wheel(wheel: Path, expected_version: str) -> None:
 import importlib
 import os
 from importlib.metadata import distribution
+from importlib.resources import files
 from pathlib import Path
 
 expected = os.environ["EXPECTED_VERSION"]
@@ -301,6 +302,11 @@ for module_name in os.environ["SMOKE_MODULES"].split(","):
             f"{module_name} imported from {origin}, "
             f"outside {installation_root}"
         )
+assets = files("whetstone_envs.reporting.assets")
+for asset_name in ("shell.html", "report.css", "report.js"):
+    content = assets.joinpath(asset_name).read_text(encoding="utf-8")
+    if not content:
+        raise SystemExit(f"packaged HTML asset {asset_name} is empty")
 print(f"installed wheel imports passed at version {actual}")
 """
     with tempfile.TemporaryDirectory(

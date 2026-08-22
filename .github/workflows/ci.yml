@@ -42,3 +42,28 @@ jobs:
         env:
           SKIP: pre-check
         run: uv run pre-commit run --all-files
+
+  browser-report:
+    name: HTML report · Chromium
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version-file: pyproject.toml
+          python-version: "3.13"
+          enable-cache: true
+          save-cache: ${{ github.event_name == 'push' }}
+          cache-suffix: browser-report-v1
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+      - name: Install pinned Chromium
+        run: uv run --group browser-test playwright install --with-deps chromium
+      - name: Compare reports to committed screenshot fixtures
+        run: uv run --group browser-test --extra optim pytest -q tests/reporting/test_browser.py

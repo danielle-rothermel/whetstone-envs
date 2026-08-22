@@ -35,7 +35,8 @@ execution-contract code:
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
   string transformations across four ISL and OSL strata.
 - [**Reporting**][reporting-source] owns strict local evaluation and
-  optimization-trajectory reports plus read-only terminal inspection.
+  optimization-trajectory reports plus read-only terminal and self-contained
+  HTML inspection.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
@@ -89,6 +90,7 @@ uv run --extra optim whetstone-eval summary RUN_DIR
 uv run --extra optim whetstone-eval failures RUN_DIR
 uv run --extra optim whetstone-eval task RUN_DIR TASK_ID
 uv run --extra optim whetstone-eval compare RUN_DIR naive ceiling
+uv run --extra optim whetstone-eval html RUN_DIR
 ```
 
 `--candidate-file NAME=PATH` adds a validated UTF-8 prompt template. An
@@ -100,16 +102,23 @@ canonical `eval-report.json`. COPRO and GEPA runs additionally publish
 ```bash
 uv run --extra optim whetstone-eval trajectory RUN_DIR
 uv run --extra optim whetstone-eval trajectory RUN_DIR --show-candidates
+uv run --extra optim whetstone-eval trajectory-html RUN_DIR
 ```
 
-Inspection reads report JSON only and never opens SQLite. Reports are private
-local debugging artifacts: they contain gold, prompt inputs, rendered prompts,
-model outputs, component traces, and complete candidate text. They never
-contain credentials, authorization headers, ambient environment values, or
-SQLite bytes. Provider failures retain only allowlisted classification and
-typed transport status metadata; raw provider messages, response bodies,
-headers, and metadata are excluded. Keep reports outside every Git repository
-and do not publish them casually.
+Both HTML commands validate the strict JSON report and atomically replace a
+deterministic `eval-report.html` or `trajectory-report.html`. Each output is a
+portable single file that opens directly through `file://`; it embeds its CSS,
+classic JavaScript, C19 guide, and report data and performs no network access.
+Regenerate it at any time from the authoritative JSON.
+
+Inspection reads report JSON only and never opens SQLite. JSON and HTML reports
+are private local debugging artifacts: they contain gold, prompt inputs,
+rendered prompts, model outputs, component traces, and complete candidate text.
+They never contain credentials, authorization headers, ambient environment
+values, or SQLite bytes. Provider failures retain only allowlisted
+classification and typed transport status metadata; raw provider messages,
+response bodies, headers, and metadata are excluded. Keep reports outside
+every Git repository and do not publish them casually.
 
 ## Instances
 

@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reconciliation, COPRO intent and GEPA effect-transcript trajectory
   publication, explicit
   delta/cumulative budgets, and exact full-text candidate views.
+- Deterministic, portable, offline `eval-report.html` and
+  `trajectory-report.html` renderings with strict embedded-data escaping,
+  hashed inline CSP, complete C19 debugging surfaces, exact-ref trajectory
+  lineage, exact per-resolution navigation and diagnosis, responsive layouts,
+  and pinned Chromium interaction and screenshot-comparison checks.
 
 ### Changed
 
@@ -38,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The public-surface guard runs with an empty allowlist and also rejects
   `getattr(obj, "_name")` reads of whetstone privates alongside the
   existing `cast("Any", …)._name` check.
+- Simplify HTML reports to a stable white scientific layout with
+  colorblind-safe blue navigation and green success emphasis.
 - Preserve the authoritative C19 `PoolSplit` beside each prepared Whetstone
   experiment so report projection joins evidence to source instances exactly.
 

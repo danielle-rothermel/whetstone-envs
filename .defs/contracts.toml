@@ -175,6 +175,28 @@ date = "2026-08-21"
 check = "uv run --extra optim pytest -q tests/reporting tests/optim/test_e2e.py"
 
 [[contracts]]
+title = "HTML reports are deterministic inert offline projections"
+statement = """
+Self-contained evaluation and trajectory HTML is generated only through the \
+strict report loaders and repository-packaged shell, CSS, and classic \
+JavaScript assets. Equal validated report data and equal assets produce equal \
+bytes without host, path, time, or random inputs. Embedded report data is \
+strict compact key-sorted finite JSON in a non-executable script element with \
+less-than, ampersand, U+2028, and U+2029 escaped and semantic round-trip \
+verified. Exact asset-byte CSP hashes authorize only the embedded style and \
+script; all report strings enter the DOM as inert text, and the file performs \
+no network, storage, worker, module, or runtime-data access. Same-directory \
+atomic replacement preserves an existing HTML report on validation, render, \
+or write failure."""
+rationale = """
+The HTML is a replaceable private view of authoritative JSON, not a second \
+schema; deterministic generation, inert text construction, and a closed CSP \
+make direct file inspection reproducible without turning recorded prompts or \
+outputs into executable content."""
+date = "2026-08-21"
+check = "uv run --extra optim pytest -q tests/reporting/test_html.py && uv run --group browser-test --extra optim pytest -q tests/reporting/test_browser.py"
+
+[[contracts]]
 title = "C11 generation is reproducible and oracle-grounded"
 statement = """
 The C11 task family deterministically generates unique noncanonical JSON inputs \

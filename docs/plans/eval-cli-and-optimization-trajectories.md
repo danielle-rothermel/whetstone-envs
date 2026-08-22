@@ -41,8 +41,8 @@ versioned JSON remains the durable debugging boundary.
 6. Rich is an optional execution-tool dependency. Core task-family imports and
    the existing extra-free `whetstone_envs.optim` exports remain importable
    without Rich or `whetstone-ai`.
-7. The HTML design in `eval-html-report-design.md` is a later consumer of the
-   same report models. HTML is not part of the first implementation sequence.
+7. The implemented HTML renderer in `eval-html-report-design.md` consumes the
+   same strict report models and defines no second result schema.
 
 ## Current implementation facts
 
@@ -358,9 +358,9 @@ The implementation includes:
 - Update optimizer CLI documentation and end-to-end fake COPRO and GEPA
   coverage.
 
-Python schema, Rich presentation, trajectory publication, and their tests share
-one ownership boundary. HTML remains a later optional implementation consuming
-the completed JSON contracts.
+Python schema, Rich presentation, trajectory publication, self-contained HTML
+presentation, and their tests share one ownership boundary. HTML consumes the
+completed strict JSON contracts through their existing loaders.
 
 ## Verification
 
@@ -434,4 +434,3 @@ The immediate implementation is complete when:
 - Remote artifact hosting or a local web server.
 - Statistical confidence intervals until runs use enough repeated binary
   observations for interval estimates to be meaningful.
-- The static HTML renderer described in the companion design.

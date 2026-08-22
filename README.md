@@ -83,6 +83,15 @@ its reflections from it, while both score on the valset, so an overlapping
 split would let memorization read as an in-search improvement. The study
 protocol pins 44/44 of the internal 88.
 
+The two optimizers do not take the same partition. **MIPROv2** needs only a
+disjoint pair inside the internal split, so a partition that leaves tasks
+unused is legal. **GEPA** builds its data registry from the whole internal
+split and then requires the trainset and valset to cover it, so a GEPA
+partition must sum to the internal size exactly; `run_optimizer` refuses a
+partial one at spec validation rather than letting it fail after the run
+directory exists. The protocol's 44/44 covers its internal 88, which is why
+the study's GEPA arm satisfies the rule.
+
 `--demo-mode` selects MIPROv2's demonstration regime and is ignored by COPRO
 and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
 `### Demonstrations` section rather than through a family placeholder:
@@ -116,10 +125,24 @@ runs every family through the same `run_optimizer`; a family is admitted by
 registering a `FamilySpec` in [`whetstone_envs.optim.families`][optim-source]
 and nothing on the shared path names one:
 
-| Family | Placeholders | Scoring | Protocol splits | Registered by |
-| --- | --- | --- | --- | --- |
-| `c19` | `{grid}`, `{command}`, `{question}` | exact match on the whole reply | `88,132,440` | `optim/experiment.py` |
-| `c18` | `{question}`, `{query}` | terminal `True`/`False` verdict, via `c18.score_gold` | `24,48,48` | `optim/c18_experiment.py` |
+| Family | Placeholders | Scoring | Protocol splits | Family registered by | Splits pinned by |
+| --- | --- | --- | --- | --- | --- |
+| `c19` | `{grid}`, `{command}`, `{question}` | exact match on the whole reply | `88,132,440` | `optim/experiment.py` | `optim/study/spec.py` (`PROTOCOL_SPLIT_SIZES`) |
+| `c18` | `{question}`, `{query}` | terminal `True`/`False` verdict, via `c18.score_gold` | `24,48,48` | `optim/c18_experiment.py` | `optim/c18_experiment.py` (`C18_PROTOCOL_SPLIT_SIZES`) |
+
+The two columns are separate because the family and its protocol splits have
+different owners. Registering a family says which tasks exist and how they are
+scored; it does not choose how many of them each role gets.
+
+For `c19` those two are different files, and the difference matters. The c19
+generator's own `DEFAULT_SPLIT_SIZES` in `c19/generation.py` is
+`(88, 132, 132)` — what the generator returns when nobody asks for anything.
+The Step 10 study pre-registered a held-out split of **440**, because the
+design's minimum detectable effect depends on it (`0.0622` at `tau^2 = 0.05`,
+`K_REPEAT = 3`; see `whetstone-study plan`). `PROTOCOL_SPLIT_SIZES` in
+`optim/study/spec.py` is the protocol's declaration of the three sizes and is
+pinned by a golden test. A study manifest records them in its `splits` block,
+and every stage reads them from there rather than from either constant.
 
 C18's splits come from its own `SplitPlan` at `n_per_stratum=30` over four
 depth strata. Its internal split of 24 is below MIPROv2's default minibatch
@@ -171,6 +194,25 @@ admission authority, or subprocess exists, unless one of two things is true:
 Anything else raises `RealCodexRefusedError`, and the refused run leaves no
 run directory behind. A session-scoped `conftest.py` fixture asserts the
 environment variable is unset and clears it, so no test can opt in.
+
+A study stage authorizes the same spend the same way, through
+`whetstone-study run --allow-real-codex`. The flag reaches the study's
+optimizer runner, which forwards it onto the Codex arm's `RunSpec` and onto
+no other arm's; the environment variable remains the other half. It is a
+**run-time spend authorization, not part of the design**: it is not a field
+on `ArmSpec`, it is not recorded in the manifest, and it does not enter the
+pre-registration hash, so two runs of one design pre-register identically
+whether or not the operator was allowed to bill a session.
+
+Without both halves, a Stage 1 or Stage 2 whose design names the Codex arm
+is refused **before any arm runs**. That ordering is the spend-safety
+property: the refusal inside `run_optimizer` arrives on the Codex arm's own
+turn, by which point every arm ahead of it has already been paid for.
+
+```bash
+WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
+  whetstone-study run --study-dir STUDY_DIR --stage stage1 --allow-real-codex
+```
 
 A real run therefore requires all of: the opt-in variable, the flag, a live
 authenticated Codex session, macOS (the containment profile is

@@ -328,6 +328,18 @@ class StudyOptimizerRunner:
     naive_template: str
     store_path: Path
     codex_capacity: int | None = None
+    #: The run-time half of the real-Codex spend authorization, carried
+    #: from ``whetstone-study run --allow-real-codex``.
+    #:
+    #: This is an *authorization to spend on this invocation*, not part of
+    #: the study's design: it is deliberately not an ``ArmSpec`` field and
+    #: never enters the pre-registration hash, because whether a stage was
+    #: allowed to bill a Codex session says nothing about what the study
+    #: pre-registered. Forwarded onto the Codex arm's ``RunSpec`` only, and
+    #: still only half the gate --
+    #: :data:`~whetstone_envs.optim.codex.ALLOW_REAL_CODEX_ENV` must also
+    #: name the opt-in in the process environment.
+    allow_real_codex: bool = False
 
     def __call__(
         self, *, arm: ArmSpec, seed: int, study_dir: Path
@@ -408,6 +420,14 @@ class StudyOptimizerRunner:
             **(
                 {"codex_capacity": self.codex_capacity}
                 if arm.optimizer == "codex" and self.codex_capacity is not None
+                else {}
+            ),
+            # Scoped to the Codex arm because every other optimizer refuses
+            # the setting outright; forwarding it unconditionally would turn
+            # one authorized stage into a validation failure on every arm.
+            **(
+                {"allow_real_codex": True}
+                if arm.optimizer == "codex" and self.allow_real_codex
                 else {}
             ),
         )

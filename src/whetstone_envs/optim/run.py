@@ -104,6 +104,7 @@ from whetstone_envs.optim.provider import (
 )
 from whetstone_envs.optim.run_cost import project_run_cost, write_run_cost
 from whetstone_envs.optim.split import (
+    GEPA_OPTIMIZER,
     TRAIN_VAL_OPTIMIZERS,
     partition_internal_split,
 )
@@ -342,6 +343,25 @@ def _validate_train_val_split(spec: RunSpec) -> None:
         raise ValueError(
             f"train_size {spec.train_size} + val_size {spec.val_size} "
             f"exceeds the internal split of {internal}"
+        )
+    if (
+        spec.optimizer == GEPA_OPTIMIZER
+        and spec.train_size + spec.val_size != internal
+    ):
+        # GEPA is stricter than the others by construction: whetstone's
+        # GEPA factory builds its data registry from the whole internal
+        # split and then requires the control's trainset and valset to
+        # *cover* it exactly, so a partition that merely fits inside the
+        # split is rejected. That rejection happens inside the durable run
+        # boundary, after the run directory exists, so the same rule is
+        # restated here at pure spec validation -- a partial partition then
+        # refuses before anything is written.
+        raise ValueError(
+            f"--optimizer {spec.optimizer} requires train_size + val_size "
+            f"to cover the internal split exactly: {spec.train_size} + "
+            f"{spec.val_size} = {spec.train_size + spec.val_size}, not "
+            f"{internal}. GEPA's data registry is built from the whole "
+            "internal split and its trainset and valset must partition it"
         )
 
 

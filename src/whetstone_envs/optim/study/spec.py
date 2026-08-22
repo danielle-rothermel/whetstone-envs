@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CI_LEVEL",
+    "CODEX_ARM_ID",
     "CODEX_EVALUATE_CALL_CAP",
     "CORRECTION_RULE",
     "HOLM_FAMILY_SIZE",
@@ -43,6 +44,7 @@ __all__ = [
     "K_RUN_PILOT",
     "K_RUN_STAGE2",
     "NULL_ARM_IDS",
+    "PROTOCOL_SPLIT_SIZES",
     "PROTOCOL_TRAIN_SIZE",
     "PROTOCOL_VAL_SIZE",
     "REAL_OPTIMIZER_ARM_IDS",
@@ -132,12 +134,17 @@ SEED_RANGE_BY_OPTIMIZER: dict[str, int] = {
     "null-identity": 6000,
 }
 
+#: The Codex arm, named where the study's spend guard reads it. It is the
+#: only arm whose runs can bill a foreign subscription, so the id is an
+#: owned constant rather than a literal repeated at each check.
+CODEX_ARM_ID = "codex"
+
 #: The four hypotheses. Order is the Holm family's input order.
 REAL_OPTIMIZER_ARM_IDS: tuple[str, ...] = (
     "copro",
     "miprov2",
     "gepa",
-    "codex",
+    CODEX_ARM_ID,
 )
 
 #: The two controls, in the order the report presents them.
@@ -288,6 +295,20 @@ class ArmSpec:
             raise ValueError(f"arm {self.arm_id!r} repeats a seed")
 
 
+#: The study protocol's three split sizes, in role order: internal,
+#: official, held-out.
+#:
+#: This is the Step 10 study's own pre-registration, and it is **not** the
+#: c19 generation default. ``whetstone_envs.c19.generation``'s
+#: ``DEFAULT_SPLIT_SIZES`` is ``(88, 132, 132)``: it describes what the
+#: generator hands back when nobody asks for anything, while the protocol
+#: pre-registered a held-out split of 440 so the design could resolve an
+#: MDE of 0.0622 at ``tau^2 = 0.05`` -- which 132 cannot. A study manifest
+#: records these three sizes in its ``splits`` block and every stage reads
+#: them from there, so this constant is the protocol's *declaration* of
+#: them, pinned by a golden test.
+PROTOCOL_SPLIT_SIZES: tuple[int, int, int] = (88, 132, 440)
+
 #: The protocol's train/val partition of the internal 88: half and half.
 #:
 #: An even split is the cheapest partition that keeps both halves
@@ -296,7 +317,9 @@ class ArmSpec:
 #: per-trial cost driver -- 44 keeps one full pass affordable while still
 #: leaving the bootstrap a 44-task trainset to draw demonstrations from.
 #: Splitting 88 any further would buy trainset size at the price of a
-#: valset too small to separate arms.
+#: valset too small to separate arms. The two also *cover* the internal
+#: split exactly, which GEPA requires: its data registry is built from the
+#: whole internal split and its trainset and valset must partition it.
 PROTOCOL_TRAIN_SIZE = 44
 PROTOCOL_VAL_SIZE = 44
 
@@ -486,6 +509,12 @@ def spec_from_manifest(
             k_run=_k_run_from(arm, design=design, stage=stage),
             seeds=_arm_seeds_from(arm, design=design, stage=stage),
             demo_mode=arm.demo_mode,
+            # Read back rather than re-derived from the protocol defaults:
+            # the manifest records the partition each arm was actually
+            # pre-registered at, and a spec that substituted today's default
+            # would let a rerun quietly measure a different design.
+            train_size=arm.train_size,
+            val_size=arm.val_size,
         )
         for arm in manifest.arms
     )

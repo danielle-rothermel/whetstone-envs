@@ -21,13 +21,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a distinction the study can afford to lose while the setup is being
   debugged. There is no default, because a run that did not state its
   partition could not be audited for this. `ArmSpec` carries the two sizes
-  as design fields, so they enter the pre-registration hash, and
-  `default_arms` pins the protocol's 44/44 of the internal 88 — an even
-  split keeps one full valset pass affordable while leaving the bootstrap
-  a 44-task trainset. Two new audit invariants,
-  `mipro_train_val_disjoint` and `gepa_train_val_disjoint`, check the
-  persisted control's two sets are disjoint and that every evaluation the
-  run paid for touched only those tasks.
+  as design fields; `ArmRecord` records them and the pre-registration
+  hashes them per arm as `split_by_arm`, so an arm rerun at a different
+  partition is a different pinned design rather than the same one. The
+  manifest schema is `v4` accordingly. `default_arms` pins the protocol's
+  44/44 of the internal 88 — an even split keeps one full valset pass
+  affordable while leaving the bootstrap a 44-task trainset, and the two
+  cover the internal split exactly, which GEPA requires. Two new audit
+  invariants, `mipro_train_val_disjoint` and `gepa_train_val_disjoint`,
+  check the persisted control's two sets are disjoint and that every
+  evaluation the run paid for touched only those tasks.
+- **GEPA's partition must cover the internal split exactly.** whetstone's
+  GEPA factory builds its data registry from the whole internal split and
+  then requires the control's trainset and valset to cover it, so
+  `train_size + val_size < internal` is not a legal GEPA partition — it was
+  rejected inside the durable run boundary, after the run directory
+  existed. `run_optimizer` now refuses it at spec validation with a message
+  naming the coverage requirement, so a partial GEPA partition leaves no
+  run directory behind. MIPROv2 is unaffected and keeps the `<=` rule: it
+  bootstraps and scores without building a registry over the whole split,
+  so a partition that leaves tasks unused is legal for it.
+- **`whetstone-study run --allow-real-codex` authorizes a Codex stage.**
+  The study's optimizer runner forwards the flag onto the Codex arm's
+  `RunSpec` and onto no other arm's; `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1`
+  remains the other half of the gate. Without both, a Stage 1 or Stage 2
+  whose design names the Codex arm is refused **before any arm runs**,
+  which is the spend-safety property: the refusal inside `run_optimizer`
+  arrives on the Codex arm's own turn, by which point every arm ordered
+  ahead of it has already been paid for. The authorization is a run-time
+  permission rather than a design choice — it is not an `ArmSpec` field, it
+  is not recorded in the manifest, and it does not enter the
+  pre-registration hash, so two runs of one design pre-register identically
+  whether or not the operator was allowed to bill a session.
+- **`whetstone-study plan` states the pre-registered MDE.** One row per
+  pinned `tau^2` (0.05 and 0.10), computed from `power.py` at the
+  manifest's own held-out size and `K_REPEAT` and at the worst-case binary
+  `sigma^2` of 0.25 — `0.0622` and `0.0690` at the study's 440 and 3.
+  Labelled as pre-registered rather than measured, because Stage 0 measures
+  both variances and records the MDE that follows. `plan` is the command
+  read before authorizing spend, and it previously said nothing about what
+  effect the design could resolve.
+- **`PROTOCOL_SPLIT_SIZES` in `optim/study/spec.py`** declares the study's
+  `(88, 132, 440)`, pinned by a golden test. It is deliberately not the c19
+  generator's `DEFAULT_SPLIT_SIZES` of `(88, 132, 132)`: the protocol
+  pre-registered a held-out split of 440 because the design's MDE depends
+  on it.
 - **The Codex arm runs.** `--optimizer codex` drives the study's
   foreign-agent arm through the same `run_optimizer` every other arm uses:
   `whetstone_envs.optim.codex` builds a `CodexControl` and a `CodexAdapter`

@@ -131,6 +131,39 @@ def test_plan_lines_derive_the_budget_from_the_matrix() -> None:
     assert "total selection+report rows: 5016" in text
 
 
+def test_plan_states_the_pre_registered_mde() -> None:
+    """The number a reader authorizes spend against, at the design's sizes.
+
+    Pinned as literals at the study's own held-out 440 and ``K_REPEAT`` 3:
+    these are the protocol review's recomputed design points, so a plan
+    that printed anything else would be quoting a design the review never
+    checked.
+
+    Fails-before: ``plan`` printed a run matrix and two budgets and no MDE
+    at all, so nothing in the command a reader runs before authorizing
+    spend said what effect the design could resolve.
+    """
+    text = "\n".join(plan_lines(_Spec()))
+    assert "pre-registered MDE" in text
+    assert "tau^2=0.05" in text
+    assert "T=440 K=3" in text
+    assert "MDE=0.0622" in text
+    assert "tau^2=0.1" in text
+    assert "MDE=0.0690" in text
+
+
+def test_the_plan_mde_is_labelled_as_pre_registered_not_measured() -> None:
+    """An estimate and a measurement are never printed in the same voice.
+
+    Stage 0 measures both variances and records the MDE that follows; this
+    row is computed at the worst-case ``sigma^2`` beforehand, and a reader
+    comparing the two needs to see which is which.
+    """
+    text = "\n".join(plan_lines(_Spec()))
+    assert "worst-case sigma^2=0.25" in text
+    assert "from power.py" in text
+
+
 def test_plan_prints_the_matrix(tmp_path: Path, capsys) -> None:
     code = main(
         ["plan", "--study-dir", str(tmp_path)],
@@ -189,9 +222,16 @@ def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
     seen: list[tuple[Path, str]] = []
 
     def run_stage(
-        *, study_dir: Path, stage: str, replace_design: bool = False
+        *,
+        study_dir: Path,
+        stage: str,
+        replace_design: bool = False,
+        allow_real_codex: bool = False,
     ) -> StudyManifest:
         assert replace_design is False
+        # An unflagged invocation authorizes no spend. Asserted rather than
+        # ignored: the default is what stops an accidental Codex bill.
+        assert allow_real_codex is False
         seen.append((study_dir, stage))
         return _minimal_manifest()
 
@@ -408,6 +448,8 @@ def _manifest_citing(pointers: tuple[EvidencePointer, ...]) -> StudyManifest:
                     arm_id="copro",
                     optimizer="copro",
                     demo_mode=None,
+                    train_size=None,
+                    val_size=None,
                     control_identity_hash="d" * 64,
                     seed_note="provider-seed-control-only",
                     runs=(

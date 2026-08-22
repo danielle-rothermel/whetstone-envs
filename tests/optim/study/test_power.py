@@ -9,6 +9,7 @@ import pytest
 from whetstone_envs.optim.study.power import (
     COMPLETENESS_BACKSTOP,
     MDE_MULTIPLIER,
+    WORST_CASE_SIGMA_SQ,
     Stage0Inputs,
     evaluate_stage0_gate,
     minimum_detectable_effect,
@@ -18,8 +19,14 @@ from whetstone_envs.optim.study.power import (
     within_variance_divergence,
 )
 
-#: Worst-case binary within-task variance, the value the review's table uses.
-WORST_CASE_SIGMA_SQ = 0.25
+
+def test_the_worst_case_variance_is_pinned() -> None:
+    """The review's table and the plan's MDE row read one constant.
+
+    Two copies could drift, and the plan's pre-registered MDE would then
+    quote a number the recomputed table never produced.
+    """
+    assert WORST_CASE_SIGMA_SQ == 0.25
 
 
 def test_mde_multiplier_is_two_sided_plus_power() -> None:

@@ -8,6 +8,15 @@ instruction memorization -- so while the setup is being debugged, both
 optimizers take an explicit, disjoint partition of the internal split
 rather than defaulting to one.
 
+The two optimizers do not take the same partition, and the difference is
+not cosmetic. **MIPROv2** needs only a disjoint pair inside the internal
+split, so a partition that leaves tasks unused is legal. **GEPA** builds
+its data registry from the whole internal split and then requires the
+trainset and valset to cover it exactly, so a GEPA partition must sum to
+the internal size; :func:`whetstone_envs.optim.run.run_optimizer` refuses a
+partial GEPA partition at spec validation rather than letting whetstone
+reject it after the run directory exists.
+
 The partition is derived from two integers so it is reproducible from the
 run spec alone: :func:`partition_internal_split` takes the first
 ``train_size`` task hashes as the trainset and the next ``val_size`` as the
@@ -21,11 +30,17 @@ deliberately not routed through here.
 
 from __future__ import annotations
 
+#: The two optimizers with a train/val concept, named individually because
+#: they do not share a rule: GEPA must partition the internal split
+#: exactly, MIPROv2 need only fit inside it.
+GEPA_OPTIMIZER = "gepa"
+MIPROV2_OPTIMIZER = "miprov2"
+
 #: The optimizers that bootstrap or reflect on one set of tasks and score
 #: on another, and so must state an explicit train/val partition. COPRO,
 #: the nulls, and Codex-direct have no such concept, so supplying a split
 #: for them is refused rather than ignored.
-TRAIN_VAL_OPTIMIZERS = ("gepa", "miprov2")
+TRAIN_VAL_OPTIMIZERS = (GEPA_OPTIMIZER, MIPROV2_OPTIMIZER)
 
 
 def partition_internal_split(
@@ -94,6 +109,8 @@ def require_disjoint_split(
 
 
 __all__ = [
+    "GEPA_OPTIMIZER",
+    "MIPROV2_OPTIMIZER",
     "TRAIN_VAL_OPTIMIZERS",
     "partition_internal_split",
     "require_disjoint_split",

@@ -48,7 +48,7 @@ from pydantic import (
 from whetstone_envs.reporting.publication import validate_output_root
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Iterable, Iterator, Mapping
     from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -76,7 +76,13 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: any spend, plus the hash over them. v2 could record a design and then let
 #: a later write silently restate it, which would make every downstream
 #: "pre-registered" claim unfalsifiable.
-STUDY_MANIFEST_SCHEMA_VERSION = 3
+#: v4 adds each arm's train/val partition, on ``ArmRecord`` and inside the
+#: pre-registration's hashed payload. v3 pinned every other field that
+#: decides what an arm's number means but left the partition unhashed, so a
+#: MIPROv2 or GEPA arm could be rerun at a different train/val split under
+#: an unchanged design hash -- the one post-hoc adjustment the block was
+#: supposed to forbid and did not.
+STUDY_MANIFEST_SCHEMA_VERSION = 4
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -395,6 +401,15 @@ class PreRegistrationRecord(_StrictModel):
 
     k_repeat: StrictInt
     k_run_by_arm: dict[StrictStr, StrictInt]
+    #: Each arm's pre-registered train/val partition of the internal split,
+    #: as ``{arm_id: [train_size, val_size]}``, with ``None`` for an arm
+    #: whose optimizer has no train/val concept.
+    #:
+    #: Hashed with the rest of the design because it *is* design: MIPROv2
+    #: and GEPA measure search efficacy against a declared partition, and a
+    #: partition chosen after a result is the same post-hoc adjustment the
+    #: rest of this block exists to forbid.
+    split_by_arm: dict[StrictStr, tuple[StrictInt, StrictInt] | None]
     ci_level: StrictFloat
     resamples: StrictInt
     bootstrap_seed: StrictInt
@@ -413,6 +428,9 @@ class PreRegistrationRecord(_StrictModel):
             raise ValueError("a pre-registration records at least one arm")
         if any(value < 1 for value in self.k_run_by_arm.values()):
             raise ValueError("every arm's K_RUN is at least 1")
+        _require_valid_split_by_arm(
+            split_by_arm=self.split_by_arm, k_run_by_arm=self.k_run_by_arm
+        )
         if not 0.0 < self.ci_level < 1.0:
             raise ValueError("the CI level is a proportion in (0, 1)")
         if self.resamples < 1:
@@ -440,6 +458,7 @@ class PreRegistrationRecord(_StrictModel):
         expected = pre_registration_design_hash(
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
+            split_by_arm=self.split_by_arm,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -459,6 +478,7 @@ class PreRegistrationRecord(_StrictModel):
         return _pre_registration_payload(
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
+            split_by_arm=self.split_by_arm,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -468,10 +488,37 @@ class PreRegistrationRecord(_StrictModel):
         )
 
 
+def _require_valid_split_by_arm(
+    *,
+    split_by_arm: Mapping[str, tuple[int, int] | None],
+    k_run_by_arm: Mapping[str, int],
+) -> None:
+    """The per-arm split names every arm, at positive sizes.
+
+    Split out of the record's validator so that validator stays readable;
+    the rule is the record's own, not a general one about splits.
+    """
+    if set(split_by_arm) != set(k_run_by_arm):
+        # A pre-registration naming a split for some arms and not others
+        # would leave the rest's partition unpinned, which is exactly the
+        # drift this block exists to prevent.
+        raise ValueError(
+            "the pre-registered split names exactly the arms K_RUN does"
+        )
+    if any(
+        size < 1
+        for split in split_by_arm.values()
+        if split is not None
+        for size in split
+    ):
+        raise ValueError("a pre-registered split size is at least 1")
+
+
 def _pre_registration_payload(  # noqa: PLR0913
     *,
     k_repeat: int,
     k_run_by_arm: dict[str, int],
+    split_by_arm: Mapping[str, tuple[int, int] | None],
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -484,10 +531,23 @@ def _pre_registration_payload(  # noqa: PLR0913
     Spelled as an explicit dict rather than derived from the model's fields:
     the hash is stored identity, and deriving it from field names would let
     a rename silently change every recorded design hash.
+
+    ``split_by_arm`` is written as a two-element list per arm, sorted by arm
+    id like ``k_run_by_arm``, so the document is canonical whatever order
+    the arms were declared in.
+
+    Deliberately **not** in here: whether the invocation was authorized to
+    spend on a real Codex session. That is a run-time permission rather than
+    a design choice, and hashing it would make two runs of one design
+    pre-register differently.
     """
     return {
         "k_repeat": k_repeat,
         "k_run_by_arm": dict(sorted(k_run_by_arm.items())),
+        "split_by_arm": {
+            arm_id: (None if split is None else [split[0], split[1]])
+            for arm_id, split in sorted(split_by_arm.items())
+        },
         "ci_level": ci_level,
         "resamples": resamples,
         "bootstrap_seed": bootstrap_seed,
@@ -501,6 +561,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
     *,
     k_repeat: int,
     k_run_by_arm: dict[str, int],
+    split_by_arm: Mapping[str, tuple[int, int] | None],
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -513,6 +574,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
         _pre_registration_payload(
             k_repeat=k_repeat,
             k_run_by_arm=k_run_by_arm,
+            split_by_arm=split_by_arm,
             ci_level=ci_level,
             resamples=resamples,
             bootstrap_seed=bootstrap_seed,
@@ -733,6 +795,13 @@ class ArmRecord(_StrictModel):
     arm_id: StrictStr
     optimizer: StrictStr
     demo_mode: StrictStr | None
+    #: The arm's train/val partition of the internal split, or ``None`` on
+    #: an arm whose optimizer has no train/val concept. Recorded because it
+    #: is part of the design the study pre-registers -- a GEPA arm rerun at
+    #: a different partition is a different arm -- so it is hashed into the
+    #: pre-registration rather than left implicit in the run's own control.
+    train_size: StrictInt | None
+    val_size: StrictInt | None
     control_identity_hash: StrictStr
     seed_note: StrictStr
     runs: tuple[RunRecord, ...]
@@ -741,6 +810,14 @@ class ArmRecord(_StrictModel):
     def _validate_arm(self) -> ArmRecord:
         if not self.arm_id.strip() or not self.optimizer.strip():
             raise ValueError("an arm names itself and its optimizer")
+        if (self.train_size is None) != (self.val_size is None):
+            raise ValueError(
+                "an arm records both halves of its train/val split or neither"
+            )
+        if self.train_size is not None and self.train_size < 1:
+            raise ValueError("a recorded train_size is at least 1")
+        if self.val_size is not None and self.val_size < 1:
+            raise ValueError("a recorded val_size is at least 1")
         if not self.control_identity_hash.strip():
             raise ValueError("an arm cites its control identity hash")
         if not self.seed_note.strip():

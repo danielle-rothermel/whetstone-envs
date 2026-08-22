@@ -26,6 +26,7 @@ is built -- outside the harness.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -73,6 +74,7 @@ from whetstone_envs.optim.study.selection import (
     report_arm,
 )
 from whetstone_envs.optim.study.spec import (
+    CODEX_ARM_ID,
     StageId,
     arm_seeds,
     spec_from_manifest,
@@ -176,6 +178,18 @@ class StageEnvironment:
     #: How a stage re-reads a run an earlier stage recorded. Absent, a
     #: stage that finds one refuses rather than selecting over a subset.
     load_recorded_run: RecordedRunLoader | None = None
+    #: Whether this invocation may spend on a real, billed Codex session.
+    #:
+    #: A spend authorization for one run of one command, not a design
+    #: field: it is set from ``whetstone-study run --allow-real-codex``,
+    #: never read off the manifest, and never hashed into the
+    #: pre-registration. The harness reads it only to refuse a stage whose
+    #: design names the Codex arm *before* any arm runs -- see
+    #: :func:`_refuse_unauthorized_codex_arm`. The runner behind
+    #: ``run_optimizer`` carries the same authorization and remains the
+    #: thing that actually gates the spend, together with the opt-in
+    #: environment variable.
+    real_codex_authorized: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +268,9 @@ def run_stage0_into_manifest(
         pool_ceiling=environment.pool_ceiling,
     )
     design = _design_record(spec, result)
-    pre_registration = _pre_registration_record(design, replaced=pinned)
+    pre_registration = _pre_registration_record(
+        design, spec=spec, replaced=pinned
+    )
     updated = manifest.model_copy(
         update={
             "design": design,
@@ -342,18 +358,45 @@ def _splits_with_measured_configs(
     )
 
 
+def _split_by_arm(spec: StudySpec) -> dict[str, tuple[int, int] | None]:
+    """Each arm's pre-registered train/val partition, or ``None``.
+
+    ``ArmSpec`` already refuses a split on an arm whose optimizer has no
+    train/val concept and requires both halves on one that does, so this is
+    a projection rather than a second rule.
+    """
+    return {
+        arm.arm_id: (
+            None
+            if arm.train_size is None or arm.val_size is None
+            else (arm.train_size, arm.val_size)
+        )
+        for arm in spec.arms
+    }
+
+
 def _pre_registration_record(
-    design: DesignRecord, *, replaced: PreRegistrationRecord | None
+    design: DesignRecord,
+    *,
+    spec: StudySpec,
+    replaced: PreRegistrationRecord | None,
 ) -> PreRegistrationRecord:
     """The frozen block for ``design``, amending ``replaced`` if it differs.
 
     The hash is computed from the design's own values rather than copied,
     so a design and its pinning cannot disagree at the moment they are
     written.
+
+    ``spec`` supplies the per-arm train/val partition, which the design
+    block does not carry: the partition is per arm and ``DesignRecord``
+    records study-wide numbers. It is pinned all the same, because an arm
+    rerun at a different split is measuring a different thing.
     """
+    split_by_arm = _split_by_arm(spec)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -369,6 +412,7 @@ def _pre_registration_record(
     return PreRegistrationRecord(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -411,6 +455,56 @@ def _design_record(spec: StudySpec, result: Stage0Result) -> DesignRecord:
 # --------------------------------------------------------------------------
 
 
+def _refuse_unauthorized_codex_arm(
+    *, spec: StudySpec, stage: StageId, environment: StageEnvironment
+) -> None:
+    """Refuse a Codex-bearing stage before any arm runs, or not at all.
+
+    The refusal that matters is the *early* one. ``run_optimizer`` already
+    declines an unauthorized real Codex run, but it declines it when the
+    Codex arm's own turn arrives -- after this stage has paid for every arm
+    ordered ahead of it. That is a real bill for a stage that was never
+    going to finish, so the same authorization is checked here, against the
+    design, while the stage has spent nothing.
+
+    Both halves of the opt-in are required, exactly as
+    :func:`~whetstone_envs.optim.codex.refuse_unauthorized_real_codex`
+    requires them: the command's ``--allow-real-codex`` and the opt-in
+    environment variable. Checking both here means this guard cannot report
+    a stage as authorized that the runner would then refuse.
+
+    Imported inside the function rather than at module scope: this module
+    takes its provider-touching collaborators as callables and does not
+    import the optimizer stack, and the two constants it needs live beside
+    the guard that enforces them.
+    """
+    from whetstone_envs.optim.codex import (  # noqa: PLC0415
+        ALLOW_REAL_CODEX_ENV,
+        ALLOW_REAL_CODEX_ENV_VALUE,
+        RealCodexRefusedError,
+    )
+
+    codex_arms = tuple(
+        arm.arm_id for arm in spec.arms if arm.optimizer == CODEX_ARM_ID
+    )
+    if not codex_arms:
+        return
+    authorized = (
+        environment.real_codex_authorized
+        and os.environ.get(ALLOW_REAL_CODEX_ENV) == ALLOW_REAL_CODEX_ENV_VALUE
+    )
+    if authorized:
+        return
+    raise RealCodexRefusedError(
+        f"{stage.value} declares the Codex arm {list(codex_arms)}, whose "
+        "runs spawn a real, billed Codex session, and this invocation is "
+        "not authorized to spend on one. Refusing before any arm runs, so "
+        "the stage buys nothing it cannot finish. Authorize it with "
+        f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} in the "
+        "environment and --allow-real-codex on the run command."
+    )
+
+
 def run_arm_stage(
     *, study_dir: Path, stage: StageId, environment: StageEnvironment
 ) -> StageResult:
@@ -446,6 +540,9 @@ def run_arm_stage(
     spec = spec_from_manifest(manifest, stage=stage)
     if not spec.arms:
         raise StageError(f"{stage.value} has no arms to run")
+    _refuse_unauthorized_codex_arm(
+        spec=spec, stage=stage, environment=environment
+    )
 
     arm_records, run_results = _run_every_arm(
         spec=spec,
@@ -816,6 +913,8 @@ def _arm_record(
         arm_id=arm.arm_id,
         optimizer=arm.optimizer,
         demo_mode=arm.demo_mode,
+        train_size=arm.train_size,
+        val_size=arm.val_size,
         control_identity_hash=control_identity_hash,
         seed_note=_seed_note(arm),
         runs=runs,

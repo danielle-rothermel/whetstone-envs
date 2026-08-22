@@ -24,6 +24,7 @@ from whetstone_envs.optim.study.environment import bound_stage_environment
 from whetstone_envs.optim.study.manifest import (
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
+    ArmRecord,
     EvidencePointer,
     RunRecord,
     read_study_manifest,
@@ -49,7 +50,12 @@ from whetstone_envs.optim.study.stages import (
     run_stage0_into_manifest,
 )
 
-from .conftest import HELD_OUT_CONFIG, OFFICIAL_CONFIG, toy_manifest
+from .conftest import (
+    HELD_OUT_CONFIG,
+    OFFICIAL_CONFIG,
+    toy_arms,
+    toy_manifest,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -231,7 +237,9 @@ class _Harness:
             completeness=1.0,
         )
 
-    def environment(self) -> StageEnvironment:
+    def environment(
+        self, *, real_codex_authorized: bool = False
+    ) -> StageEnvironment:
         with bound_stage_environment(self.study_dir) as base:
             return StageEnvironment(
                 bind_engine=base.bind_engine,
@@ -242,6 +250,7 @@ class _Harness:
                 run_optimizer=self.run_optimizer,
                 score_official=self.score_official,
                 evaluate_held_out=self.evaluate_held_out,
+                real_codex_authorized=real_codex_authorized,
             )
 
 
@@ -368,6 +377,136 @@ def test_every_run_is_scored_before_any_arm_is_measured(
         held_out = harness.events.index(f"held_out:{arm.arm_id}")
         assert official
         assert max(official) < held_out
+
+
+# --------------------------------------------------------------------------
+# A Codex-bearing stage refuses before it spends
+# --------------------------------------------------------------------------
+
+
+def _codex_study(tmp_path: Path) -> Path:
+    """A calibrated study whose design names the Codex arm.
+
+    The Codex arm is declared *after* an ordinary arm on purpose: what the
+    early refusal buys is that the arms ahead of it are never paid for, and
+    an arm order that put Codex first could not show that.
+    """
+    study_dir = tmp_path / "study"
+    codex = ArmRecord(
+        arm_id="codex",
+        optimizer="codex",
+        demo_mode=None,
+        train_size=None,
+        val_size=None,
+        control_identity_hash="f" * 64,
+        seed_note="control-seed-field",
+        runs=(),
+    )
+    write_study_manifest(study_dir, toy_manifest(arms=(*toy_arms(), codex)))
+    with bound_stage_environment(study_dir) as environment:
+        run_stage0_into_manifest(study_dir=study_dir, environment=environment)
+    return study_dir
+
+
+@pytest.mark.parametrize("stage", [StageId.STAGE1, StageId.STAGE2])
+def test_an_unauthorized_codex_stage_refuses_before_any_arm_runs(
+    tmp_path: Path, stage: StageId
+) -> None:
+    """The spend-safety property: zero arms dispatched, so zero spend.
+
+    Fails-before: the refusal lived only inside ``run_optimizer``, which
+    the Codex arm reaches on *its* turn -- after every arm ordered ahead of
+    it had already run and been paid for. The stage then aborted with a
+    bill and no result. Asserting the harness recorded no events at all is
+    what makes "before any arm runs" checkable rather than asserted.
+    """
+    from whetstone_envs.optim.codex import RealCodexRefusedError
+
+    study_dir = _codex_study(tmp_path)
+    harness = _Harness(study_dir, scores={})
+    with pytest.raises(RealCodexRefusedError, match="not authorized"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=stage,
+            environment=harness.environment(),
+        )
+    assert harness.events == []
+
+
+def test_an_authorized_codex_stage_still_needs_the_environment_half(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The flag alone does not authorize spend, here as in the runner."""
+    from whetstone_envs.optim.codex import (
+        ALLOW_REAL_CODEX_ENV,
+        RealCodexRefusedError,
+    )
+
+    monkeypatch.delenv(ALLOW_REAL_CODEX_ENV, raising=False)
+    study_dir = _codex_study(tmp_path)
+    harness = _Harness(study_dir, scores={})
+    with pytest.raises(RealCodexRefusedError):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=harness.environment(real_codex_authorized=True),
+        )
+    assert harness.events == []
+
+
+def test_both_halves_of_the_opt_in_lift_the_early_refusal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With both halves present the stage dispatches its arms.
+
+    The Codex arm's own run still goes through the injected runner rather
+    than a real session -- this test is about the *gate*, not about
+    spawning a CLI -- so nothing here reaches a provider or a subprocess.
+    Its point is that the gate, once satisfied, stops refusing: without
+    this the flag would be unfalsifiable.
+    """
+    from whetstone_envs.optim.codex import (
+        ALLOW_REAL_CODEX_ENV,
+        ALLOW_REAL_CODEX_ENV_VALUE,
+    )
+
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
+    study_dir = _codex_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.1 * index
+        for arm in spec.arms
+        for index, seed in enumerate(arm.seeds, start=1)
+    }
+    harness = _Harness(study_dir, scores=scores)
+
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=harness.environment(real_codex_authorized=True),
+    )
+
+    assert any(event.startswith("run:codex-") for event in harness.events)
+
+
+def test_a_stage_with_no_codex_arm_needs_no_authorization(
+    tmp_path: Path,
+) -> None:
+    """The guard is scoped to the arm that can bill, and to nothing else."""
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.1 * index
+        for arm in spec.arms
+        for index, seed in enumerate(arm.seeds, start=1)
+    }
+    harness = _Harness(study_dir, scores=scores)
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=harness.environment(),
+    )
+    assert harness.events
 
 
 def test_an_arm_stage_without_its_collaborators_refuses(

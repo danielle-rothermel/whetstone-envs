@@ -10,6 +10,9 @@ from whetstone_envs.optim.study.spec import (
     K_CAL_CAP,
     K_CAL_INITIAL,
     NULL_ARM_IDS,
+    PROTOCOL_SPLIT_SIZES,
+    PROTOCOL_TRAIN_SIZE,
+    PROTOCOL_VAL_SIZE,
     REAL_OPTIMIZER_ARM_IDS,
     SEED_RANGE_BY_OPTIMIZER,
     ArmKind,
@@ -125,6 +128,33 @@ def test_the_holm_family_is_the_four_real_optimizers() -> None:
 def test_the_codex_cap_is_the_adopted_eight() -> None:
     """D2, named here so no caller re-decides it per run."""
     assert CODEX_EVALUATE_CALL_CAP == 8
+
+
+def test_the_protocol_split_sizes_are_pinned() -> None:
+    """The study's three sizes, as literals.
+
+    Pinned rather than derived, and deliberately *not* the c19 generation
+    default: ``whetstone_envs.c19.generation.DEFAULT_SPLIT_SIZES`` is
+    ``(88, 132, 132)``, which is what the generator returns when nobody
+    asks. The protocol pre-registered a held-out split of 440 because the
+    design's MDE depends on it, so the two must be allowed to differ and a
+    test that derived one from the other would hide the difference.
+    """
+    from whetstone_envs.c19.generation import DEFAULT_SPLIT_SIZES
+
+    assert PROTOCOL_SPLIT_SIZES == (88, 132, 440)
+    assert PROTOCOL_SPLIT_SIZES != DEFAULT_SPLIT_SIZES
+
+
+def test_the_protocol_partition_covers_the_protocol_internal_split() -> None:
+    """GEPA's coverage rule, checked against the protocol's own numbers.
+
+    GEPA requires ``train + val == internal`` exactly. If the protocol's
+    44/44 ever stopped covering its internal 88, every GEPA arm in the
+    study would refuse at spec validation -- so the relationship is pinned
+    here rather than discovered at Stage 1.
+    """
+    assert PROTOCOL_SPLIT_SIZES[0] == (PROTOCOL_TRAIN_SIZE + PROTOCOL_VAL_SIZE)
 
 
 def test_split_sizes_reach_the_runner_as_one_triple() -> None:
@@ -247,6 +277,8 @@ def test_an_arm_naming_an_unseeded_optimizer_is_refused() -> None:
                 arm_id="mystery",
                 optimizer="not-an-optimizer",
                 demo_mode=None,
+                train_size=None,
+                val_size=None,
                 control_identity_hash="f" * 64,
                 seed_note="provider-seed-control-only",
                 runs=(),

@@ -657,6 +657,73 @@ def test_a_faithful_run_passes_the_train_val_invariant(
     assert statuses[InvariantId.MIPRO_TRAIN_VAL_DISJOINT] is AuditStatus.PASS
 
 
+def _evidence_with_intent_tasks(evidence, task_hashes):
+    """``evidence`` whose first step resolves one intent over ``task_hashes``.
+
+    The same substitution as :func:`_evidence_with_control` and for the
+    same reason: an in-process MIPROv2 run resolves no evaluation intents,
+    so a run that evaluated a task outside its own partition cannot exist
+    as a fixture. A thin view swaps exactly the field the predicate reads.
+    """
+    from dataclasses import replace as replace_dataclass
+    from types import SimpleNamespace
+
+    resolution = SimpleNamespace(
+        optim_eval_request=SimpleNamespace(task_hashes=tuple(task_hashes))
+    )
+
+    class _Entry:
+        def __init__(self, entry, intents):
+            self._entry = entry
+            self._intents = intents
+
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
+
+        @property
+        def resolved_intents(self):
+            return self._intents
+
+    return replace_dataclass(
+        evidence,
+        steps=(_Entry(evidence.steps[0], (resolution,)), *evidence.steps[1:]),
+    )
+
+
+def test_an_intent_outside_the_declared_partition_fails(miprov2_runs) -> None:
+    """The second half of the invariant: the run must stay inside the split.
+
+    A disjoint control is not enough. MIPROv2 bootstraps from the trainset
+    and scores trials on the valset, so an evaluation that reached a task
+    in *neither* scored something the declared partition never admitted --
+    the fan-out failure seen from the split's side.
+
+    Fails-before evidence for that branch specifically: it had no negative
+    test, because no fixture can reach it.
+    """
+    evidence = load_run_evidence(miprov2_runs["fewshot"])
+    finding = miprov2_train_val_disjoint(
+        _evidence_with_intent_tasks(evidence, ("f" * 64,))
+    )
+    assert finding.status is AuditStatus.FAIL, finding.detail
+    assert "outside the declared" in finding.detail
+    assert finding.evidence_refs
+
+
+def test_an_intent_inside_the_declared_partition_passes(miprov2_runs) -> None:
+    """The same substitution with an admitted task must not fail.
+
+    Without this, the test above would pass on a predicate that failed
+    every resolved intent regardless of which tasks it named.
+    """
+    evidence = load_run_evidence(miprov2_runs["fewshot"])
+    control = _terminal_state_of(evidence).control
+    finding = miprov2_train_val_disjoint(
+        _evidence_with_intent_tasks(evidence, control.trainset_task_hashes[:1])
+    )
+    assert finding.status is AuditStatus.PASS, finding.detail
+
+
 def test_bootstrap_after_proposal_fails(miprov2_runs, tmp_path) -> None:
     """A bootstrap evaluation issued after proposals began is a defect.
 

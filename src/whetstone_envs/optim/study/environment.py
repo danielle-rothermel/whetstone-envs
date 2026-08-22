@@ -137,13 +137,23 @@ def _require_recorded_population(
 
 @contextmanager
 def bound_stage_environment(
-    study_dir: Path, *, transport: str = FAKE_TRANSPORT
+    study_dir: Path,
+    *,
+    transport: str = FAKE_TRANSPORT,
+    allow_real_codex: bool = False,
 ) -> Iterator[StageEnvironment]:
     """Open a study's store and bind one engine per evaluation role.
 
     ``transport="fake"`` is the default because every stage in this package
     is exercised without provider calls; a paid stage names ``openrouter``
     explicitly, so no code path reaches a provider by omission.
+
+    ``allow_real_codex`` is the run-time authorization to spend on a real,
+    billed Codex session, carried from ``whetstone-study run
+    --allow-real-codex``. It defaults off for the same reason the transport
+    does, and it is a property of *this invocation* rather than of the
+    study: it reaches the runner and the harness's early refusal, and never
+    the manifest or the pre-registration hash.
     """
     if transport != FAKE_TRANSPORT:
         # The provider-backed binder belongs with the stage that spends, and
@@ -263,6 +273,7 @@ def bound_stage_environment(
             num_seeds=k_repeat,
             naive_template=family.probes.naive_template,
             store_path=study_dir / STUDY_STORE_NAME,
+            allow_real_codex=allow_real_codex,
         )
         yield StageEnvironment(
             bind_engine=bind_engine,
@@ -274,4 +285,5 @@ def bound_stage_environment(
             score_official=official.score_official,
             evaluate_held_out=held_out.evaluate_held_out,
             load_recorded_run=runner.load_recorded_run,
+            real_codex_authorized=allow_real_codex,
         )

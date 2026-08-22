@@ -683,6 +683,60 @@ def test_a_split_exceeding_the_internal_split_is_refused() -> None:
         run_optimizer(spec)
 
 
+def test_a_partial_gepa_partition_is_refused_before_the_run_boundary(
+    tmp_path: Path,
+) -> None:
+    """GEPA must cover the internal split exactly, and refuse early if not.
+
+    whetstone's GEPA factory builds its data registry from the whole
+    internal split and then requires the control's trainset and valset to
+    cover it, so ``train + val < internal`` is not a legal GEPA partition.
+
+    Fails-before: envs validated only ``<=``, so a partial partition passed
+    spec validation and was rejected by whetstone *inside* the durable run
+    boundary -- after the run directory existed. Asserting the directory is
+    absent is what makes "before the boundary" checkable.
+    """
+    output_dir = tmp_path / "run"
+    spec = replace(
+        _spec(optimizer="gepa", train_size=1, val_size=1),
+        split_sizes=(3, 2, 0),
+        output_dir=output_dir,
+    )
+    with pytest.raises(ValueError, match="cover the internal split exactly"):
+        run_optimizer(spec)
+    assert not output_dir.exists()
+
+
+def test_an_exact_gepa_partition_passes_validation() -> None:
+    """The coverage rule refuses a partial partition, not every partition."""
+    from whetstone_envs.optim.run import _validate_train_val_split
+
+    _validate_train_val_split(
+        replace(
+            _spec(optimizer="gepa", train_size=1, val_size=1),
+            split_sizes=(2, 2, 0),
+        )
+    )
+
+
+def test_miprov2_still_accepts_a_partition_inside_the_internal_split() -> None:
+    """The coverage rule is GEPA's alone; MIPROv2 keeps the ``<=`` rule.
+
+    MIPROv2 bootstraps from the trainset and scores on the valset without
+    building a registry over the whole split, so a partition that leaves
+    tasks unused is legal for it and must not be swept up by GEPA's rule.
+    """
+    from whetstone_envs.optim.run import _validate_train_val_split
+
+    _validate_train_val_split(
+        replace(
+            _spec(optimizer="miprov2", train_size=1, val_size=1),
+            split_sizes=(3, 2, 0),
+        )
+    )
+
+
 @pytest.mark.parametrize("optimizer", ["copro", "codex"])
 def test_a_train_val_split_is_refused_on_an_optimizer_without_one(
     optimizer: str,

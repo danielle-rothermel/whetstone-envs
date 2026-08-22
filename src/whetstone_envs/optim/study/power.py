@@ -44,6 +44,7 @@ __all__ = [
     "SIGNIFICANCE_ALPHA",
     "TARGET_POWER",
     "WITHIN_VARIANCE_DIVERGENCE_FLAG",
+    "WORST_CASE_SIGMA_SQ",
     "GateOutcome",
     "Stage0Gate",
     "Stage0Inputs",
@@ -76,6 +77,14 @@ MDE_FORMULA = (
     "MDE(T, K) = (z_{1-alpha/2} + z_power) * "
     "sqrt((tau^2 + 2 * sigma^2 / K) / T)"
 )
+
+#: The worst-case within-task sampling variance for a binary score, at
+#: ``p = 0.5``. The protocol review's MDE table is quoted at this value and
+#: the plan's pre-registered MDE row recomputes it here, so a design point a
+#: reader authorizes spend against is the most pessimistic one rather than a
+#: variance the study has not measured yet. Stage 0 replaces it with the
+#: measured ``sigma^2``.
+WORST_CASE_SIGMA_SQ = 0.25
 
 #: Relative divergence between the naive-only and pooled within-variance
 #: estimates above which the study flags the decomposition caveat.

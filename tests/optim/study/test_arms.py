@@ -179,19 +179,23 @@ def test_the_study_capacity_cap_agrees_with_the_arms_own() -> None:
 
 
 def test_the_study_cannot_dispatch_a_paid_codex_run(tmp_path: Path) -> None:
-    """A study arm has no seam to pass, so it must be refused, not billed.
+    """An unauthorized runner refuses the Codex arm rather than billing it.
 
     ``StudyOptimizerRunner`` calls ``run_optimizer`` with a ``RunSpec``
     and nothing else -- there is no ``codex_test_seam`` parameter on the
     stage-harness protocol and no field on ``ArmSpec`` that could build
-    one. Before the spend guard, that meant running a study whose design
-    names the Codex arm reached the real, billed CLI through the
-    authentication preflight. Now the dispatch refuses, so a fake-transport
-    study cannot buy a Codex session by accident.
+    one. Without an authorization the runner therefore forwards
+    ``allow_real_codex=False``, and ``run_optimizer`` refuses before any
+    preflight, adapter, or subprocess exists.
 
-    The refusal is the *arm's* to lift: a real Codex stage runs under the
-    two-part opt-in, deliberately, and this is what makes that deliberate
-    rather than default.
+    **The authorization is the runner's, not the arm's.** It is a run-time
+    permission to spend on this invocation rather than a design choice, so
+    it lives on ``StudyOptimizerRunner`` (set from ``whetstone-study run
+    --allow-real-codex``) and deliberately not on ``ArmSpec``: putting it
+    on the arm would push it into the manifest and the pre-registration
+    hash, making two runs of one design pre-register differently. The
+    environment variable is the other half of the gate and neither half
+    authorizes spend alone.
     """
     from whetstone_envs.optim.codex import RealCodexRefusedError
 
@@ -199,3 +203,69 @@ def test_the_study_cannot_dispatch_a_paid_codex_run(tmp_path: Path) -> None:
     arm = _codex_arm()
     with pytest.raises(RealCodexRefusedError):
         runner(arm=arm, seed=4000, study_dir=tmp_path)
+
+
+def test_an_authorized_runner_forwards_the_opt_in_to_the_codex_arm(
+    tmp_path: Path,
+) -> None:
+    """The flag reaches ``RunSpec``, which is what lifts the refusal.
+
+    Fails-before: ``_spec_for`` forwarded no ``allow_real_codex`` at all
+    and ``ArmSpec`` had no such field, so a Stage 1 or Stage 2 whose design
+    names the Codex arm could not be authorized by any means -- it aborted
+    at the Codex arm's turn, after the earlier arms had already been paid
+    for.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), allow_real_codex=True)
+    spec = runner._spec_for(_codex_arm(), seed=4000, run_dir=tmp_path / "run")
+    assert spec.allow_real_codex is True
+
+
+def test_the_opt_in_is_not_forwarded_to_another_arm(tmp_path: Path) -> None:
+    """Codex settings are refused on other optimizers, this one included.
+
+    Forwarding it unconditionally would turn one authorized stage into a
+    ``RunSpec`` validation failure on every non-Codex arm.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), allow_real_codex=True)
+    spec = runner._spec_for(_arm(), seed=2000, run_dir=tmp_path / "run")
+    assert spec.allow_real_codex is False
+
+
+def test_the_authorization_is_not_an_arm_field() -> None:
+    """The design and the permission to spend stay separate types.
+
+    An ``allow_real_codex`` on ``ArmSpec`` would travel into ``ArmRecord``
+    and from there into the pre-registration payload, which is exactly what
+    the payload must not carry: whether an operator was allowed to bill a
+    Codex session says nothing about what the study pre-registered.
+    """
+    from dataclasses import fields
+
+    assert "allow_real_codex" not in {field.name for field in fields(ArmSpec)}
+
+
+def test_an_authorized_runner_still_needs_the_environment_half(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """One half of the opt-in authorizes nothing.
+
+    The runner carries the flag and the spec carries it onward, and the
+    run is still refused: a serialized spec or a copied command line
+    cannot buy a session on a machine that never opted in.
+    """
+    from dataclasses import replace
+
+    from whetstone_envs.optim.codex import (
+        ALLOW_REAL_CODEX_ENV,
+        RealCodexRefusedError,
+    )
+
+    monkeypatch.delenv(ALLOW_REAL_CODEX_ENV, raising=False)
+    runner = replace(_runner(tmp_path), allow_real_codex=True)
+    with pytest.raises(RealCodexRefusedError):
+        runner(arm=_codex_arm(), seed=4000, study_dir=tmp_path)

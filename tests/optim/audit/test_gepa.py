@@ -75,6 +75,7 @@ from whetstone_envs.optim.audit.gepa import (
     SKIPPED_MUTATION_KEY_NAME,
     _as_skip_record,
     gepa_terminal_artifact_present,
+    gepa_train_val_disjoint,
 )
 from whetstone_envs.optim.audit.registry import audit_run, invariants_for
 from whetstone_envs.optim.audit.schema import AuditStatus, InvariantId
@@ -378,6 +379,79 @@ def test_an_overlapping_train_val_split_fails(
 def test_a_faithful_run_passes_the_train_val_invariant(gepa_run_dir) -> None:
     statuses = _statuses(gepa_run_dir)
     assert statuses[InvariantId.GEPA_TRAIN_VAL_DISJOINT] is AuditStatus.PASS
+
+
+def _evidence_with_intent_tasks(evidence, task_hashes):
+    """``evidence`` whose first step resolves one intent over ``task_hashes``.
+
+    Substituted on loaded evidence rather than on disk, for the same reason
+    ``test_miprov2.py`` substitutes a control there: in-process GEPA
+    dispatches no evaluation intents at all, so a run that resolved one
+    over a foreign task cannot be produced as a fixture. A thin view over
+    the step swaps exactly the field the predicate reads.
+    """
+    from dataclasses import replace as replace_dataclass
+    from types import SimpleNamespace
+
+    resolution = SimpleNamespace(
+        optim_eval_request=SimpleNamespace(task_hashes=tuple(task_hashes))
+    )
+
+    class _Entry:
+        def __init__(self, entry, intents):
+            self._entry = entry
+            self._intents = intents
+
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
+
+        @property
+        def resolved_intents(self):
+            return self._intents
+
+    steps = (
+        _Entry(evidence.steps[0], (resolution,)),
+        *evidence.steps[1:],
+    )
+    return replace_dataclass(evidence, steps=steps)
+
+
+def test_an_intent_outside_the_declared_partition_fails(gepa_run_dir) -> None:
+    """The second half of the invariant: the run must stay inside the split.
+
+    The control's own two sets being disjoint is not enough. GEPA reflects
+    on the trainset and scores its frontier on the valset, so an evaluation
+    that reached a task in *neither* scored something the declared
+    partition never admitted -- the fan-out failure seen from the split's
+    side, and the reason the invariant checks the run as well as the
+    control.
+
+    Fails-before evidence for that branch specifically: it had no negative
+    test, because no fixture can reach it.
+    """
+    evidence = load_run_evidence(gepa_run_dir)
+    finding = gepa_train_val_disjoint(
+        _evidence_with_intent_tasks(evidence, ("f" * 64,))
+    )
+    assert finding.status is AuditStatus.FAIL, finding.detail
+    assert "outside the declared" in finding.detail
+    assert finding.evidence_refs
+
+
+def test_an_intent_inside_the_declared_partition_passes(gepa_run_dir) -> None:
+    """The same substitution with an admitted task must not fail.
+
+    Without this, the test above would pass on a predicate that failed
+    every resolved intent regardless of which tasks it named.
+    """
+    from whetstone.optim.gepa.control import GepaControl
+
+    evidence = load_run_evidence(gepa_run_dir)
+    control = GepaControl.model_validate(evidence.control_record)
+    finding = gepa_train_val_disjoint(
+        _evidence_with_intent_tasks(evidence, control.trainset_task_hashes[:1])
+    )
+    assert finding.status is AuditStatus.PASS, finding.detail
 
 
 def test_gepa_invariant_wire_values_are_pinned() -> None:

@@ -1,12 +1,31 @@
-"""What a stage's own evaluations cost, projected from persisted evidence.
+"""What a stage cost, projected from evidence rather than accumulated.
 
-An optimizer run reports its spend through ``OptimResult.cost``, which
-whetstone aggregates from the evidence each Step cites. Stage 0 has no
-optimizer and no ``OptimResult``: its anchors reach the provider straight
-through the evaluation engine, so the same rows exist and nothing collects
-them. That is the gap this module closes, and it closes it the same way --
-by re-deriving every number from the persisted output rows rather than from
-a counter held while the stage ran.
+A stage's bill is assembled by whichever of two routes matches how the
+stage spends, and this module owns both.
+
+**Stage 0 evaluates through the engine.** An optimizer run reports its
+spend through ``OptimResult.cost``, which whetstone aggregates from the
+evidence each Step cites. Stage 0 has no optimizer and no ``OptimResult``:
+its anchors reach the provider straight through the evaluation engine, so
+the same rows exist and nothing collects them. :func:`stage_spend_records`
+closes that gap the same way -- by re-deriving every number from the
+persisted output rows rather than from a counter held while the stage ran.
+
+**An arm stage spends through optimizer runs.** Each of its runs already
+projected its own per-role bill, so the stage total is the *fold* of those
+records rather than a second reading of the same rows;
+:func:`run_spend_records` performs it. Re-reading the rows would risk
+counting a call twice and would let the stage row and the run rows
+disagree about one set of calls. The fold re-applies the honesty rule to
+the total rather than carrying it from the parts, so a single unpriced run
+withholds the whole role's total exactly as a single unpriced call does
+within one run.
+
+Neither function covers official-selection scoring or held-out evaluation:
+those reach the provider outside any optimizer run and leave no record
+either route can see, so every total here is a lower bound. Ledgering them
+is Phase E; the renderers say so rather than letting a partial total read
+as a complete one.
 
 **Every number is read back, never accumulated.** The stage hands over the
 :class:`~whetstone.eval.schema.EvalEvidence` its evaluations produced, this
@@ -29,11 +48,10 @@ evaluations; there is no proposer in Stage 0. A proposer role is therefore
 omitted from the projection rather than reported as an all-zero row, which
 would claim the stage measured a proposer that spent nothing.
 
-This module prices whatever evidence it is given and asks no questions
-about where the evidence came from. The harness decides which stages are
-worth pricing -- a fake-transport stage produces real rows that would total
-to a bill nobody owes -- and that judgement lives at the call site rather
-than here.
+This module prices whatever it is given and asks no questions about where
+that came from. The harness decides which stages are worth pricing -- a
+fake-transport stage produces real rows that would total to a bill nobody
+owes -- and that judgement lives at the call site rather than here.
 """
 
 from __future__ import annotations

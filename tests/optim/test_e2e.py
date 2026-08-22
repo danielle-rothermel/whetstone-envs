@@ -20,7 +20,7 @@ from whetstone.optim.contracts import OptimResult
 from whetstone_envs.c19 import PROBES
 from whetstone_envs.optim.cli import main
 from whetstone_envs.optim.experiment import C19_MUTATION_FIELD
-from whetstone_envs.optim.run import C19RunSpec, run_c19_optimizer
+from whetstone_envs.optim.run import RunSpec, run_optimizer
 from whetstone_envs.reporting.publication import (
     DurableRunError,
     load_trajectory_report,
@@ -200,8 +200,8 @@ def test_projection_failure_preserves_runtime_and_terminal_result(
         ),
         pytest.raises(DurableRunError, match="projection boom") as captured,
     ):
-        run_c19_optimizer(
-            C19RunSpec(
+        run_optimizer(
+            RunSpec(
                 optimizer="copro",
                 transport="fake",
                 split_sizes=(2, 2, 0),
@@ -222,8 +222,8 @@ def test_run_refuses_in_repo_output() -> None:
     with pytest.raises(
         ValueError, match="must not be written inside the repo"
     ):
-        run_c19_optimizer(
-            C19RunSpec(
+        run_optimizer(
+            RunSpec(
                 optimizer="copro",
                 transport="fake",
                 output_dir=Path("artifacts") / "c19-run",
@@ -239,8 +239,8 @@ def test_run_refuses_in_repo_output_when_cwd_is_elsewhere(
     with pytest.raises(
         ValueError, match="must not be written inside the repo"
     ):
-        run_c19_optimizer(
-            C19RunSpec(
+        run_optimizer(
+            RunSpec(
                 optimizer="copro",
                 transport="fake",
                 output_dir=repo_root / "artifacts" / "c19-run",
@@ -296,8 +296,8 @@ def test_miprov2_fake_transport_completes(tmp_path, demo_mode: str) -> None:
 
 def test_runner_rejects_unknown_demo_mode(tmp_path) -> None:
     with pytest.raises(ValueError, match="unsupported demo mode"):
-        run_c19_optimizer(
-            C19RunSpec(
+        run_optimizer(
+            RunSpec(
                 optimizer="miprov2",
                 transport="fake",
                 output_dir=tmp_path / "bad-demo-mode",
@@ -308,8 +308,8 @@ def test_runner_rejects_unknown_demo_mode(tmp_path) -> None:
 
 def test_runner_rejects_non_positive_num_seeds(tmp_path) -> None:
     with pytest.raises(ValueError, match="num_seeds must be at least 1"):
-        run_c19_optimizer(
-            C19RunSpec(
+        run_optimizer(
+            RunSpec(
                 optimizer="copro",
                 transport="fake",
                 output_dir=tmp_path / "bad-num-seeds",

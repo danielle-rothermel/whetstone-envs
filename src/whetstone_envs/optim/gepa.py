@@ -87,14 +87,22 @@ def _gepa_transport(
     )
 
 
-def build_c19_gepa_control(
+def build_c19_gepa_control(  # noqa: PLR0913
     *,
     engine: EvalEngine,
     experiment: Experiment,
     prompt_services: GepaPromptServices,
     policy_identity_hash: str,
+    seed: int = 0,
+    max_metric_calls: int | None = None,
 ):
-    """Resolve the C19 GEPA control over the engine's internal split."""
+    """Resolve the C19 GEPA control over the engine's internal split.
+
+    ``seed`` is GEPA's explicit algorithmic seed, carried straight onto the
+    control. ``max_metric_calls`` pins the paid metric-call ceiling; ``None``
+    keeps the default of one full pass over the trainset plus one reflection
+    minibatch, which is what a smoke run needs.
+    """
     prompt_adapter = PlainPromptAdapter()
     task_hashes = experiment.eval_configs.internal.task_set.task_hashes
     if engine.sampling.task_hashes != task_hashes:
@@ -121,18 +129,25 @@ def build_c19_gepa_control(
         component_names=(GEPA_COMPONENT_NAME,),
         num_predictors=1,
         # One full pass to score the seed, plus one reflection minibatch.
-        max_metric_calls=len(task_hashes) + 1,
+        max_metric_calls=(
+            len(task_hashes) + 1
+            if max_metric_calls is None
+            else max_metric_calls
+        ),
         reflection_minibatch_size=1,
+        seed=seed,
     ).model_copy(update={"mutation_field": C19_MUTATION_FIELD})
 
 
-def build_c19_gepa_adapter(
+def build_c19_gepa_adapter(  # noqa: PLR0913
     *,
     store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
     run_id: str,
     proposer_transport: ProposerTransport | None,
+    seed: int = 0,
+    max_metric_calls: int | None = None,
 ) -> GepaHarnessAdapter:
     """Assemble a real C19 GEPA adapter on the public factory surface."""
     prompt_adapter = PlainPromptAdapter()
@@ -147,6 +162,8 @@ def build_c19_gepa_adapter(
         experiment=experiment,
         prompt_services=prompt_services,
         policy_identity_hash=policy_identity_hash,
+        seed=seed,
+        max_metric_calls=max_metric_calls,
     )
     return build_gepa_harness_adapter(
         store=store,

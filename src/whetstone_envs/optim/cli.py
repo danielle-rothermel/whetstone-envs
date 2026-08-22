@@ -7,11 +7,16 @@ from pathlib import Path
 
 from whetstone_envs.optim.run import (
     C19_DEMO_MODES,
-    C19_OPTIMIZERS,
-    C19_TRANSPORTS,
-    C19RunSpec,
+    DEFAULT_COPRO_BREADTH,
+    DEFAULT_COPRO_DEPTH,
+    DEFAULT_SPLIT_SIZES,
+    MIN_COPRO_BREADTH,
+    OPTIMIZERS,
+    TRANSPORTS,
+    RunSpec,
     default_output_dir,
-    run_c19_optimizer,
+    registered_family_ids,
+    run_optimizer,
 )
 from whetstone_envs.reporting.publication import DurableRunError
 
@@ -26,16 +31,53 @@ def _split_sizes(value: str) -> tuple[int, int, int]:
     return (internal, official, held_out)
 
 
+def _int_at_least(value: str, *, minimum: int) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected an integer, got {value!r}"
+        ) from error
+    if parsed < minimum:
+        raise argparse.ArgumentTypeError(
+            f"expected an integer of at least {minimum}, got {parsed}"
+        )
+    return parsed
+
+
+def _copro_breadth(value: str) -> int:
+    """COPRO needs at least two drafts per step to have a choice."""
+    return _int_at_least(value, minimum=MIN_COPRO_BREADTH)
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected an integer, got {value!r}"
+        ) from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive integer, got {parsed}"
+        )
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run COPRO, GEPA, or MIPROv2 on a named whetstone-envs family."
         ),
     )
-    parser.add_argument("--family", choices=("c19",), default="c19")
+    parser.add_argument(
+        "--family",
+        choices=registered_family_ids(),
+        default="c19",
+    )
     parser.add_argument(
         "--optimizer",
-        choices=C19_OPTIMIZERS,
+        choices=OPTIMIZERS,
         required=True,
     )
     parser.add_argument(
@@ -46,22 +88,93 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--transport",
-        choices=C19_TRANSPORTS,
+        choices=TRANSPORTS,
         default="fake",
     )
     parser.add_argument(
         "--split-sizes",
         type=_split_sizes,
-        default=(2, 2, 0),
+        default=DEFAULT_SPLIT_SIZES,
     )
     parser.add_argument("--run-id")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--model", default="openai/gpt-4.1-nano")
     parser.add_argument(
+        "--proposer-model",
+        default=None,
+        help=(
+            "Model for the proposer role. Defaults to --model, which keeps "
+            "a single-model run identical to one that never named a "
+            "proposer."
+        ),
+    )
+    parser.add_argument(
         "--num-seeds",
-        type=int,
+        type=_positive_int,
         default=1,
         help="Repeats per task (K_REPEAT).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "This run's algorithmic seed. GEPA and MIPROv2 carry it onto "
+            "their controls; COPRO has no control seed, so its runs are "
+            "seeded only by the provider SEED control. Omit to keep each "
+            "optimizer's own default."
+        ),
+    )
+    parser.add_argument(
+        "--n-per-stratum",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Instances generated per stratum. Defaults to the family's own "
+            "pool size."
+        ),
+    )
+    parser.add_argument(
+        "--pool-seed-start",
+        type=int,
+        default=None,
+        help=(
+            "First generator seed for the task pool. Defaults to the "
+            "family's own start."
+        ),
+    )
+    parser.add_argument(
+        "--copro-breadth",
+        type=_copro_breadth,
+        default=DEFAULT_COPRO_BREADTH,
+        help=(
+            "COPRO candidates proposed per step; must be at least "
+            f"{MIN_COPRO_BREADTH}."
+        ),
+    )
+    parser.add_argument(
+        "--copro-depth",
+        type=int,
+        default=DEFAULT_COPRO_DEPTH,
+        help="COPRO search depth; step count is depth + 1.",
+    )
+    parser.add_argument(
+        "--gepa-max-metric-calls",
+        type=_positive_int,
+        default=None,
+        help=(
+            "GEPA's paid metric-call ceiling. Defaults to one full pass "
+            "over the trainset plus one reflection minibatch."
+        ),
+    )
+    parser.add_argument(
+        "--codex-capacity",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Admitted evaluate-call cap for the Codex arm. Rejected until "
+            "the Codex adapter lands, so it cannot look honoured."
+        ),
     )
     return parser
 
@@ -73,16 +186,25 @@ def main(argv: list[str] | None = None) -> int:
     if output is None and run_id is not None:
         output = default_output_dir(run_id)
     try:
-        path = run_c19_optimizer(
-            C19RunSpec(
+        path = run_optimizer(
+            RunSpec(
                 optimizer=arguments.optimizer,
                 transport=arguments.transport,
+                family=arguments.family,
                 split_sizes=arguments.split_sizes,
                 output_dir=output,
                 run_id=run_id,
                 model=arguments.model,
+                proposer_model=arguments.proposer_model,
                 demo_mode=arguments.demo_mode,
                 num_seeds=arguments.num_seeds,
+                n_per_stratum=arguments.n_per_stratum,
+                pool_seed_start=arguments.pool_seed_start,
+                seed=arguments.seed,
+                copro_breadth=arguments.copro_breadth,
+                copro_depth=arguments.copro_depth,
+                gepa_max_metric_calls=arguments.gepa_max_metric_calls,
+                codex_capacity=arguments.codex_capacity,
             )
         )
     except DurableRunError as error:

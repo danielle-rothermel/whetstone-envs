@@ -14,7 +14,7 @@ pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import Browser, Page, expect, sync_playwright
 
-from whetstone_envs.optim.run import C19RunSpec, run_c19_optimizer
+from whetstone_envs.optim.run import RunSpec, run_optimizer
 from whetstone_envs.reporting.html import (
     publish_eval_html,
     publish_trajectory_html,
@@ -469,8 +469,8 @@ def test_eval_report_file_interactions_and_screenshots(
 def test_trajectory_file_timeline_lineage_and_screenshots(
     browser: Browser, tmp_path
 ) -> None:
-    directory = run_c19_optimizer(
-        C19RunSpec(
+    directory = run_optimizer(
+        RunSpec(
             optimizer="copro",
             transport="fake",
             split_sizes=(2, 2, 0),

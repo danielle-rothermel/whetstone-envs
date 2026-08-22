@@ -42,7 +42,7 @@ def test_optimizer_cli_preserves_traceback_and_prints_run_directory(
     directory.mkdir()
     error = DurableRunError(directory, RuntimeError("publication failed"))
     with patch(
-        "whetstone_envs.optim.cli.run_c19_optimizer",
+        "whetstone_envs.optim.cli.run_optimizer",
         side_effect=error,
     ):
         status = optim_main(

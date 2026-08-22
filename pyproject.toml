@@ -174,6 +174,7 @@ exclude = [
 include = [
     "src/whetstone_envs/optim/cli.py",
     "src/whetstone_envs/optim/experiment.py",
+    "src/whetstone_envs/optim/families.py",
     "src/whetstone_envs/optim/gepa.py",
     "src/whetstone_envs/optim/miprov2.py",
     "src/whetstone_envs/optim/provider.py",
@@ -185,6 +186,8 @@ include = [
     "src/whetstone_envs/reporting/html.py",
     "tests/optim/test_e2e.py",
     "tests/optim/test_experiment.py",
+    "tests/optim/test_families.py",
+    "tests/optim/test_run_spec.py",
     "tests/optim/test_miprov2.py",
     "tests/optim/test_provider.py",
     "tests/reporting/test_projection.py",

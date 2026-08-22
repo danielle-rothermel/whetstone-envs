@@ -6,6 +6,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The C19 optimizer runner is now a family-agnostic runner. `C19RunSpec`
+  becomes `RunSpec` and `run_c19_optimizer` becomes `run_optimizer`; both
+  read every family-specific decision -- pool generator, experiment builder,
+  probes, mutation field, render contract, and scripted proposer bodies --
+  from a new `whetstone_envs.optim.families` registry rather than from
+  literals in the runner. `run_optimizer` now names no task family, which is
+  what lets a second family reach the optimizers through the identical path.
+  `C19_OPTIMIZERS` and `C19_TRANSPORTS` become `OPTIMIZERS` and
+  `TRANSPORTS`, and `C19_PROPOSAL_BODIES` becomes `FamilySpec
+  .proposal_bodies()`.
+- Task-pool generation is no longer hardcoded. The runner used to call
+  `generate_pool(n_per_stratum=2, seed_start=765_432)` with both values
+  written into its body; they are now `RunSpec` fields defaulting to the
+  family's own values, so an unparameterised run generates the pool it
+  always generated.
+- COPRO's breadth and depth are no longer hardcoded to `2` and `1`. Both are
+  `RunSpec` fields with those values as defaults. A breadth below 2 is
+  refused at spec validation rather than inside the durable run boundary,
+  matching `CoproControl`'s own rule.
+
+### Added
+
+- A task-family registry at `whetstone_envs.optim.families`. `FamilySpec`
+  carries one family's generator, experiment builder, probes, mutation
+  field, prompt fields, render contract, and pool defaults;
+  `register_family` admits it and `family_spec` resolves it. `c19` is
+  registered; `c18` is a known identifier the registry already admits, so
+  registering it later is a registration rather than a change to the
+  registry's vocabulary. A known-but-unregistered family reports a wiring
+  gap distinctly from an unrecognised name.
+- `RunSpec.seed` plumbs one explicit algorithmic seed per run. GEPA and
+  MIPROv2 carry it onto their controls as an explicit field; `CoproControl`
+  has no seed, so a COPRO run's stochasticity remains the proposer LM and
+  the provider `SEED` control. `seed_disposition` names that difference for
+  the study manifest rather than faking a seed the control never reads. An
+  omitted seed keeps each optimizer's own default, so an unseeded run keeps
+  the control identity hash it always had.
+- `RunSpec.proposer_model` separates the proposal route from the task route,
+  so a study can run a cheap task model against a stronger proposer.
+  `None` reuses the experiment's own route.
+- `RunSpec.gepa_max_metric_calls` pins GEPA's paid metric-call ceiling, and
+  `RunSpec.codex_capacity` carries the Codex arm's evaluate-call cap. Each
+  is refused on an optimizer that cannot honour it, so a flag nothing reads
+  cannot look respected in the study manifest.
+- New `whetstone_envs.optim.cli` flags: `--proposer-model`, `--seed`,
+  `--n-per-stratum`, `--pool-seed-start`, `--copro-breadth`,
+  `--copro-depth`, `--gepa-max-metric-calls`, and `--codex-capacity`.
+  `--family` now offers exactly the registered families.
+- The C19 optimizer CLI and runner accept `--optimizer gepa` and
+  `--optimizer miprov2` through the same shared runner path as COPRO.
+- `--num-seeds` on the CLI and `RunSpec.num_seeds` make repeats per task
+  (`K_REPEAT`) a runner parameter instead of a hardcoded 1.
+
 ## [0.2.2] - 2026-08-22
 
 ### Changed

@@ -702,9 +702,17 @@ def test_codex_runs_the_second_family_unchanged(tmp_path) -> None:
     out-of-process MCP server rebuilds -- is read from the family
     registry, so c18 runs through the identical path with no code change
     and audits the same way.
+
+    The *projected report* is asserted here alongside the audit, because
+    the two check different things and a passing audit does not imply a
+    publishable report. The report's embedded ``EvalReport`` re-derives
+    every observation's score to validate it, and doing that with a
+    family-agnostic rule is what once made a c18 Codex run unpublishable
+    while its audit still passed.
     """
     from whetstone_envs.c18 import PROBES as C18_PROBES
     from whetstone_envs.optim.audit.registry import audit_run
+    from whetstone_envs.reporting.publication import load_trajectory_report
 
     output = _codex_run(
         tmp_path=tmp_path,
@@ -726,6 +734,26 @@ def test_codex_runs_the_second_family_unchanged(tmp_path) -> None:
         for finding in report.findings
         if finding.status.value == "fail"
     ]
+
+    # Reading it back re-validates it: publication writes the document,
+    # and the loader re-runs every schema invariant over the persisted
+    # bytes, so a report that only validated in memory does not pass.
+    trajectory = load_trajectory_report(output)
+    embedded = [
+        resolution.eval_report
+        for resolution in trajectory.resolutions
+        if resolution.eval_report is not None
+    ]
+    assert embedded, (
+        "the c18 Codex run published no embedded evaluation report, so "
+        "nothing exercised the schema's per-family score check"
+    )
+    assert all(eval_report.run.family == "c18" for eval_report in embedded), [
+        eval_report.run.family for eval_report in embedded
+    ]
+    assert any(eval_report.observations for eval_report in embedded), (
+        "no embedded report carried a scored observation"
+    )
 
 
 @requires_codex_sandbox

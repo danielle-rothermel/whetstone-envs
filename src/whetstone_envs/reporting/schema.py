@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from enum import UNIQUE, StrEnum, verify
-from typing import Annotated, Literal
+from functools import cache
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -17,7 +19,15 @@ from pydantic import (
 
 from whetstone_envs.probes import normalize
 
+if TYPE_CHECKING:
+    from whetstone.eval.eval_procedure import EvalProcedureRunner
+
 # Persisted literals are owned here and pinned directly by golden tests.
+#: The node id the schema's own score re-derivation passes to a family
+#: scorer. Not a persisted value and never stored: the runners ignore it,
+#: and it exists so the call is self-describing in a traceback.
+_VALIDATION_NODE_ID = "schema_score_validation"
+
 EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v1"
 TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
 #: The only whetstone-ai cost-report schema version this package projects.
@@ -40,6 +50,59 @@ SPLIT_ROLE_BY_REPORT_ROLE: dict[EvalRoleName, str] = {
     "official": "official",
     "held_out": "held_out",
 }
+
+
+@cache
+def _family_scorer(family: str) -> EvalProcedureRunner:
+    """The eval-node runner the family registry binds to ``family``.
+
+    Cached because a report validates every scored observation and the
+    runners are stateless by contract -- workers reconstruct them from
+    ``runner_type()`` with no constructor state -- so one instance per
+    family is the same object the run itself scored through.
+
+    Imported inside the function rather than at module scope: the family
+    registry pulls in the whole optimizer stack, and this module is also
+    read by report consumers that never build an experiment.
+    """
+    from whetstone_envs.optim.families import family_spec  # noqa: PLC0415
+
+    return family_spec(family).eval_runner()
+
+
+def _family_score(*, family: str, output_text: str, gold: str) -> float:
+    """What ``family``'s own scorer yields for one observation.
+
+    The report's scores are not the schema's to invent -- they are the
+    run's -- so validating them means re-deriving them the way the run
+    did. The family registry is the single owner of "how a generation
+    becomes a score" (``FamilySpec.eval_runner``), and this routes
+    through it rather than restating any family's rule here.
+
+    Hard-coding normalized exact match, which is what this check used to
+    do, is a c19 rule wearing a family-agnostic name: c18 scores the
+    *terminal verdict* it extracts from a reasoned reply
+    (:func:`whetstone_envs.c18.score_gold`), so a correct c18 answer
+    ending in ``True`` scored 1.0 while the schema recomputed 0.0 and
+    refused the whole report. That failure had nothing to do with the
+    row and everything to do with the check, and it took down
+    publication for the entire run.
+
+    ``node_id`` and the procedure-config hash are the runner's, not
+    this check's; both runners ignore them, and a runner that did not
+    would be scoring on something a persisted report does not carry.
+    """
+    score, _output, _metadata = _family_scorer(family).run_eval_node(
+        node_id=_VALIDATION_NODE_ID,
+        node_inputs={"provider_generation": output_text},
+        evaluation_procedure_config_hash="",
+        task=SimpleNamespace(gold=gold),
+    )
+    if score is None:
+        raise ValueError(
+            f"the {family} scorer returned no score for a scored observation"
+        )
+    return float(score)
 
 
 class _StrictModel(BaseModel):
@@ -403,13 +466,15 @@ class EvalReport(_StrictModel):
             if row.state is ObservationState.SCORED:
                 if row.output_text is None:
                     raise ValueError("scored observations require output text")
-                expected_score = float(
-                    normalize(row.output_text) == normalize(task.gold)
+                expected_score = _family_score(
+                    family=self.run.family,
+                    output_text=row.output_text,
+                    gold=task.gold,
                 )
                 if row.score != expected_score:
                     raise ValueError(
-                        "observation score disagrees with normalized exact "
-                        "match"
+                        "observation score disagrees with the "
+                        f"{self.run.family} scorer"
                     )
         for result in self.results:
             if not isinstance(result, EvalSuccess):

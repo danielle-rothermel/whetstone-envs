@@ -53,8 +53,14 @@ OPTIM_ROOT = Path(run_module.__file__).parent
 FAMILY_ADAPTER_FILES = frozenset({"c18_experiment.py", "families.py"})
 
 #: Files that legitimately name a family for a reason other than driving it.
-#: ``experiment.py`` owns C19's own contract, mirroring ``c18_experiment.py``.
-FAMILY_CONTRACT_FILES = frozenset({"experiment.py"})
+#: ``experiment.py`` owns C19's own contract, mirroring ``c18_experiment.py``,
+#: and ``scoring_runner.py`` owns C19's eval-node runner the same way
+#: ``c18_experiment.py`` owns C18's -- the registry binds one to each family
+#: and nothing else uses either as a default. They are family-adapter code
+#: that predates the c18 split and kept its own module, so a call appearing
+#: in one family's trace and not the other's is the adapter swap working
+#: rather than a leak.
+FAMILY_CONTRACT_FILES = frozenset({"experiment.py", "scoring_runner.py"})
 
 #: Split sizes small enough to keep a fake-transport run a smoke run, and
 #: pool sizes that yield at least four instances in each family.

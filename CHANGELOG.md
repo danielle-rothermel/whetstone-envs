@@ -106,6 +106,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whatever just ran.
 
 ### Fixed
+- **A report's scores are checked by the family that produced them.** The
+  `EvalReport` schema re-derives every scored observation to validate it,
+  but re-derived it as normalized exact match — a c19 rule wearing a
+  family-agnostic name. C18 scores the terminal verdict it extracts from a
+  reasoned reply, so a *correct* c18 answer ending in `True` reported 1.0
+  while the schema recomputed 0.0, called the row a lie, and refused the
+  whole report: publication failed for the entire run over a check that was
+  wrong rather than a score that was. The check now routes through
+  `FamilySpec.eval_runner`, the registry's single owner of how a family's
+  generation becomes a score, so it keeps its purpose — a reported score
+  must equal what the family's own scorer yields for that row — without
+  restating any family's rule. Found by the real-Codex ladder's c18 rung;
+  the fake transport replies with bare gold, which both rules score alike.
+
 - `stage0 --replace-design` that records an amendment discards the previous
   Stage-1 call-count verdict: a pilot gate describes the design it was
   computed against, so Stage 2 owes the amended study a fresh pilot.

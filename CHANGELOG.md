@@ -27,6 +27,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `REPORTED_NUMBERS_RESOLVE` (every reported evaluation resolves to eval
   evidence in the run's own store), wired end to end with a negative fixture;
   the per-optimizer invariant sets follow.
+- `optim/audit/gepa.py`: GEPA's eight fidelity invariants, each shipping a
+  negative fixture that makes exactly it FAIL. They check that the terminal
+  step persisted a result artifact bound to the run, that the candidate
+  front is the per-instance argmax over internal validation scores and that
+  selection came from it, that every mutated candidate traces to a
+  reflection over an earlier evaluation of its recorded parent, that the
+  metric-call counter advanced monotonically and terminalized at the
+  configured ceiling, that every step persisted its rejected reflections,
+  that every step which spent metric calls carries evidence of the spend,
+  that the terminal candidate is a live search draft or an honest seed
+  retention, and that a platform-dispatched run replayed each deferral
+  episode identically.
+- The GEPA audit reads the search result where it is actually persisted:
+  the terminal step's history carries `GEPA_TERMINAL_ARTIFACT_KEY`, which
+  resolves to a `GepaRunResultArtifact` and from there to the
+  `GepaDetailedResult` and `GepaEffectTranscript`. There is no Pareto front,
+  no per-instance score, and no reflection record under `GEPA_STATE_KEY`,
+  which holds only `metric_calls_consumed` and `terminal`. No whetstone-ai
+  change was needed: every record on that path is reachable through a public
+  module.
+- `GEPA_REFLECTION_MINIBATCH` is deliberately not shipped. Nothing persisted
+  witnesses how many instance traces one reflection consumed, so it could
+  never have a failing fixture. `GEPA_TERMINAL_ARTIFACT_PRESENT` replaces
+  it, keeping GEPA at eight invariants.
 - `_mutate.py` builds a negative fixture by copying a real fake-transport run
   and violating one named evidence field. It re-seals `OptimResult`'s
   self-verifying step wrapper refs and request chain, so a fixture stays
@@ -35,6 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reason. `reseal_run_binding` extends this to a mutation of the `OptimRun`
   record itself -- its optimizer control or seed candidate -- which is
   embedded in every step request and so needs re-deriving in all of them.
+  `reseal_request_refs`, `reseal_candidate_refs`, and
+  `rethread_snapshot_refs` cover the three further integrity refs a mutation
+  can invalidate -- a step's own request ref, a candidate wrapper's
+  self-verifying ref, and the next request's `prior_state_ref` /
+  `prior_history_ref` -- and `reseal_all` runs all four passes in dependency
+  order, which is what `mutate_run` now does. Resealing therefore has one
+  owner: an optimizer whose mutations reach the request, a candidate
+  payload, or a snapshot no longer re-derives its own copies.
 - `optim/audit/copro.py`: COPRO's seven fidelity invariants, each a pure
   function over the run's evidence returning a finding with an evidence-ref
   citation for every judgment, and each shipping a negative fixture built

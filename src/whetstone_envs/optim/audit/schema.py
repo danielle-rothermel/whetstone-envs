@@ -87,6 +87,33 @@ class InvariantId(StrEnum):
     #: MIPROv2: the observed trial count matches the configured budget
     #: unless a terminal failure truncated the run.
     MIPRO_TRIALS_MATCH_CONTROL = "mipro_trials_match_control"
+    #: GEPA: the terminal step's history resolves to a
+    #: ``GepaRunResultArtifact`` bound to this run. The precondition every
+    #: other GEPA invariant reads through, and the replacement for the
+    #: deleted ``GEPA_REFLECTION_MINIBATCH`` -- no persisted record
+    #: witnesses a reflection's minibatch size.
+    GEPA_TERMINAL_ARTIFACT_PRESENT = "gepa_terminal_artifact_present"
+    #: GEPA: the candidate front is the per-instance argmax over internal
+    #: scores, and the selected candidate sits on it.
+    GEPA_PARETO_FRONT = "gepa_pareto_front"
+    #: GEPA: every mutated candidate traces to a propose effect over its
+    #: recorded parent, itself preceded by an evaluation of that parent.
+    GEPA_MUTATION_TRACES_TO_REFLECTION = "gepa_mutation_traces_to_reflection"
+    #: GEPA: the metric-call counter advanced monotonically and terminalized
+    #: exactly at the configured ceiling.
+    GEPA_METRIC_CALL_BUDGET = "gepa_metric_call_budget"
+    #: GEPA: every step persisted a skipped-mutation record, and the run-level
+    #: record is the union over all steps.
+    GEPA_SKIPPED_MUTATIONS_RECORDED = "gepa_skipped_mutations_recorded"
+    #: GEPA: every step whose metric-call counter advanced carries evaluation
+    #: evidence; a pure-replay step is exempt.
+    GEPA_STEP_EVIDENCE_PRESENT = "gepa_step_evidence_present"
+    #: GEPA: the terminal candidate is a live search draft or an honest
+    #: seed retention, judged by provenance rather than by text.
+    GEPA_NO_FORGED_TERMINAL = "gepa_no_forged_terminal"
+    #: GEPA: a platform-dispatched run replayed each deferral episode's paid
+    #: prefix identically. ``NOT_APPLICABLE`` on an in-process run.
+    GEPA_PLATFORM_RESUME_IDENTITY = "gepa_platform_resume_identity"
 
 
 class _StrictModel(BaseModel):

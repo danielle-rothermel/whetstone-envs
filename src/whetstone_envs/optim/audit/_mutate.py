@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Any
 
 from dr_store.sync import open_sqlite
 from whetstone.core.identity import typed_ref_for_record
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.contracts import (
     OPTIM_RUN_SCHEMA,
     OptimRun,
@@ -250,6 +251,112 @@ def reseal_run_binding(document: dict[str, Any]) -> dict[str, Any]:
     return reseal_step_chain(document)
 
 
+def reseal_request_refs(document: dict[str, Any]) -> dict[str, Any]:
+    """Recompute every step's own ``request.record_ref``.
+
+    :func:`reseal_step_chain` recomputes a request ref only for steps with a
+    predecessor, because its own worked mutation targets a step *result*
+    field. A mutation may instead target the request itself -- GEPA's
+    metric-call ceiling lives in ``request.record.hyperparameters`` -- and
+    step 0 has no predecessor, so its stale ref would fail validation before
+    any invariant could judge the artifact.
+    """
+    steps = document.get("step_results")
+    if not isinstance(steps, list):
+        raise MutationError("result.json carries no step_results list")
+    for index, wrapper in enumerate(steps):
+        request = wrapper.get("record", {}).get("request")
+        if not isinstance(request, dict) or not isinstance(
+            request.get("record"), dict
+        ):
+            raise MutationError(f"step {index} carries no request record")
+        request["record_ref"] = _request_ref(request["record"])
+    return document
+
+
+def reseal_candidate_refs(document: dict[str, Any]) -> dict[str, Any]:
+    """Recompute each step's candidate wrapper refs.
+
+    ``CandidateRef`` self-verifies that ``record_ref`` addresses its own
+    record, so a mutation to a candidate payload leaves the wrapper stale
+    and the artifact fails validation before an invariant can judge it.
+    Recomputing is integrity bookkeeping; the semantic violation is the
+    mutated payload.
+    """
+    steps = document.get("step_results")
+    if not isinstance(steps, list):
+        raise MutationError("result.json carries no step_results list")
+    proposals = document.get("proposals") or []
+    for index, wrapper in enumerate(steps):
+        record = wrapper.get("record")
+        if not isinstance(record, dict):
+            raise MutationError(f"step {index} carries no record")
+        candidates = [
+            *record.get("proposed_candidates", []),
+            *record.get("accepted_candidates", []),
+            *(
+                proposal["candidate"]
+                for proposal in proposals
+                if isinstance(proposal, dict) and "candidate" in proposal
+            ),
+        ]
+        retained = record.get("retained_candidate_ref")
+        if retained is not None:
+            candidates.append(retained)
+        for candidate_wrapper in candidates:
+            try:
+                reference = candidate_reference(
+                    Candidate.model_validate(candidate_wrapper["record"])
+                )
+            except ValueError as error:
+                raise MutationError(
+                    f"mutated step {index} carries an invalid candidate: "
+                    f"{error}"
+                ) from error
+            candidate_wrapper["record_ref"] = reference.record_ref.model_dump(
+                mode="json"
+            )
+            candidate_wrapper["identity_hash"] = reference.identity_hash
+    return document
+
+
+def rethread_snapshot_refs(document: dict[str, Any]) -> dict[str, Any]:
+    """Re-point each request's ``prior_state_ref`` / ``prior_history_ref``.
+
+    ``OptimStepRequest`` cites the prior step's *exact* state and history
+    refs, so re-putting a mutated snapshot invalidates the next step's
+    request before any invariant can judge the artifact.
+    :func:`reseal_step_chain` rethreads ``prior_step_result_ref``, which is
+    all a ``result.json``-only mutation needs; a state or history mutation
+    additionally needs these two. Both are integrity bookkeeping -- the
+    semantic violation is the mutated snapshot itself.
+    """
+    steps = document.get("step_results")
+    if not isinstance(steps, list):
+        raise MutationError("result.json carries no step_results list")
+    for index in range(1, len(steps)):
+        prior = steps[index - 1].get("record")
+        request = steps[index].get("record", {}).get("request")
+        if not isinstance(prior, dict) or not isinstance(request, dict):
+            raise MutationError(f"step {index} carries no request record")
+        request["record"]["prior_state_ref"] = prior["state_ref"]
+        request["record"]["prior_history_ref"] = prior["history_ref"]
+    return document
+
+
+def reseal_all(document: dict[str, Any]) -> dict[str, Any]:
+    """Re-seal every integrity ref a single-field mutation can invalidate.
+
+    The four passes run in dependency order: snapshot refs feed the request
+    records, candidate wrappers and request refs are each self-verifying,
+    and the step chain is recomputed last from the now-consistent records.
+    """
+    rethread_snapshot_refs(document)
+    reseal_candidate_refs(document)
+    reseal_request_refs(document)
+    return reseal_step_chain(document)
+
+
 def mutate_run(
     source: Path,
     destination: Path,
@@ -270,7 +377,7 @@ def mutate_run(
     result_path = run_dir / RESULT_FILENAME
     document = json.loads(result_path.read_text(encoding="utf-8"))
     mutate_json_field(document, path, rewrite)
-    reseal_step_chain(document)
+    reseal_all(document)
     result_path.write_text(
         json.dumps(document, indent=2),
         encoding="utf-8",
@@ -284,6 +391,10 @@ __all__ = [
     "mutate_json_field",
     "mutate_run",
     "put_record",
+    "reseal_all",
+    "reseal_candidate_refs",
+    "reseal_request_refs",
     "reseal_run_binding",
     "reseal_step_chain",
+    "rethread_snapshot_refs",
 ]

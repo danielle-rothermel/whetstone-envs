@@ -134,6 +134,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   round is not producible on the fake transport today: the scripted proposer
   supplies two bodies, one of which is the seed itself and is rejected as a
   no-op mutation.
+- `optim/audit/codex.py`: the six Codex-direct fidelity invariants, carrying
+  the F6 retarget. A Codex run's search is a foreign agent's, so these check
+  containment rather than recorded decisions: that every evaluation the run
+  paid for went through the one granted Tool and stayed reachable as Tool
+  Evidence (both directions); that the returned candidate's `selected_call_id`
+  resolves to a completed, *scored* admission entry; that no capacity debit
+  ordinal exceeds the run's configured cap and no refusal consumed capacity;
+  that the output artifact carries this run's own lease binding; that exactly
+  one tool is granted and used, over the pinned `CODEX_EVAL_INPUT_FIELDS`;
+  and that a failed run's recorded spend still matches its admission ledger.
+- The Codex audit reads the admission ledger through `admitted_entries`, never
+  by raw SQL over `whetstone_tool_admission_entry`, and scopes it from
+  `OptimRun.tool_configs` rather than from the run's own reported evidence --
+  scoping by what a run reported would let an under-reporting run read an
+  empty ledger and pass totality vacuously. Per F6 there is no `read-scores`
+  tool and no `tool_name` column: the name is dereferenced from
+  `tool_config.record.definition.record`. Per OQ1 there is no `codex_agent`
+  cost role, so task-model spend is read at role granularity.
+- `_evidence.py` resolves `state_delta` refs named in `STATE_RECORD_REF_KEYS`
+  at load time, exposed as `RunEvidence.stored_record`. Invariants stay pure
+  functions over already-resolved evidence rather than reopening the store.
+- `_mutate.py` gains `mutate_ledger_entry` and `delete_ledger_entry` for
+  building negatives against the durable admission ledger. A mutation of the
+  run record leaves a loadable artifact through `reseal_run_binding`, which
+  re-seals the `OptimRun` wrapper and re-threads it through every step
+  request.
+- Two committed Codex run fixtures under `tests/optim/audit/fixtures/`, with
+  the generator that produced them. They are committed rather than built at
+  test time because the Codex-direct adapter, the one-tool MCP surface, and
+  `ToolAdmissionAuthority.admitted_entries` are all whetstone-ai 0.1.7
+  surface; the Codex tests skip until an install can read them, and turn
+  themselves on when 0.1.7 lands.
 
 ### Changed
 

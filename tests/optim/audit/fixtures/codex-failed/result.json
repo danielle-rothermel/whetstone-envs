@@ -1,0 +1,708 @@
+{
+  "run": {
+    "record": {
+      "run_id": "codex-toy-run",
+      "optimizer_config": {
+        "record_ref": {
+          "schema_name": "whetstone.codex_optimizer_config",
+          "content_hash": "b21930218e34cf3fecb1ca3cd7ea119cc1371a0a725799aa93a9d226c79e8119"
+        },
+        "record_hash": "6687e8639ef491a9eaddc0d9f1c904cc6c8ee7e98cd4ce1df60defc5dc67db19"
+      },
+      "adapter_key": "codex",
+      "mode": "tool_using",
+      "terminal_output_contract": {
+        "returned_proposal_count": 1,
+        "terminal_proposal_count": null,
+        "require_distinct_bases": false
+      },
+      "template_render_contract": {
+        "kind": "python_format/v1",
+        "available_fields": [
+          "prompt"
+        ],
+        "required_fields": [
+          "prompt"
+        ]
+      },
+      "initial_candidate_ref": {
+        "record": {
+          "candidate_id": "toy-initial",
+          "base_ref": {
+            "schema_name": "whetstone.toy.root_candidate",
+            "content_hash": "0c7db1f10e1daaad62b5a58e3cd779dc19ded0fbdd5b44d760e95e9f0fdcb659"
+          },
+          "payload": {
+            "user_prompt_template": "Reply briefly to: {prompt}"
+          }
+        },
+        "record_ref": {
+          "schema_name": "whetstone.optim_candidate",
+          "content_hash": "9c081c90f250d08f89e28d741fe045eab740912b426b9cb579250167038c650e"
+        },
+        "identity_hash": "c4d8460aa12ca14c20020d41df279d6df13605a6c3617547bf666df028fd4ff4"
+      },
+      "mutation_field": "user_prompt_template",
+      "reward_policy": null,
+      "tool_configs": [
+        {
+          "record": {
+            "definition": {
+              "record": {
+                "tool_name": "evaluate_candidate",
+                "version": 1,
+                "input_fields": [
+                  "base_ref",
+                  "model_route",
+                  "template"
+                ],
+                "output_fields": [
+                  "evaluation_evidence_ref",
+                  "output_artifact_ref",
+                  "per_task_values",
+                  "per_task_counts",
+                  "row_accounting"
+                ],
+                "refusal_classes": [
+                  "authorization",
+                  "capacity",
+                  "budget",
+                  "validation"
+                ],
+                "expansion_semantics": null
+              },
+              "record_ref": {
+                "schema_name": "whetstone.tool_definition",
+                "content_hash": "bac73ac7a975820b7d6c25bd9965f9d79c4430e3f226b523575eef7d23162f50"
+              },
+              "config_hash": "c5c1d9ff21a8a997cd2688c6ec78b6f5e66225019d73a938a6c9edf19e47bd70"
+            },
+            "endpoint_key": "mcp.whetstone.evaluate_candidate",
+            "eval_config": {
+              "definition_ref": {
+                "definition_id": "whetstone.toy.eval",
+                "version": "1",
+                "schema_name": "whetstone.eval.definition",
+                "identity_hash": "a65b36aee031cc8bd55047b8d2eeb61f07932fdcdd7c4aec138468cace65c661"
+              },
+              "sampling_config_hash": "30edd82e2a108539f43259d14585140cf8e201a904a032d781bdc8704b2b07b9",
+              "evaluation_procedure_config_hash": "cd40567d4238d6cc530f38e5e4a09155c0b978c9bbf51be13769754eb29c4a15",
+              "aggregation_config_hash": "714993853442bfcb74949f5c08689635b2ce04dbb4506feeecf076857144136a",
+              "config_hash": "3a6868c7a77534abb1b86dd6795ef5cf7890a60c16731a8fd74ea86d568e17a8"
+            },
+            "reward_policy_hash": "4a4c959496786afd71c4c8c63dcc946c38045876ad4458763d9bc6270f82be85",
+            "capacity": {
+              "max_accepted_calls": 8,
+              "scope": "run"
+            },
+            "timeout_policy_ref": null,
+            "operational_policy_refs": [],
+            "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
+            "idempotent_replay": true,
+            "candidate_template_field": "user_prompt_template"
+          },
+          "record_ref": {
+            "schema_name": "whetstone.tool_config",
+            "content_hash": "e4781bcbebc6b18f1508bb5054c5c5cf19bc92db4f4c26ebfbf7fab6c3f66825"
+          },
+          "config_hash": "6752e634eb2abdc95d862317ff4c97f7d11ab036a6fbc21a59f50d9f9cf8b18f"
+        }
+      ]
+    },
+    "record_ref": {
+      "schema_name": "whetstone.optim_run",
+      "content_hash": "98e7b3bfa938d9ee161c9f8e92f291055dcfaa3e267f332e1a9940b676265a18"
+    },
+    "config_hash": "f40f140ca99b5144e6c304ed143b1f74c5094babc4ff0a4fc69d0c9dbc078a87"
+  },
+  "proposals": [],
+  "step_results": [
+    {
+      "record": {
+        "request": {
+          "record": {
+            "run": {
+              "record": {
+                "run_id": "codex-toy-run",
+                "optimizer_config": {
+                  "record_ref": {
+                    "schema_name": "whetstone.codex_optimizer_config",
+                    "content_hash": "b21930218e34cf3fecb1ca3cd7ea119cc1371a0a725799aa93a9d226c79e8119"
+                  },
+                  "record_hash": "6687e8639ef491a9eaddc0d9f1c904cc6c8ee7e98cd4ce1df60defc5dc67db19"
+                },
+                "adapter_key": "codex",
+                "mode": "tool_using",
+                "terminal_output_contract": {
+                  "returned_proposal_count": 1,
+                  "terminal_proposal_count": null,
+                  "require_distinct_bases": false
+                },
+                "template_render_contract": {
+                  "kind": "python_format/v1",
+                  "available_fields": [
+                    "prompt"
+                  ],
+                  "required_fields": [
+                    "prompt"
+                  ]
+                },
+                "initial_candidate_ref": {
+                  "record": {
+                    "candidate_id": "toy-initial",
+                    "base_ref": {
+                      "schema_name": "whetstone.toy.root_candidate",
+                      "content_hash": "0c7db1f10e1daaad62b5a58e3cd779dc19ded0fbdd5b44d760e95e9f0fdcb659"
+                    },
+                    "payload": {
+                      "user_prompt_template": "Reply briefly to: {prompt}"
+                    }
+                  },
+                  "record_ref": {
+                    "schema_name": "whetstone.optim_candidate",
+                    "content_hash": "9c081c90f250d08f89e28d741fe045eab740912b426b9cb579250167038c650e"
+                  },
+                  "identity_hash": "c4d8460aa12ca14c20020d41df279d6df13605a6c3617547bf666df028fd4ff4"
+                },
+                "mutation_field": "user_prompt_template",
+                "reward_policy": null,
+                "tool_configs": [
+                  {
+                    "record": {
+                      "definition": {
+                        "record": {
+                          "tool_name": "evaluate_candidate",
+                          "version": 1,
+                          "input_fields": [
+                            "base_ref",
+                            "model_route",
+                            "template"
+                          ],
+                          "output_fields": [
+                            "evaluation_evidence_ref",
+                            "output_artifact_ref",
+                            "per_task_values",
+                            "per_task_counts",
+                            "row_accounting"
+                          ],
+                          "refusal_classes": [
+                            "authorization",
+                            "capacity",
+                            "budget",
+                            "validation"
+                          ],
+                          "expansion_semantics": null
+                        },
+                        "record_ref": {
+                          "schema_name": "whetstone.tool_definition",
+                          "content_hash": "bac73ac7a975820b7d6c25bd9965f9d79c4430e3f226b523575eef7d23162f50"
+                        },
+                        "config_hash": "c5c1d9ff21a8a997cd2688c6ec78b6f5e66225019d73a938a6c9edf19e47bd70"
+                      },
+                      "endpoint_key": "mcp.whetstone.evaluate_candidate",
+                      "eval_config": {
+                        "definition_ref": {
+                          "definition_id": "whetstone.toy.eval",
+                          "version": "1",
+                          "schema_name": "whetstone.eval.definition",
+                          "identity_hash": "a65b36aee031cc8bd55047b8d2eeb61f07932fdcdd7c4aec138468cace65c661"
+                        },
+                        "sampling_config_hash": "30edd82e2a108539f43259d14585140cf8e201a904a032d781bdc8704b2b07b9",
+                        "evaluation_procedure_config_hash": "cd40567d4238d6cc530f38e5e4a09155c0b978c9bbf51be13769754eb29c4a15",
+                        "aggregation_config_hash": "714993853442bfcb74949f5c08689635b2ce04dbb4506feeecf076857144136a",
+                        "config_hash": "3a6868c7a77534abb1b86dd6795ef5cf7890a60c16731a8fd74ea86d568e17a8"
+                      },
+                      "reward_policy_hash": "4a4c959496786afd71c4c8c63dcc946c38045876ad4458763d9bc6270f82be85",
+                      "capacity": {
+                        "max_accepted_calls": 8,
+                        "scope": "run"
+                      },
+                      "timeout_policy_ref": null,
+                      "operational_policy_refs": [],
+                      "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
+                      "idempotent_replay": true,
+                      "candidate_template_field": "user_prompt_template"
+                    },
+                    "record_ref": {
+                      "schema_name": "whetstone.tool_config",
+                      "content_hash": "e4781bcbebc6b18f1508bb5054c5c5cf19bc92db4f4c26ebfbf7fab6c3f66825"
+                    },
+                    "config_hash": "6752e634eb2abdc95d862317ff4c97f7d11ab036a6fbc21a59f50d9f9cf8b18f"
+                  }
+                ]
+              },
+              "record_ref": {
+                "schema_name": "whetstone.optim_run",
+                "content_hash": "98e7b3bfa938d9ee161c9f8e92f291055dcfaa3e267f332e1a9940b676265a18"
+              },
+              "config_hash": "f40f140ca99b5144e6c304ed143b1f74c5094babc4ff0a4fc69d0c9dbc078a87"
+            },
+            "step_id": "codex-toy-run:codex:0",
+            "kind": "tool",
+            "kind_label": "codex_direct",
+            "step_index": 0,
+            "prior_step_result_ref": null,
+            "prior_state_ref": null,
+            "prior_history_ref": null,
+            "candidates": [
+              {
+                "candidate_id": "toy-initial",
+                "base_ref": {
+                  "schema_name": "whetstone.toy.root_candidate",
+                  "content_hash": "0c7db1f10e1daaad62b5a58e3cd779dc19ded0fbdd5b44d760e95e9f0fdcb659"
+                },
+                "payload": {
+                  "user_prompt_template": "Reply briefly to: {prompt}"
+                }
+              }
+            ],
+            "pools": {},
+            "hyperparameters": {
+              "round_index": 0,
+              "model": "toy-codex-model",
+              "reasoning_effort": "medium",
+              "max_tool_calls": 8,
+              "eval_config_identity_hash": "3a6868c7a77534abb1b86dd6795ef5cf7890a60c16731a8fd74ea86d568e17a8",
+              "reward_policy_hash": "4a4c959496786afd71c4c8c63dcc946c38045876ad4458763d9bc6270f82be85"
+            },
+            "budget": {
+              "consumed": {},
+              "remaining": {
+                "tool_calls": 8
+              }
+            },
+            "step_output_contract": {
+              "returned_proposal_count": 0,
+              "terminal_proposal_count": 1,
+              "require_distinct_bases": false
+            }
+          },
+          "record_ref": {
+            "schema_name": "whetstone.optim_step_request",
+            "content_hash": "5989785eb7873991ce36fc992a03635b86348ce55ff4e260abc2a70b9225c5b4"
+          }
+        },
+        "proposed_candidates": [],
+        "accepted_candidates": [],
+        "resolved_intents": [],
+        "search_evidence": [],
+        "tool_evidence": [
+          {
+            "result": {
+              "record": {
+                "call": {
+                  "record": {
+                    "call_id": "c1",
+                    "tool_config": {
+                      "record": {
+                        "definition": {
+                          "record": {
+                            "tool_name": "evaluate_candidate",
+                            "version": 1,
+                            "input_fields": [
+                              "base_ref",
+                              "model_route",
+                              "template"
+                            ],
+                            "output_fields": [
+                              "evaluation_evidence_ref",
+                              "output_artifact_ref",
+                              "per_task_values",
+                              "per_task_counts",
+                              "row_accounting"
+                            ],
+                            "refusal_classes": [
+                              "authorization",
+                              "capacity",
+                              "budget",
+                              "validation"
+                            ],
+                            "expansion_semantics": null
+                          },
+                          "record_ref": {
+                            "schema_name": "whetstone.tool_definition",
+                            "content_hash": "bac73ac7a975820b7d6c25bd9965f9d79c4430e3f226b523575eef7d23162f50"
+                          },
+                          "config_hash": "c5c1d9ff21a8a997cd2688c6ec78b6f5e66225019d73a938a6c9edf19e47bd70"
+                        },
+                        "endpoint_key": "mcp.whetstone.evaluate_candidate",
+                        "eval_config": {
+                          "definition_ref": {
+                            "definition_id": "whetstone.toy.eval",
+                            "version": "1",
+                            "schema_name": "whetstone.eval.definition",
+                            "identity_hash": "a65b36aee031cc8bd55047b8d2eeb61f07932fdcdd7c4aec138468cace65c661"
+                          },
+                          "sampling_config_hash": "30edd82e2a108539f43259d14585140cf8e201a904a032d781bdc8704b2b07b9",
+                          "evaluation_procedure_config_hash": "cd40567d4238d6cc530f38e5e4a09155c0b978c9bbf51be13769754eb29c4a15",
+                          "aggregation_config_hash": "714993853442bfcb74949f5c08689635b2ce04dbb4506feeecf076857144136a",
+                          "config_hash": "3a6868c7a77534abb1b86dd6795ef5cf7890a60c16731a8fd74ea86d568e17a8"
+                        },
+                        "reward_policy_hash": "4a4c959496786afd71c4c8c63dcc946c38045876ad4458763d9bc6270f82be85",
+                        "capacity": {
+                          "max_accepted_calls": 8,
+                          "scope": "run"
+                        },
+                        "timeout_policy_ref": null,
+                        "operational_policy_refs": [],
+                        "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
+                        "idempotent_replay": true,
+                        "candidate_template_field": "user_prompt_template"
+                      },
+                      "record_ref": {
+                        "schema_name": "whetstone.tool_config",
+                        "content_hash": "e4781bcbebc6b18f1508bb5054c5c5cf19bc92db4f4c26ebfbf7fab6c3f66825"
+                      },
+                      "config_hash": "6752e634eb2abdc95d862317ff4c97f7d11ab036a6fbc21a59f50d9f9cf8b18f"
+                    },
+                    "capacity_binding": {
+                      "scope": "run",
+                      "subject_ref": {
+                        "schema_name": "whetstone.optim_run",
+                        "content_hash": "98e7b3bfa938d9ee161c9f8e92f291055dcfaa3e267f332e1a9940b676265a18"
+                      }
+                    },
+                    "args": {
+                      "base_ref": {
+                        "content_hash": "9c081c90f250d08f89e28d741fe045eab740912b426b9cb579250167038c650e",
+                        "schema_name": "whetstone.optim_candidate"
+                      },
+                      "model_route": "openai/chat_completions/fake-model",
+                      "template": "Answer {prompt} in one short sentence."
+                    }
+                  },
+                  "record_ref": {
+                    "schema_name": "whetstone.tool_call",
+                    "content_hash": "d4630d0cd89fccdb24570fe2069f29ceb99f0a41e8195b4835dd2b77d7271bd0"
+                  }
+                },
+                "output": {
+                  "evaluation_evidence_ref": {
+                    "content_hash": "fc432a7cd633f871b5da9a0fcb671577c3e76b3e2fc33c37eddfc4cd21922038",
+                    "schema_name": "whetstone.eval_evidence"
+                  },
+                  "output_artifact_ref": {
+                    "content_hash": "c2139da272541881b97b7177533904f1b769d80496b4a7519707b3df8705eeb3",
+                    "schema_name": "whetstone.eval_outputs"
+                  },
+                  "per_task_counts": [
+                    1,
+                    1
+                  ],
+                  "per_task_values": [
+                    1.0,
+                    1.0
+                  ],
+                  "row_accounting": {
+                    "failed": 0,
+                    "invalid": 0,
+                    "missing": 0,
+                    "planned": 2,
+                    "present": 2
+                  }
+                },
+                "refusal": null,
+                "terminal_failure": null,
+                "evaluation_evidence_refs": [
+                  {
+                    "schema_name": "whetstone.eval_evidence",
+                    "content_hash": "fc432a7cd633f871b5da9a0fcb671577c3e76b3e2fc33c37eddfc4cd21922038"
+                  }
+                ],
+                "reward": {
+                  "record": {
+                    "reward_name": "reward",
+                    "value": 1.0,
+                    "reward_policy": {
+                      "policy_name": "toy-reward",
+                      "reward_name": "reward",
+                      "terms": [
+                        {
+                          "name": "score",
+                          "weight": 1.0,
+                          "maximize": true,
+                          "worst_value": 0.0
+                        }
+                      ],
+                      "missing_data": "fail"
+                    },
+                    "evidence_role": "internal",
+                    "input_citations": [
+                      {
+                        "name": "score",
+                        "value": 1.0,
+                        "contributed": 1.0,
+                        "was_missing": false
+                      }
+                    ],
+                    "evidence_refs": [
+                      {
+                        "schema_name": "whetstone.eval_evidence",
+                        "content_hash": "fc432a7cd633f871b5da9a0fcb671577c3e76b3e2fc33c37eddfc4cd21922038"
+                      }
+                    ],
+                    "provenance_ordinal": 1
+                  },
+                  "record_ref": {
+                    "schema_name": "whetstone.reward",
+                    "content_hash": "e9524ed9c387ef6da7e21efbcbeb3aae4b9133918e1aeb00ef0b16097c3188b4"
+                  }
+                },
+                "provenance_note": null,
+                "provenance_ordinal": 1
+              },
+              "record_ref": {
+                "schema_name": "whetstone.tool_result",
+                "content_hash": "52fea4905e41825c5084db4462c40ff2d00428d02154fa8d927044e4075a5ebc"
+              }
+            },
+            "store_entry": {
+              "tool_call": {
+                "record": {
+                  "call_id": "c1",
+                  "tool_config": {
+                    "record": {
+                      "definition": {
+                        "record": {
+                          "tool_name": "evaluate_candidate",
+                          "version": 1,
+                          "input_fields": [
+                            "base_ref",
+                            "model_route",
+                            "template"
+                          ],
+                          "output_fields": [
+                            "evaluation_evidence_ref",
+                            "output_artifact_ref",
+                            "per_task_values",
+                            "per_task_counts",
+                            "row_accounting"
+                          ],
+                          "refusal_classes": [
+                            "authorization",
+                            "capacity",
+                            "budget",
+                            "validation"
+                          ],
+                          "expansion_semantics": null
+                        },
+                        "record_ref": {
+                          "schema_name": "whetstone.tool_definition",
+                          "content_hash": "bac73ac7a975820b7d6c25bd9965f9d79c4430e3f226b523575eef7d23162f50"
+                        },
+                        "config_hash": "c5c1d9ff21a8a997cd2688c6ec78b6f5e66225019d73a938a6c9edf19e47bd70"
+                      },
+                      "endpoint_key": "mcp.whetstone.evaluate_candidate",
+                      "eval_config": {
+                        "definition_ref": {
+                          "definition_id": "whetstone.toy.eval",
+                          "version": "1",
+                          "schema_name": "whetstone.eval.definition",
+                          "identity_hash": "a65b36aee031cc8bd55047b8d2eeb61f07932fdcdd7c4aec138468cace65c661"
+                        },
+                        "sampling_config_hash": "30edd82e2a108539f43259d14585140cf8e201a904a032d781bdc8704b2b07b9",
+                        "evaluation_procedure_config_hash": "cd40567d4238d6cc530f38e5e4a09155c0b978c9bbf51be13769754eb29c4a15",
+                        "aggregation_config_hash": "714993853442bfcb74949f5c08689635b2ce04dbb4506feeecf076857144136a",
+                        "config_hash": "3a6868c7a77534abb1b86dd6795ef5cf7890a60c16731a8fd74ea86d568e17a8"
+                      },
+                      "reward_policy_hash": "4a4c959496786afd71c4c8c63dcc946c38045876ad4458763d9bc6270f82be85",
+                      "capacity": {
+                        "max_accepted_calls": 8,
+                        "scope": "run"
+                      },
+                      "timeout_policy_ref": null,
+                      "operational_policy_refs": [],
+                      "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
+                      "idempotent_replay": true,
+                      "candidate_template_field": "user_prompt_template"
+                    },
+                    "record_ref": {
+                      "schema_name": "whetstone.tool_config",
+                      "content_hash": "e4781bcbebc6b18f1508bb5054c5c5cf19bc92db4f4c26ebfbf7fab6c3f66825"
+                    },
+                    "config_hash": "6752e634eb2abdc95d862317ff4c97f7d11ab036a6fbc21a59f50d9f9cf8b18f"
+                  },
+                  "capacity_binding": {
+                    "scope": "run",
+                    "subject_ref": {
+                      "schema_name": "whetstone.optim_run",
+                      "content_hash": "98e7b3bfa938d9ee161c9f8e92f291055dcfaa3e267f332e1a9940b676265a18"
+                    }
+                  },
+                  "args": {
+                    "base_ref": {
+                      "content_hash": "9c081c90f250d08f89e28d741fe045eab740912b426b9cb579250167038c650e",
+                      "schema_name": "whetstone.optim_candidate"
+                    },
+                    "model_route": "openai/chat_completions/fake-model",
+                    "template": "Answer {prompt} in one short sentence."
+                  }
+                },
+                "record_ref": {
+                  "schema_name": "whetstone.tool_call",
+                  "content_hash": "d4630d0cd89fccdb24570fe2069f29ceb99f0a41e8195b4835dd2b77d7271bd0"
+                }
+              },
+              "tool_config": {
+                "record": {
+                  "definition": {
+                    "record": {
+                      "tool_name": "evaluate_candidate",
+                      "version": 1,
+                      "input_fields": [
+                        "base_ref",
+                        "model_route",
+                        "template"
+                      ],
+                      "output_fields": [
+                        "evaluation_evidence_ref",
+                        "output_artifact_ref",
+                        "per_task_values",
+                        "per_task_counts",
+                        "row_accounting"
+                      ],
+                      "refusal_classes": [
+                        "authorization",
+                        "capacity",
+                        "budget",
+                        "validation"
+                      ],
+                      "expansion_semantics": null
+                    },
+                    "record_ref": {
+                      "schema_name": "whetstone.tool_definition",
+                      "content_hash": "bac73ac7a975820b7d6c25bd9965f9d79c4430e3f226b523575eef7d23162f50"
+                    },
+                    "config_hash": "c5c1d9ff21a8a997cd2688c6ec78b6f5e66225019d73a938a6c9edf19e47bd70"
+                  },
+                  "endpoint_key": "mcp.whetstone.evaluate_candidate",
+                  "eval_config": {
+                    "definition_ref": {
+                      "definition_id": "whetstone.toy.eval",
+                      "version": "1",
+                      "schema_name": "whetstone.eval.definition",
+                      "identity_hash": "a65b36aee031cc8bd55047b8d2eeb61f07932fdcdd7c4aec138468cace65c661"
+                    },
+                    "sampling_config_hash": "30edd82e2a108539f43259d14585140cf8e201a904a032d781bdc8704b2b07b9",
+                    "evaluation_procedure_config_hash": "cd40567d4238d6cc530f38e5e4a09155c0b978c9bbf51be13769754eb29c4a15",
+                    "aggregation_config_hash": "714993853442bfcb74949f5c08689635b2ce04dbb4506feeecf076857144136a",
+                    "config_hash": "3a6868c7a77534abb1b86dd6795ef5cf7890a60c16731a8fd74ea86d568e17a8"
+                  },
+                  "reward_policy_hash": "4a4c959496786afd71c4c8c63dcc946c38045876ad4458763d9bc6270f82be85",
+                  "capacity": {
+                    "max_accepted_calls": 8,
+                    "scope": "run"
+                  },
+                  "timeout_policy_ref": null,
+                  "operational_policy_refs": [],
+                  "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
+                  "idempotent_replay": true,
+                  "candidate_template_field": "user_prompt_template"
+                },
+                "record_ref": {
+                  "schema_name": "whetstone.tool_config",
+                  "content_hash": "e4781bcbebc6b18f1508bb5054c5c5cf19bc92db4f4c26ebfbf7fab6c3f66825"
+                },
+                "config_hash": "6752e634eb2abdc95d862317ff4c97f7d11ab036a6fbc21a59f50d9f9cf8b18f"
+              },
+              "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
+              "capacity_scope": "run",
+              "capacity_scope_id": "98e7b3bfa938d9ee161c9f8e92f291055dcfaa3e267f332e1a9940b676265a18",
+              "state": "completed",
+              "capacity_debit_ordinal": 1,
+              "refusal": null,
+              "tool_result_ref": {
+                "schema_name": "whetstone.tool_result",
+                "content_hash": "52fea4905e41825c5084db4462c40ff2d00428d02154fa8d927044e4075a5ebc"
+              },
+              "effect_terminal": {
+                "request": {
+                  "semantic_key": "whetstone.tool_execution:a37e6b380308c7c16b8cdbb52aba1fdb1939996bbe6eb78e45f950870703930b",
+                  "request_hash": "965d5ba61baad2a728d1358b386e4f93ee2f042329cc8c4b799c59d210216e62",
+                  "replay_policy": "idempotent"
+                },
+                "outcome": "succeeded",
+                "owner_id": "codex-audit-fixture",
+                "attempt_id": "c97e80ac3e5143c2b086739ebd74268f",
+                "fence": 1,
+                "result_ref": {
+                  "schema_name": "whetstone.tool_result",
+                  "content_hash": "52fea4905e41825c5084db4462c40ff2d00428d02154fa8d927044e4075a5ebc"
+                },
+                "failure": null
+              }
+            }
+          }
+        ],
+        "proposer_usage": [],
+        "state_ref": {
+          "schema_name": "whetstone.optim_state_snapshot",
+          "content_hash": "0fa59643f37ff889dd0414a7a5986f784c91ed1ba0c44ac89ef2d8876e325e5c"
+        },
+        "history_ref": null,
+        "budget_delta": {
+          "consumed": {
+            "tool_calls": 1
+          }
+        },
+        "budget": {
+          "consumed": {
+            "tool_calls": 1
+          },
+          "remaining": {
+            "tool_calls": 7
+          }
+        },
+        "status": "failed",
+        "terminal_failure": {
+          "code": "codex_selection_unevaluated",
+          "message": "Codex reported a Tool Call with no durable completed admission entry",
+          "details": {
+            "call_id": "never-issued"
+          }
+        },
+        "seed_retained": false,
+        "retained_candidate_ref": null,
+        "provenance_note": null,
+        "provenance_ordinal": null
+      },
+      "record_ref": {
+        "schema_name": "whetstone.optim_step_result",
+        "content_hash": "44ba54684abf99cc9ed41ea18e2382f3df9e655d4b7c881e283cf194ab9944a1"
+      }
+    }
+  ],
+  "cost": {
+    "schema_version": 1,
+    "task_model": {
+      "calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "priced_calls": 0,
+      "unpriced_calls": 0,
+      "cached_calls": 0,
+      "rows_missing_token_breakdown": 0,
+      "usd": null
+    },
+    "proposer": {
+      "calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "priced_calls": 0,
+      "unpriced_calls": 0,
+      "cached_calls": 0,
+      "rows_missing_token_breakdown": 0,
+      "usd": null
+    }
+  },
+  "terminal_failure": {
+    "code": "codex_selection_unevaluated",
+    "message": "Codex reported a Tool Call with no durable completed admission entry",
+    "details": {
+      "call_id": "never-issued"
+    }
+  },
+  "seed_retained": false,
+  "provenance_note": null,
+  "provenance_ordinal": null
+}

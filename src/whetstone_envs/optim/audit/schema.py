@@ -114,6 +114,27 @@ class InvariantId(StrEnum):
     #: GEPA: a platform-dispatched run replayed each deferral episode's paid
     #: prefix identically. ``NOT_APPLICABLE`` on an in-process run.
     GEPA_PLATFORM_RESUME_IDENTITY = "gepa_platform_resume_identity"
+    #: Codex: every evaluation the run paid for went through the one
+    #: granted Tool, and every admitted call is reachable as Tool
+    #: Evidence on the Step Result.
+    CODEX_NO_EVAL_OUTSIDE_TOOLS = "codex_no_eval_outside_tools"
+    #: Codex: the returned candidate's selected call resolves to a
+    #: completed, scored admission entry.
+    CODEX_FINAL_CANDIDATE_EVALUATED = "codex_final_candidate_evaluated"
+    #: Codex: no capacity debit ordinal exceeds the run's cap, and every
+    #: refusal consumed no capacity.
+    CODEX_CAPACITY_RESPECTED = "codex_capacity_respected"
+    #: Codex: the output artifact carries this run's own run-lease
+    #: binding rather than another Step's. The member name avoids the
+    #: word "token" so a secrets linter does not read the wire value as
+    #: a credential; the value itself is the persisted spelling.
+    CODEX_LEASE_BINDS_ARTIFACT = "codex_lease_token_binds_artifact"
+    #: Codex: exactly one tool name appears, over the pinned evaluation
+    #: input fields.
+    CODEX_TOOL_SURFACE_MINIMAL = "codex_tool_surface_minimal"
+    #: Codex: a run that failed still accounts for every evaluation it
+    #: paid for.
+    CODEX_FAILURE_EVIDENCE_RETAINED = "codex_failure_evidence_retained"
 
 
 class _StrictModel(BaseModel):

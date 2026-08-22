@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 from typing import TYPE_CHECKING, Any
 
 from dr_store.sync import open_sqlite
@@ -50,6 +51,7 @@ from whetstone.optim.contracts import (
     OptimRun,
     OptimStepRequest,
     OptimStepResult,
+    optimization_run_reference,
     step_request_reference,
     step_result_reference,
 )
@@ -137,6 +139,92 @@ def put_record(run_dir: Path, schema: str, record: Any) -> dict[str, str]:
     }
 
 
+#: The relational table the Tool admission ledger persists its entries
+#: in. Rewriting a row is how a Codex negative fixture violates a ledger
+#: invariant: the entry's own model validators reject most edits made
+#: through ``result.json``, so the violation has to be made where the
+#: authority will read it back. This is whetstone's persisted table name,
+#: pinned by a golden test.
+TOOL_ADMISSION_ENTRY_TABLE = "whetstone_tool_admission_entry"
+
+
+def mutate_ledger_entry(
+    run_dir: Path,
+    call_id: str,
+    rewrite: Callable[[dict[str, Any]], dict[str, Any]],
+) -> None:
+    """Rewrite one durable admission entry, refusing a no-op.
+
+    The audit reads the ledger through ``admitted_entries``, never by
+    raw SQL. Building a negative fixture is the opposite direction --
+    it must *write* a row the reader will then decode -- and there is no
+    public writer for an already-terminal entry, so the fixture builder
+    goes through the table directly. That asymmetry is deliberate: test
+    tooling may reach for the storage, the audited path may not.
+    """
+    store_path = run_dir / RUNTIME_STORE_FILENAME
+    if not store_path.is_file():
+        raise AuditEvidenceError(f"{store_path} is missing")
+    connection = sqlite3.connect(store_path)
+    try:
+        rows = connection.execute(
+            f"SELECT store_namespace_key, entry_json "  # noqa: S608
+            f"FROM {TOOL_ADMISSION_ENTRY_TABLE} WHERE call_id = ?",
+            (call_id,),
+        ).fetchall()
+        if not rows:
+            raise MutationError(
+                f"no admission entry for call {call_id!r} to mutate"
+            )
+        for namespace, raw in rows:
+            current = json.loads(raw)
+            replacement = rewrite(dict(current))
+            if replacement == current:
+                raise MutationError(
+                    f"rewriting admission entry {call_id!r} produced an "
+                    f"identical value; the fixture would not be a negative"
+                )
+            connection.execute(
+                f"UPDATE {TOOL_ADMISSION_ENTRY_TABLE} "  # noqa: S608
+                f"SET entry_json = ? "
+                f"WHERE store_namespace_key = ? AND call_id = ?",
+                (
+                    json.dumps(replacement, sort_keys=True),
+                    namespace,
+                    call_id,
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def delete_ledger_entry(run_dir: Path, call_id: str) -> None:
+    """Drop one durable admission entry, refusing a no-op.
+
+    An entry present in ``tool_evidence`` but absent from the ledger is
+    the shape no honest run produces, which is exactly why it is the
+    negative for the reverse direction of ledger totality.
+    """
+    store_path = run_dir / RUNTIME_STORE_FILENAME
+    if not store_path.is_file():
+        raise AuditEvidenceError(f"{store_path} is missing")
+    connection = sqlite3.connect(store_path)
+    try:
+        cursor = connection.execute(
+            f"DELETE FROM {TOOL_ADMISSION_ENTRY_TABLE} "  # noqa: S608
+            f"WHERE call_id = ?",
+            (call_id,),
+        )
+        if cursor.rowcount < 1:
+            raise MutationError(
+                f"no admission entry for call {call_id!r} to delete"
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def copy_run(source: Path, destination: Path) -> Path:
     """Copy a run directory so a mutation never touches the original.
 
@@ -153,10 +241,12 @@ def reseal_step_chain(document: dict[str, Any]) -> dict[str, Any]:
     """Recompute each step's wrapper ref and re-thread the request chain.
 
     ``OptimResult`` verifies that every step's ``record_ref`` addresses its
-    own record and that each later request cites the prior step's exact
-    refs. After a mutation both are stale, so this walks the steps in order,
-    recomputes the wrapper ref from the mutated record, and writes the new
-    ref into the next step's ``prior_step_result_ref``.
+    own record, that each later request cites the prior step's exact
+    refs, and that the run wrapper addresses its own record. After a
+    mutation those are stale, so this reseals the run, threads it into
+    every request, then walks the steps in order, recomputing each
+    wrapper ref from the mutated record and writing the new ref into the
+    next step's ``prior_step_result_ref``.
 
     The mutated field itself is untouched -- only the integrity refs that
     would otherwise reject the artifact before any invariant could judge it.
@@ -164,6 +254,7 @@ def reseal_step_chain(document: dict[str, Any]) -> dict[str, Any]:
     steps = document.get("step_results")
     if not isinstance(steps, list):
         raise MutationError("result.json carries no step_results list")
+    run_ref = _resealed_run(document)
     prior_ref: dict[str, Any] | None = None
     for index, wrapper in enumerate(steps):
         if not isinstance(wrapper, dict):
@@ -171,13 +262,18 @@ def reseal_step_chain(document: dict[str, Any]) -> dict[str, Any]:
         record = wrapper.get("record")
         if not isinstance(record, dict):
             raise MutationError(f"step {index} carries no record")
+        request = record.get("request")
+        if not isinstance(request, dict) or not isinstance(
+            request.get("record"), dict
+        ):
+            raise MutationError(f"step {index} carries no request record")
+        if run_ref is not None:
+            # Every request cites the run, so a mutated run record makes
+            # each one stale too.
+            request["record"]["run"] = run_ref
         if prior_ref is not None:
-            request = record.get("request")
-            if not isinstance(request, dict) or not isinstance(
-                request.get("record"), dict
-            ):
-                raise MutationError(f"step {index} carries no request record")
             request["record"]["prior_step_result_ref"] = prior_ref
+        if run_ref is not None or prior_ref is not None:
             # The request is itself a self-verifying wrapper.
             request["record_ref"] = _request_ref(request["record"])
         try:
@@ -191,6 +287,33 @@ def reseal_step_chain(document: dict[str, Any]) -> dict[str, Any]:
         wrapper["record_ref"] = recomputed.record_ref.model_dump(mode="json")
         prior_ref = wrapper["record_ref"]
     return document
+
+
+def _resealed_run(document: dict[str, Any]) -> dict[str, Any] | None:
+    """Recompute the run wrapper's ref, when the run record was mutated.
+
+    ``OptimResult`` verifies that ``run.record_ref`` addresses its own
+    record, and every step request cites the run wrapper, so mutating a
+    field of the run leaves both stale. Returns None when the ref was
+    already exact, so an untouched run is left byte-identical.
+    """
+    run = document.get("run")
+    if not isinstance(run, dict) or not isinstance(run.get("record"), dict):
+        raise MutationError("result.json carries no run record")
+    try:
+        recomputed = optimization_run_reference(
+            OptimRun.model_validate(run["record"])
+        )
+    except ValueError as error:
+        raise MutationError(
+            f"mutated run is not a valid OptimRun: {error}"
+        ) from error
+    resealed = recomputed.model_dump(mode="json")
+    if resealed == run:
+        return None
+    run.clear()
+    run.update(resealed)
+    return resealed
 
 
 def _request_ref(request_record: dict[str, Any]) -> dict[str, Any]:
@@ -386,9 +509,12 @@ def mutate_run(
 
 
 __all__ = [
+    "TOOL_ADMISSION_ENTRY_TABLE",
     "MutationError",
     "copy_run",
+    "delete_ledger_entry",
     "mutate_json_field",
+    "mutate_ledger_entry",
     "mutate_run",
     "put_record",
     "reseal_all",

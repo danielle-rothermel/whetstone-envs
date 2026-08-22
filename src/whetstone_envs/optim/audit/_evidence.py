@@ -205,6 +205,11 @@ class RunEvidence:
     #: run's ``optimizer_config`` ref resolves to nothing -- itself an
     #: auditable defect, so loading returns rather than raising.
     control_record: dict[str, object] | None
+    #: Records addressed by an optimizer's own ``state_delta`` refs,
+    #: resolved at load time while the store is still open. An invariant
+    #: is a pure function over already-resolved evidence, so it cannot
+    #: reopen the store to chase a ref itself.
+    state_records: dict[TypedRef, object]
 
     @property
     def run_id(self) -> str:
@@ -237,6 +242,16 @@ class RunEvidence:
         one as the other.
         """
         return self.eval_evidence_by_ref.get(ref)
+
+    def stored_record(self, ref: TypedRef) -> object | None:
+        """The decoded record at ``ref``, or None when it resolved to none.
+
+        Only refs an optimizer's state delta names are resolved, and a
+        dangling one returns None rather than raising: a ref that
+        addresses nothing is itself a finding, and refusing to load would
+        crash the audit instead of letting an invariant report it.
+        """
+        return self.state_records.get(ref)
 
     def all_eval_evidence(self) -> Iterator[tuple[TypedRef, EvalEvidence]]:
         """Every resolvable eval-evidence record this run produced."""
@@ -375,6 +390,43 @@ def _collect_eval_evidence(
     return collected
 
 
+#: State-snapshot keys whose value is a serialized ``TypedRef`` to a
+#: record an invariant needs. Resolved at load time so an invariant never
+#: reopens the store. Codex writes its output artifact's ref under the
+#: first of these (``optim/codex/adapter.py:331``).
+STATE_RECORD_REF_KEYS = ("codex_output_artifact_ref",)
+
+
+def _collect_state_records(
+    store: object,
+    steps: tuple[StepEvidence, ...],
+) -> dict[TypedRef, object]:
+    """Deref every state-delta ref an invariant may need to read.
+
+    A malformed or dangling ref is skipped rather than raising, for the
+    same reason ``_collect_eval_evidence`` skips one: the absence is the
+    evidence, and an invariant reports it.
+    """
+    collected: dict[TypedRef, object] = {}
+    for entry in steps:
+        if entry.state is None:
+            continue
+        for key in STATE_RECORD_REF_KEYS:
+            raw = entry.state.get(key)
+            if raw is None:
+                continue
+            try:
+                ref = TypedRef.model_validate(raw)
+            except ValueError:
+                continue
+            if ref in collected:
+                continue
+            found = _get_optional(store, ref)
+            if found is not None:
+                collected[ref] = found
+    return collected
+
+
 def load_run_evidence(run_dir: Path) -> RunEvidence:
     """Read ``run_dir`` into the evidence every invariant reads.
 
@@ -427,6 +479,7 @@ def load_run_evidence(run_dir: Path) -> RunEvidence:
             store, result.run.record.optimizer_config.record_ref
         )
         control_record = raw_control if isinstance(raw_control, dict) else None
+        state_records = _collect_state_records(store, frozen_steps)
 
     return RunEvidence(
         run_dir=run_dir,
@@ -435,6 +488,7 @@ def load_run_evidence(run_dir: Path) -> RunEvidence:
         eval_evidence_by_ref=eval_evidence,
         gepa_terminal=gepa_terminal,
         control_record=control_record,
+        state_records=state_records,
     )
 
 
@@ -445,6 +499,7 @@ __all__ = [
     "MIPROV2_OPTIMIZER",
     "RESULT_FILENAME",
     "RUNTIME_STORE_FILENAME",
+    "STATE_RECORD_REF_KEYS",
     "AuditEvidenceError",
     "GepaTerminalEvidence",
     "RunEvidence",

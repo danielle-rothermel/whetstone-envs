@@ -24,6 +24,7 @@ from whetstone_envs.optim.audit._evidence import (
     evidence_ref,
     load_run_evidence,
 )
+from whetstone_envs.optim.audit.codex import CODEX_INVARIANTS
 from whetstone_envs.optim.audit.copro import COPRO_INVARIANTS
 from whetstone_envs.optim.audit.gepa import GEPA_INVARIANTS
 from whetstone_envs.optim.audit.miprov2 import MIPROV2_INVARIANTS
@@ -131,7 +132,7 @@ INVARIANTS_BY_OPTIMIZER: dict[str, tuple[Invariant, ...]] = {
     COPRO_OPTIMIZER: SHARED_INVARIANTS + COPRO_INVARIANTS,
     MIPROV2_OPTIMIZER: SHARED_INVARIANTS + MIPROV2_INVARIANTS,
     GEPA_OPTIMIZER: SHARED_INVARIANTS + GEPA_INVARIANTS,
-    CODEX_OPTIMIZER: SHARED_INVARIANTS,
+    CODEX_OPTIMIZER: SHARED_INVARIANTS + CODEX_INVARIANTS,
 }
 
 

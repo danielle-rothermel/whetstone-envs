@@ -106,6 +106,10 @@ include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
 extend-exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
+    # A standalone script run against a *different* whetstone-ai
+    # checkout than the one installed here, so its imports cannot
+    # resolve against this environment by construction.
+    "tests/optim/audit/fixtures/generate.py",
 ]
 line-length = 79
 
@@ -158,6 +162,11 @@ ignore = ["PLR1711", "S101", "TRY003"]
 "src/whetstone_envs/reporting/cli.py" = ["PLC0415"]
 "src/whetstone_envs/reporting/html.py" = ["PLC0415"]
 "tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
+# A standalone fixture generator, run by hand against a whetstone-ai
+# checkout rather than imported: it must set sys.path before importing
+# whetstone at all, and it mirrors a CodexRunner signature it does not
+# use every argument of.
+"tests/optim/audit/fixtures/generate.py" = ["ARG002", "E402", "PLR0913"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
 
 [tool.ruff.lint.flake8-type-checking]
@@ -168,6 +177,10 @@ include = ["scripts", "src", "tests"]
 exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
+    # A standalone script run against a *different* whetstone-ai
+    # checkout than the one installed here, so its imports cannot
+    # resolve against this environment by construction.
+    "tests/optim/audit/fixtures/generate.py",
 ]
 
 [[tool.ty.overrides]]
@@ -194,6 +207,11 @@ include = [
     "tests/reporting/test_schema.py",
     "tests/reporting/test_browser.py",
     "tests/reporting/test_views.py",
+    # The Codex audit reads whetstone-ai 0.1.7 surface behind runtime
+    # guards so it still loads on 0.1.6; ty resolves against whichever
+    # is installed, so one of the two must be unresolvable.
+    "src/whetstone_envs/optim/audit/codex.py",
+    "tests/optim/audit/test_codex.py",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

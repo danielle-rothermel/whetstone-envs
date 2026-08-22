@@ -39,9 +39,59 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from whetstone.core.identity import TypedRef
+
     from whetstone_envs.optim.audit._evidence import RunEvidence
+    from whetstone_envs.optim.audit.schema import EvidenceRef
 
     Invariant = Callable[[RunEvidence], AuditFinding]
+
+
+class _ResolutionTally:
+    """Counts reported evaluations and records which ones do not resolve.
+
+    The three evidence paths -- intent resolutions, search evidence, and
+    Tool Results -- differ only in how many refs each reported number
+    carries and what to call it in a message. Sharing the resolution
+    itself keeps one definition of "resolves", so a Codex run and a COPRO
+    run are held to the same standard rather than to two drifting copies.
+    """
+
+    __slots__ = ("checked", "evidence", "refs", "unresolved")
+
+    def __init__(self, evidence: RunEvidence) -> None:
+        self.evidence = evidence
+        self.unresolved: list[str] = []
+        self.refs: list[EvidenceRef] = []
+        self.checked = 0
+
+    def check_one(self, ref: TypedRef | None, *, where: str) -> None:
+        """One reported number, which may cite no ref at all."""
+        if ref is None:
+            self.checked += 1
+            self.unresolved.append(f"{where} cites no eval result")
+            return
+        self.check_many((ref,), where=where)
+
+    def check_many(self, refs: tuple[TypedRef, ...], *, where: str) -> None:
+        """One reported evaluation citing zero or more evidence refs.
+
+        Zero is itself a violation: a completed evaluation that names no
+        evidence reported a number nothing backs.
+        """
+        if not refs:
+            self.checked += 1
+            self.unresolved.append(f"{where} cites no eval result")
+            return
+        for ref in refs:
+            self.checked += 1
+            if self.evidence.eval_evidence(ref) is None:
+                self.unresolved.append(
+                    f"{where} cites {ref.schema_name} which is not "
+                    f"eval evidence"
+                )
+                continue
+            self.refs.append(evidence_ref(ref))
 
 
 def reported_numbers_resolve(evidence: RunEvidence) -> AuditFinding:
@@ -58,54 +108,51 @@ def reported_numbers_resolve(evidence: RunEvidence) -> AuditFinding:
     like infidelity. This is the generic invariant every optimizer shares --
     the per-optimizer modules add the algorithm-specific ones on top.
 
+    **A tool-mediated evaluation is a reported number too.** A
+    ``TOOL_USING`` run -- Codex is the only one -- resolves no intent and
+    mints no search evidence *by design*: its paid evaluations are cited
+    from ``tool_evidence`` instead, each Tool Result naming the
+    ``EvalEvidence`` it produced. Counting only the intent paths would fail
+    every honest Codex run for reporting nothing, while a Codex run that
+    genuinely resolved to nothing would be indistinguishable from it. So
+    all three paths count, and each is resolved the same way.
+
     **Zero completed evaluations is never a pass.** A run whose steps
-    completed no intent failed to report the numbers this invariant governs,
-    and a run with no steps at all has nothing to govern; the first is a
-    ``FAIL`` and the second ``NOT_APPLICABLE``. Reporting either as "all 0
-    of 0 resolve" would let an empty run read as audited fidelity.
+    completed no intent, search, or tool evaluation failed to report the
+    numbers this invariant governs, and a run with no steps at all has
+    nothing to govern; the first is a ``FAIL`` and the second
+    ``NOT_APPLICABLE``. Reporting either as "all 0 of 0 resolve" would let
+    an empty run read as audited fidelity.
     """
-    unresolved: list[str] = []
-    refs = []
-    checked = 0
+    tally = _ResolutionTally(evidence)
     for entry in evidence.steps:
         for position, resolution in enumerate(entry.resolved_intents):
-            if resolution.outcome is not IntentOutcome.COMPLETED:
-                continue
-            checked += 1
-            ref = resolution.eval_result_ref
-            if ref is None:
-                unresolved.append(
-                    f"step {entry.index} intent {position} cites no "
-                    f"eval result"
+            if resolution.outcome is IntentOutcome.COMPLETED:
+                tally.check_one(
+                    resolution.eval_result_ref,
+                    where=f"step {entry.index} intent {position}",
                 )
-                continue
-            found = evidence.eval_evidence(ref)
-            if found is None:
-                unresolved.append(
-                    f"step {entry.index} intent {position} cites "
-                    f"{ref.schema_name} which is not eval evidence"
-                )
-                continue
-            refs.append(evidence_ref(ref))
         for position, search in enumerate(entry.search_evidence):
-            if search.outcome is not IntentOutcome.COMPLETED:
-                continue
-            checked += 1
-            ref = search.eval_result_ref
-            if ref is None:
-                unresolved.append(
-                    f"step {entry.index} search {position} cites no "
-                    f"eval result"
+            if search.outcome is IntentOutcome.COMPLETED:
+                tally.check_one(
+                    search.eval_result_ref,
+                    where=f"step {entry.index} search {position}",
                 )
-                continue
-            found = evidence.eval_evidence(ref)
-            if found is None:
-                unresolved.append(
-                    f"step {entry.index} search {position} cites "
-                    f"{ref.schema_name} which is not eval evidence"
+        for position, tool in enumerate(entry.tool_evidence):
+            record = tool.result.record
+            # A tool call that terminalized with a failure reports no
+            # number, exactly as a failed intent does. Its admission is
+            # still audited -- that is ``codex_no_eval_outside_tools``'s
+            # business, not this invariant's.
+            if record.terminal_failure is None:
+                tally.check_many(
+                    record.evaluation_evidence_refs,
+                    where=f"step {entry.index} tool call {position}",
                 )
-                continue
-            refs.append(evidence_ref(ref))
+
+    unresolved = tally.unresolved
+    refs = tally.refs
+    checked = tally.checked
 
     if unresolved:
         return AuditFinding(
@@ -132,8 +179,8 @@ def reported_numbers_resolve(evidence: RunEvidence) -> AuditFinding:
                 status=AuditStatus.FAIL,
                 detail=(
                     f"this run persisted {len(evidence.steps)} step(s) but "
-                    "completed no evaluation intent and no search "
-                    "evaluation, so no reported number was checked"
+                    "completed no evaluation intent, search evaluation, or "
+                    "tool evaluation, so no reported number was checked"
                 ),
                 evidence_refs=(),
             )

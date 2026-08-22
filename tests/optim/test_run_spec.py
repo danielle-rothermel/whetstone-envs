@@ -21,6 +21,7 @@ from whetstone.optim.contracts import OptimResult
 
 from whetstone_envs.optim.cli import build_parser, main
 from whetstone_envs.optim.run import (
+    CODEX_DEFAULT_BINARY,
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
@@ -145,30 +146,67 @@ def test_gepa_metric_call_ceiling_must_be_positive(tmp_path) -> None:
         )
 
 
-def test_codex_capacity_is_refused_until_its_adapter_lands(tmp_path) -> None:
-    """``codex_capacity`` is carried but nothing honours it yet.
-
-    Refusing beats accepting a cap no admission ledger enforces, which would
-    read as a respected capacity in the study manifest.
-    """
-    with pytest.raises(ValueError, match="cannot drive yet"):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("codex_capacity", 8),
+        ("codex_binary", "/usr/bin/false"),
+        ("codex_model", "some-agent-model"),
+        ("codex_reasoning_effort", "high"),
+        ("codex_wall_seconds", 30.0),
+    ],
+)
+def test_codex_settings_are_refused_on_another_optimizer(
+    tmp_path, field: str, value: object
+) -> None:
+    """A setting that looks honoured but is not misdescribes the arm."""
+    with pytest.raises(
+        ValueError, match="codex settings apply only to --optimizer codex"
+    ):
         run_optimizer(
             _spec(
-                output_dir=tmp_path / "codex-capacity",
-                codex_capacity=8,
+                optimizer="copro",
+                output_dir=tmp_path / f"codex-{field}",
+                **{field: value},
             )
         )
 
 
+def test_a_zero_codex_capacity_is_refused() -> None:
+    """A cap of zero admits nothing, so the run could buy no evaluation."""
+    with pytest.raises(ValueError, match="codex_capacity must be at least 1"):
+        run_optimizer(_spec(optimizer="codex", codex_capacity=0))
+
+
+def test_an_unknown_codex_reasoning_effort_is_refused() -> None:
+    with pytest.raises(ValueError, match="codex_reasoning_effort must be"):
+        run_optimizer(
+            _spec(optimizer="codex", codex_reasoning_effort="maximum")
+        )
+
+
 def test_the_runner_admits_only_the_optimizers_it_can_drive() -> None:
-    """``codex`` and the nulls are named by the protocol but not runnable.
+    """The nulls are named by the protocol but are controls, not optimizers.
 
     Admitting a name the runner cannot drive would fail inside the durable
     run boundary rather than at spec validation.
     """
-    assert OPTIMIZERS == ("copro", "gepa", "miprov2")
-    for absent in ("codex", "null-random", "null-identity"):
+    assert OPTIMIZERS == ("codex", "copro", "gepa", "miprov2")
+    for absent in ("null-random", "null-identity"):
         assert absent not in OPTIMIZERS
+
+
+def test_a_test_seam_is_refused_on_another_optimizer() -> None:
+    """The scripted-preflight seam belongs to the Codex arm alone."""
+    from whetstone_envs.optim.codex import CodexTestSeam
+
+    with pytest.raises(ValueError, match="codex_test_seam applies only"):
+        run_optimizer(
+            _spec(optimizer="copro"),
+            codex_test_seam=CodexTestSeam(
+                preflight=lambda **_kwargs: None, environment={}
+            ),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -468,10 +506,40 @@ def test_every_new_flag_reaches_the_spec_unchanged() -> None:
     assert spec.run_id == "study-run"
 
 
-def test_codex_capacity_flag_reaches_the_spec_and_is_then_refused() -> None:
-    """The flag parses; the runner is what refuses it."""
-    spec = _captured_spec(["--optimizer", "copro", "--codex-capacity", "8"])
+def test_the_codex_flags_reach_the_spec() -> None:
+    spec = _captured_spec(
+        [
+            "--optimizer",
+            "codex",
+            "--codex-capacity",
+            "8",
+            "--codex-binary",
+            "/opt/fake/codex",
+            "--codex-model",
+            "agent-model",
+            "--codex-reasoning-effort",
+            "high",
+            "--codex-wall-seconds",
+            "45",
+        ]
+    )
     assert spec.codex_capacity == 8
+    assert spec.codex_binary == "/opt/fake/codex"
+    assert spec.codex_model == "agent-model"
+    assert spec.codex_reasoning_effort == "high"
+    assert spec.codex_wall_seconds == 45.0
+
+
+def test_the_codex_binary_defaults_to_the_real_cli() -> None:
+    """A run that names no binary spawns the real Codex, not a stand-in.
+
+    The fake CLI is selectable only by an explicit flag, so no default
+    path can quietly run a scripted agent and report it as a Codex run.
+    """
+    spec = _captured_spec(["--optimizer", "codex"])
+    assert spec.codex_binary == CODEX_DEFAULT_BINARY
+    assert spec.codex_capacity is None
+    assert spec.codex_model is None
 
 
 def test_a_negative_pool_seed_start_is_accepted_by_the_parser() -> None:
@@ -488,6 +556,7 @@ def test_a_negative_pool_seed_start_is_accepted_by_the_parser() -> None:
         "--copro-breadth",
         "--gepa-max-metric-calls",
         "--codex-capacity",
+        "--codex-wall-seconds",
     ],
 )
 def test_count_flags_refuse_a_non_positive_value(flag: str) -> None:
@@ -522,9 +591,7 @@ def test_every_drivable_optimizer_parses(optimizer: str) -> None:
     assert spec.optimizer == optimizer
 
 
-@pytest.mark.parametrize(
-    "optimizer", ["codex", "null-random", "null-identity"]
-)
+@pytest.mark.parametrize("optimizer", ["null-random", "null-identity"])
 def test_optimizers_the_runner_cannot_drive_are_refused(
     optimizer: str,
 ) -> None:

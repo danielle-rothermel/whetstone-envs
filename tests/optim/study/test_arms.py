@@ -101,3 +101,82 @@ def test_a_partially_set_arm_forwards_only_what_it_set(
     assert spec.miprov2_num_trials == 10
     assert spec.miprov2_num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES
     assert spec.miprov2_split == DEFAULT_MIPROV2_SPLIT.value
+
+
+# --------------------------------------------------------------------------
+# The Codex arm
+# --------------------------------------------------------------------------
+
+
+def _codex_arm() -> ArmSpec:
+    return ArmSpec(
+        arm_id="codex",
+        optimizer="codex",
+        kind=ArmKind.REAL,
+        k_run=1,
+        seeds=(4000,),
+    )
+
+
+def test_the_codex_arm_runs_through_the_shared_runner(
+    tmp_path: Path,
+) -> None:
+    """The Codex arm is a ``RunSpec`` like any other, not a side path.
+
+    Every arm reaches the same ``run_optimizer``; what makes Codex
+    different is its adapter, not its dispatch. Its arm id is admitted by
+    ``OPTIMIZER_ARM_IDS``, so it is not refused as a control.
+    """
+    from whetstone_envs.optim.study.arms import OPTIMIZER_ARM_IDS
+
+    assert "codex" in OPTIMIZER_ARM_IDS
+    spec = _runner(tmp_path)._spec_for(
+        _codex_arm(), seed=4000, run_dir=tmp_path / "run"
+    )
+    assert spec.optimizer == "codex"
+    assert spec.seed == 4000
+    assert spec.transport == "fake"
+
+
+def test_the_studys_capacity_cap_reaches_the_codex_arm(
+    tmp_path: Path,
+) -> None:
+    """D2's cap is the study's to set, and it must actually be carried."""
+    from dataclasses import replace
+
+    from whetstone_envs.optim.study.spec import CODEX_EVALUATE_CALL_CAP
+
+    runner = replace(_runner(tmp_path), codex_capacity=CODEX_EVALUATE_CALL_CAP)
+    spec = runner._spec_for(_codex_arm(), seed=4000, run_dir=tmp_path / "run")
+    assert spec.codex_capacity == CODEX_EVALUATE_CALL_CAP
+
+
+def test_the_capacity_cap_is_not_forwarded_to_another_arm(
+    tmp_path: Path,
+) -> None:
+    """A cap on a COPRO spec would be refused at validation, rightly.
+
+    Forwarding it anyway would turn a study-level setting into a run
+    failure for every non-Codex arm, so the arm is what gates it.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), codex_capacity=8)
+    spec = runner._spec_for(_arm(), seed=2000, run_dir=tmp_path / "run")
+    assert spec.codex_capacity is None
+
+
+def test_the_study_capacity_cap_agrees_with_the_arms_own() -> None:
+    """One number, named in the study spec and defaulted in the builder.
+
+    Two constants that could drift would let a study advertise one cap
+    and a run enforce another.
+    """
+    from whetstone_envs.optim.codex import (
+        CODEX_EVALUATE_CALL_CAP as BUILDER_CAP,
+    )
+    from whetstone_envs.optim.study.spec import (
+        CODEX_EVALUATE_CALL_CAP as STUDY_CAP,
+    )
+
+    assert BUILDER_CAP == STUDY_CAP == 8

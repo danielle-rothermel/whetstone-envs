@@ -363,7 +363,14 @@ def _collect_eval_evidence(
     store: object,
     steps: tuple[StepEvidence, ...],
 ) -> dict[TypedRef, EvalEvidence]:
-    """Deref every eval-evidence ref the run's intents and search cite.
+    """Deref every eval-evidence ref the run's evidence cites.
+
+    Three paths cite one: an intent resolution, a search-evidence entry,
+    and -- for the one ``TOOL_USING`` optimizer, Codex -- a Tool Result's
+    ``evaluation_evidence_refs``. A Codex run resolves no intent at all,
+    so omitting the tool path would leave its every paid evaluation
+    unreachable from this map and make an honest run look like one that
+    reported nothing.
 
     Two kinds of ref are deliberately *not* errors here:
 
@@ -390,6 +397,8 @@ def _collect_eval_evidence(
             for evidence in entry.search_evidence
             if evidence.eval_result_ref is not None
         )
+        for tool in entry.tool_evidence:
+            refs.extend(tool.result.record.evaluation_evidence_refs)
         for ref in refs:
             if ref in collected or ref.schema_name != EVAL_EVIDENCE_SCHEMA:
                 continue

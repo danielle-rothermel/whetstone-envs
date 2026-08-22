@@ -7,24 +7,22 @@ every negative asserts *both* that its target FAILs and that no other
 invariant's status changed -- a mutation that broke everything would let
 a sloppy invariant look sound.
 
-**Why these fixtures are committed rather than built here.** The other
-optimizers' audits build their evidence by running a real fake-transport
-run in ``conftest.py``. A Codex run cannot be built that way: the
-Codex-direct adapter, the one-tool MCP surface, and
-``ToolAdmissionAuthority.admitted_entries`` are all 0.1.7 surface, and
-the installed whetstone-ai is 0.1.6. So the runs were produced once
-against a checkout carrying that surface (see
-``fixtures/generate.py``) and committed, and these tests skip until an
-install can read them.
+**Why these fixtures are committed rather than built here.** The
+committed runs were produced once against a checkout carrying the
+Codex-direct surface (see ``fixtures/generate.py``) at a time when the
+installed whetstone-ai could not run one at all. They are kept because
+they are the *mutable* evidence: every negative below is a hand-mutated
+copy of one, and mutating a committed artifact is what makes a negative
+reproducible rather than dependent on a live run's incidental shape.
 
-**The version skew is real and worth naming.** Neither tip alone can
-produce these fixtures. ``08-22-codex`` carries the Codex surface but
-predates ``OptimStepResult.proposer_usage``, which the 0.1.6 tip added to
-the step record's identity payload; the 0.1.6 tip has ``proposer_usage``
-but no Codex. The committed fixtures were generated against the merge of
-the two, which is what 0.1.7 will be -- the two branches' source merges
-cleanly. ``requires_codex_surface`` skips on anything else, so this suite
-turns itself on when 0.1.7 lands rather than needing to be edited.
+**The positives are also proven on a fresh run.** Now that the installed
+whetstone-ai carries the Codex surface, ``tests/optim/test_e2e.py``
+drives a real fake-CLI run and audits it, so the invariants are checked
+against evidence the current code produced as well as against the
+committed snapshot. ``requires_codex_surface`` remains because the
+committed fixtures are unreadable without that surface, and an install
+lacking it must fail rather than skip -- see
+``test_a_codex_run_without_the_surface_fails_rather_than_skipping``.
 """
 
 from __future__ import annotations

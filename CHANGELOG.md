@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The Codex arm runs.** `--optimizer codex` drives the study's
+  foreign-agent arm through the same `run_optimizer` every other arm uses:
+  `whetstone_envs.optim.codex` builds a `CodexControl` and a `CodexAdapter`
+  from the family's own render contract and mutation field, and
+  `prepare_codex_run` binds the one Tool the agent may use. The agent
+  searches out of process under dr-exec containment and reaches exactly one
+  MCP tool, which evaluates a candidate on the internal split. It is the
+  first `TOOL_USING` run here, so it is the first to get a durable
+  admission authority and a tool executor: its capacity is enforced across
+  processes because the evaluation server that admits its calls is a
+  different process. `--codex-capacity` is that cap and defaults to the
+  pre-registered 8; `--codex-binary`, `--codex-model`,
+  `--codex-reasoning-effort`, and `--codex-wall-seconds` configure the
+  agent. An authentication preflight runs before any capacity is
+  committed, and no flag or `RunSpec` field can substitute it — the
+  scripted stand-in is reachable only through a keyword-only test seam.
+  **Known platform limitation:** the Codex containment profile is macOS
+  `sandbox-exec` only, so the spawning tests are Darwin-gated. Everything
+  above the sandbox — the control, the runtime config, the capacity
+  arithmetic, and the audit — runs everywhere.
+- **`whetstone_envs.optim.codex_runtime` carries the launch across the
+  process boundary.** The Codex MCP evaluation server rebuilds its engine
+  from one serialized config, and whetstone-ai's
+  `ReferenceEvalRuntimeConfig` always rebuilds the *toy* experiment — a
+  limitation whetstone-ai names itself. A study run wired to it comes up
+  fine and then refuses every single tool call as "not bound to the
+  engine's exact Eval Config", leaving the agent nothing to select.
+  `EnvsCodexRuntimeConfig` carries the family's generation parameters
+  instead and rebuilds the identical experiment, and the adapter builder
+  proves the rebuilt Eval Config matches the run's before anything is
+  spawned.
+- **The Codex fidelity audit runs on every Codex run.** The six invariants
+  and the shared one now execute against a real fake-CLI run rather than
+  only against committed fixtures, and `reported_numbers_resolve` counts
+  tool-mediated evaluations: a `TOOL_USING` run resolves no intent by
+  design, so an invariant reading only the intent paths failed every honest
+  Codex run for reporting nothing.
+- **The trajectory report renders a Codex run's evaluations.** They are
+  projected from tool evidence, each attributed to the candidate its Tool
+  Call actually built, with the evaluation's own reward. Reading only the
+  intent path showed a terminal candidate with no measurement behind it.
 - `whetstone_envs.optim.audit`: offline fidelity audits over one optimizer
   run's durable evidence. `audit_run(run_dir)` reads `result.json` and
   `runtime.sqlite` through whetstone-ai's public API and returns an

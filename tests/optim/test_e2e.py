@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from collections import Counter
 from contextlib import closing
 from pathlib import Path
@@ -17,8 +18,14 @@ from whetstone.eval import EvalEvidence
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.contracts import OptimResult
 
+from tests.optim.codex_support import (
+    CODEX_SPLIT_SIZES,
+    codex_test_seam,
+    codex_tool_steps,
+)
 from whetstone_envs.c19 import PROBES
 from whetstone_envs.optim.cli import main
+from whetstone_envs.optim.codex import CODEX_EVALUATE_CALL_CAP
 from whetstone_envs.optim.experiment import C19_MUTATION_FIELD
 from whetstone_envs.optim.run import RunSpec, run_optimizer
 from whetstone_envs.reporting.publication import (
@@ -442,3 +449,263 @@ def test_rerun_against_the_same_output_replays_recorded_effects(
     assert main(argv) == 0
     assert _lease_rows(database) == before
     assert (output / "result.json").read_text(encoding="utf-8") == first_result
+
+
+# --------------------------------------------------------------------------
+# The Codex arm, driven by the scripted fake CLI
+# --------------------------------------------------------------------------
+
+requires_codex_sandbox = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the Codex sandbox is macOS sandbox-exec only",
+)
+
+
+def _codex_run(
+    *,
+    tmp_path: Path,
+    run_id: str,
+    templates: tuple[str, ...],
+    selected: str | None,
+    capacity: int | None = CODEX_EVALUATE_CALL_CAP,
+) -> Path:
+    """One Codex arm run over the c19 family, agent decisions scripted."""
+    return run_optimizer(
+        RunSpec(
+            optimizer="codex",
+            transport="fake",
+            split_sizes=CODEX_SPLIT_SIZES,
+            output_dir=tmp_path / run_id,
+            run_id=run_id,
+            codex_capacity=capacity,
+        ),
+        codex_test_seam=codex_test_seam(
+            steps=codex_tool_steps(
+                templates=templates,
+                selected=selected,
+                scratch=tmp_path,
+            ),
+            binary_dir=tmp_path / "codex-bin",
+        ),
+    )
+
+
+@requires_codex_sandbox
+def test_codex_fake_cli_completes(tmp_path) -> None:
+    """The Codex arm end to end, on the real admission and ledger path.
+
+    Only the agent's decisions are scripted: the fake CLI is a real
+    subprocess that speaks real MCP over HTTP to the whetstone-hosted
+    evaluation server, so admission, leasing, evaluation, and the ledger
+    are the production ones.
+    """
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e",
+        templates=(PROBES.ceiling_template,),
+        selected="c1",
+    )
+    result = OptimResult.model_validate_json(
+        (output / "result.json").read_text(encoding="utf-8")
+    )
+    assert result.terminal_failure is None, result.terminal_failure
+    step = result.step_results[-1].record
+    assert step.status.value == "complete"
+    # Codex is TOOL_USING: its paid evaluations are cited from tool
+    # evidence, and it resolves no intent and mints no search evidence.
+    assert step.resolved_intents == ()
+    assert step.search_evidence == ()
+    assert len(step.tool_evidence) == 1
+    assert step.budget_delta.consumed["tool_calls"] == 1
+    # The accepted candidate is rebuilt from the recorded tool call's
+    # arguments, not from anything the agent's artifact asserted.
+    accepted = result.proposals[0].candidate.record.payload
+    assert accepted[C19_MUTATION_FIELD] == PROBES.ceiling_template
+
+
+@requires_codex_sandbox
+def test_codex_two_evaluations_debit_the_whole_budget(tmp_path) -> None:
+    """Every admitted call is on the ledger and debits the step budget.
+
+    Under-reporting is a terminal failure upstream, so a completing run
+    is itself the proof that what the agent reported and what the run
+    durably admitted agree.
+    """
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e-two",
+        templates=(PROBES.naive_template, PROBES.ceiling_template),
+        selected="c2",
+    )
+    result = OptimResult.model_validate_json(
+        (output / "result.json").read_text(encoding="utf-8")
+    )
+    assert result.terminal_failure is None, result.terminal_failure
+    step = result.step_results[-1].record
+    assert len(step.tool_evidence) == 2
+    assert step.budget_delta.consumed["tool_calls"] == 2
+    assert {
+        str(entry.store_entry.call_id) for entry in step.tool_evidence
+    } == {"c1", "c2"}
+    accepted = result.proposals[0].candidate.record.payload
+    assert accepted[C19_MUTATION_FIELD] == PROBES.ceiling_template
+
+
+@requires_codex_sandbox
+def test_codex_selecting_nothing_retains_the_seed(tmp_path) -> None:
+    """An honest "nothing beat the seed" keeps the seed and its evidence."""
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e-seed",
+        templates=(PROBES.naive_template,),
+        selected=None,
+    )
+    result = OptimResult.model_validate_json(
+        (output / "result.json").read_text(encoding="utf-8")
+    )
+    assert result.terminal_failure is None, result.terminal_failure
+    step = result.step_results[-1].record
+    assert step.seed_retained is True
+    assert step.accepted_candidates == ()
+    assert (
+        step.retained_candidate_ref == result.run.record.initial_candidate_ref
+    )
+    # The evaluation it did buy is still reachable and still debited.
+    assert len(step.tool_evidence) == 1
+    assert step.budget_delta.consumed["tool_calls"] == 1
+
+
+@requires_codex_sandbox
+def test_codex_trajectory_report_renders_the_tool_evaluations(
+    tmp_path,
+) -> None:
+    """A Codex run's report must show the evaluations it bought.
+
+    Codex resolves no intent, so a projection reading only the intent
+    path renders a Codex run as having evaluated nothing -- a terminal
+    candidate with no measurement behind it, and a report that silently
+    understates what the arm did. Its paid evaluations are cited from
+    tool evidence instead, and each becomes a trajectory row with its own
+    embedded evaluation.
+    """
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e-report",
+        templates=(PROBES.naive_template, PROBES.ceiling_template),
+        selected="c2",
+    )
+    trajectory = load_trajectory_report(output)
+
+    assert trajectory.terminal_status == "complete"
+    assert len(trajectory.resolutions) == 2
+    assert [row.request_id for row in trajectory.resolutions] == [
+        "tool:c1",
+        "tool:c2",
+    ]
+    assert all(row.outcome == "completed" for row in trajectory.resolutions)
+    # Every row carries its own embedded evaluation, and each is
+    # attributed to the candidate that tool call actually built -- the
+    # ceiling template scores above the naive one.
+    assert all(row.eval_report is not None for row in trajectory.resolutions)
+    rewards = [row.reward for row in trajectory.resolutions]
+    assert all(reward is not None for reward in rewards)
+    naive, ceiling = rewards
+    assert naive is not None
+    assert ceiling is not None
+    assert ceiling > naive
+    assert trajectory.steps[0].resolution_indexes == (1, 2)
+
+
+@requires_codex_sandbox
+def test_codex_reports_run_spend_from_tool_evidence(tmp_path) -> None:
+    """A Codex run's whole spend is task-model spend, driven through tools.
+
+    Nothing is attributed to a proposer -- the agent proposes, and its own
+    model spend is not on the study's key (OQ1). An aggregator reading
+    only the intent path would report a Codex run as having cost nothing,
+    so this asserts the task-model side is non-zero.
+    """
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e-spend",
+        templates=(PROBES.ceiling_template,),
+        selected="c1",
+    )
+    cost = json.loads((output / "cost.json").read_text(encoding="utf-8"))
+    by_role = {row["role"]: row for row in cost["spend"]}
+    # The two roles the cost report knows. Per OQ1 there is no
+    # ``codex_agent`` role: the agent's own model runs on the Codex
+    # subscription rather than the study's key, so whetstone has no
+    # evidence to price it with and does not invent a field it cannot
+    # populate.
+    assert set(by_role) == {"task_model", "proposer"}
+    assert by_role["task_model"]["calls"] > 0
+    assert by_role["proposer"]["calls"] == 0
+
+
+@requires_codex_sandbox
+def test_codex_audit_passes_on_a_fresh_run(tmp_path) -> None:
+    """Every Codex invariant, plus the shared one, on a run made just now.
+
+    The committed fixtures prove the invariants against evidence produced
+    once; this proves them against evidence produced by the code under
+    test, which is what keeps them regression tests rather than a
+    snapshot of one historical run.
+    """
+    from whetstone_envs.optim.audit.registry import audit_run
+
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e-audit",
+        templates=(PROBES.ceiling_template,),
+        selected="c1",
+    )
+    report = audit_run(output)
+    assert report.optimizer == "codex"
+    assert report.passed, [
+        (finding.invariant_id, finding.detail)
+        for finding in report.findings
+        if finding.status.value == "fail"
+    ]
+
+
+@requires_codex_sandbox
+def test_codex_cli_end_to_end(tmp_path) -> None:
+    """The CLI admits ``--optimizer codex`` and its flags reach the run.
+
+    The CLI cannot build a test seam, by design, so this drives the real
+    argument path as far as it goes and stops where a real Codex session
+    would be required -- the preflight, which is exactly the gate that
+    must not be bypassable from the command line.
+    """
+    from whetstone_envs.optim.codex import CODEX_DEFAULT_BINARY
+    from whetstone_envs.optim.run import RunSpec as _RunSpec
+
+    captured: list[_RunSpec] = []
+
+    def capture(spec, **kwargs):
+        captured.append(spec)
+        assert kwargs == {}, "the CLI must pass no test seam"
+        return tmp_path / "unused"
+
+    with patch("whetstone_envs.optim.cli.run_optimizer", capture):
+        code = main(
+            [
+                "--optimizer",
+                "codex",
+                "--transport",
+                "fake",
+                "--codex-capacity",
+                "4",
+                "--run-id",
+                "c19-codex-cli",
+                "--output",
+                str(tmp_path / "cli-run"),
+            ]
+        )
+
+    assert code == 0
+    spec = captured[0]
+    assert spec.optimizer == "codex"
+    assert spec.codex_capacity == 4
+    assert spec.codex_binary == CODEX_DEFAULT_BINARY

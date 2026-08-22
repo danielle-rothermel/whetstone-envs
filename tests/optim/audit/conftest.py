@@ -193,3 +193,49 @@ def gepa_reflection_bodies():
             yield
 
     return scripted
+
+
+@pytest.fixture(scope="session")
+def codex_run_dir(tmp_path_factory) -> Path:
+    """One completed Codex arm run, driven by the scripted fake CLI.
+
+    The fake CLI is a real subprocess speaking real MCP to the real
+    evaluation server, so this is genuine Codex evidence -- an admission
+    ledger, tool evidence, and an output artifact -- rather than a
+    hand-built approximation of one. Only the agent's decisions are
+    scripted.
+
+    Skipped off macOS: the Codex containment profile is ``sandbox-exec``.
+    """
+    import sys
+
+    if sys.platform != "darwin":
+        pytest.skip("the Codex sandbox is macOS sandbox-exec only")
+
+    from tests.optim.codex_support import (
+        CODEX_SPLIT_SIZES,
+        codex_test_seam,
+        codex_tool_steps,
+    )
+    from whetstone_envs.c19 import PROBES
+    from whetstone_envs.optim.codex import CODEX_EVALUATE_CALL_CAP
+
+    root = tmp_path_factory.mktemp("audit-runs")
+    return run_optimizer(
+        RunSpec(
+            optimizer="codex",
+            transport="fake",
+            split_sizes=CODEX_SPLIT_SIZES,
+            output_dir=root / "codex",
+            run_id="c19-codex-audit-fixture",
+            codex_capacity=CODEX_EVALUATE_CALL_CAP,
+        ),
+        codex_test_seam=codex_test_seam(
+            steps=codex_tool_steps(
+                templates=(PROBES.ceiling_template,),
+                selected="c1",
+                scratch=root,
+            ),
+            binary_dir=root / "codex-bin",
+        ),
+    )

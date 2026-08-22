@@ -55,9 +55,9 @@ Install C18's pinned generator dependencies when generating its pools:
 uv add 'whetstone-envs[c18]'
 ```
 
-Install the optimizer adapter extra when running COPRO, GEPA, or MIPROv2
-against a task family. The extra pins published `whetstone-ai==0.1.6` from
-PyPI:
+Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
+Codex against a task family. The extra pins published `whetstone-ai==0.1.6`
+from PyPI:
 
 ```bash
 uv add 'whetstone-envs[optim]'
@@ -71,6 +71,7 @@ public surface, with no private imports and no adapter subclassing:
 | `copro` | `configure_copro` + `CoproAdapter` | — | Proposal-only search over the mutation field. |
 | `gepa` | `build_gepa_harness_adapter` | — | Reflection search; the trainset is the internal eval split. A run that finds no improvement reports the retained seed rather than substituting a candidate. |
 | `miprov2` | `configure_miprov2` + `Miprov2Adapter` | `--demo-mode fewshot\|zeroshot\|ground_only` | Also binds an opening durable state (labeled trainset, proposal examples, RNG checkpoint). |
+| `codex` | `configure_codex` + `CodexAdapter` | — | The foreign-agent arm: the Codex CLI searches out of process under dr-exec containment and reaches exactly one MCP tool, which evaluates a candidate on the internal split. One opaque step; whetstone runs no search of its own. macOS only — the containment profile is `sandbox-exec`. |
 
 `--demo-mode` selects MIPROv2's demonstration regime and is ignored by COPRO
 and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
@@ -79,6 +80,23 @@ and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
 `zeroshot` and `ground_only` still bootstrap demos to ground instruction
 proposals but leave the section empty. `--num-seeds` sets repeats per task
 (`K_REPEAT`).
+
+The Codex arm takes its own flags. `--codex-capacity` is the per-run
+admitted evaluate-call cap, which is simultaneously the step's `tool_calls`
+budget and the `ToolCapacity` the evaluation server admits against; it
+defaults to the study's pre-registered 8. `--codex-binary` is the CLI to
+spawn (default: the real `codex` on the run PATH), and `--codex-model`,
+`--codex-reasoning-effort`, and `--codex-wall-seconds` configure the agent.
+A Codex run proves its session with an authentication preflight before it
+commits any capacity, and there is no flag that skips it.
+
+Two properties follow from the agent being foreign. A Codex run resolves no
+evaluation intent — every paid evaluation is admitted through the tool and
+cited from the step's tool evidence, which is where the trajectory report
+and the audit read it. And the agent's own model spend runs on the Codex
+subscription rather than the study's key, so the cost report prices the
+task model and attributes nothing to a proposer; there is no `codex_agent`
+cost role.
 
 `--family` selects which task family the optimizers drive. Every optimizer
 runs every family through the same `run_optimizer`; a family is admitted by
@@ -111,9 +129,17 @@ uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer miprov2 --demo-mode fewshot \
   --transport fake --split-sizes 2,2,0
 uv run --extra optim python scripts/run-optim.py \
+  --family c19 --optimizer codex --transport fake --split-sizes 2,2,0 \
+  --codex-capacity 8
+uv run --extra optim python scripts/run-optim.py \
   --family c18 --optimizer copro --transport fake --split-sizes 2,2,0 \
   --n-per-stratum 1
 ```
+
+The Codex line spawns the real Codex CLI and needs a working session; the
+suite covers the same path with a scripted stand-in that speaks real MCP to
+the real evaluation server, so everything above the agent's own decisions is
+exercised without a paid run.
 
 ## Evaluation and trajectory reports
 

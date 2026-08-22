@@ -6,6 +6,9 @@ import traceback
 from pathlib import Path
 
 from whetstone_envs.optim.run import (
+    CODEX_DEFAULT_BINARY,
+    CODEX_EVALUATE_CALL_CAP,
+    CODEX_REASONING_EFFORTS,
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
     DEFAULT_MIPROV2_FULL_EVAL_STEPS,
@@ -19,6 +22,7 @@ from whetstone_envs.optim.run import (
     MIPROV2_SPLITS,
     OPTIMIZERS,
     TRANSPORTS,
+    CodexReasoningEffort,
     RunSpec,
     default_output_dir,
     registered_family_ids,
@@ -54,6 +58,20 @@ def _int_at_least(value: str, *, minimum: int) -> int:
 def _copro_breadth(value: str) -> int:
     """COPRO needs at least two drafts per step to have a choice."""
     return _int_at_least(value, minimum=MIN_COPRO_BREADTH)
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected a number, got {value!r}"
+        ) from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive number, got {parsed}"
+        )
+    return parsed
 
 
 def _positive_int(value: str) -> int:
@@ -233,8 +251,40 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=None,
         help=(
-            "Admitted evaluate-call cap for the Codex arm. Rejected until "
-            "the Codex adapter lands, so it cannot look honoured."
+            "Admitted evaluate-call cap for the Codex arm, which is its "
+            f"eval budget. Defaults to {CODEX_EVALUATE_CALL_CAP}."
+        ),
+    )
+    parser.add_argument(
+        "--codex-binary",
+        default=CODEX_DEFAULT_BINARY,
+        help=(
+            "The Codex CLI to spawn, resolved on the run PATH. Defaults "
+            f"to the real {CODEX_DEFAULT_BINARY!r}."
+        ),
+    )
+    parser.add_argument(
+        "--codex-model",
+        default=None,
+        help=(
+            "The Codex agent's own model. Defaults to --model, the task "
+            "model. The agent's own spend is not on the study's key and "
+            "is not priced in the run's cost report."
+        ),
+    )
+    parser.add_argument(
+        "--codex-reasoning-effort",
+        choices=CODEX_REASONING_EFFORTS,
+        default=CodexReasoningEffort.MEDIUM.value,
+        help="How hard the Codex agent reasons.",
+    )
+    parser.add_argument(
+        "--codex-wall-seconds",
+        type=_positive_float,
+        default=None,
+        help=(
+            "The Codex agent's wall budget in seconds. Defaults to "
+            "whetstone-ai's own."
         ),
     )
     return parser
@@ -274,6 +324,10 @@ def main(argv: list[str] | None = None) -> int:
                 miprov2_num_candidates=arguments.miprov2_num_candidates,
                 miprov2_split=arguments.miprov2_split,
                 codex_capacity=arguments.codex_capacity,
+                codex_binary=arguments.codex_binary,
+                codex_model=arguments.codex_model,
+                codex_reasoning_effort=arguments.codex_reasoning_effort,
+                codex_wall_seconds=arguments.codex_wall_seconds,
             )
         )
     except DurableRunError as error:

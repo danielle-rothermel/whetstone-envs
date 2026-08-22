@@ -12,7 +12,28 @@ from __future__ import annotations
 import pytest
 
 from whetstone_envs.optim.study.gates import (
+    GEPA_MAX_METRIC_CALLS_PINNED,
+    GEPA_PIN_REASON,
     GEPA_RESOLVED_MAX_METRIC_CALLS,
+    MEASURED_FANOUT_RATIO,
+    MEASURED_GEPA_DISTINCT_EVALUATIONS,
+    MEASURED_GEPA_RESULT_JSON_BYTES,
+    MEASURED_GEPA_SEARCH_EVIDENCE_ENTRIES,
+    MEASURED_GEPA_SQLITE_BYTES,
+    MEASURED_GEPA_STEPS,
+    MEASURED_GEPA_TASK_CALLS,
+    MEASURED_GEPA_WALL_SECONDS,
+    MEASURED_MIPROV2_BOOTSTRAP_ROWS_FEWSHOT,
+    MEASURED_MIPROV2_BOOTSTRAP_ROWS_GROUND_ONLY,
+    MEASURED_MIPROV2_BOOTSTRAP_ROWS_ZEROSHOT,
+    MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
+    MEASURED_MIPROV2_GROUND_ONLY_TASK_CALLS,
+    MEASURED_MIPROV2_MINIBATCH_TASKS,
+    MEASURED_MIPROV2_TRAINSET_TASKS,
+    MEASURED_MIPROV2_ZEROSHOT_TASK_CALLS,
+    MEASUREMENT_N_PER_STRATUM,
+    MEASUREMENT_POOL_SEED_START,
+    MEASUREMENT_SPLIT_SIZES,
     MIPROV2_BOOTSTRAP_ROWS_BEST_CASE,
     MIPROV2_BOOTSTRAP_ROWS_WORST_CASE,
     MIPROV2_BOOTSTRAPPING_PLANS,
@@ -161,3 +182,129 @@ def test_a_fanned_out_gepa_run_trips_the_gate() -> None:
         internal_size=88,
         k_repeat=3,
     )
+
+
+# --------------------------------------------------------------------------
+# Wave 3 measurements
+# --------------------------------------------------------------------------
+# These are pinned as literals for the same reason the estimates are: a
+# measurement re-derived from the code that produced it proves nothing. The
+# provenance for every one of them is in ``gates.py``'s own comments -- which
+# run, which splits, which control settings.
+
+
+def test_the_measurement_provenance_is_the_protocol_splits() -> None:
+    """A measurement at other splits would not answer the question asked."""
+    assert MEASUREMENT_SPLIT_SIZES == (88, 132, 220)
+    assert MEASUREMENT_N_PER_STRATUM == 32
+    assert MEASUREMENT_POOL_SEED_START == 1_000_000
+    # 22 c19 strata at 32 each is 704 tasks, enough for 88 + 132 + 220.
+    assert sum(MEASUREMENT_SPLIT_SIZES) <= MEASUREMENT_N_PER_STRATUM * 22
+
+
+def test_r6_is_retired_by_a_measured_ratio_of_one() -> None:
+    """**The F16 finding.** No fan-out, so R6 does not gate Stage 1.
+
+    The feared multiplier was 88 / 35 = 2.51x. The measured one is 1.0.
+    """
+    assert MEASURED_FANOUT_RATIO == 1.0
+    assert MEASURED_FANOUT_RATIO < 88 / 35
+
+
+def test_the_measured_miprov2_call_counts_are_pinned() -> None:
+    assert MEASURED_MIPROV2_FEWSHOT_TASK_CALLS == 245
+    assert MEASURED_MIPROV2_ZEROSHOT_TASK_CALLS == 246
+    assert MEASURED_MIPROV2_GROUND_ONLY_TASK_CALLS == 245
+    assert MEASURED_MIPROV2_MINIBATCH_TASKS == 35
+
+
+def test_the_measured_calls_sit_far_inside_the_stage1_gate() -> None:
+    """The gate's denominator is a loose upper bound, as intended.
+
+    A loose bound cannot false-abort a run, which is what F10 was worried
+    about -- it just turns out to be far looser than F10 expected, because
+    the bootstrap term is negligible rather than dominant.
+    """
+    for observed in (
+        MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
+        MEASURED_MIPROV2_ZEROSHOT_TASK_CALLS,
+        MEASURED_MIPROV2_GROUND_ONLY_TASK_CALLS,
+    ):
+        assert observed < MIPROV2_FEWSHOT_TASK_CALL_FLOOR
+        assert call_count_within_estimate(
+            optimizer="miprov2",
+            observed_task_calls=observed,
+            internal_size=88,
+            k_repeat=1,
+        )
+
+
+def test_the_measured_bootstrap_rows_are_not_the_protocol_bound() -> None:
+    """F10's 28-616 does not apply: the trainset is one task.
+
+    ``build_miprov2_control`` slices ``trainset=task_hashes[:1]`` at every
+    split size, so bootstrapping walks a single task no matter how large
+    the internal split is.
+    """
+    assert MEASURED_MIPROV2_TRAINSET_TASKS == 1
+    assert MEASURED_MIPROV2_BOOTSTRAP_ROWS_FEWSHOT == 1
+    assert MEASURED_MIPROV2_BOOTSTRAP_ROWS_GROUND_ONLY == 1
+    # Zeroshot emits no LABELS_ONLY plan, so it carries one more
+    # bootstrapping plan than the other two modes -- and one more row.
+    assert MEASURED_MIPROV2_BOOTSTRAP_ROWS_ZEROSHOT == 2
+    for measured in (
+        MEASURED_MIPROV2_BOOTSTRAP_ROWS_FEWSHOT,
+        MEASURED_MIPROV2_BOOTSTRAP_ROWS_ZEROSHOT,
+        MEASURED_MIPROV2_BOOTSTRAP_ROWS_GROUND_ONLY,
+    ):
+        assert measured < MIPROV2_BOOTSTRAP_ROWS_BEST_CASE
+
+
+def test_the_measured_gepa_sizing_is_pinned() -> None:
+    """556 steps consumed the 732-call budget; steps are not calls."""
+    assert MEASURED_GEPA_STEPS == 556
+    assert MEASURED_GEPA_STEPS < GEPA_RESOLVED_MAX_METRIC_CALLS
+    assert MEASURED_GEPA_WALL_SECONDS == 1_329
+    assert MEASURED_GEPA_TASK_CALLS == 265
+    assert MEASURED_GEPA_DISTINCT_EVALUATIONS == 91
+
+
+def test_gepa_search_evidence_is_quadratic_in_the_step_count() -> None:
+    """The F9 root cause, pinned as the number that shows it.
+
+    Every step persists its whole replayed prefix as search evidence, so
+    the entry count is about ``steps^2 / 2`` while the distinct evaluations
+    behind it stay flat. That ratio is why the artifacts are three orders
+    of magnitude larger than the work performed.
+    """
+    assert MEASURED_GEPA_SEARCH_EVIDENCE_ENTRIES == 155_956
+    quadratic = MEASURED_GEPA_STEPS**2 / 2
+    assert (
+        0.9 * quadratic
+        < MEASURED_GEPA_SEARCH_EVIDENCE_ENTRIES
+        < (1.2 * quadratic)
+    )
+    assert (
+        MEASURED_GEPA_SEARCH_EVIDENCE_ENTRIES
+        > 1_000 * MEASURED_GEPA_DISTINCT_EVALUATIONS
+    )
+
+
+def test_d3_pins_gepa_to_the_pre_registered_fallback() -> None:
+    """**The D3 decision.** 200, the value registered before measuring.
+
+    Registering the fallback in advance is what makes this a
+    pre-registration rather than a number chosen to fit the measurement.
+    """
+    assert GEPA_MAX_METRIC_CALLS_PINNED == 200
+    assert GEPA_MAX_METRIC_CALLS_PINNED < GEPA_RESOLVED_MAX_METRIC_CALLS
+    assert GEPA_PIN_REASON.strip()
+
+
+def test_the_gepa_store_blew_the_sizing_bar() -> None:
+    """1.73 GB against a ~1 GB bar is what triggered the pin."""
+    one_gigabyte = 1_000_000_000
+    assert one_gigabyte < MEASURED_GEPA_SQLITE_BYTES
+    assert 0.7 * one_gigabyte < MEASURED_GEPA_RESULT_JSON_BYTES
+    # And the wall time did *not* trigger it: under the 60-minute bar.
+    assert MEASURED_GEPA_WALL_SECONDS < 60 * 60

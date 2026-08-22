@@ -24,9 +24,12 @@ from dr_store.sync import open_sqlite
 from whetstone_envs.optim.run_cost import RUN_COST_SCHEMA_NAME
 from whetstone_envs.optim.study.cli import (
     DEFAULT_STORE_NAME,
+    ESTIMATE_LABEL,
     EXIT_CHECK_FAILED,
     EXIT_ERROR,
     EXIT_OK,
+    MEASURED_LABEL,
+    MEASURED_TASK_CALLS_BY_ARM,
     NO_ESTIMATE,
     NOT_CHECKED,
     OPTIMIZER_BUDGET_HEADING,
@@ -579,6 +582,39 @@ def test_plan_states_each_estimate_s_derivation() -> None:
     assert "basis:" in text
     # COPRO's derivation is its own search shape.
     assert "breadth 2" in text
+
+
+def test_plan_prints_measured_numbers_beside_the_estimates() -> None:
+    """Wave 3's measurements appear, labelled as measurements.
+
+    An estimate and a measurement are known to different degrees, and the
+    reader deciding whether to authorize spend is the one who needs to see
+    which is which.
+    """
+
+    class _MeasuredArmSpec(_Spec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.arm_ids = ("copro", "miprov2", "gepa")
+            self.k_run_by_arm = {"copro": 5, "miprov2": 5, "gepa": 5}
+
+    text = "\n".join(plan_lines(_MeasuredArmSpec()))
+    assert MEASURED_LABEL in text
+    assert ESTIMATE_LABEL in text
+    for arm, measured in MEASURED_TASK_CALLS_BY_ARM.items():
+        assert arm in text
+        assert str(measured) in text
+    # COPRO was not measured, so it prints only its estimate.
+    copro_lines = [
+        line for line in plan_lines(_MeasuredArmSpec()) if "copro" in line
+    ]
+    assert copro_lines
+    assert all(MEASURED_LABEL not in line for line in copro_lines)
+
+
+def test_the_measured_arms_are_the_ones_wave_3_actually_ran() -> None:
+    """Only measured arms carry a measurement; the rest say estimate."""
+    assert set(MEASURED_TASK_CALLS_BY_ARM) == {"miprov2", "gepa"}
 
 
 def test_plan_says_no_estimate_rather_than_guessing() -> None:

@@ -32,7 +32,11 @@ from dr_store import DocumentFileError
 from dr_store.sync import open_sqlite
 
 from whetstone_envs.optim.study.environment import bound_stage_environment
-from whetstone_envs.optim.study.gates import estimate_optimizer_calls
+from whetstone_envs.optim.study.gates import (
+    MEASURED_GEPA_TASK_CALLS,
+    MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
+    estimate_optimizer_calls,
+)
 from whetstone_envs.optim.study.leakage import (
     HeldOutObservation,
     LeakageRule,
@@ -163,9 +167,14 @@ def plan_lines(spec: StudySpecLike) -> tuple[str, ...]:
       internally, from the control defaults in
       :mod:`whetstone_envs.optim.study.gates`. It dominates the total --
       GEPA's 732 metric calls and MIPROv2's bootstrap walk dwarf the
-      official and held-out passes -- and it is the number Wave 3 replaces
-      with a measurement. The output labels it as an estimate for that
-      reason.
+      official and held-out passes.
+
+      Wave 3 measured two of these arms on fake transport at these very
+      splits, so where a measurement exists the plan prints it beside the
+      estimate and labels it ``MEASURED``. The labels are the point: an
+      estimate and a measurement are known to different degrees, and a
+      reader deciding whether to authorize spend needs to see which is
+      which rather than a single undifferentiated column.
     """
     internal, official, held_out = spec.split_sizes
     lines = [
@@ -209,15 +218,29 @@ def plan_lines(spec: StudySpecLike) -> tuple[str, ...]:
     return tuple(lines)
 
 
-#: How the optimizer-side budget is labelled. It is not a measurement, and
-#: the label is the thing that keeps it from being read as one.
+#: How the optimizer-side budget is labelled. Per-arm rows carry their own
+#: label, because some arms are measured and some are not.
 OPTIMIZER_BUDGET_HEADING = (
-    "optimizer-side calls (ESTIMATE from control defaults; "
-    "Wave 3 measures these):"
+    "optimizer-side calls per run (ESTIMATE from control defaults unless "
+    "marked MEASURED):"
 )
+
+#: The two per-arm labels. An estimate and a measurement are known to
+#: different degrees, so they are never printed in the same voice.
+ESTIMATE_LABEL = "ESTIMATE"
+MEASURED_LABEL = "MEASURED"
 
 #: What an unrecognised arm reports instead of a fabricated number.
 NO_ESTIMATE = "no estimate"
+
+#: Wave 3's fake-transport measurements, per arm, at the study's own
+#: splits. Only arms actually measured appear; an arm with no entry prints
+#: its estimate and says so. c19 fake transport, ``(88, 132, 220)``,
+#: ``num_seeds=1``; see ``gates.py`` for each number's provenance.
+MEASURED_TASK_CALLS_BY_ARM = {
+    "miprov2": MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
+    "gepa": MEASURED_GEPA_TASK_CALLS,
+}
 
 
 def _optimizer_budget_lines(
@@ -226,7 +249,10 @@ def _optimizer_budget_lines(
     """Per-arm optimizer call estimates, plus the study-wide range."""
     lines = [
         OPTIMIZER_BUDGET_HEADING,
-        f"{'arm':<24}{'K_RUN':>8}{'per run':>20}{'arm total':>22}",
+        (
+            f"{'arm':<24}{'K_RUN':>8}{'per run':>20}"
+            f"{'arm total':>22}{'  basis':<10}"
+        ),
     ]
     total_low = 0
     total_high = 0
@@ -247,9 +273,19 @@ def _optimizer_budget_lines(
         lines.append(
             f"{arm_id:<24}{k_run:>8}"
             f"{_range(estimate.low, estimate.high):>20}"
-            f"{_range(low, high):>22}{suffix}"
+            f"{_range(low, high):>22}  {ESTIMATE_LABEL}{suffix}"
         )
         lines.append(f"{'':<24}basis: {estimate.basis}")
+        measured = MEASURED_TASK_CALLS_BY_ARM.get(arm_id)
+        if measured is not None:
+            lines.append(
+                f"{'':<24}{'':>8}{measured:>20}{measured * k_run:>22}"
+                f"  {MEASURED_LABEL}"
+            )
+            lines.append(
+                f"{'':<24}basis: measured on fake transport at these "
+                f"splits (Wave 3)"
+            )
     lines.extend(
         ("", f"total optimizer-side calls: {_range(total_low, total_high)}")
     )
@@ -824,9 +860,12 @@ if __name__ == "__main__":
 
 __all__ = [
     "DEFAULT_STORE_NAME",
+    "ESTIMATE_LABEL",
     "EXIT_CHECK_FAILED",
     "EXIT_ERROR",
     "EXIT_OK",
+    "MEASURED_LABEL",
+    "MEASURED_TASK_CALLS_BY_ARM",
     "NOT_CHECKED",
     "OPTIMIZER_BUDGET_HEADING",
     "PROGRAM_NAME",

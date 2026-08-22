@@ -248,6 +248,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   printed: the report treats an absent block exactly as it treats a failed
   one, so a study whose rules passed on the terminal but were never written
   back could never clear the downgrade.
+- `whetstone_envs.optim.study.fanout`: the F16 measurement. `measure_fanout`
+  reads a completed run's evidence and reports, per evaluation, the task
+  subset the optimizer requested beside the rows the platform actually
+  planned. It reads both evidence surfaces -- MIPROv2 resolves intents, GEPA
+  emits search evidence -- and counts each eval-evidence record once, keyed
+  by its content hash, because GEPA re-emits its whole replayed prefix on
+  every step.
+- Wave 3's fake-transport measurements are pinned in
+  `optim/study/gates.py`, each with the run and split sizes it came from,
+  and golden-tested as literals. `tests/optim/study/test_fanout.py`
+  re-measures mechanically on a small fake run and asserts the result
+  against the formula the code implements, so a regression fails a test
+  rather than a provider bill.
+- `whetstone-study plan` now prints Wave 3's measured per-run call counts
+  beside the control-derived estimates, labelling each row `MEASURED` or
+  `ESTIMATE`. Arms Wave 3 did not measure print only their estimate.
 
 ### Notes
 
@@ -390,6 +406,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   it found — the stage-history counts, the fan-out and GEPA-sizing details,
   the trajectory step count, the measured MDE and held-out size in the
   threats table — are now figures citing their manifest paths.
+- **R6 is retired.** The feared 2.51x minibatch fan-out does not happen:
+  across four fake-transport runs at the protocol's own `(88, 132, 220)`
+  splits, every evaluation executed exactly the task subset it requested,
+  for a measured fan-out ratio of 1.0. The platform's deferral row expansion
+  honours per-intent task sets. Two independent records agree on the count
+  -- summed `EvalEvidence.row_accounting.planned` and `cost.json`'s
+  `task_model.calls`.
+- **F10's 28-616 bootstrap bound does not apply to this runner.**
+  `build_miprov2_control` slices `trainset=task_hashes[:1]`, giving MIPROv2
+  a one-task trainset at every split size, so bootstrapping costs 1 row per
+  run (2 for `zeroshot`, which emits no `LABELS_ONLY` plan). The derivation
+  was also wrong in two further ways: the plan count is `num_candidates - 2`,
+  not a fixed 7, and there is no `/p_accept` inflation because `max_rounds`
+  is 1, so a rejected attempt still advances the cursor. The loose ceiling
+  is retained as the Stage-1 gate's denominator, since a loose upper bound
+  cannot false-abort a run.
+- **D3 resolves to the pre-registered fallback: GEPA runs at
+  `max_metric_calls = 200`, not 732.** One measured 732-call run took 556
+  whetstone steps and 22 minutes -- inside the wall-clock bar -- but produced
+  a 1.73 GB `runtime.sqlite` and a 766 MB `result.json`, against a ~1 GB
+  bar. Each step restarts `optimize()` and replays the whole prefix, and
+  persists that prefix as its own search evidence, so both artifacts grow
+  superlinearly: 155,956 search-evidence entries addressing 91 distinct
+  evaluations.
 
 ### Added
 

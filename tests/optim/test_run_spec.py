@@ -184,14 +184,17 @@ def test_an_unknown_codex_reasoning_effort_is_refused() -> None:
 
 
 def test_the_runner_admits_only_the_optimizers_it_can_drive() -> None:
-    """The nulls are named by the protocol but are controls, not optimizers.
+    """null-A is drivable; null-B is not, because it has no search.
 
-    Admitting a name the runner cannot drive would fail inside the durable
-    run boundary rather than at spec validation.
+    null-A is a control *for selection*, so it must spend the same
+    proposal budget and produce the same evidence as the arm it stands in
+    for -- which means driving COPRO's search shape with an uninformative
+    proposer. null-B proposes nothing, so there is no search to drive and
+    no fidelity invariant to audit; admitting it would fail inside the
+    durable run boundary rather than at spec validation.
     """
-    assert OPTIMIZERS == ("codex", "copro", "gepa", "miprov2")
-    for absent in ("null-random", "null-identity"):
-        assert absent not in OPTIMIZERS
+    assert OPTIMIZERS == ("codex", "copro", "gepa", "miprov2", "null-random")
+    assert "null-identity" not in OPTIMIZERS
 
 
 def test_a_test_seam_is_refused_on_another_optimizer() -> None:
@@ -595,11 +598,11 @@ def test_every_drivable_optimizer_parses(optimizer: str) -> None:
     assert spec.optimizer == optimizer
 
 
-@pytest.mark.parametrize("optimizer", ["null-random", "null-identity"])
+@pytest.mark.parametrize("optimizer", ["null-identity"])
 def test_optimizers_the_runner_cannot_drive_are_refused(
     optimizer: str,
 ) -> None:
-    """Named by the protocol, not yet runnable, so refused at the parser."""
+    """null-B proposes nothing, so there is no search to drive."""
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["--optimizer", optimizer])

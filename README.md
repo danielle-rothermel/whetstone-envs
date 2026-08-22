@@ -172,6 +172,44 @@ uv run --extra optim python scripts/run-optim.py \
 
 `--optimizer codex` is deliberately absent from that list — see below.
 
+`--optimizer null-random` is null-A, the study's selection-on-noise control.
+It is not a separate path: it drives COPRO's own search shape with an
+uninformative proposer, so it honours `--copro-breadth` and `--copro-depth`
+and produces the same evidence a COPRO run does — a result, a store, a
+passing audit, priced cost rows. That is what makes it a control *for
+selection*: a null that skipped slots or recorded a different shape of
+evidence would be controlling for something else. Its perturbations are
+seeded, and reproducible for a given `(--seed, --run-id)` pair.
+
+```bash
+uv run --extra optim python scripts/run-optim.py \
+  --family c19 --optimizer null-random --transport fake --split-sizes 4,2,0
+```
+
+null-B (`null-identity`) is deliberately *not* a runner optimizer: it
+proposes nothing, so it has no search to drive and no fidelity invariant to
+audit. The study harness records it directly.
+
+### Real transport smoke rungs
+
+Before any multi-run spend, one rung per optimizer arm runs end to end on
+the real OpenRouter transport over toy splits, so mock-only assumptions
+surface before an experiment depends on them. The rungs live in
+`tests/real_transport/`, carry the `real_transport` marker, and are
+deselected unless `WHETSTONE_ENVS_REAL_TRANSPORT=1` is set. Opting in
+without `OPENROUTER_API_KEY` fails loudly rather than skipping — a silent
+skip would let a run that called nothing report success.
+
+```bash
+mise exec -- bash scripts/check-real-transport.sh
+mise exec -- bash scripts/check-real-transport.sh -k rung1
+```
+
+The script writes a transcript and a rung table with per-rung ledgered cost
+under `~/drotherm/data/whetstone-envs/real-transport/<timestamp>/`. It
+spends real money, so it is never part of `pre-check.sh` or the default CI
+run; the `Real transport smoke` workflow is `workflow_dispatch`-only.
+
 ### Real Codex runs
 
 A Codex run spawns the real Codex CLI, which costs money, so it is refused

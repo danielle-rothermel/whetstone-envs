@@ -1,0 +1,74 @@
+name: Real transport smoke
+
+# Manual only. These rungs drive the REAL OpenRouter transport and SPEND
+# REAL MONEY, so nothing schedules them and no push or pull request can
+# trigger them -- the ladder runs when a human dispatches it and names the
+# rungs to run.
+on:
+  workflow_dispatch:
+    inputs:
+      selector:
+        description: >-
+          pytest -k selector for the rungs to run, e.g. "rung1" or
+          "rung2 or rung4". Empty runs the whole ladder.
+        required: false
+        default: ""
+        type: string
+
+permissions: {}
+
+concurrency:
+  # One ladder at a time: two concurrent runs would bill the same key twice
+  # for the same evidence.
+  group: real-transport
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Real transport rungs
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # The opt-in half. The credential half comes from repo secrets below;
+      # the suite FAILs loudly if this is set without the key, so a
+      # misconfigured secret cannot look like a passing ladder.
+      WHETSTONE_ENVS_REAL_TRANSPORT: "1"
+      SELECTOR: ${{ inputs.selector }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version-file: pyproject.toml
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+      - name: Run the real-transport rungs
+        env:
+          # Referenced, never created here. An absent secret arrives as an
+          # empty string, which the suite's precondition rejects by name.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          # --python 3.13 is not redundant with setup-uv: whetstone-ai is
+          # gated to 3.13/3.14 in pyproject, so a resolve that picked 3.12
+          # would silently build an environment without the optimizer
+          # package and fail at import rather than at resolution.
+          args=(--python 3.13 --extra c18 --extra optim
+                pytest -v -s tests/real_transport)
+          if [ -n "${SELECTOR}" ]; then
+            args+=(-k "${SELECTOR}")
+          fi
+          uv run "${args[@]}" 2>&1 | tee transcript.txt
+          exit "${PIPESTATUS[0]}"
+      - name: Upload the transcript
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-transport-transcript
+          path: transcript.txt
+          if-no-files-found: warn

@@ -96,6 +96,7 @@ addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
 markers = [
     "integration: opt-in checks that run in CI or with --run-integration",
+    "real_transport: opt-in rungs that spend real money on the OpenRouter transport",
 ]
 
 [tool.pyright]

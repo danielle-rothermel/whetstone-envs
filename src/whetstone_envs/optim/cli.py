@@ -103,6 +103,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--optimizer",
         choices=OPTIMIZERS,
         required=True,
+        help=(
+            "The arm to run. 'null-random' is null-A, the "
+            "selection-on-noise control: it drives COPRO's search shape "
+            "with an uninformative proposer, so it honours "
+            "--copro-breadth and --copro-depth and produces the same "
+            "evidence a COPRO run does."
+        ),
     )
     parser.add_argument(
         "--demo-mode",

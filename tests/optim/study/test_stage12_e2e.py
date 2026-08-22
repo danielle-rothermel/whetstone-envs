@@ -27,7 +27,11 @@ from whetstone_envs.optim.study.analysis import (
     CEILING_CANDIDATE_NAME,
     NAIVE_CANDIDATE_NAME,
 )
-from whetstone_envs.optim.study.cli import EXIT_OK, main
+from whetstone_envs.optim.study.cli import (
+    EXIT_CHECK_FAILED,
+    EXIT_OK,
+    main,
+)
 from whetstone_envs.optim.study.manifest import (
     STUDY_STORE_NAME,
     ArmRecord,
@@ -324,3 +328,54 @@ def test_no_rendered_prose_carries_an_unbacked_number(
     """
     manifest = _run_every_stage(study_dir)
     assert unbacked_numbers_in(build_study_report(manifest)) == []
+
+
+def test_a_refused_stage_reports_one_line_and_a_nonzero_exit(
+    study_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A refusal must not exit 0: a script would read that as a stage run.
+
+    The second ``stage0`` is the refusal most likely to be met by an
+    operator, because re-running the calibration is the natural thing to
+    try. It reports the reason and the flag that would make the
+    replacement deliberate, on one line, with the study's own exit code.
+    """
+    assert _run_stage(study_dir, StageId.STAGE0.value) == EXIT_OK
+    capsys.readouterr()
+
+    assert _run_stage(study_dir, StageId.STAGE0.value) == EXIT_CHECK_FAILED
+    captured = capsys.readouterr()
+    assert "already pre-registered" in captured.err
+    assert "--replace-design" in captured.err
+    assert "Traceback" not in captured.err
+
+    # The refused run left the pinned design exactly as it was.
+    assert read_study_manifest(study_dir).pre_registration is not None
+
+
+def test_replace_design_re_runs_stage0_over_a_pinned_study(
+    study_dir: Path,
+) -> None:
+    """The deliberate path the refusal points at actually works."""
+    assert _run_stage(study_dir, StageId.STAGE0.value) == EXIT_OK
+    pinned = read_study_manifest(study_dir).pre_registration
+    assert pinned is not None
+    assert (
+        main(
+            [
+                "run",
+                "--study-dir",
+                str(study_dir),
+                "--stage",
+                StageId.STAGE0.value,
+                "--replace-design",
+            ]
+        )
+        == EXIT_OK
+    )
+    # Re-calibrating onto the same design is not an amendment, so the
+    # original block is written back rather than relabelled.
+    again = read_study_manifest(study_dir).pre_registration
+    assert again is not None
+    assert again.design_hash == pinned.design_hash
+    assert again.provenance == pinned.provenance

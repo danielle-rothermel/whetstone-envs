@@ -50,7 +50,9 @@ from whetstone_envs.optim.study.manifest import (
     format_pointer_report,
     read_study_manifest,
 )
+from whetstone_envs.optim.study.selection import SelectionError
 from whetstone_envs.optim.study.spec import load_study_spec
+from whetstone_envs.optim.study.stages import StageError
 from whetstone_envs.optim.study.stages import run_stage as _run_stage_harness
 from whetstone_envs.reporting.study_report import generate_study_report
 
@@ -684,6 +686,41 @@ def default_report_generator(
     return generate_study_report(manifest=manifest, out_dir=out_dir)
 
 
+def _dispatch(
+    arguments: argparse.Namespace,
+    *,
+    load_spec: StudySpecLoader,
+    run_stage: StageRunner,
+    generate_report: ReportGenerator,
+) -> int:
+    """Route one parsed invocation to its subcommand body.
+
+    Split from :func:`main` so the dispatch and the error translation are
+    each readable on their own: this function knows the subcommands, and
+    ``main`` knows what each failure means to a caller's exit code.
+    """
+    if arguments.command == "plan":
+        return _run_plan(study_dir=arguments.study_dir, load_spec=load_spec)
+    if arguments.command == "run":
+        return _run_stage(
+            study_dir=arguments.study_dir,
+            stage=arguments.stage,
+            run_stage=run_stage,
+            replace_design=arguments.replace_design,
+        )
+    if arguments.command == "report":
+        return _run_report(
+            study_dir=arguments.study_dir,
+            out_dir=arguments.out,
+            generate_report=_report_generator_for(
+                arguments.study_dir, generate_report
+            ),
+        )
+    if arguments.command == "leakage-check":
+        return _run_leakage_check(study_dir=arguments.study_dir)
+    return _run_manifest_check(path=arguments.path, store_path=arguments.store)
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -698,36 +735,31 @@ def main(
     generator -- so the CLI is the study's actual entry point rather than a
     shell around one. Tests pass their own collaborators, which is how the
     ordering is verified independently of the wiring.
+
+    Three exit codes, and the distinction between the last two matters to a
+    caller scripting the stages: ``0`` the command did what was asked,
+    ``1`` it could not run (a missing directory, an unreadable manifest),
+    and ``2`` the study said no -- a refused stage, a refused selection, or
+    a check that failed. A refusal must never exit ``0``, because that
+    reads as a stage that ran.
     """
     arguments = build_parser().parse_args(argv)
-    load_spec = load_spec or load_study_spec
-    run_stage = run_stage or default_stage_runner
-    generate_report = generate_report or default_report_generator
     try:
-        if arguments.command == "plan":
-            return _run_plan(
-                study_dir=arguments.study_dir, load_spec=load_spec
-            )
-        if arguments.command == "run":
-            return _run_stage(
-                study_dir=arguments.study_dir,
-                stage=arguments.stage,
-                run_stage=run_stage,
-                replace_design=arguments.replace_design,
-            )
-        if arguments.command == "report":
-            return _run_report(
-                study_dir=arguments.study_dir,
-                out_dir=arguments.out,
-                generate_report=_report_generator_for(
-                    arguments.study_dir, generate_report
-                ),
-            )
-        if arguments.command == "leakage-check":
-            return _run_leakage_check(study_dir=arguments.study_dir)
-        return _run_manifest_check(
-            path=arguments.path, store_path=arguments.store
+        return _dispatch(
+            arguments,
+            load_spec=load_spec or load_study_spec,
+            run_stage=run_stage or default_stage_runner,
+            generate_report=generate_report or default_report_generator,
         )
+    except (StageError, SelectionError) as error:
+        # A refused stage and a refused selection are the study saying no:
+        # a gate that did not pass, a stage run out of order, a second
+        # selection for an arm. They exit ``2`` for the same reason a
+        # failed pointer check does -- the command ran correctly and the
+        # study declined -- and they must not exit ``0``, because a caller
+        # scripting the stages would read that as a stage that spent.
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        return EXIT_CHECK_FAILED
     except (OSError, ValueError, DocumentFileError) as error:
         # A missing study directory, an unreadable or non-canonical
         # manifest, and a manifest that fails validation are all

@@ -108,9 +108,12 @@ uv run --extra optim whetstone-eval compare RUN_DIR naive ceiling
 uv run --extra optim whetstone-eval html RUN_DIR
 ```
 
-`--candidate-file NAME=PATH` adds a validated UTF-8 prompt template. An
-official run uses `--role official`; official evidence intentionally carries
-no reward. Standalone runs publish `runtime.sqlite` and a bounded 128 MiB
+`--candidate-file NAME=PATH` adds a validated UTF-8 prompt template.
+`--role` selects the split to evaluate: `internal`, `official`, or
+`held_out`. Official and held-out evidence intentionally carries no reward,
+and each role reports against its own tasks and eval config hash. The
+held-out split is optional, so `--role held_out` requires a positive
+third `--split-sizes` entry and is refused by name otherwise. Standalone runs publish `runtime.sqlite` and a bounded 128 MiB
 canonical `eval-report.json`. Optimizer runs additionally publish
 `trajectory-report.json` under the same bound, carrying a per-role spend
 block (calls, cached calls, tokens, and a USD total only when every billable

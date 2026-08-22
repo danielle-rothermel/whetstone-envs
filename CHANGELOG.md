@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `--n-per-stratum`, `--pool-seed-start`, `--copro-breadth`,
   `--copro-depth`, `--gepa-max-metric-calls`, and `--codex-capacity`.
   `--family` now offers exactly the registered families.
+
+- The C19 evaluation CLI and report accept `--role held_out`, evaluating the
+  held-out split through the same path as `internal` and `official`. The
+  persisted `EvalRun.role` records which of the three roles a report covers,
+  and every role reports against its own tasks and its own
+  `eval_config_hash`. An experiment prepared without a held-out split refuses
+  the role by name before creating a run directory rather than falling back to
+  another split.
+
 - The C19 optimizer CLI and runner accept `--optimizer gepa` and
   `--optimizer miprov2` through the same shared runner path as COPRO.
 - `--num-seeds` on the CLI and `RunSpec.num_seeds` make repeats per task

@@ -25,8 +25,17 @@ TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
 #: not been checked against, so it is rejected rather than reinterpreted.
 SPEND_SCHEMA_VERSION = 1
 CandidateSource = Literal["naive", "ceiling", "custom", "optimized"]
-EvalRoleName = Literal["internal", "official"]
+EvalRoleName = Literal["internal", "official", "held_out"]
 RoleSpendName = Literal["task_model", "proposer"]
+
+#: The reported role name mapped to the upstream experiment split role. The
+#: keys are this package's persisted ``EvalRun.role`` literals; the values are
+#: whetstone's ``SPLIT_ROLES`` spellings, which differ for ``internal``.
+SPLIT_ROLE_BY_REPORT_ROLE: dict[EvalRoleName, str] = {
+    "internal": "internal_eval",
+    "official": "official",
+    "held_out": "held_out",
+}
 
 
 class _StrictModel(BaseModel):

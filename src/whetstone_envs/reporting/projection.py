@@ -62,6 +62,7 @@ from whetstone_envs.reporting.schema import (
 if TYPE_CHECKING:
     from dr_store import ObjectStore
     from whetstone.eval import EvalResult
+    from whetstone.experiment.sampling import EvalSplit
 
     from whetstone_envs.instances import Instance
     from whetstone_envs.optim.experiment import PreparedC19Experiment
@@ -89,6 +90,31 @@ def _instances_for_role(
         return prepared.split.internal_eval
     if role == "official":
         return prepared.split.official
+    if role == "held_out":
+        return prepared.split.held_out
+    raise ValueError(f"unsupported evaluation role {role!r}")
+
+
+def _eval_split_for_role(
+    prepared: PreparedC19Experiment, role: EvalRoleName
+) -> EvalSplit:
+    """Resolve the prepared eval split for one reporting role.
+
+    Held-out is optional upstream, so an absent held-out split is refused by
+    name rather than silently reported against another role's tasks.
+    """
+    configs = prepared.experiment.eval_configs
+    if role == "internal":
+        return configs.internal
+    if role == "official":
+        return configs.official
+    if role == "held_out":
+        if configs.held_out is None:
+            raise ValueError(
+                "this experiment has no held_out split; request a "
+                "positive held-out split size to evaluate the held_out role"
+            )
+        return configs.held_out
     raise ValueError(f"unsupported evaluation role {role!r}")
 
 
@@ -371,11 +397,7 @@ def project_eval_report(  # noqa: PLR0913
     projected_results: list[EvaluationResult] = []
     report_observations: list[Observation] = []
     graph_hash = prepared.experiment.rollout_graph.graph_hash
-    eval_split = (
-        prepared.experiment.eval_configs.internal
-        if role == "internal"
-        else prepared.experiment.eval_configs.official
-    )
+    eval_split = _eval_split_for_role(prepared, role)
     all_tasks = tuple(
         zip(
             all_instances,

@@ -49,6 +49,7 @@ from whetstone_envs.optim.run_cost import (
 )
 from whetstone_envs.optim.study.anchors import EngineBinder
 from whetstone_envs.optim.study.fanout import planned_rows_in_directory
+from whetstone_envs.optim.study.gates import GEPA_MAX_METRIC_CALLS_PINNED
 from whetstone_envs.optim.study.manifest import (
     EvidencePointer,
     RunRecord,
@@ -328,6 +329,18 @@ class StudyOptimizerRunner:
     naive_template: str
     store_path: Path
     codex_capacity: int | None = None
+    #: The run-time half of the real-Codex spend authorization, carried
+    #: from ``whetstone-study run --allow-real-codex``.
+    #:
+    #: This is an *authorization to spend on this invocation*, not part of
+    #: the study's design: it is deliberately not an ``ArmSpec`` field and
+    #: never enters the pre-registration hash, because whether a stage was
+    #: allowed to bill a Codex session says nothing about what the study
+    #: pre-registered. Forwarded onto the Codex arm's ``RunSpec`` only, and
+    #: still only half the gate --
+    #: :data:`~whetstone_envs.optim.codex.ALLOW_REAL_CODEX_ENV` must also
+    #: name the opt-in in the process environment.
+    allow_real_codex: bool = False
 
     def __call__(
         self, *, arm: ArmSpec, seed: int, study_dir: Path
@@ -400,13 +413,35 @@ class StudyOptimizerRunner:
                 for field, value in (
                     ("miprov2_num_trials", arm.miprov2_num_trials),
                     ("miprov2_num_candidates", arm.miprov2_num_candidates),
-                    ("miprov2_split", arm.miprov2_split),
+                    ("train_size", arm.train_size),
+                    ("val_size", arm.val_size),
                 )
                 if value is not None
             },
+            # The pinned metric-call budget, not the run's default. Left
+            # unset, ``build_gepa_control`` resolves ``auto`` to roughly
+            # ``train + val + 1`` -- about 89 on the study's 44/44 split --
+            # while the Stage-1 call-count gate and the power design are
+            # both built on ``GEPA_MAX_METRIC_CALLS_PINNED``. A GEPA arm
+            # that ran at the default would be judged against a ceiling it
+            # never had, so the pin is forwarded here rather than left to a
+            # default that agrees with it only by accident.
+            **(
+                {"gepa_max_metric_calls": GEPA_MAX_METRIC_CALLS_PINNED}
+                if arm.optimizer == "gepa"
+                else {}
+            ),
             **(
                 {"codex_capacity": self.codex_capacity}
                 if arm.optimizer == "codex" and self.codex_capacity is not None
+                else {}
+            ),
+            # Scoped to the Codex arm because every other optimizer refuses
+            # the setting outright; forwarding it unconditionally would turn
+            # one authorized stage into a validation failure on every arm.
+            **(
+                {"allow_real_codex": True}
+                if arm.optimizer == "codex" and self.allow_real_codex
                 else {}
             ),
         )

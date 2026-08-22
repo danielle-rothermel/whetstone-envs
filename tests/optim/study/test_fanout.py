@@ -46,7 +46,6 @@ from whetstone_envs.optim.study.fanout import (
 from whetstone_envs.optim.study.gates import (
     MEASURED_FANOUT_RATIO,
     MEASURED_MIPROV2_MINIBATCH_TASKS,
-    MEASURED_MIPROV2_TRAINSET_TASKS,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +60,10 @@ if TYPE_CHECKING:
 #: a subset of it.
 INTERNAL_SPLIT = 9
 MINIBATCH_TASKS = 3
+#: The measured run's train/val partition of the internal 9, standing in
+#: for the protocol's 44/44 of 88 at a size a test can afford.
+TRAIN_TASKS = 4
+VAL_TASKS = 5
 
 
 @pytest.fixture(scope="module")
@@ -79,6 +82,8 @@ def minibatched_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
             miprov2_minibatch=True,
             miprov2_minibatch_size=MINIBATCH_TASKS,
             miprov2_minibatch_full_eval_steps=5,
+            train_size=TRAIN_TASKS,
+            val_size=VAL_TASKS,
             run_id="c19-miprov2-fanout",
             output_dir=output,
         )
@@ -164,16 +169,19 @@ def test_the_cost_projection_independently_agrees(
     assert task_calls == measurement.planned_rows
 
 
-def test_the_trainset_is_the_measured_one_task(
+def test_the_bootstrap_walks_the_declared_trainset(
     measurement: FanoutMeasurement,
 ) -> None:
-    """F10's correction, re-measured: bootstrapping walks one task.
+    """Bootstrapping walks the trainset one task per evaluation.
 
-    ``build_miprov2_control`` slices ``trainset=task_hashes[:1]``, so the
-    bootstrap cost is bounded by one task at any split size. This is why
-    the measured bootstrap rows are 1-2 rather than the protocol's 28-616,
-    and pinning it here means a change to that slicing fails a test that
-    names the budget consequence.
+    F10's concern was that bootstrap cost scales with the whole split.
+    It does not: the bootstrap is a cursor walk that evaluates **one**
+    trainset task per intent and stops once the plan's demo cap is met,
+    so the cost is bounded by the trainset, never by the valset or the
+    full internal split.
+
+    Measured here rather than asserted from the control, because the
+    budget consequence is a property of the intents actually issued.
     """
     bootstrap = [
         intent
@@ -182,8 +190,10 @@ def test_the_trainset_is_the_measured_one_task(
     ]
     assert bootstrap, "the fewshot run issued no bootstrap evaluation"
     for intent in bootstrap:
-        assert intent.requested == MEASURED_MIPROV2_TRAINSET_TASKS
-        assert intent.planned == MEASURED_MIPROV2_TRAINSET_TASKS
+        assert intent.requested == 1
+        assert intent.planned == 1
+    # The walk is bounded by the trainset, not the internal split.
+    assert len(bootstrap) <= TRAIN_TASKS
 
 
 def test_every_measured_evaluation_names_its_surface(
@@ -222,6 +232,8 @@ def gepa_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
             num_seeds=1,
             seed=3000,
             gepa_max_metric_calls=40,
+            train_size=2,
+            val_size=2,
             run_id="c19-gepa-observed",
             output_dir=output,
         )

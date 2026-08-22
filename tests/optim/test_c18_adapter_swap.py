@@ -71,7 +71,18 @@ DEMO_MODES = ("fewshot", "zeroshot", "ground_only")
 TRACED_OPTIMIZERS = ("copro", "gepa")
 
 
+#: ``miprov2`` and ``gepa`` require an explicit disjoint train/val split of
+#: the internal split and the others refuse one, so the smoke spec supplies
+#: it per optimizer. At the smoke internal 2 the only partition is 1/1.
+TRAIN_VAL_OPTIMIZER_IDS = ("gepa", "miprov2")
+
+
 def _smoke_spec(*, family: str, optimizer: str, output: Path, **overrides):
+    split = (
+        {"train_size": 1, "val_size": 1}
+        if optimizer in TRAIN_VAL_OPTIMIZER_IDS
+        else {}
+    )
     return RunSpec(
         optimizer=optimizer,
         transport="fake",
@@ -80,6 +91,7 @@ def _smoke_spec(*, family: str, optimizer: str, output: Path, **overrides):
         n_per_stratum=POOL_SIZE_BY_FAMILY[family],
         run_id=f"{family}-{optimizer}-swap",
         output_dir=output,
+        **split,
         **overrides,
     )
 
@@ -306,7 +318,54 @@ def test_no_private_whetstone_import_was_needed_for_c18() -> None:
     test_optim_package_imports_no_private_whetstone_members()
 
 
-@pytest.mark.parametrize("optimizer", OPTIMIZERS)
+#: Optimizers this test can drive with nothing but the fake transport.
+#:
+#: Codex is excluded because it is not one of them: it spawns a real
+#: foreign agent, so driving it needs the scripted CLI and the test seam
+#: that reaches it. Its c18 evidence is
+#: ``test_codex_runs_the_second_family_unchanged`` in ``test_e2e.py``,
+#: which drives the identical ``run_optimizer`` path over c18 and audits
+#: the result -- the same C3 claim, made where the fake CLI is available.
+#:
+#: The exclusion is now a statement about *coverage*, not a safety
+#: measure. It used to be both: parametrizing over ``OPTIMIZERS`` here
+#: spawned the real Codex binary. ``run_optimizer`` refuses an unseamed
+#: Codex run outright now, which
+#: ``test_the_excluded_arm_would_refuse_rather_than_spend`` pins -- so
+#: re-adding Codex to a parametrization can only fail a test, never buy a
+#: session.
+SELF_DRIVING_OPTIMIZERS = tuple(
+    optimizer for optimizer in OPTIMIZERS if optimizer != "codex"
+)
+
+
+@pytest.mark.parametrize(
+    "optimizer", [o for o in OPTIMIZERS if o not in SELF_DRIVING_OPTIMIZERS]
+)
+def test_the_excluded_arm_would_refuse_rather_than_spend(
+    tmp_path, optimizer: str
+) -> None:
+    """Excluding Codex is a choice here, not the thing keeping us safe.
+
+    Parametrized over the complement of ``SELF_DRIVING_OPTIMIZERS`` so it
+    covers whatever this module excludes rather than re-naming "codex":
+    if a future arm is excluded for the same reason, this asserts that
+    arm is also refused rather than silently billed.
+    """
+    from whetstone_envs.optim.codex import RealCodexRefusedError
+
+    with pytest.raises(RealCodexRefusedError):
+        run_optimizer(
+            _smoke_spec(
+                family="c18",
+                optimizer=optimizer,
+                output=tmp_path / optimizer,
+            )
+        )
+    assert not (tmp_path / optimizer).exists()
+
+
+@pytest.mark.parametrize("optimizer", SELF_DRIVING_OPTIMIZERS)
 def test_every_optimizer_drives_c18_to_a_complete_run(
     tmp_path, optimizer: str
 ) -> None:

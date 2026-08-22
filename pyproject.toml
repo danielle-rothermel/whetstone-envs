@@ -43,6 +43,7 @@ dependencies = [
 
 [project.scripts]
 whetstone-eval = "whetstone_envs.reporting.cli:main"
+whetstone-study = "whetstone_envs.optim.study.cli:main"
 
 [project.optional-dependencies]
 c18 = [
@@ -51,7 +52,7 @@ c18 = [
 ]
 optim = [
     "rich==15.0.0",
-    "whetstone-ai==0.1.6; python_version >= '3.13' and python_version < '3.15'",
+    "whetstone-ai==0.1.8; python_version >= '3.13' and python_version < '3.15'",
 ]
 
 [project.urls]

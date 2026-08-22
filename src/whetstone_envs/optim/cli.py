@@ -6,19 +6,23 @@ import traceback
 from pathlib import Path
 
 from whetstone_envs.optim.run import (
+    ALLOW_REAL_CODEX_ENV,
+    ALLOW_REAL_CODEX_ENV_VALUE,
+    CODEX_DEFAULT_BINARY,
+    CODEX_EVALUATE_CALL_CAP,
+    CODEX_REASONING_EFFORTS,
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
     DEFAULT_MIPROV2_FULL_EVAL_STEPS,
     DEFAULT_MIPROV2_MINIBATCH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
     DEFAULT_SPLIT_SIZES,
     DEMO_MODES,
     MIN_COPRO_BREADTH,
-    MIPROV2_SPLITS,
     OPTIMIZERS,
     TRANSPORTS,
+    CodexReasoningEffort,
     RunSpec,
     default_output_dir,
     registered_family_ids,
@@ -54,6 +58,20 @@ def _int_at_least(value: str, *, minimum: int) -> int:
 def _copro_breadth(value: str) -> int:
     """COPRO needs at least two drafts per step to have a choice."""
     return _int_at_least(value, minimum=MIN_COPRO_BREADTH)
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected a number, got {value!r}"
+        ) from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive number, got {parsed}"
+        )
+    return parsed
 
 
 def _positive_int(value: str) -> int:
@@ -219,13 +237,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--miprov2-split",
-        choices=MIPROV2_SPLITS,
-        default=DEFAULT_MIPROV2_SPLIT.value,
+        "--train-size",
+        type=_positive_int,
+        default=None,
         help=(
-            "How MIPROv2 partitions the internal split. 'single-task' "
-            "bootstraps from a one-task trainset; 'internal' is DSPy's "
-            "default of trainset = valset = the whole internal split."
+            "Tasks from the internal split used as the trainset. Required "
+            "for --optimizer miprov2 and gepa, which bootstrap or reflect "
+            "on the trainset and score on a disjoint valset; refused on "
+            "the optimizers that have no train/val concept."
+        ),
+    )
+    parser.add_argument(
+        "--val-size",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Tasks from the internal split used as the valset, taken "
+            "after the trainset so the two are disjoint. Required "
+            "alongside --train-size."
         ),
     )
     parser.add_argument(
@@ -233,8 +262,52 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=None,
         help=(
-            "Admitted evaluate-call cap for the Codex arm. Rejected until "
-            "the Codex adapter lands, so it cannot look honoured."
+            "Admitted evaluate-call cap for the Codex arm, which is its "
+            f"eval budget. Defaults to {CODEX_EVALUATE_CALL_CAP}."
+        ),
+    )
+    parser.add_argument(
+        "--codex-binary",
+        default=CODEX_DEFAULT_BINARY,
+        help=(
+            "The Codex CLI to spawn, resolved on the run PATH. Defaults "
+            f"to the real {CODEX_DEFAULT_BINARY!r}."
+        ),
+    )
+    parser.add_argument(
+        "--codex-model",
+        default=None,
+        help=(
+            "The Codex agent's own model. Defaults to --model, the task "
+            "model. The agent's own spend is not on the study's key and "
+            "is not priced in the run's cost report."
+        ),
+    )
+    parser.add_argument(
+        "--codex-reasoning-effort",
+        choices=CODEX_REASONING_EFFORTS,
+        default=CodexReasoningEffort.MEDIUM.value,
+        help="How hard the Codex agent reasons.",
+    )
+    parser.add_argument(
+        "--codex-wall-seconds",
+        type=_positive_float,
+        default=None,
+        help=(
+            "The Codex agent's wall budget in seconds. Defaults to "
+            "whetstone-ai's own."
+        ),
+    )
+    parser.add_argument(
+        "--allow-real-codex",
+        action="store_true",
+        help=(
+            "Opt in to spawning the real, billed Codex CLI. Half of the "
+            "opt-in: the run is still refused unless "
+            f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} is also "
+            "set in the environment. Without both, a Codex run is refused "
+            "before any session probe, because the authentication "
+            "preflight itself spawns the CLI and costs money."
         ),
     )
     return parser
@@ -272,8 +345,14 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 miprov2_num_trials=arguments.miprov2_num_trials,
                 miprov2_num_candidates=arguments.miprov2_num_candidates,
-                miprov2_split=arguments.miprov2_split,
+                train_size=arguments.train_size,
+                val_size=arguments.val_size,
                 codex_capacity=arguments.codex_capacity,
+                codex_binary=arguments.codex_binary,
+                codex_model=arguments.codex_model,
+                codex_reasoning_effort=arguments.codex_reasoning_effort,
+                codex_wall_seconds=arguments.codex_wall_seconds,
+                allow_real_codex=arguments.allow_real_codex,
             )
         )
     except DurableRunError as error:

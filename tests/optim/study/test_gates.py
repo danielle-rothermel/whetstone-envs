@@ -126,10 +126,10 @@ def test_null_identity_is_the_report_harness_not_an_optimizer_run() -> None:
         internal_size=88,
         k_repeat=3,
         official_size=132,
-        held_out_size=220,
+        held_out_size=440,
     )
-    # One official pass over 132 and one held-out pass over 220, at K=3.
-    assert null.low == null.high == 3 * (132 + 220) == 1_056
+    # One official pass over 132 and one held-out pass over 440, at K=3.
+    assert null.low == null.high == 3 * (132 + 440) == 1_716
     assert null.gated
     assert "no optimizer run" in null.basis
     # And it does not track the internal split, which it never evaluates.
@@ -138,7 +138,7 @@ def test_null_identity_is_the_report_harness_not_an_optimizer_run() -> None:
         internal_size=8_800,
         k_repeat=3,
         official_size=132,
-        held_out_size=220,
+        held_out_size=440,
     )
     assert wider.low == null.low
 
@@ -146,9 +146,8 @@ def test_null_identity_is_the_report_harness_not_an_optimizer_run() -> None:
 def test_null_identity_no_longer_borrows_copros_search_shape() -> None:
     """The regression this replaces: null-B priced as a COPRO run.
 
-    Split sizes where the two formulas genuinely differ, because at the
-    protocol's own ``(88, 132, 220)`` at ``K_REPEAT = 3`` they coincide at
-    1,056 by arithmetic accident.
+    Split sizes where the two formulas differ by a wide margin, so the
+    pin cannot be satisfied by an arithmetic coincidence.
     """
     null = estimate_optimizer_calls(
         "null-identity",
@@ -167,9 +166,9 @@ def test_the_null_identity_harness_formula_is_one_pass_each() -> None:
     assert NULL_IDENTITY_HELD_OUT_PASSES == 1
     assert (
         null_identity_report_rows(
-            official_size=132, held_out_size=220, k_repeat=3
+            official_size=132, held_out_size=440, k_repeat=3
         )
-        == 1_056
+        == 1_716
     )
 
 
@@ -284,8 +283,13 @@ def test_a_fanned_out_gepa_run_trips_the_gate() -> None:
 # run, which splits, which control settings.
 
 
-def test_the_measurement_provenance_is_the_protocol_splits() -> None:
-    """A measurement at other splits would not answer the question asked."""
+def test_the_measurement_provenance_is_what_wave_3_ran() -> None:
+    """Measurement provenance, pinned so it cannot drift to fit the study.
+
+    Wave 3 measured at held-out 220. The study now pre-registers 440, so
+    this no longer matches the protocol splits -- and must not be rewritten
+    to, because it records what was actually run.
+    """
     assert MEASUREMENT_SPLIT_SIZES == (88, 132, 220)
     assert MEASUREMENT_N_PER_STRATUM == 32
     assert MEASUREMENT_POOL_SEED_START == 1_000_000
@@ -510,5 +514,5 @@ def test_null_identity_reports_zero_calls_and_passes_its_gate() -> None:
         internal_size=88,
         k_repeat=3,
         official_size=132,
-        held_out_size=220,
+        held_out_size=440,
     )

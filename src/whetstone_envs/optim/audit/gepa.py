@@ -1,10 +1,11 @@
-"""GEPA's eight fidelity invariants over one run's durable evidence.
+"""GEPA's nine fidelity invariants over one run's durable evidence.
 
 GEPA claims a specific search: an evolutionary loop that keeps a Pareto
 front of candidates over per-instance validation scores, mutates a selected
 candidate by reflecting over that candidate's own execution traces, records
 every rejected reflection rather than silently narrowing the search, and
-stops at a declared metric-call ceiling. These eight invariants check each
+stops at a declared metric-call ceiling, over a train/val partition it
+declared up front. These nine invariants check each
 of those claims against what the run persisted, and nothing else.
 
 Where the evidence lives (whetstone-ai ``miprofix-ai`` @ ``716976f2``)
@@ -47,7 +48,7 @@ Nothing persisted records how many instance traces one reflection consumed.
 per-reflection-batch, and ``control.reflection_minibatch_size`` is a
 *configured* value the evidence does not independently witness. An audit
 with no failing fixture is not an audit, so it ships not at all rather than
-as a permanent ``NOT_APPLICABLE``. :data:`GEPA_INVARIANTS` keeps eight by
+as a permanent ``NOT_APPLICABLE``. :data:`GEPA_INVARIANTS` keeps nine by
 adding :func:`gepa_terminal_artifact_present`, the precondition every other
 invariant reads through.
 
@@ -94,6 +95,7 @@ from typing import TYPE_CHECKING
 from whetstone.core.identity import compute_identity_hash
 from whetstone.optim.contracts import StepStatus
 from whetstone.optim.gepa.contracts import GepaCandidateComponent
+from whetstone.optim.gepa.control import GepaControl
 
 from whetstone_envs.optim.audit._evidence import evidence_ref
 from whetstone_envs.optim.audit.schema import (
@@ -1060,7 +1062,102 @@ def gepa_platform_resume_identity(evidence: RunEvidence) -> AuditFinding:
     )
 
 
-#: GEPA's eight invariants, in the order an ``audit.json`` reports them.
+# --- 9 · train/val disjointness -------------------------------------------
+
+
+def gepa_train_val_disjoint(evidence: RunEvidence) -> AuditFinding:
+    """Reflection and Pareto selection read disjoint task sets.
+
+    GEPA writes each mutation by reflecting over trainset failures, then
+    selects its Pareto frontier by scoring candidates on the valset. If the
+    two sets overlap, a candidate is selected on the very tasks whose
+    failures were quoted into the instruction that produced it, so the
+    frontier rewards fitting the reflection examples rather than
+    generalizing past them -- and the study reads that as search efficacy.
+
+    Read from the persisted control at the ref the run binds itself to,
+    not from a step echo written by the code path under audit. Every
+    evaluation the run issued must also fall inside the union of the two
+    sets: an intent reaching outside them scored a task the declared
+    partition never admitted.
+    """
+    invariant = InvariantId.GEPA_TRAIN_VAL_DISJOINT
+    refs = (evidence_ref(evidence.control_ref),)
+    if evidence.control_record is None:
+        return AuditFinding(
+            invariant_id=invariant,
+            status=AuditStatus.FAIL,
+            detail=(
+                "the run's optimizer config ref resolves to no control "
+                "record, so the declared train/val split is unreadable"
+            ),
+            evidence_refs=refs,
+        )
+    try:
+        control = GepaControl.model_validate(evidence.control_record)
+    except ValueError:
+        return AuditFinding(
+            invariant_id=invariant,
+            status=AuditStatus.FAIL,
+            detail=(
+                "the run's persisted control does not validate as a "
+                "GepaControl, so the declared train/val split is unreadable"
+            ),
+            evidence_refs=refs,
+        )
+
+    trainset = tuple(control.trainset_task_hashes)
+    valset = tuple(control.valset_task_hashes)
+    overlap = set(trainset) & set(valset)
+    if overlap:
+        return AuditFinding(
+            invariant_id=invariant,
+            status=AuditStatus.FAIL,
+            detail=(
+                f"the control's trainset ({len(trainset)}) and valset "
+                f"({len(valset)}) share {len(overlap)} task(s), so the "
+                f"Pareto frontier is scored on reflected-over tasks"
+            ),
+            evidence_refs=refs,
+        )
+
+    admitted = set(trainset) | set(valset)
+    problems: list[str] = []
+    checked = 0
+    for entry in evidence.steps:
+        for position, resolution in enumerate(entry.resolved_intents):
+            tasks = resolution.optim_eval_request.task_hashes
+            if tasks is None:
+                continue
+            checked += 1
+            outside = set(tasks) - admitted
+            if outside:
+                problems.append(
+                    f"step {entry.index} intent {position} evaluates "
+                    f"{len(outside)} task(s) outside the declared "
+                    f"train/val partition"
+                )
+
+    if problems:
+        return AuditFinding(
+            invariant_id=invariant,
+            status=AuditStatus.FAIL,
+            detail="; ".join(problems),
+            evidence_refs=refs,
+        )
+    return AuditFinding(
+        invariant_id=invariant,
+        status=AuditStatus.PASS,
+        detail=(
+            f"the control's {len(trainset)}-task trainset and "
+            f"{len(valset)}-task valset are disjoint, and all {checked} "
+            f"task-scoped evaluation intent(s) drew only from them"
+        ),
+        evidence_refs=refs,
+    )
+
+
+#: GEPA's nine invariants, in the order an ``audit.json`` reports them.
 #: The precondition comes first so a reader triaging a failing run sees
 #: immediately whether the search result was readable at all.
 GEPA_INVARIANTS = (
@@ -1072,6 +1169,7 @@ GEPA_INVARIANTS = (
     gepa_step_evidence_present,
     gepa_no_forged_terminal,
     gepa_platform_resume_identity,
+    gepa_train_val_disjoint,
 )
 
 
@@ -1093,4 +1191,5 @@ __all__ = [
     "gepa_skipped_mutations_recorded",
     "gepa_step_evidence_present",
     "gepa_terminal_artifact_present",
+    "gepa_train_val_disjoint",
 ]

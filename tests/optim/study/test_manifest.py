@@ -34,6 +34,7 @@ from whetstone_envs.optim.study.manifest import (
     ArmRecord,
     BalanceRecord,
     C18Record,
+    CallCountGateRecord,
     DesignRecord,
     EvidencePointer,
     FanoutCheckRecord,
@@ -199,11 +200,16 @@ def _full_manifest() -> StudyManifest:
             "fanout_check": FanoutCheckRecord(
                 passed=True, minibatch_intents=12, full_valset_intents=3
             ),
+            "call_count_gate": CallCountGateRecord(
+                stage="stage1", passed=True, tolerance=1.5
+            ),
             "arms": (
                 ArmRecord(
                     arm_id="copro",
                     optimizer="copro",
                     demo_mode=None,
+                    train_size=None,
+                    val_size=None,
                     control_identity_hash=_hash("d"),
                     seed_note="provider-seed-control-only",
                     runs=(_run("copro-1", result="5", audit="6", cost="e"),),
@@ -274,8 +280,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 3
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v3"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 5
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v5"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -301,6 +307,7 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "design",
         "gepa_sizing",
         "fanout_check",
+        "call_count_gate",
         "arms",
         "selection",
         "held_out_claims",
@@ -382,10 +389,18 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "minibatch_intents",
         "full_valset_intents",
     ]
+    assert list(payload["call_count_gate"]) == [
+        "stage",
+        "passed",
+        "tolerance",
+        "overruns",
+    ]
     assert list(payload["arms"][0]) == [
         "arm_id",
         "optimizer",
         "demo_mode",
+        "train_size",
+        "val_size",
         "control_identity_hash",
         "seed_note",
         "runs",
@@ -439,6 +454,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "p_bootstrap",
         "p_holm",
         "completeness",
+        "anchor_completeness",
     ]
     assert list(payload["balance"]) == [
         "before_stage0_usd",
@@ -472,7 +488,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v4"
+    payload["schema"] = "whetstone_envs.step10_study/v6"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 
@@ -819,17 +835,29 @@ def test_a_row_backed_only_by_an_outstanding_claim_is_refused() -> None:
 
 _PINNED_K_RUN_BY_ARM = {"copro": 5, "gepa": 5}
 
+#: COPRO has no train/val concept and GEPA does, so the pinned block below
+#: exercises both shapes of the per-arm split at once.
+_PINNED_SPLIT_BY_ARM: dict[str, tuple[int, int] | None] = {
+    "copro": None,
+    "gepa": (44, 44),
+}
+
 
 def _pre_registration(
     *,
     k_repeat: int = 3,
+    split_by_arm: dict[str, tuple[int, int] | None] | None = None,
     provenance: str = PROVENANCE_ORIGINAL,
     amended_from: str | None = None,
 ) -> PreRegistrationRecord:
     """A pinned block whose hash actually covers its own fields."""
+    splits = dict(
+        _PINNED_SPLIT_BY_ARM if split_by_arm is None else split_by_arm
+    )
     return PreRegistrationRecord(
         k_repeat=k_repeat,
         k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
+        split_by_arm=splits,
         ci_level=0.95,
         resamples=10_000,
         bootstrap_seed=0,
@@ -839,6 +867,7 @@ def _pre_registration(
         design_hash=pre_registration_design_hash(
             k_repeat=k_repeat,
             k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
+            split_by_arm=splits,
             ci_level=0.95,
             resamples=10_000,
             bootstrap_seed=0,
@@ -862,6 +891,50 @@ def test_a_pre_registration_hash_covers_its_own_fields() -> None:
     assert record.provenance == PROVENANCE_ORIGINAL
     assert record.pinned_fields()["k_repeat"] == 3
     assert record.pinned_fields()["m"] == CORRECTION_FAMILY_SIZE
+
+
+def test_the_hashed_payload_keys_are_pinned() -> None:
+    """The hashed document is stored identity, so its keys are literals.
+
+    ``split_by_arm`` is in the list and an authorization to spend is not:
+    the partition an arm was measured at is design, and whether the
+    operator was allowed to bill a Codex session for this invocation is
+    not.
+    """
+    assert list(_pre_registration().pinned_fields()) == [
+        "k_repeat",
+        "k_run_by_arm",
+        "split_by_arm",
+        "ci_level",
+        "resamples",
+        "bootstrap_seed",
+        "correction",
+        "m",
+        "completeness_backstop",
+    ]
+
+
+def test_the_hashed_payload_writes_each_split_as_a_pair() -> None:
+    """The per-arm split's wire shape, pinned as a literal."""
+    assert _pre_registration().pinned_fields()["split_by_arm"] == {
+        "copro": None,
+        "gepa": [44, 44],
+    }
+
+
+def test_changing_a_split_size_changes_the_design_hash() -> None:
+    """Fails-before evidence that the partition is actually pinned.
+
+    Before the split entered the payload, an arm rerun at a different
+    train/val partition produced a byte-identical design hash, so the
+    pre-registration certified a design the study had not run.
+    """
+    assert (
+        _pre_registration(
+            split_by_arm={"copro": None, "gepa": (40, 48)}
+        ).design_hash
+        != _pre_registration().design_hash
+    )
 
 
 def test_a_pre_registration_whose_hash_does_not_cover_it_is_refused() -> None:
@@ -890,6 +963,30 @@ def test_a_later_write_may_not_change_the_pre_registration(
     with pytest.raises(PreRegistrationViolationError, match="k_repeat"):
         write_study_manifest(tmp_path, restated, replace=True)
     # The document on disk is untouched by the refused write.
+    assert read_study_manifest(tmp_path).pre_registration == (
+        _pre_registration()
+    )
+
+
+def test_a_later_write_may_not_change_a_pinned_split_size(
+    tmp_path: Path,
+) -> None:
+    """The same refusal, for the field the hash did not used to cover.
+
+    Fails-before: with ``split_by_arm`` outside the hashed payload this
+    write was accepted, because the restated block hashed identically to
+    the pinned one.
+    """
+    write_study_manifest(tmp_path, _pinned_manifest())
+    restated = _minimal_manifest().model_copy(
+        update={
+            "pre_registration": _pre_registration(
+                split_by_arm={"copro": None, "gepa": (40, 48)}
+            )
+        }
+    )
+    with pytest.raises(PreRegistrationViolationError, match="split_by_arm"):
+        write_study_manifest(tmp_path, restated, replace=True)
     assert read_study_manifest(tmp_path).pre_registration == (
         _pre_registration()
     )

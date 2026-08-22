@@ -44,6 +44,7 @@ __all__ = [
     "SIGNIFICANCE_ALPHA",
     "TARGET_POWER",
     "WITHIN_VARIANCE_DIVERGENCE_FLAG",
+    "WORST_CASE_SIGMA_SQ",
     "GateOutcome",
     "Stage0Gate",
     "Stage0Inputs",
@@ -76,6 +77,14 @@ MDE_FORMULA = (
     "MDE(T, K) = (z_{1-alpha/2} + z_power) * "
     "sqrt((tau^2 + 2 * sigma^2 / K) / T)"
 )
+
+#: The worst-case within-task sampling variance for a binary score, at
+#: ``p = 0.5``. The protocol review's MDE table is quoted at this value and
+#: the plan's pre-registered MDE row recomputes it here, so a design point a
+#: reader authorizes spend against is the most pessimistic one rather than a
+#: variance the study has not measured yet. Stage 0 replaces it with the
+#: measured ``sigma^2``.
+WORST_CASE_SIGMA_SQ = 0.25
 
 #: Relative divergence between the naive-only and pooled within-variance
 #: estimates above which the study flags the decomposition caveat.
@@ -347,7 +356,14 @@ COMPLETENESS_BACKSTOP = 0.90
 
 #: How a task's achieved sample count enters the estimate. Persisted, so the
 #: report states the rule it applied rather than describing one.
-COMPLETENESS_RULE = "achieved-count-weighted-per-task-delta"
+#:
+#: A paired delta is only as observed as its *less* observed side, so the
+#: count a task contributes is the per-task minimum of the arm's achieved
+#: rows and the anchor's. The minimum rather than the product because the
+#: weight is a fraction of a planned sample, not a joint probability:
+#: two sides each at 3/3 must weight 1.0, and a product of fractions would
+#: punish a fully observed pair the moment either side is ragged.
+COMPLETENESS_RULE = "achieved-count-weighted-per-task-delta-paired-minimum"
 
 
 def weighted_per_task_delta(

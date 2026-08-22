@@ -1,6 +1,6 @@
 """A toy study manifest over a real c19 population.
 
-The splits here are tiny -- (4, 4, 6) against the study's own (88, 132, 220)
+The splits here are tiny -- (4, 4, 6) against the study's own (88, 132, 440)
 -- but they are *real*: the task hashes come from an actually-generated pool
 through the same experiment builder a paid stage would use, so the manifest
 the harness reads describes tasks the harness can then evaluate. A manifest
@@ -34,8 +34,12 @@ if TYPE_CHECKING:
     from whetstone_envs.instances import Instance
 
 #: Toy sizes: enough tasks per role for a real calibration, small enough to
-#: stay a unit test. The study's own sizes are (88, 132, 220).
+#: stay a unit test. The study's own sizes are (88, 132, 440).
 TOY_SPLIT_SIZES = (4, 4, 6)
+#: The toy train/val partition of the toy internal 4, standing in for the
+#: protocol's 44/44 of 88 at a size a unit test can afford.
+TOY_TRAIN_SIZE = 2
+TOY_VAL_SIZE = 2
 TOY_N_PER_STRATUM = 1
 TOY_POOL_SEED_START = 765_432
 
@@ -87,6 +91,8 @@ def toy_arms() -> tuple[ArmRecord, ...]:
             arm_id="copro",
             optimizer="copro",
             demo_mode=None,
+            train_size=None,
+            val_size=None,
             control_identity_hash="d" * 64,
             seed_note="provider-seed-control-only",
             runs=(),
@@ -95,6 +101,8 @@ def toy_arms() -> tuple[ArmRecord, ...]:
             arm_id="null-identity",
             optimizer="null-identity",
             demo_mode=None,
+            train_size=None,
+            val_size=None,
             control_identity_hash="e" * 64,
             seed_note="provider-seed-control-only",
             runs=(),

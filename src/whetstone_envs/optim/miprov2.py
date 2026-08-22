@@ -15,23 +15,29 @@ composed template still satisfies the family's placeholder requirement.
 section; ``zeroshot`` and ``ground_only`` keep the section empty while still
 bootstrapping demos to ground instruction proposals.
 
-Minibatching is off by default. The valset is the internal split less the
-trainset -- see :class:`Miprov2Split` for the two partitions and why the
-choice is substantive -- and ``configure_miprov2`` refuses a
-``minibatch_size`` exceeding it. C18's internal split of 24 is below
-MIPROv2's default 35, so a study that turns minibatching on must size it
-against the run's own valset.
+Minibatching is off by default. The trainset and valset are supplied by
+the caller as two explicit, disjoint task-hash tuples drawn from the
+internal split, and ``configure_miprov2`` refuses a ``minibatch_size``
+exceeding the valset. C18's internal split of 24 is below MIPROv2's
+default 35, so a study that turns minibatching on must size it against the
+run's own valset.
 
-The search shape (``num_trials``, ``num_candidates``) and the split are
-parameters rather than literals, so a study arm can request the protocol's
-auto-light configuration without editing this module. The defaults are this
-runner's own, smaller shape, which is what keeps the fake-transport
-end-to-end runs fast.
+The split is a required input rather than a setting with a default: an
+in-search improvement measured on tasks the bootstrap already saw cannot
+be distinguished from demonstration memorization, so while the setup is
+being debugged every MIPROv2 run must state a disjoint train/val
+partition. :func:`~whetstone_envs.optim.run.partition_internal_split`
+derives the two tuples deterministically from the spec's sizes.
+
+The search shape (``num_trials``, ``num_candidates``) is parameters rather
+than literals, so a study arm can request the protocol's auto-light
+configuration without editing this module. The defaults are this runner's
+own, smaller shape, which is what keeps the fake-transport end-to-end runs
+fast.
 """
 
 from __future__ import annotations
 
-from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING
 
 from whetstone.core.identity import ImmutableJsonObject, compute_identity_hash
@@ -79,6 +85,7 @@ from whetstone_envs.optim.experiment import (
     gold_by_task_hash,
     provider_call_config_ref,
 )
+from whetstone_envs.optim.split import require_disjoint_split
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -121,48 +128,6 @@ DEFAULT_MIPROV2_NUM_CANDIDATES = 3
 DEMO_MODES = tuple(mode.value for mode in Miprov2DemoMode)
 
 
-@verify(UNIQUE)
-class Miprov2Split(StrEnum):
-    """How a run partitions the engine's tasks into trainset and valset.
-
-    The two are genuinely different experiments, not two spellings of one,
-    which is why this is a named setting rather than a slice literal.
-
-    ``SINGLE_TASK`` is what this runner has always done:
-    ``trainset=task_hashes[:1]``, ``valset=task_hashes[1:]``. Bootstrapping
-    is a single cursor walk over the trainset, so a one-task trainset means
-    every bootstrapped demonstration is drawn from **one task** -- which
-    Wave 3 measured as 1-2 bootstrap rows per run and flagged as a
-    substantive design question, not just a budget one.
-
-    ``INTERNAL`` is DSPy's own default: trainset and valset are both the
-    whole internal split, so demonstrations are drawn from every task the
-    run can see.
-
-    ``SINGLE_TASK`` remains the default pending that decision, so this
-    setting changes nothing until a caller asks for the other one.
-    """
-
-    SINGLE_TASK = "single-task"
-    INTERNAL = "internal"
-
-
-#: The split this runner has always produced. Kept as the default while the
-#: one-task-trainset question is open; see :class:`Miprov2Split`.
-DEFAULT_MIPROV2_SPLIT = Miprov2Split.SINGLE_TASK
-
-MIPROV2_SPLITS = tuple(split.value for split in Miprov2Split)
-
-
-def _resolve_split(
-    split: Miprov2Split, task_hashes: tuple[str, ...]
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """This split's ``(trainset, valset)`` over ``task_hashes``."""
-    if split is Miprov2Split.INTERNAL:
-        return task_hashes, task_hashes
-    return task_hashes[:1], task_hashes[1:]
-
-
 def miprov2_policy_identity_hash(family: FamilySpec) -> str:
     """One family's inline MIPROv2 proposal executor policy identity."""
     return compute_identity_hash(
@@ -197,7 +162,8 @@ def build_miprov2_control(  # noqa: PLR0913
     minibatch: bool = DEFAULT_MIPROV2_MINIBATCH,
     minibatch_size: int | None = None,
     minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS,
-    split: Miprov2Split = DEFAULT_MIPROV2_SPLIT,
+    trainset_task_hashes: tuple[str, ...],
+    valset_task_hashes: tuple[str, ...],
 ) -> Miprov2Control:
     """Resolve one family's MIPROv2 control against the engine.
 
@@ -212,8 +178,12 @@ def build_miprov2_control(  # noqa: PLR0913
     protocol's shape; raising them raises the run's call count, which is
     why the Stage-1 estimate is a loose upper bound.
 
-    ``split`` selects the trainset/valset partition; see
-    :class:`Miprov2Split` for why the choice is substantive.
+    ``trainset_task_hashes`` and ``valset_task_hashes`` are required and
+    must be disjoint subsets of the engine's internal split: bootstrapping
+    draws demonstrations from the trainset and the search scores every
+    trial on the valset, so overlapping them would let demonstration
+    memorization read as an in-search improvement. The caller derives them
+    from the run spec, which is what makes the partition reproducible.
     """
     prompt_adapter = PlainPromptAdapter()
     task_hashes = tuple(engine.sampling.task_hashes)
@@ -225,8 +195,13 @@ def build_miprov2_control(  # noqa: PLR0913
         raise ValueError("num_trials must be at least 1")
     if num_candidates < 1:
         raise ValueError("num_candidates must be at least 1")
+    trainset, valset = require_disjoint_split(
+        trainset_task_hashes=trainset_task_hashes,
+        valset_task_hashes=valset_task_hashes,
+        task_hashes=task_hashes,
+        optimizer="MIPROv2",
+    )
     bootstrapped, labeled = _demo_maxima(demo_mode)
-    trainset, valset = _resolve_split(split, task_hashes)
     resolved_minibatch_size = (
         len(valset) if minibatch_size is None else minibatch_size
     )

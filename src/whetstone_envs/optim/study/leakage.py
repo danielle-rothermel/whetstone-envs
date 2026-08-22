@@ -378,12 +378,18 @@ def check_l5_splits_disjoint(
 def check_held_out_nesting(
     *, smaller: tuple[str, ...], larger: tuple[str, ...]
 ) -> LeakageFinding:
-    """The D5 growth check: held-220 must be a subset of held-440.
+    """D5: one held-out split must be contained in the other.
 
-    Growing the held-out split at the Stage-0 gate is only safe if the
-    smaller split's tasks are all still in the larger one -- otherwise the
-    "same" split before and after the decision is two different populations,
-    and the anchors measured on the first do not describe the second.
+    Two held-out splits of different sizes describe the same population
+    only if the smaller one's tasks are all still in the larger. Otherwise
+    anchors measured on the first do not describe the second, and a
+    comparison across them silently changes what is being measured.
+
+    The study now pre-registers held-out at 440, so this is no longer a
+    gate-time decision about whether to grow the split. It remains a
+    checkable invariant: the deterministic split makes held-220 a prefix
+    of held-440 by construction, and this proves that construction held
+    for whichever two splits it is handed.
     """
     missing = tuple(sorted(set(smaller) - set(larger)))
     return LeakageFinding(

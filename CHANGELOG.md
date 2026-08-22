@@ -6,8 +6,215 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `stage0 --replace-design` that records an amendment discards the previous
+  Stage-1 call-count verdict: a pilot gate describes the design it was
+  computed against, so Stage 2 owes the amended study a fresh pilot.
+
+- **Stage 2 requires a Stage 1 whose call-count gate passed.** The gate
+  catches a fan-out bug — an optimizer whose minibatch intents silently
+  expanded to the full valset — for the price of one run per arm, which is
+  the whole reason the pilot exists. Its verdict was evaluated inside the
+  Stage-1 process and recorded nowhere, so a Stage 2 invoked directly after
+  Stage 0, or re-invoked after a Stage 1 whose gate had failed, skipped the
+  check entirely and paid for the full five-run design behind it. Stage 1
+  now records the verdict — passing or failing, with the overrunning runs
+  named — in a new `call_count_gate` manifest block, and Stage 2 refuses
+  before dispatching any arm when it is missing or failed, naming which of
+  the two it is because the actions differ. The manifest schema is `v5`
+  accordingly.
+- **A held-out delta is only as complete as its thinner side.** The paired
+  completeness weighting read the optimizer's achieved row counts alone, so
+  an arm that measured every row against a naive anchor whose own held-out
+  evaluation had lost most of its repeats reported completeness `1.0`: the
+  anchor's thin fallback mean was treated as fully observed, and the delta
+  cleared the 90% backstop and was claimed on evidence that was mostly
+  missing on one side. Completeness is now the per-task **minimum** of both
+  sides' achieved counts — conservative by construction, and the minimum
+  rather than the product because the weight is a fraction of a planned
+  sample, so two fully observed sides must still weight `1.0`. The held-out
+  row records the paired figure, which is what the report's backstop reads,
+  and carries the anchor's own completeness beside it as
+  `anchor_completeness` so a downgraded arm is not misread as having failed
+  to measure itself.
+- **A Codex-bearing stage proves the session before it buys anything
+  else.** The early guard checked only *authorization*, so a stage with
+  both opt-in halves present still discovered an unusable Codex — an
+  unsupported platform, a binary absent from the run's PATH, an expired or
+  missing session — when the Codex arm's own turn arrived, after COPRO,
+  MIPROv2, and GEPA had been paid for. The same preflight `run_optimizer`
+  reaches now runs at the guard, before any arm is dispatched, and a
+  failure refuses the stage with the preflight's own diagnosis preserved as
+  the cause.
+- **GEPA study arms run at the pre-registered metric-call budget.** The
+  arm's `RunSpec` carried no `gepa_max_metric_calls`, so `build_gepa_control`
+  resolved its own `auto` default — roughly `train + val + 1`, about 89 on
+  the study's 44/44 split — while the Stage-1 call-count gate and the power
+  design are both built on the pinned `GEPA_MAX_METRIC_CALLS_PINNED = 200`.
+  A GEPA arm was therefore judged against a ceiling it never ran at. The
+  runner now forwards the pin, and on GEPA arms only.
+- **A stage refuses arm records that disagree with the pinned split.**
+  Stages 1 and 2 rebuild each arm's runnable spec from `ArmRecord`'s
+  mutable `train_size`/`val_size` while `pre_registration.split_by_arm` is
+  the immutable, hashed truth, and the two were never compared — so an
+  edited record could run MIPROv2 or GEPA at a partition the design never
+  registered, under a design hash that still validated. Loading a spec now
+  raises `PreRegistrationViolationError` when they disagree, and an arm
+  stage additionally refuses arms the pinned block does not name at all —
+  an arm declared after the design was pinned has no registered partition,
+  run count, or place in the correction family. Stage 0 stays permissive
+  there, because adding an arm and re-pinning is exactly how
+  `stage0 --replace-design` records an amendment.
+
+### Security
+
+- **The test suite cannot reach a real Codex session, even under
+  `monkeypatch`.** The two-part opt-in is process state, and setting the
+  environment half is the ordinary way to test that a gate lifts — so an
+  authorization test that supplied no scripted seam could reach the real
+  CLI by way of a session probe that runs *after* the opt-in is satisfied.
+  `refuse_unauthorized_real_codex` now honours a new
+  `WHETSTONE_ENVS_FORBID_REAL_CODEX` above every other input, and the
+  suite's session fixture arms it for the whole run: a test may
+  monkeypatch the allow variable and still cannot reach a real session,
+  while scripted runs through a `CodexTestSeam` are unaffected because they
+  reach no real CLI to forbid. Every production path to the real preflight
+  or adapter — including the study harness's early stage guard — routes
+  through that one gate, so the tripwire cannot be bypassed by reaching a
+  preflight another way.
+
+### Changed
+- Pins published whetstone-ai 0.1.8, whose Codex-direct optimizer is the
+  first to have produced evaluations against the real `codex` CLI: the
+  output schema, the MCP tool host and approval mode, and the
+  `model_route`/`base_ref` the agent must supply were all fixed there.
+
 ### Added
 
+- **Every optimizer with a train/val concept runs on an explicit disjoint
+  split.** `--train-size` and `--val-size` are required for
+  `--optimizer miprov2` and `--optimizer gepa` and refused on the
+  optimizers that have no such concept. They partition the internal split
+  deterministically — trainset first, valset next — so the two sets are
+  disjoint and reproducible from the spec alone, and both are recorded on
+  the control the run persists. MIPROv2 bootstraps its demonstrations from
+  the trainset and GEPA writes its reflections from it, while both score
+  on the valset: an overlapping split would let demonstration or
+  instruction memorization read as an in-search improvement, which is not
+  a distinction the study can afford to lose while the setup is being
+  debugged. There is no default, because a run that did not state its
+  partition could not be audited for this. `ArmSpec` carries the two sizes
+  as design fields; `ArmRecord` records them and the pre-registration
+  hashes them per arm as `split_by_arm`, so an arm rerun at a different
+  partition is a different pinned design rather than the same one, which
+  the manifest schema records from `v4` on. `default_arms` pins the protocol's
+  44/44 of the internal 88 — an even split keeps one full valset pass
+  affordable while leaving the bootstrap a 44-task trainset, and the two
+  cover the internal split exactly, which GEPA requires. Two new audit
+  invariants, `mipro_train_val_disjoint` and `gepa_train_val_disjoint`,
+  check the persisted control's two sets are disjoint and that every
+  evaluation the run paid for touched only those tasks.
+- **GEPA's partition must cover the internal split exactly.** whetstone's
+  GEPA factory builds its data registry from the whole internal split and
+  then requires the control's trainset and valset to cover it, so
+  `train_size + val_size < internal` is not a legal GEPA partition — it was
+  rejected inside the durable run boundary, after the run directory
+  existed. `run_optimizer` now refuses it at spec validation with a message
+  naming the coverage requirement, so a partial GEPA partition leaves no
+  run directory behind. MIPROv2 is unaffected and keeps the `<=` rule: it
+  bootstraps and scores without building a registry over the whole split,
+  so a partition that leaves tasks unused is legal for it.
+- **`whetstone-study run --allow-real-codex` authorizes a Codex stage.**
+  The study's optimizer runner forwards the flag onto the Codex arm's
+  `RunSpec` and onto no other arm's; `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1`
+  remains the other half of the gate. Without both, a Stage 1 or Stage 2
+  whose design names the Codex arm is refused **before any arm runs**,
+  which is the spend-safety property: the refusal inside `run_optimizer`
+  arrives on the Codex arm's own turn, by which point every arm ordered
+  ahead of it has already been paid for. The authorization is a run-time
+  permission rather than a design choice — it is not an `ArmSpec` field, it
+  is not recorded in the manifest, and it does not enter the
+  pre-registration hash, so two runs of one design pre-register identically
+  whether or not the operator was allowed to bill a session.
+- **`whetstone-study plan` states the pre-registered MDE.** One row per
+  pinned `tau^2` (0.05 and 0.10), computed from `power.py` at the
+  manifest's own held-out size and `K_REPEAT` and at the worst-case binary
+  `sigma^2` of 0.25 — `0.0622` and `0.0690` at the study's 440 and 3.
+  Labelled as pre-registered rather than measured, because Stage 0 measures
+  both variances and records the MDE that follows. `plan` is the command
+  read before authorizing spend, and it previously said nothing about what
+  effect the design could resolve.
+- **`PROTOCOL_SPLIT_SIZES` in `optim/study/spec.py`** declares the study's
+  `(88, 132, 440)`, pinned by a golden test. It is deliberately not the c19
+  generator's `DEFAULT_SPLIT_SIZES` of `(88, 132, 132)`: the protocol
+  pre-registered a held-out split of 440 because the design's MDE depends
+  on it.
+- **The Codex arm runs.** `--optimizer codex` drives the study's
+  foreign-agent arm through the same `run_optimizer` every other arm uses:
+  `whetstone_envs.optim.codex` builds a `CodexControl` and a `CodexAdapter`
+  from the family's own render contract and mutation field, and
+  `prepare_codex_run` binds the one Tool the agent may use. The agent
+  searches out of process under dr-exec containment and reaches exactly one
+  MCP tool, which evaluates a candidate on the internal split. It is the
+  first `TOOL_USING` run here, so it is the first to get a durable
+  admission authority and a tool executor: its capacity is enforced across
+  processes because the evaluation server that admits its calls is a
+  different process. `--codex-capacity` is that cap and defaults to the
+  pre-registered 8; `--codex-binary`, `--codex-model`,
+  `--codex-reasoning-effort`, and `--codex-wall-seconds` configure the
+  agent. An authentication preflight runs before any capacity is
+  committed, and no flag or `RunSpec` field can substitute it — the
+  scripted stand-in is reachable only through a keyword-only test seam.
+  **Known platform limitation:** the Codex containment profile is macOS
+  `sandbox-exec` only, so the spawning tests are Darwin-gated. Everything
+  above the sandbox — the control, the runtime config, the capacity
+  arithmetic, and the audit — runs everywhere.
+- **A real Codex run is refused unless it is deliberately opted in.** The
+  authentication preflight is not a spend guard: it proves a session by
+  *spawning* the Codex CLI, and on a machine with `~/.codex/auth.json` that
+  spawn succeeds and is billed. So "the caller passed no test seam" used to
+  mean "the run reaches the real, paid CLI" — which a study arm, a
+  parametrization over the optimizer list, or a plain `--optimizer codex`
+  could all trigger without meaning to buy anything. `run_optimizer` now
+  refuses a Codex run outright, raising `RealCodexRefusedError` before any
+  preflight, adapter, admission authority, or subprocess exists and before
+  the durable run boundary creates a directory, unless either a
+  `CodexTestSeam` is supplied or *both* halves of the opt-in are present:
+  `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1` in the environment and
+  `--allow-real-codex` (`RunSpec.allow_real_codex`). Requiring both means
+  neither a serialized spec nor an exported variable authorizes spend on its
+  own. A session-scoped autouse fixture asserts the variable is unset and
+  clears it, so no test can opt in.
+- **The pre-spawn identity assertion covers the model route and the task
+  set, not just the Eval Config.** `eval_config_ref` does not pin the task
+  model on the openrouter transport — the route is carried by the provider
+  call config — so a runtime config naming a different model rebuilt to the
+  *same* Eval Config and the run would have completed, reported a coherent
+  trajectory, and measured a model the study never asked for.
+  `build_codex_adapter` now proves `task_model_identity_hash()` and
+  `sampling.task_hashes` equal across the in-process engine and the rebuilt
+  runtime-config engine as well, refusing loudly on either mismatch.
+- **`whetstone_envs.optim.codex_runtime` carries the launch across the
+  process boundary.** The Codex MCP evaluation server rebuilds its engine
+  from one serialized config, and whetstone-ai's
+  `ReferenceEvalRuntimeConfig` always rebuilds the *toy* experiment — a
+  limitation whetstone-ai names itself. A study run wired to it comes up
+  fine and then refuses every single tool call as "not bound to the
+  engine's exact Eval Config", leaving the agent nothing to select.
+  `EnvsCodexRuntimeConfig` carries the family's generation parameters
+  instead and rebuilds the identical experiment, and the adapter builder
+  proves the rebuilt Eval Config matches the run's before anything is
+  spawned.
+- **The Codex fidelity audit runs on every Codex run.** The six invariants
+  and the shared one now execute against a real fake-CLI run rather than
+  only against committed fixtures, and `reported_numbers_resolve` counts
+  tool-mediated evaluations: a `TOOL_USING` run resolves no intent by
+  design, so an invariant reading only the intent paths failed every honest
+  Codex run for reporting nothing.
+- **The trajectory report renders a Codex run's evaluations.** They are
+  projected from tool evidence, each attributed to the candidate its Tool
+  Call actually built, with the evaluation's own reward. Reading only the
+  intent path showed a terminal candidate with no measurement behind it.
 - `whetstone_envs.optim.audit`: offline fidelity audits over one optimizer
   run's durable evidence. `audit_run(run_dir)` reads `result.json` and
   `runtime.sqlite` through whetstone-ai's public API and returns an
@@ -294,16 +501,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   as positive and refused on any other optimizer, and `ArmSpec` carries
   them so a study arm can request the protocol's shape. Defaults are
   unchanged, which keeps the fake-transport end-to-end runs fast.
-- **The MIPROv2 trainset/valset split is selectable.** `build_miprov2_control`
-  sliced `trainset=task_hashes[:1]`, so every bootstrapped demonstration was
-  drawn from a single task at every split size — a substantive design
-  question Wave 3 flagged, not just a budget one. The partition is now the
-  `Miprov2Split` setting behind `--miprov2-split`: `single-task` is today's
-  one-task trainset and `internal` is DSPy's own default of
-  trainset = valset = the whole internal split. `single-task` remains the
-  default pending a decision on whether the one-task trainset is intended,
-  and the choice is documented where it is made rather than implied by a
-  slice literal.
+
+### Changed
+
+- **`whetstone-study` is an installed console script.** The study CLI
+  named itself `whetstone-study` and its `__main__` documented the console
+  script, but nothing registered one, so only
+  `python -m whetstone_envs.optim.study` actually worked. Both entry points
+  now resolve to the same `main`.
+- **The pre-registered held-out split is 440, not 220.** The c19 protocol
+  splits are now internal 88 / official 132 / held-out 440, using 660 of
+  the 704 available instances. Doubling the reporting split halves the
+  variance term the Stage-0 gate inverts, so the pre-registered MDE row
+  the study is judged against moves with it. `MEASUREMENT_SPLIT_SIZES`
+  stays `(88, 132, 220)`: that is what Wave 3 actually measured, and
+  rewriting it would misstate the provenance of every measured number
+  derived from those runs. Because the split is deterministic, held-220
+  remains a prefix of held-440, so `check_held_out_nesting` keeps its
+  meaning — but it is now an invariant the construction guarantees rather
+  than a growth decision taken at the Stage-0 gate, and its docstring says
+  so.
 
 ### Fixed
 
@@ -337,6 +554,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   are golden-pinned with their derivations, and `whetstone-study plan`
   prints them; its GEPA row now reports the measurement scaled to the pinned
   budget rather than to the retired one.
+
+### Known limitations
+
+- **No real Codex run has been performed.** Every claim about the Codex arm
+  in this release rests on the scripted fake CLI. That stand-in is a real
+  subprocess speaking real MCP over HTTP to the real whetstone-hosted
+  evaluation server, so the production admission, lease, evaluation, and
+  ledger path *is* exercised end to end — only the agent's own decisions
+  are scripted. What remains unproven is the part only a live agent can
+  demonstrate: that a real Codex session reads its prompt, chooses its own
+  candidates, spends its capacity sensibly, and returns a `selected_call_id`
+  that resolves. The §6 "one real run" is therefore still open.
+
+  Performing it requires all of: `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1` and
+  `--allow-real-codex` (see the spend guard above), a live authenticated
+  Codex session, macOS, provider spend for the task-model evaluations it
+  buys, and an explicit go from Danielle. Until then, treat the arm as
+  mechanically complete and behaviorally unvalidated.
 
 ### Notes
 

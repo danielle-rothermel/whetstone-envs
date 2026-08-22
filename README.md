@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.6`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.8`.
 
 ## Installation
 
@@ -55,9 +55,9 @@ Install C18's pinned generator dependencies when generating its pools:
 uv add 'whetstone-envs[c18]'
 ```
 
-Install the optimizer adapter extra when running COPRO, GEPA, or MIPROv2
-against a task family. The extra pins published `whetstone-ai==0.1.6` from
-PyPI:
+Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
+Codex against a task family. The extra pins published `whetstone-ai==0.1.8`
+from PyPI:
 
 ```bash
 uv add 'whetstone-envs[optim]'
@@ -69,8 +69,28 @@ public surface, with no private imports and no adapter subclassing:
 | Optimizer | Constructed by | Modes | Notes |
 | --- | --- | --- | --- |
 | `copro` | `configure_copro` + `CoproAdapter` | — | Proposal-only search over the mutation field. |
-| `gepa` | `build_gepa_harness_adapter` | — | Reflection search; the trainset is the internal eval split. A run that finds no improvement reports the retained seed rather than substituting a candidate. |
-| `miprov2` | `configure_miprov2` + `Miprov2Adapter` | `--demo-mode fewshot\|zeroshot\|ground_only` | Also binds an opening durable state (labeled trainset, proposal examples, RNG checkpoint). |
+| `gepa` | `build_gepa_harness_adapter` | — | Reflection search over a required disjoint train/val split of the internal eval split. A run that finds no improvement reports the retained seed rather than substituting a candidate. |
+| `miprov2` | `configure_miprov2` + `Miprov2Adapter` | `--demo-mode fewshot\|zeroshot\|ground_only` | Bootstraps demonstrations from a required disjoint train/val split of the internal eval split. Also binds an opening durable state (labeled trainset, proposal examples, RNG checkpoint). |
+| `codex` | `configure_codex` + `CodexAdapter` | — | The foreign-agent arm: the Codex CLI searches out of process under dr-exec containment and reaches exactly one MCP tool, which evaluates a candidate on the internal split. One opaque step; whetstone runs no search of its own. macOS only — the containment profile is `sandbox-exec`. |
+
+`--train-size` and `--val-size` are **required** for `--optimizer miprov2`
+and `--optimizer gepa`, and refused on the optimizers that have no train/val
+concept. They partition the internal split deterministically -- the trainset
+is its first `--train-size` tasks and the valset the next `--val-size` -- so
+the two sets are disjoint and reproducible from the spec alone. There is no
+default: MIPROv2 bootstraps demonstrations from the trainset and GEPA writes
+its reflections from it, while both score on the valset, so an overlapping
+split would let memorization read as an in-search improvement. The study
+protocol pins 44/44 of the internal 88.
+
+The two optimizers do not take the same partition. **MIPROv2** needs only a
+disjoint pair inside the internal split, so a partition that leaves tasks
+unused is legal. **GEPA** builds its data registry from the whole internal
+split and then requires the trainset and valset to cover it, so a GEPA
+partition must sum to the internal size exactly; `run_optimizer` refuses a
+partial one at spec validation rather than letting it fail after the run
+directory exists. The protocol's 44/44 covers its internal 88, which is why
+the study's GEPA arm satisfies the rule.
 
 `--demo-mode` selects MIPROv2's demonstration regime and is ignored by COPRO
 and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
@@ -80,15 +100,49 @@ and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
 proposals but leave the section empty. `--num-seeds` sets repeats per task
 (`K_REPEAT`).
 
+The Codex arm takes its own flags. `--codex-capacity` is the per-run
+admitted evaluate-call cap, which is simultaneously the step's `tool_calls`
+budget and the `ToolCapacity` the evaluation server admits against; it
+defaults to the study's pre-registered 8. `--codex-binary` is the CLI to
+spawn (default: the real `codex` on the run PATH), and `--codex-model`,
+`--codex-reasoning-effort`, and `--codex-wall-seconds` configure the agent.
+A Codex run proves its session with an authentication preflight before it
+commits any capacity, and there is no flag that skips it. The preflight is
+not a spend guard, though — it proves a session by spawning the CLI — so a
+Codex run is refused outright unless it is scripted or deliberately opted
+in; see [Real Codex runs](#real-codex-runs).
+
+Two properties follow from the agent being foreign. A Codex run resolves no
+evaluation intent — every paid evaluation is admitted through the tool and
+cited from the step's tool evidence, which is where the trajectory report
+and the audit read it. And the agent's own model spend runs on the Codex
+subscription rather than the study's key, so the cost report prices the
+task model and attributes nothing to a proposer; there is no `codex_agent`
+cost role.
+
 `--family` selects which task family the optimizers drive. Every optimizer
 runs every family through the same `run_optimizer`; a family is admitted by
 registering a `FamilySpec` in [`whetstone_envs.optim.families`][optim-source]
 and nothing on the shared path names one:
 
-| Family | Placeholders | Scoring | Protocol splits | Registered by |
-| --- | --- | --- | --- | --- |
-| `c19` | `{grid}`, `{command}`, `{question}` | exact match on the whole reply | `88,132,220` | `optim/experiment.py` |
-| `c18` | `{question}`, `{query}` | terminal `True`/`False` verdict, via `c18.score_gold` | `24,48,48` | `optim/c18_experiment.py` |
+| Family | Placeholders | Scoring | Protocol splits | Family registered by | Splits pinned by |
+| --- | --- | --- | --- | --- | --- |
+| `c19` | `{grid}`, `{command}`, `{question}` | exact match on the whole reply | `88,132,440` | `optim/experiment.py` | `optim/study/spec.py` (`PROTOCOL_SPLIT_SIZES`) |
+| `c18` | `{question}`, `{query}` | terminal `True`/`False` verdict, via `c18.score_gold` | `24,48,48` | `optim/c18_experiment.py` | `optim/c18_experiment.py` (`C18_PROTOCOL_SPLIT_SIZES`) |
+
+The two columns are separate because the family and its protocol splits have
+different owners. Registering a family says which tasks exist and how they are
+scored; it does not choose how many of them each role gets.
+
+For `c19` those two are different files, and the difference matters. The c19
+generator's own `DEFAULT_SPLIT_SIZES` in `c19/generation.py` is
+`(88, 132, 132)` — what the generator returns when nobody asks for anything.
+The Step 10 study pre-registered a held-out split of **440**, because the
+design's minimum detectable effect depends on it (`0.0622` at `tau^2 = 0.05`,
+`K_REPEAT = 3`; see `whetstone-study plan`). `PROTOCOL_SPLIT_SIZES` in
+`optim/study/spec.py` is the protocol's declaration of the three sizes and is
+pinned by a golden test. A study manifest records them in its `splits` block,
+and every stage reads them from there rather than from either constant.
 
 C18's splits come from its own `SplitPlan` at `n_per_stratum=30` over four
 depth strata. Its internal split of 24 is below MIPROv2's default minibatch
@@ -106,13 +160,73 @@ Runs happen in-process; artifacts write under
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer copro --transport fake --split-sizes 2,2,0
 uv run --extra optim python scripts/run-optim.py \
-  --family c19 --optimizer gepa --transport fake --split-sizes 2,2,0
+  --family c19 --optimizer gepa --transport fake --split-sizes 2,2,0 \
+  --train-size 1 --val-size 1
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer miprov2 --demo-mode fewshot \
-  --transport fake --split-sizes 2,2,0
+  --transport fake --split-sizes 2,2,0 --train-size 1 --val-size 1
 uv run --extra optim python scripts/run-optim.py \
   --family c18 --optimizer copro --transport fake --split-sizes 2,2,0 \
   --n-per-stratum 1
+```
+
+`--optimizer codex` is deliberately absent from that list — see below.
+
+### Real Codex runs
+
+A Codex run spawns the real Codex CLI, which costs money, so it is refused
+by default. The authentication preflight is not the thing that stops an
+accidental run: it proves a session by *spawning* the CLI, and on a machine
+with a Codex login that spawn succeeds and is billed. So `run_optimizer`
+refuses `--optimizer codex` outright, before any preflight, adapter,
+admission authority, or subprocess exists, unless one of two things is true:
+
+- a `CodexTestSeam` is supplied, which points the run at the scripted fake
+  CLI. It is keyword-only, absent from `RunSpec`, and has no flag, so only a
+  test reaches it; or
+- both halves of the opt-in are present:
+  `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1` in the environment **and**
+  `--allow-real-codex` (`RunSpec.allow_real_codex`). Requiring both means
+  neither a serialized spec nor an exported variable authorizes spend on its
+  own — a study arm or a copied command line carrying the flag still
+  refuses.
+
+Anything else raises `RealCodexRefusedError`, and the refused run leaves no
+run directory behind. A session-scoped `conftest.py` fixture asserts the
+environment variable is unset and clears it, so no test can opt in.
+
+A study stage authorizes the same spend the same way, through
+`whetstone-study run --allow-real-codex`. The flag reaches the study's
+optimizer runner, which forwards it onto the Codex arm's `RunSpec` and onto
+no other arm's; the environment variable remains the other half. It is a
+**run-time spend authorization, not part of the design**: it is not a field
+on `ArmSpec`, it is not recorded in the manifest, and it does not enter the
+pre-registration hash, so two runs of one design pre-register identically
+whether or not the operator was allowed to bill a session.
+
+Without both halves, a Stage 1 or Stage 2 whose design names the Codex arm
+is refused **before any arm runs**. That ordering is the spend-safety
+property: the refusal inside `run_optimizer` arrives on the Codex arm's own
+turn, by which point every arm ahead of it has already been paid for.
+
+```bash
+WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
+  whetstone-study run --study-dir STUDY_DIR --stage stage1 --allow-real-codex
+```
+
+A real run therefore requires all of: the opt-in variable, the flag, a live
+authenticated Codex session, macOS (the containment profile is
+`sandbox-exec`), provider spend for the task-model evaluations, and a go
+from Danielle. **No real Codex run has been performed yet** — every claim
+about the arm rests on the scripted stand-in, which speaks real MCP to the
+real evaluation server and so exercises the production admission, lease,
+evaluation, and ledger path. Only the agent's own decisions are scripted.
+
+```bash
+WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
+  python scripts/run-optim.py \
+  --family c19 --optimizer codex --transport fake --split-sizes 2,2,0 \
+  --codex-capacity 8 --allow-real-codex
 ```
 
 ## Evaluation and trajectory reports

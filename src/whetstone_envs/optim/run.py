@@ -20,15 +20,19 @@ from whetstone.coordination.runtime_bootstrap import (
     RegisteredRuntime,
     build_runtime,
     copro_run_request,
+    prepare_codex_run,
     prepare_copro_run,
     prepare_gepa_run,
     prepare_miprov2_run,
 )
-from whetstone.core.identity import compute_identity_hash
-from whetstone.core.leasing import EffectLeaseAuthority
+from whetstone.core.identity import (
+    compute_identity_hash,
+)
+from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.core.roles import EvalRole
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.adapters import MappingAdapterRegistry, OptimizerAdapter
+from whetstone.optim.codex.control import CodexControl
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
 from whetstone.optim.copro.control import (
@@ -50,8 +54,27 @@ from whetstone.optim.proposal.proposer import (
     build_inline_proposal_executor,
     prompt_adapter_identity_hash,
 )
+from whetstone.optim.tools.evaluator import EngineToolEvaluator
+from whetstone.optim.tools.execution import EvaluatingToolExecutor
+from whetstone.optim.tools.facade import ToolAdmissionAuthority
 from whetstone.provider.language_model import PlainPromptAdapter
 
+from whetstone_envs.optim.codex import (
+    ALLOW_REAL_CODEX_ENV,
+    ALLOW_REAL_CODEX_ENV_VALUE,
+    CODEX_ADAPTER_KEY,
+    CODEX_DEFAULT_BINARY,
+    CODEX_EVALUATE_CALL_CAP,
+    CODEX_REASONING_EFFORTS,
+    CodexReasoningEffort,
+    CodexTestSeam,
+    RealCodexRefusedError,
+    build_codex_adapter,
+    build_codex_control,
+    codex_run_root,
+    refuse_unauthorized_real_codex,
+)
+from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
 from whetstone_envs.optim.experiment import provider_call_config_ref
 from whetstone_envs.optim.families import (
     KNOWN_FAMILY_IDS,
@@ -66,11 +89,8 @@ from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_MINIBATCH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
     DEMO_MODES,
-    MIPROV2_SPLITS,
     Miprov2DemoMode,
-    Miprov2Split,
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
@@ -83,6 +103,11 @@ from whetstone_envs.optim.provider import (
     openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.run_cost import project_run_cost, write_run_cost
+from whetstone_envs.optim.split import (
+    GEPA_OPTIMIZER,
+    TRAIN_VAL_OPTIMIZERS,
+    partition_internal_split,
+)
 from whetstone_envs.reporting.projection import project_trajectory_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
@@ -95,8 +120,11 @@ if TYPE_CHECKING:
     from whetstone.coordination.harness_run_controller import OptimRunLaunch
     from whetstone.eval.protocol import EvalEngine
     from whetstone.experiment.env import Experiment
+    from whetstone.optim.codex.adapter import CodexAdapter
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.proposal.proposer import ProposerTransport
+
+    from whetstone_envs.optim.codex_runtime import CodexRuntimeTransport
 
 DEFAULT_OUTPUT_ROOT = (
     Path.home() / "drotherm" / "data" / "runs" / ("whetstone-envs")
@@ -104,12 +132,12 @@ DEFAULT_OUTPUT_ROOT = (
 
 #: Every optimizer the shared runner can drive today.
 #:
-#: ``codex``, ``null-random``, and ``null-identity`` are named by the study
-#: protocol and land with their own adapters; they are absent here because
-#: their modules are not in this package yet, and admitting a name the runner
-#: cannot drive would fail late, inside a durable run boundary, instead of at
-#: spec validation.
-OPTIMIZERS = ("copro", "gepa", "miprov2")
+#: ``null-random`` and ``null-identity`` are named by the study protocol but
+#: are controls rather than optimizers -- they run through
+#: :mod:`whetstone_envs.optim.nulls`, not this runner -- so they are absent
+#: here. Admitting a name the runner cannot drive would fail late, inside a
+#: durable run boundary, instead of at spec validation.
+OPTIMIZERS = ("codex", "copro", "gepa", "miprov2")
 TRANSPORTS = ("fake", "openrouter")
 
 #: Retained COPRO search shape: two drafts per step, one step of depth.
@@ -190,12 +218,16 @@ class RunSpec:
     #: MIPROv2 instruction/fewshot candidates per component. The default is
     #: below the protocol's auto-light 6, for the same reason.
     miprov2_num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES
-    #: How MIPROv2 partitions the internal split into trainset and valset.
-    #: ``single-task`` -- the default -- gives bootstrapping a one-task
-    #: trainset; ``internal`` is DSPy's default of trainset = valset = the
-    #: whole internal split. The default is retained pending a decision on
-    #: whether drawing every demonstration from one task is intended.
-    miprov2_split: str = DEFAULT_MIPROV2_SPLIT.value
+    #: The explicit train/val partition of the internal split, required by
+    #: every optimizer with a train/val concept (``miprov2`` and ``gepa``)
+    #: and refused on the others. The trainset is the first ``train_size``
+    #: tasks of the internal split and the valset the next ``val_size``, so
+    #: the two sets are disjoint and reproducible from the spec alone. They
+    #: have no default: an in-search improvement measured on tasks the
+    #: optimizer trained on cannot be told apart from memorization, so a
+    #: run must state the partition it is claiming.
+    train_size: int | None = None
+    val_size: int | None = None
     #: Extra scripted proposer bodies for a fake-transport run, appended to
     #: the family's own. The family scripts a ceiling draft and the naive
     #: seed; the seed is rejected as a no-op mutation, so a fake round can
@@ -205,10 +237,34 @@ class RunSpec:
     #: proposal path re-validates. Refused on a real transport, where the
     #: proposer -- not the runner -- writes the bodies.
     extra_proposal_bodies: tuple[str, ...] = ()
-    #: The Codex arm's admitted evaluate-call cap. Carried so a spec is
-    #: complete before its adapter lands; rejected on other optimizers so it
-    #: cannot look honoured when nothing reads it.
+    #: The Codex arm's admitted evaluate-call cap: the per-run
+    #: ``ToolCapacity.max_accepted_calls`` and the Step's ``tool_calls``
+    #: budget at once. ``None`` takes the arm's own cap,
+    #: :data:`~whetstone_envs.optim.codex.CODEX_EVALUATE_CALL_CAP`.
+    #: Rejected on other optimizers so it cannot look honoured when
+    #: nothing reads it.
     codex_capacity: int | None = None
+    #: The Codex CLI this run spawns. The default is the real binary,
+    #: resolved on the run PATH; a test overrides it to the scripted fake.
+    #: Rejected on other optimizers for the same reason as the cap.
+    codex_binary: str = CODEX_DEFAULT_BINARY
+    #: Codex's own model, and how hard it reasons. ``None`` reuses the
+    #: run's ``model``, which is the task model -- a Codex run that names
+    #: no agent model is asking for the same route it evaluates with.
+    codex_model: str | None = None
+    codex_reasoning_effort: str = CodexReasoningEffort.MEDIUM.value
+    #: The Codex agent's wall budget in seconds. ``None`` keeps
+    #: whetstone-ai's own default.
+    codex_wall_seconds: float | None = None
+    #: Half of the deliberate opt-in to a real, billed Codex session. A
+    #: Codex run without a test seam is refused unless this is set *and*
+    #: :data:`~whetstone_envs.optim.codex.ALLOW_REAL_CODEX_ENV` names the
+    #: opt-in in the process environment -- see
+    #: :func:`~whetstone_envs.optim.codex.refuse_unauthorized_real_codex`.
+    #: This field alone cannot authorize spend, which is why it is safe
+    #: for a serialized spec to carry it. Rejected on other optimizers,
+    #: like every other Codex-scoped setting.
+    allow_real_codex: bool = False
 
 
 #: How a run's ``seed`` reaches the optimizer, recorded per optimizer.
@@ -234,7 +290,6 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
         != DEFAULT_MIPROV2_FULL_EVAL_STEPS
         or spec.miprov2_num_trials != DEFAULT_MIPROV2_NUM_TRIALS
         or spec.miprov2_num_candidates != DEFAULT_MIPROV2_NUM_CANDIDATES
-        or spec.miprov2_split != DEFAULT_MIPROV2_SPLIT.value
     )
     if non_default and spec.optimizer != "miprov2":
         raise ValueError("miprov2 settings apply only to --optimizer miprov2")
@@ -251,9 +306,90 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
         raise ValueError("miprov2_num_trials must be at least 1")
     if spec.miprov2_num_candidates < 1:
         raise ValueError("miprov2_num_candidates must be at least 1")
-    if spec.miprov2_split not in MIPROV2_SPLITS:
+
+
+def _validate_train_val_split(spec: RunSpec) -> None:
+    """Refuse a train/val split the run cannot honestly claim.
+
+    Required for every optimizer in :data:`TRAIN_VAL_OPTIMIZERS` and
+    refused on the others, for the same reason the other optimizer-scoped
+    settings are: a size that looks honoured but is not is how a study
+    comes to misdescribe its own arm.
+
+    Both sizes are checked against the *internal* split, which is the only
+    split these optimizers may see -- the official and held-out splits are
+    not theirs to train on. Refused here, at pure spec validation, so an
+    unrunnable partition never reaches the durable run boundary.
+    """
+    supplied = spec.train_size is not None or spec.val_size is not None
+    if spec.optimizer not in TRAIN_VAL_OPTIMIZERS:
+        if supplied:
+            raise ValueError(
+                "train_size and val_size apply only to "
+                f"--optimizer {{{', '.join(TRAIN_VAL_OPTIMIZERS)}}}"
+            )
+        return
+    if spec.train_size is None or spec.val_size is None:
         raise ValueError(
-            f"miprov2_split must be one of {list(MIPROV2_SPLITS)}"
+            f"--optimizer {spec.optimizer} requires an explicit "
+            "--train-size and --val-size partition of the internal split"
+        )
+    if spec.train_size < 1:
+        raise ValueError("train_size must be at least 1")
+    if spec.val_size < 1:
+        raise ValueError("val_size must be at least 1")
+    internal = spec.split_sizes[0]
+    if spec.train_size + spec.val_size > internal:
+        raise ValueError(
+            f"train_size {spec.train_size} + val_size {spec.val_size} "
+            f"exceeds the internal split of {internal}"
+        )
+    if (
+        spec.optimizer == GEPA_OPTIMIZER
+        and spec.train_size + spec.val_size != internal
+    ):
+        # GEPA is stricter than the others by construction: whetstone's
+        # GEPA factory builds its data registry from the whole internal
+        # split and then requires the control's trainset and valset to
+        # *cover* it exactly, so a partition that merely fits inside the
+        # split is rejected. That rejection happens inside the durable run
+        # boundary, after the run directory exists, so the same rule is
+        # restated here at pure spec validation -- a partial partition then
+        # refuses before anything is written.
+        raise ValueError(
+            f"--optimizer {spec.optimizer} requires train_size + val_size "
+            f"to cover the internal split exactly: {spec.train_size} + "
+            f"{spec.val_size} = {spec.train_size + spec.val_size}, not "
+            f"{internal}. GEPA's data registry is built from the whole "
+            "internal split and its trainset and valset must partition it"
+        )
+
+
+def _validate_codex_settings(spec: RunSpec) -> None:
+    """Refuse Codex settings the run cannot honour.
+
+    Refused on another optimizer rather than silently ignored, like every
+    other optimizer-scoped setting: a setting that looks honoured but is
+    not is how a study comes to misdescribe its own arm.
+    """
+    non_default = (
+        spec.codex_capacity is not None
+        or spec.codex_binary != CODEX_DEFAULT_BINARY
+        or spec.codex_model is not None
+        or spec.codex_reasoning_effort != CodexReasoningEffort.MEDIUM.value
+        or spec.codex_wall_seconds is not None
+        or spec.allow_real_codex
+    )
+    if non_default and spec.optimizer != "codex":
+        raise ValueError("codex settings apply only to --optimizer codex")
+    if spec.codex_capacity is not None and spec.codex_capacity < 1:
+        raise ValueError("codex_capacity must be at least 1")
+    if spec.codex_wall_seconds is not None and spec.codex_wall_seconds <= 0:
+        raise ValueError("codex_wall_seconds must be positive")
+    if spec.codex_reasoning_effort not in CODEX_REASONING_EFFORTS:
+        raise ValueError(
+            "codex_reasoning_effort must be one of "
+            f"{list(CODEX_REASONING_EFFORTS)}"
         )
 
 
@@ -367,17 +503,12 @@ def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
         if spec.gepa_max_metric_calls < 1:
             raise ValueError("gepa_max_metric_calls must be at least 1")
     _validate_miprov2_settings(spec)
+    _validate_train_val_split(spec)
     if spec.extra_proposal_bodies and spec.transport != "fake":
         raise ValueError(
             "extra_proposal_bodies applies only to --transport fake"
         )
-    if spec.codex_capacity is not None:
-        # The Codex adapter is not in this package yet, so no optimizer can
-        # honour a capacity cap. Refusing beats silently ignoring it.
-        raise ValueError(
-            "codex_capacity applies only to --optimizer codex, "
-            "which this runner cannot drive yet"
-        )
+    _validate_codex_settings(spec)
     family = family_spec(spec.family)
     n_per_stratum = (
         family.default_n_per_stratum
@@ -414,6 +545,28 @@ class _BoundOptimizer:
     gepa_control: GepaControl | None = None
     miprov2_control: Miprov2Control | None = None
     miprov2_adapter: Miprov2Adapter | None = None
+    codex_control: CodexControl | None = None
+
+
+def build_codex_runtime_config(
+    *, spec: RunSpec, validated: _ValidatedSpec
+) -> EnvsCodexRuntimeConfig:
+    """The runtime config the Codex MCP evaluation server rebuilds from.
+
+    Derived from the same spec the in-process engine was built from, so
+    the two cannot drift: every generation parameter is read from one
+    place. ``build_codex_adapter`` then proves the rebuild lands on the
+    same Eval Config before anything is spawned.
+    """
+    return EnvsCodexRuntimeConfig(
+        family_id=validated.family.family_id,
+        split_sizes=spec.split_sizes,
+        n_per_stratum=validated.n_per_stratum,
+        pool_seed_start=validated.pool_seed_start,
+        num_seeds=spec.num_seeds,
+        transport=cast("CodexRuntimeTransport", spec.transport),
+        model=spec.model,
+    )
 
 
 def _bind_optimizer(  # noqa: PLR0913
@@ -427,12 +580,45 @@ def _bind_optimizer(  # noqa: PLR0913
     copro_control: CoproControl,
     prompt_adapter: PlainPromptAdapter,
     proposer_transport: ProposerTransport | None,
+    output_dir: Path,
+    sqlite_path: Path,
+    codex_test_seam: CodexTestSeam | None = None,
 ) -> _BoundOptimizer:
     """Build exactly the adapter this run drives.
 
     Registry membership is part of controller identity, so a run registers
     its own optimizer and nothing else.
     """
+    if spec.optimizer == "codex":
+        codex_control = build_codex_control(
+            engine=engine,
+            experiment=experiment,
+            family=validated.family,
+            model=spec.codex_model or spec.model,
+            max_tool_calls=spec.codex_capacity,
+            codex_binary=spec.codex_binary,
+            reasoning_effort=CodexReasoningEffort(spec.codex_reasoning_effort),
+            wall_seconds=spec.codex_wall_seconds,
+        )
+        return _BoundOptimizer(
+            adapter_key=CODEX_ADAPTER_KEY,
+            # The preflight runs inside this call, so a broken Codex
+            # session fails here -- before the runtime exists and before
+            # any capacity or eval budget is committed.
+            adapter=build_codex_adapter(
+                store=store,
+                control=codex_control,
+                engine=engine,
+                runtime_config=build_codex_runtime_config(
+                    spec=spec, validated=validated
+                ),
+                reward_policy=experiment.reward_policy,
+                store_path=sqlite_path,
+                run_root=codex_run_root(output_dir),
+                test_seam=codex_test_seam,
+            ),
+            codex_control=codex_control,
+        )
     if spec.optimizer == "copro":
         return _BoundOptimizer(
             adapter_key=COPRO_ADAPTER_KEY,
@@ -445,6 +631,15 @@ def _bind_optimizer(  # noqa: PLR0913
                 extra_proposal_bodies=spec.extra_proposal_bodies,
             ),
         )
+    # Both remaining optimizers take a train/val split; ``_validate_spec``
+    # has already proven the two sizes are present and fit the internal
+    # split, so this is a pure re-derivation of the same partition the
+    # spec names.
+    trainset_task_hashes, valset_task_hashes = partition_internal_split(
+        tuple(engine.sampling.task_hashes),
+        train_size=cast("int", spec.train_size),
+        val_size=cast("int", spec.val_size),
+    )
     if spec.optimizer == "gepa":
         gepa_adapter = build_gepa_adapter(
             store=store,
@@ -455,6 +650,8 @@ def _bind_optimizer(  # noqa: PLR0913
             proposer_transport=proposer_transport,
             max_metric_calls=spec.gepa_max_metric_calls,
             seed=GEPA_DEFAULT_SEED if spec.seed is None else spec.seed,
+            trainset_task_hashes=trainset_task_hashes,
+            valset_task_hashes=valset_task_hashes,
         )
         return _BoundOptimizer(
             adapter_key=GEPA_ADAPTER_KEY,
@@ -472,7 +669,8 @@ def _bind_optimizer(  # noqa: PLR0913
         minibatch_full_eval_steps=spec.miprov2_minibatch_full_eval_steps,
         num_trials=spec.miprov2_num_trials,
         num_candidates=spec.miprov2_num_candidates,
-        split=Miprov2Split(spec.miprov2_split),
+        trainset_task_hashes=trainset_task_hashes,
+        valset_task_hashes=valset_task_hashes,
     )
     miprov2_adapter = build_miprov2_adapter(
         store=store,
@@ -489,6 +687,113 @@ def _bind_optimizer(  # noqa: PLR0913
     )
 
 
+def _codex_preflight_already_proven() -> None:
+    """The preflight ``prepare_codex_run`` requires, already satisfied.
+
+    ``build_codex_adapter`` runs the real ``codex_auth_preflight`` before
+    it returns an adapter at all, so by the time the launch is prepared
+    the session has been proven against this run's own executor and
+    process environment. ``prepare_codex_run`` still requires a callable --
+    it has no default, deliberately, so no caller can forget one -- and
+    this names the proof that already happened. Running a second probe
+    here would spend wall time re-proving the same session.
+
+    This is not a way to skip the check: the only path that reaches it
+    went through the real preflight moments earlier, and a failure there
+    raises before the runtime is built.
+    """
+
+
+def _codex_tool_executor(
+    *,
+    engine: EvalEngine,
+    experiment: Experiment,
+    effect_authority: EffectLeaseAuthority,
+    owner_id: str,
+) -> EvaluatingToolExecutor:
+    """The in-harness executor that re-issues Codex's out-of-process calls.
+
+    Codex evaluates through its own MCP server, which admits and persists
+    each call against the same durable store. The harness still needs an
+    executor so the Step's Issued Tool Call ledger can record every call;
+    for an already-terminal call it reads the durable result rather than
+    evaluating again.
+    """
+    return EvaluatingToolExecutor(
+        EngineToolEvaluator(engine),
+        experiment.reward_policy,
+        effect_authority,
+        owner_id=owner_id,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    )
+
+
+def _build_run_runtime(  # noqa: PLR0913
+    *,
+    store,
+    engine: EvalEngine,
+    experiment: Experiment,
+    bound: _BoundOptimizer,
+    run_id: str,
+    sqlite_path: Path,
+) -> RegisteredRuntime:
+    """Assemble the runtime this run drives its one optimizer through.
+
+    Effect leases are durable, not per-process: they live in the run's own
+    ``runtime.sqlite`` beside the object store, mirroring whetstone-ai's
+    platform CLI, which hands ``EffectLeaseAuthority.sqlite`` the same path
+    it opened the store from. The lease authority owns
+    ``dr_store_lease_authority*`` while the object store owns
+    ``objects``/``bindings``, so one file carries both without a name
+    collision. A memory authority would discard every terminal at process
+    exit, so a re-run against a completed run directory would re-execute
+    effects that already happened.
+
+    A Codex run needs two more things, and they are the reason this is a
+    function rather than one call: its Tool Calls are admitted from an
+    out-of-process MCP evaluation server, so its per-run capacity must be
+    durable too -- an in-memory authority would let that process admit
+    past the cap, and the cap is what bounds paid evaluations -- and being
+    the one ``TOOL_USING`` run, it needs a tool executor so the Step's
+    Issued Tool Call ledger records every call the agent made outside.
+    """
+    effect_authority = EffectLeaseAuthority.sqlite(sqlite_path)
+    is_codex = bound.codex_control is not None
+    owner_id = f"{run_id}-owner"
+    runtime = build_runtime(
+        store=store,
+        engine=engine,
+        adapter_registry=MappingAdapterRegistry(
+            {bound.adapter_key: bound.adapter}
+        ),
+        effect_authority=effect_authority,
+        owner_id=owner_id,
+        admission=(
+            ToolAdmissionAuthority.sqlite(sqlite_path) if is_codex else None
+        ),
+        tool_executor=(
+            _codex_tool_executor(
+                engine=engine,
+                experiment=experiment,
+                effect_authority=effect_authority,
+                owner_id=owner_id,
+            )
+            if is_codex
+            else None
+        ),
+    )
+    if is_codex:
+        # The adapter reads durable Tool Call entries from the exact store
+        # the harness admits through, so it is bound to the runtime's own
+        # rather than to a second one built here. ``bind_tool_store`` is
+        # the Codex adapter's, not the ``OptimizerAdapter`` protocol's --
+        # only a TOOL_USING adapter has one -- and ``_bind_optimizer``
+        # guarantees this branch holds a ``CodexAdapter``.
+        codex_adapter = cast("CodexAdapter", bound.adapter)
+        codex_adapter.bind_tool_store(runtime.tool_store)
+    return runtime
+
+
 def _prepare_launch(  # noqa: PLR0913
     *,
     runtime: RegisteredRuntime,
@@ -501,6 +806,21 @@ def _prepare_launch(  # noqa: PLR0913
 ) -> OptimRunLaunch:
     """Bind the run for whichever optimizer this run registered."""
     render_contract = family.render_contract()
+    if bound.codex_control is not None:
+        return prepare_codex_run(
+            runtime,
+            run_id=run_id,
+            control=bound.codex_control,
+            experiment=experiment,
+            render_contract=render_contract,
+            mutation_field=family.mutation_field,
+            # The session was already proven when the adapter was built,
+            # before the runtime existed. ``prepare_codex_run`` requires a
+            # callable and has no default, so this names the proof that
+            # already happened rather than re-spawning a second probe on
+            # the run's wall budget.
+            preflight=_codex_preflight_already_proven,
+        )
     if bound.gepa_control is not None:
         return prepare_gepa_run(
             runtime,
@@ -544,15 +864,44 @@ def _prepare_launch(  # noqa: PLR0913
     )
 
 
-def run_optimizer(spec: RunSpec) -> Path:
+def run_optimizer(
+    spec: RunSpec, *, codex_test_seam: CodexTestSeam | None = None
+) -> Path:
     """Run one optimizer over one family's split, writing artifacts off-repo.
 
-    COPRO, GEPA, and MIPROv2 all reach the same runtime entry point; MIPROv2
+    Every optimizer reaches the same runtime entry point. MIPROv2
     additionally binds an opening durable state, and its ``demo_mode``
-    selects the demonstration regime. Every family-specific decision is read
-    from the family registry, so this function names no family.
+    selects the demonstration regime; Codex is the one ``TOOL_USING`` run,
+    so it alone gets a durable admission authority and a tool executor.
+    Every family-specific decision is read from the family registry, so
+    this function names no family.
+
+    ``codex_test_seam`` exists only so a test can drive the scripted fake
+    Codex CLI. It is keyword-only, absent from :class:`RunSpec`, and has
+    no CLI flag, so no production path or serialized spec can select one --
+    see :class:`~whetstone_envs.optim.codex.CodexTestSeam`.
+
+    A Codex run that supplies neither a seam nor the deliberate real-Codex
+    opt-in is refused before any effect happens: the preflight spawns the
+    billed CLI to prove a session, so it cannot be the thing that stops an
+    accidental paid run. Every caller -- the CLI, a study arm, a
+    parametrized test -- reaches Codex through this function, so one gate
+    covers all of them.
+
+    The spend guard runs *after* spec validation and before anything else.
+    Both are pure and neither spends, so the order is only about which
+    message a caller gets: an unrunnable spec should be told what is wrong
+    with it rather than that it could not afford to run, and a spec that
+    is merely unaffordable has nothing else to report.
     """
+    if codex_test_seam is not None and spec.optimizer != "codex":
+        raise ValueError("codex_test_seam applies only to --optimizer codex")
     validated = _validate_spec(spec)
+    if spec.optimizer == "codex":
+        refuse_unauthorized_real_codex(
+            test_seam=codex_test_seam,
+            allow_real_codex=spec.allow_real_codex,
+        )
     family = validated.family
     resolved_run_id = spec.run_id or (
         f"{family.run_id_prefix}-{spec.optimizer}-{uuid4().hex[:8]}"
@@ -658,23 +1007,17 @@ def run_optimizer(spec: RunSpec) -> Path:
             copro_control=copro_control,
             prompt_adapter=prompt_adapter,
             proposer_transport=proposer_transport,
+            output_dir=resolved_output,
+            sqlite_path=sqlite_path,
+            codex_test_seam=codex_test_seam,
         )
-        # Effect leases are durable, not per-process: they live in the run's
-        # own ``runtime.sqlite`` beside the object store, mirroring
-        # whetstone-ai's platform CLI, which hands ``EffectLeaseAuthority
-        # .sqlite`` the same path it opened the store from. The lease
-        # authority owns ``dr_store_lease_authority*`` while the object store
-        # owns ``objects``/``bindings``, so one file carries both without a
-        # name collision. A memory authority would discard every terminal at
-        # process exit, so a re-run against a completed run directory would
-        # re-execute effects that already happened.
-        runtime = build_runtime(
+        runtime = _build_run_runtime(
             store=store,
             engine=engine,
-            adapter_registry=MappingAdapterRegistry(
-                {bound.adapter_key: bound.adapter}
-            ),
-            effect_authority=EffectLeaseAuthority.sqlite(sqlite_path),
+            experiment=experiment,
+            bound=bound,
+            run_id=resolved_run_id,
+            sqlite_path=sqlite_path,
         )
         # ``RegisteredRuntime.close`` releases the eval engine and the
         # authority's sqlite connection on every exit path, including the
@@ -748,6 +1091,11 @@ def _proposer_config_resolver(
 
 
 __all__ = [
+    "ALLOW_REAL_CODEX_ENV",
+    "ALLOW_REAL_CODEX_ENV_VALUE",
+    "CODEX_DEFAULT_BINARY",
+    "CODEX_EVALUATE_CALL_CAP",
+    "CODEX_REASONING_EFFORTS",
     "COPRO_EXECUTOR_SCHEMA_SUFFIX",
     "DEFAULT_COPRO_BREADTH",
     "DEFAULT_COPRO_DEPTH",
@@ -755,19 +1103,20 @@ __all__ = [
     "DEFAULT_MIPROV2_MINIBATCH",
     "DEFAULT_MIPROV2_NUM_CANDIDATES",
     "DEFAULT_MIPROV2_NUM_TRIALS",
-    "DEFAULT_MIPROV2_SPLIT",
     "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_SPLIT_SIZES",
     "DEMO_MODES",
     "GEPA_DEFAULT_SEED",
     "KNOWN_FAMILY_IDS",
     "MIPROV2_DEFAULT_SEED",
-    "MIPROV2_SPLITS",
     "OPTIMIZERS",
     "SEED_DISPOSITION_CONTROL_FIELD",
     "SEED_DISPOSITION_PROVIDER_ONLY",
+    "TRAIN_VAL_OPTIMIZERS",
     "TRANSPORTS",
-    "Miprov2Split",
+    "CodexReasoningEffort",
+    "CodexTestSeam",
+    "RealCodexRefusedError",
     "RunSpec",
     "default_output_dir",
     "registered_family_ids",

@@ -26,6 +26,7 @@ is built -- outside the harness.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -54,6 +55,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVENANCE_ORIGINAL,
     STUDY_STORE_NAME,
     ArmRecord,
+    CallCountGateRecord,
     DesignRecord,
     PreRegistrationRecord,
     RunRecord,
@@ -73,8 +75,10 @@ from whetstone_envs.optim.study.selection import (
     report_arm,
 )
 from whetstone_envs.optim.study.spec import (
+    CODEX_ARM_ID,
     StageId,
     arm_seeds,
+    require_pinned_arms,
     spec_from_manifest,
 )
 
@@ -86,6 +90,7 @@ if TYPE_CHECKING:
 __all__ = [
     "SEED_NOTE_CONTROL_FIELD",
     "SEED_NOTE_PROVIDER_ONLY",
+    "STAGE_PREFLIGHT_ROOT_NAME",
     "ArmRunResult",
     "OptimizerRunner",
     "StageEnvironment",
@@ -96,6 +101,13 @@ __all__ = [
     "run_stage",
     "run_stage0_into_manifest",
 ]
+
+
+#: Where the early Codex guard's preflight keeps its dr-exec job records,
+#: beneath the study directory. A stage's session probe is the study's own
+#: evidence rather than any one run's, so it lives beside ``study.json``
+#: instead of inside a run directory the stage may never create.
+STAGE_PREFLIGHT_ROOT_NAME = "codex-preflight"
 
 
 class StageError(RuntimeError):
@@ -176,6 +188,35 @@ class StageEnvironment:
     #: How a stage re-reads a run an earlier stage recorded. Absent, a
     #: stage that finds one refuses rather than selecting over a subset.
     load_recorded_run: RecordedRunLoader | None = None
+    #: Whether this invocation may spend on a real, billed Codex session.
+    #:
+    #: A spend authorization for one run of one command, not a design
+    #: field: it is set from ``whetstone-study run --allow-real-codex``,
+    #: never read off the manifest, and never hashed into the
+    #: pre-registration. The harness reads it only to refuse a stage whose
+    #: design names the Codex arm *before* any arm runs -- see
+    #: :func:`_refuse_unauthorized_codex_arm`. The runner behind
+    #: ``run_optimizer`` carries the same authorization and remains the
+    #: thing that actually gates the spend, together with the opt-in
+    #: environment variable.
+    real_codex_authorized: bool = False
+    #: How a test points the harness's Codex preflight at the scripted
+    #: fake CLI instead of a real session.
+    #:
+    #: ``None`` on every production path -- ``bound_stage_environment``
+    #: never sets one, nothing reads it off the manifest, and no CLI flag
+    #: builds one -- so the early guard reaches the real
+    #: ``codex_auth_preflight``.
+    #:
+    #: Typed as ``object`` rather than naming
+    #: :class:`~whetstone_envs.optim.codex.CodexTestSeam`, because this
+    #: module deliberately does not import the optimizer stack -- the one
+    #: place it needs Codex, the guard, imports inside the function. The
+    #: seam is a concrete frozen record rather than a behavioural port, so
+    #: a local Protocol would restate its fields rather than describe a
+    #: contract; the guard passes it straight through to
+    #: ``preflight_codex_session``, which names the real type.
+    codex_test_seam: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +295,9 @@ def run_stage0_into_manifest(
         pool_ceiling=environment.pool_ceiling,
     )
     design = _design_record(spec, result)
-    pre_registration = _pre_registration_record(design, replaced=pinned)
+    pre_registration = _pre_registration_record(
+        design, spec=spec, replaced=pinned
+    )
     updated = manifest.model_copy(
         update={
             "design": design,
@@ -281,6 +324,12 @@ def run_stage0_into_manifest(
         pinned is not None
         and pre_registration.provenance == PROVENANCE_AMENDED
     )
+    if amending:
+        # The pilot's call-count verdict was computed against the design it
+        # replaced. Carrying it across an amendment would let Stage 2 spend
+        # the full design on a gate that never saw this design's arms, run
+        # counts, or splits, so the amended study owes a fresh Stage 1.
+        updated = updated.model_copy(update={"call_count_gate": None})
     write_study_manifest(
         study_dir,
         updated,
@@ -342,18 +391,45 @@ def _splits_with_measured_configs(
     )
 
 
+def _split_by_arm(spec: StudySpec) -> dict[str, tuple[int, int] | None]:
+    """Each arm's pre-registered train/val partition, or ``None``.
+
+    ``ArmSpec`` already refuses a split on an arm whose optimizer has no
+    train/val concept and requires both halves on one that does, so this is
+    a projection rather than a second rule.
+    """
+    return {
+        arm.arm_id: (
+            None
+            if arm.train_size is None or arm.val_size is None
+            else (arm.train_size, arm.val_size)
+        )
+        for arm in spec.arms
+    }
+
+
 def _pre_registration_record(
-    design: DesignRecord, *, replaced: PreRegistrationRecord | None
+    design: DesignRecord,
+    *,
+    spec: StudySpec,
+    replaced: PreRegistrationRecord | None,
 ) -> PreRegistrationRecord:
     """The frozen block for ``design``, amending ``replaced`` if it differs.
 
     The hash is computed from the design's own values rather than copied,
     so a design and its pinning cannot disagree at the moment they are
     written.
+
+    ``spec`` supplies the per-arm train/val partition, which the design
+    block does not carry: the partition is per arm and ``DesignRecord``
+    records study-wide numbers. It is pinned all the same, because an arm
+    rerun at a different split is measuring a different thing.
     """
+    split_by_arm = _split_by_arm(spec)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -369,6 +445,7 @@ def _pre_registration_record(
     return PreRegistrationRecord(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -411,6 +488,106 @@ def _design_record(spec: StudySpec, result: Stage0Result) -> DesignRecord:
 # --------------------------------------------------------------------------
 
 
+def _refuse_unauthorized_codex_arm(
+    *,
+    spec: StudySpec,
+    stage: StageId,
+    study_dir: Path,
+    environment: StageEnvironment,
+) -> None:
+    """Refuse a Codex-bearing stage before any arm runs, or not at all.
+
+    The refusal that matters is the *early* one. ``run_optimizer`` already
+    declines an unauthorized real Codex run, but it declines it when the
+    Codex arm's own turn arrives -- after this stage has paid for every arm
+    ordered ahead of it. That is a real bill for a stage that was never
+    going to finish, so the same authorization is checked here, against the
+    design, while the stage has spent nothing.
+
+    Both halves of the opt-in are required, exactly as
+    :func:`~whetstone_envs.optim.codex.refuse_unauthorized_real_codex`
+    requires them: the command's ``--allow-real-codex`` and the opt-in
+    environment variable. Checking both here means this guard cannot report
+    a stage as authorized that the runner would then refuse.
+
+    **Authorization is not usability.** A stage that clears the opt-in can
+    still have no Codex to run: an unsupported platform, a binary that is
+    not on the run's PATH, an expired or absent session. Those were
+    discovered when the adapter was built, on the Codex arm's turn -- again
+    after the other arms were paid for -- so the same preflight
+    ``run_optimizer`` reaches is run here instead, while the stage has
+    spent nothing on the arms ahead of it. The probe is itself a billed
+    session probe, which is why it runs strictly *after* the opt-in check
+    and never before it.
+
+    Imported inside the function rather than at module scope: this module
+    takes its provider-touching collaborators as callables and does not
+    import the optimizer stack, and the constants it needs live beside the
+    guard that enforces them.
+    """
+    from whetstone_envs.optim.codex import (  # noqa: PLC0415
+        ALLOW_REAL_CODEX_ENV,
+        ALLOW_REAL_CODEX_ENV_VALUE,
+        CodexTestSeam,
+        RealCodexRefusedError,
+        preflight_codex_session,
+    )
+
+    codex_arms = tuple(
+        arm.arm_id for arm in spec.arms if arm.optimizer == CODEX_ARM_ID
+    )
+    if not codex_arms:
+        return
+    authorized = (
+        environment.real_codex_authorized
+        and os.environ.get(ALLOW_REAL_CODEX_ENV) == ALLOW_REAL_CODEX_ENV_VALUE
+    )
+    if not authorized:
+        raise RealCodexRefusedError(
+            f"{stage.value} declares the Codex arm {list(codex_arms)}, whose "
+            "runs spawn a real, billed Codex session, and this invocation is "
+            "not authorized to spend on one. Refusing before any arm runs, "
+            "so the stage buys nothing it cannot finish. Authorize it with "
+            f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} in the "
+            "environment and --allow-real-codex on the run command."
+        )
+    seam = environment.codex_test_seam
+    if seam is not None and not isinstance(seam, CodexTestSeam):
+        # ``StageEnvironment`` types this loosely to keep the optimizer
+        # stack out of the module, so the one place that has the real type
+        # is the one place that checks it. A wrong object here would
+        # otherwise reach the preflight and be read as "no seam", which is
+        # the production path.
+        raise StageError(
+            "codex_test_seam must be a CodexTestSeam; got "
+            f"{type(seam).__name__}"
+        )
+    try:
+        preflight_codex_session(
+            scratch_root=study_dir / STAGE_PREFLIGHT_ROOT_NAME,
+            model=spec.task_model,
+            allow_real_codex=environment.real_codex_authorized,
+            test_seam=seam,
+        )
+    except RealCodexRefusedError:
+        # The gate's own refusal -- an unauthorized call, or the test
+        # tripwire -- is already the right error with the right message,
+        # so it travels as itself rather than being reworded as a stage
+        # failure.
+        raise
+    except Exception as error:
+        # Re-raised as a stage refusal so the caller sees which stage
+        # declined and why, with the preflight's own message preserved as
+        # the cause rather than replaced by it.
+        raise StageError(
+            f"{stage.value} declares the Codex arm {list(codex_arms)}, and "
+            "this machine cannot run a Codex session: "
+            f"{error}. Refusing before any arm runs, so the stage does not "
+            "pay for COPRO, MIPROv2, and GEPA and then discover it can "
+            "never finish"
+        ) from error
+
+
 def run_arm_stage(
     *, study_dir: Path, stage: StageId, environment: StageEnvironment
 ) -> StageResult:
@@ -446,6 +623,21 @@ def run_arm_stage(
     spec = spec_from_manifest(manifest, stage=stage)
     if not spec.arms:
         raise StageError(f"{stage.value} has no arms to run")
+    # An arm declared after the design was pinned would spend on a design
+    # nobody registered. Stage 0 tolerates that state -- it is how an
+    # amendment is written -- so the check belongs here, not in the loader.
+    require_pinned_arms(manifest)
+    # Both refusals are before dispatch and cost nothing, so the order is
+    # about which one a reader should see first. An unauthorized Codex arm
+    # is a property of the invocation the operator can fix now; a missing
+    # pilot is a property of the study that takes a whole stage to fix.
+    _refuse_unauthorized_codex_arm(
+        spec=spec,
+        stage=stage,
+        study_dir=study_dir,
+        environment=environment,
+    )
+    _require_passed_stage1_gate(manifest=manifest, stage=stage)
 
     arm_records, run_results = _run_every_arm(
         spec=spec,
@@ -461,7 +653,11 @@ def run_arm_stage(
     )
 
     _check_call_counts(
-        spec=spec, stage=stage, run_results=run_results, design=manifest.design
+        study_dir=study_dir,
+        spec=spec,
+        stage=stage,
+        run_results=run_results,
+        design=manifest.design,
     )
 
     # One ledger per stage: the pilot's selection and the full design's are
@@ -681,6 +877,7 @@ def _run_every_arm(
 
 def _check_call_counts(
     *,
+    study_dir: Path,
     spec: StudySpec,
     stage: StageId,
     run_results: dict[str, tuple[ArmRunResult, ...]],
@@ -694,6 +891,13 @@ def _check_call_counts(
     it at the pilot is the whole point and re-running it at Stage 2 would
     just re-report a fact the pilot already established.
 
+    **The verdict is recorded before it is raised on.** Stage 2 requires a
+    passed gate to run at all, and a verdict that lived only in this
+    process could not be required of a Stage 2 started in a fresh one. The
+    record is written for a failed gate too: that is the finding, and it is
+    what lets the Stage-2 refusal say the pilot failed rather than that the
+    pilot is missing.
+
     Codex is exempt by construction, because its estimate carries
     ``gated=False``: its agent chooses how much of its cap to spend, and a
     bug detector pointed at a non-deterministic agent invites a false abort
@@ -702,7 +906,7 @@ def _check_call_counts(
     if stage is not StageId.STAGE1:
         return
     internal_size = spec.internal.size
-    overruns = [
+    overruns = tuple(
         f"{arm.arm_id}/{result.candidate.run_id}: "
         f"{result.observed_task_calls} calls"
         for arm in spec.arms
@@ -715,12 +919,62 @@ def _check_call_counts(
             official_size=spec.official.size,
             held_out_size=spec.held_out.size,
         )
-    ]
+    )
+    manifest = read_study_manifest(study_dir)
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "call_count_gate": CallCountGateRecord(
+                    stage=StageId.STAGE1.value,
+                    passed=not overruns,
+                    tolerance=STAGE1_CALL_COUNT_TOLERANCE,
+                    overruns=overruns,
+                )
+            }
+        ),
+        replace=True,
+    )
     if overruns:
         raise StageError(
             "these runs exceeded "
             f"{STAGE1_CALL_COUNT_TOLERANCE}x their pre-spend call estimate, "
             "which is what a fan-out bug looks like: " + "; ".join(overruns)
+        )
+
+
+def _require_passed_stage1_gate(
+    *, manifest: StudyManifest, stage: StageId
+) -> None:
+    """Stage 2 runs only behind a Stage 1 whose call-count gate passed.
+
+    The pilot is not a formality: it is the one place a fan-out bug is
+    caught for the price of one run per arm instead of five. A Stage 2
+    invoked directly after Stage 0, or after a Stage 1 that failed the
+    gate, spent the full design without that check ever having cleared --
+    exactly the bill the pilot exists to avoid.
+
+    Refused before dispatch, so a study in either state pays nothing. The
+    two cases are named separately because they need different actions: a
+    missing pilot has to be run, and a failed one has to be diagnosed.
+    """
+    if stage is not StageId.STAGE2:
+        return
+    gate = manifest.call_count_gate
+    if gate is None:
+        raise StageError(
+            "stage2 requires a completed stage1 whose call-count gate "
+            "passed, and this study has recorded no such gate; run stage1 "
+            "first. Refusing before any arm runs, so the full design buys "
+            "nothing the pilot was supposed to clear it for"
+        )
+    if not gate.passed:
+        raise StageError(
+            "stage2 requires a stage1 whose call-count gate passed, and "
+            "this study's pilot failed it: "
+            + "; ".join(gate.overruns)
+            + ". Refusing before any arm runs; diagnose the fan-out the "
+            "pilot caught rather than paying for it five times over"
         )
 
 
@@ -816,6 +1070,8 @@ def _arm_record(
         arm_id=arm.arm_id,
         optimizer=arm.optimizer,
         demo_mode=arm.demo_mode,
+        train_size=arm.train_size,
+        val_size=arm.val_size,
         control_identity_hash=control_identity_hash,
         seed_note=_seed_note(arm),
         runs=runs,

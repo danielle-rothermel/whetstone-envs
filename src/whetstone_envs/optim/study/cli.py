@@ -31,6 +31,10 @@ from typing import TYPE_CHECKING, Protocol
 from dr_store import DocumentFileError
 from dr_store.sync import open_sqlite
 
+from whetstone_envs.optim.codex import (
+    ALLOW_REAL_CODEX_ENV,
+    ALLOW_REAL_CODEX_ENV_VALUE,
+)
 from whetstone_envs.optim.study.environment import bound_stage_environment
 from whetstone_envs.optim.study.gates import (
     GEPA_MAX_METRIC_CALLS_PINNED,
@@ -58,6 +62,10 @@ from whetstone_envs.optim.study.manifest import (
     format_pointer_report,
     read_study_manifest,
     write_study_manifest,
+)
+from whetstone_envs.optim.study.power import (
+    WORST_CASE_SIGMA_SQ,
+    minimum_detectable_effect,
 )
 from whetstone_envs.optim.study.selection import SelectionError
 from whetstone_envs.optim.study.spec import load_study_spec
@@ -127,6 +135,12 @@ class StageRunner(Protocol):
     ``replace_design`` is part of the contract rather than a Stage-0 detail
     because the CLI cannot know which stage a runner will dispatch to; the
     harness refuses it on the stages that record no design.
+
+    ``allow_real_codex`` is this invocation's authorization to spend on a
+    real, billed Codex session. It is a run-time spend authorization, not
+    part of the study's design: it never reaches the manifest and never
+    enters the pre-registration hash, so two studies that differ only in
+    whether the operator authorized Codex spend pre-register identically.
     """
 
     def __call__(
@@ -135,6 +149,7 @@ class StageRunner(Protocol):
         study_dir: Path,
         stage: str,
         replace_design: bool = False,
+        allow_real_codex: bool = False,
     ) -> StudyManifest: ...
 
 
@@ -212,6 +227,7 @@ def plan_lines(spec: StudySpecLike) -> tuple[str, ...]:
             "",
         )
     )
+    lines.extend(_mde_lines(held_out_size=held_out, k_repeat=spec.k_repeat))
     lines.extend(
         _optimizer_budget_lines(
             spec,
@@ -221,6 +237,52 @@ def plan_lines(spec: StudySpecLike) -> tuple[str, ...]:
             held_out_size=held_out,
         )
     )
+    return tuple(lines)
+
+
+#: The task-by-arm interaction variances the pre-registered MDE is quoted
+#: at. These are the protocol review's own two design points, so they are
+#: pinned here rather than swept: a plan that quoted one number would hide
+#: how sharply the MDE moves with an assumption nothing has measured yet.
+MDE_TAU_SQ_CASES: tuple[float, ...] = (0.05, 0.10)
+
+#: How the MDE row is labelled. It is a *pre-registered* number computed
+#: from the design, not a measurement: Stage 0 measures ``tau^2`` and
+#: ``sigma^2`` and records the MDE that follows, which may differ.
+MDE_HEADING = (
+    "pre-registered MDE on the held-out split "
+    f"(worst-case sigma^2={WORST_CASE_SIGMA_SQ}, from power.py):"
+)
+
+
+def _mde_lines(*, held_out_size: int, k_repeat: int) -> tuple[str, ...]:
+    """The MDE this design can resolve, at each pinned ``tau^2``.
+
+    Computed from :func:`minimum_detectable_effect` at the manifest's own
+    held-out size and ``K_REPEAT`` rather than read off a table, so the
+    number a reader authorizes spend against is the one the design implies.
+
+    ``sigma^2`` is the worst-case binary within-task variance. Stage 0
+    replaces both variances with measurements and records the resulting
+    MDE in the design block; until then this is the pre-registration.
+    """
+    if held_out_size < 1 or k_repeat < 1:
+        # A spec with no held-out split or no repeats has no MDE to state,
+        # and a fabricated one would be worse than none.
+        return ("", f"{MDE_HEADING} not computable at these sizes", "")
+    lines = ["", MDE_HEADING]
+    lines.extend(
+        f"  tau^2={tau_sq:<6} T={held_out_size} K={k_repeat}  "
+        f"MDE={
+            minimum_detectable_effect(
+                tau_sq=tau_sq,
+                sigma_sq=WORST_CASE_SIGMA_SQ,
+                n_tasks=held_out_size,
+                num_seeds=k_repeat,
+            ):.4f}"
+        for tau_sq in MDE_TAU_SQ_CASES
+    )
+    lines.append("")
     return tuple(lines)
 
 
@@ -356,6 +418,7 @@ def _run_stage(
     stage: str,
     run_stage: StageRunner | None,
     replace_design: bool = False,
+    allow_real_codex: bool = False,
 ) -> int:
     if run_stage is None:
         print(
@@ -365,7 +428,10 @@ def _run_stage(
         )
         return EXIT_ERROR
     manifest = run_stage(
-        study_dir=study_dir, stage=stage, replace_design=replace_design
+        study_dir=study_dir,
+        stage=stage,
+        replace_design=replace_design,
+        allow_real_codex=allow_real_codex,
     )
     print(f"{stage} complete for study {manifest.study_id}")
     print(study_dir / STUDY_MANIFEST_NAME)
@@ -718,6 +784,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        "--allow-real-codex",
+        action="store_true",
+        help=(
+            "Authorize this invocation to spend on a real, billed Codex "
+            "session for the study's Codex arm. Half the opt-in: "
+            f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} must "
+            "also be set in the environment. Without both, a stage whose "
+            "design names the Codex arm is refused before any arm runs. "
+            "This is a spend authorization, not part of the design: it "
+            "does not enter the pre-registration hash."
+        ),
+    )
+    run.add_argument(
         "--replace-design",
         action="store_true",
         help=(
@@ -763,7 +842,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def default_stage_runner(
-    *, study_dir: Path, stage: str, replace_design: bool = False
+    *,
+    study_dir: Path,
+    stage: str,
+    replace_design: bool = False,
+    allow_real_codex: bool = False,
 ) -> StudyManifest:
     """Run one stage on the fake transport, over the study's own directory.
 
@@ -776,8 +859,15 @@ def default_stage_runner(
     Fake transport is the default because spend authorization attaches at a
     Stage gate and not at a CLI invocation. A paid stage is a deliberate
     act, so it is not reachable by running this command with no flags.
+
+    ``allow_real_codex`` is forwarded into the bound environment, where it
+    reaches both the study's optimizer runner and the harness's early
+    refusal. It travels no further: the manifest this returns records the
+    design, and an authorization to spend is not one.
     """
-    with bound_stage_environment(study_dir) as environment:
+    with bound_stage_environment(
+        study_dir, allow_real_codex=allow_real_codex
+    ) as environment:
         return _run_stage_harness(
             study_dir=study_dir,
             stage=stage,
@@ -823,6 +913,7 @@ def _dispatch(
             stage=arguments.stage,
             run_stage=run_stage,
             replace_design=arguments.replace_design,
+            allow_real_codex=arguments.allow_real_codex,
         )
     if arguments.command == "report":
         return _run_report(
@@ -896,6 +987,8 @@ __all__ = [
     "EXIT_CHECK_FAILED",
     "EXIT_ERROR",
     "EXIT_OK",
+    "MDE_HEADING",
+    "MDE_TAU_SQ_CASES",
     "MEASURED_LABEL",
     "MEASURED_TASK_CALLS_BY_ARM",
     "NOT_CHECKED",

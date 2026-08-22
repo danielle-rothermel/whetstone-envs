@@ -1,4 +1,4 @@
-"""The eight MIPROv2 fidelity invariants.
+"""The nine MIPROv2 fidelity invariants.
 
 MIPROv2's claim is a specific algorithm: bootstrap demonstrations from the
 trainset, ground instruction proposals in them, then search the resulting
@@ -1041,6 +1041,84 @@ def miprov2_trials_match_control(evidence: RunEvidence) -> AuditFinding:
     )
 
 
+def miprov2_train_val_disjoint(evidence: RunEvidence) -> AuditFinding:
+    """Bootstrap and search read disjoint halves of the internal split.
+
+    MIPROv2 bootstraps demonstrations from the trainset and scores every
+    trial on the valset. If the two overlap, a candidate can score well on
+    a task whose own gold answer it is carrying as a demonstration, and the
+    resulting improvement is memorization that the study would read as
+    search efficacy. The disjointness is therefore part of what a MIPROv2
+    number *means*, not a configuration detail.
+
+    Checked twice over, because the control and the run can disagree: the
+    control's own two sets must be disjoint, and every evaluation the run
+    actually issued must fall inside the union. An intent that reached
+    outside both sets evaluated a task the partition never admitted --
+    which is the fan-out failure mode, seen from the split's side.
+    """
+    invariant = InvariantId.MIPRO_TRAIN_VAL_DISJOINT
+    state = _terminal_state(evidence)
+    if state is None:
+        return _missing(invariant, "no step persisted MIPROv2 state")
+    refs = _state_refs(evidence)
+    control = state.control
+    trainset = tuple(control.trainset_task_hashes)
+    valset = tuple(control.valset_task_hashes)
+    if not trainset or not valset:
+        return _missing(
+            invariant, "the control records an empty trainset or valset"
+        )
+
+    overlap = set(trainset) & set(valset)
+    if overlap:
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            (
+                f"the control's trainset ({len(trainset)}) and valset "
+                f"({len(valset)}) share {len(overlap)} task(s), so a "
+                f"bootstrapped demonstration can be scored on its own task"
+            ),
+            refs,
+        )
+
+    admitted = set(trainset) | set(valset)
+    problems: list[str] = []
+    checked = 0
+    for entry in evidence.steps:
+        for position, resolution in enumerate(entry.resolved_intents):
+            tasks = resolution.optim_eval_request.task_hashes
+            if tasks is None:
+                continue
+            checked += 1
+            outside = set(tasks) - admitted
+            if outside:
+                problems.append(
+                    f"step {entry.index} intent {position} evaluates "
+                    f"{len(outside)} task(s) outside the declared "
+                    f"train/val partition"
+                )
+
+    if problems:
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            "; ".join(problems),
+            refs,
+        )
+    return _finding(
+        invariant,
+        AuditStatus.PASS,
+        (
+            f"the control's {len(trainset)}-task trainset and "
+            f"{len(valset)}-task valset are disjoint, and all {checked} "
+            f"task-scoped evaluation intent(s) drew only from them"
+        ),
+        refs,
+    )
+
+
 #: Every MIPROv2 invariant, in the order the audit report lists them.
 #:
 #: Enumerated here for the registry to splice in; ``registry.py`` stays the
@@ -1054,6 +1132,7 @@ MIPROV2_INVARIANTS = (
     miprov2_periodic_full_eval,
     miprov2_bootstrap_through_engine,
     miprov2_trials_match_control,
+    miprov2_train_val_disjoint,
 )
 
 
@@ -1078,6 +1157,7 @@ __all__ = [
     "miprov2_minibatch_sizing",
     "miprov2_periodic_full_eval",
     "miprov2_tpe_selection",
+    "miprov2_train_val_disjoint",
     "miprov2_trials_match_control",
     "miprov2_zeroshot_grounding",
     "zeroshot_grounding_problems",

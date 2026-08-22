@@ -69,6 +69,8 @@ def _arms() -> tuple[ArmRecord, ...]:
             arm_id=arm_id,
             optimizer=arm_id,
             demo_mode=None,
+            train_size=None,
+            val_size=None,
             control_identity_hash=chr(ord("a") + index) * 64,
             seed_note="provider-seed-control-only",
             runs=(),

@@ -16,6 +16,7 @@ from whetstone_envs.optim.study.analysis import (
     _achieved_counts,
     _delta_for,
 )
+from whetstone_envs.optim.study.power import COMPLETENESS_BACKSTOP
 from whetstone_envs.optim.study.selection import HeldOutMeasurement
 
 HELD_OUT_CONFIG = "held-out-eval-config"
@@ -89,6 +90,57 @@ def test_a_ragged_task_shrinks_its_own_contribution() -> None:
     # tightened by dropping it.
     assert len(ragged.arm_per_task) == len(complete.arm_per_task)
     assert ragged.completeness < complete.completeness
+
+
+def test_a_thin_anchor_downgrades_the_delta_it_anchors() -> None:
+    """Completeness is the paired minimum, so both sides count.
+
+    Fails-before: the weighting read the *arm's* achieved counts only. An
+    arm that measured every row against an anchor that lost two thirds of
+    its own reported completeness 1.0 -- the anchor's thin fallback mean
+    was treated as fully observed -- so the delta cleared the 0.90 backstop
+    and was claimed on evidence that was mostly missing on one side.
+    """
+    arm = _measurement("copro", (1.0, 1.0, 1.0), counts=(3, 3, 3))
+    thin_anchor = _measurement(
+        "naive", (0.0, 0.0, 0.0), completeness=1 / 3, counts=(1, 1, 1)
+    )
+    delta = _delta_for(
+        arm_id="copro", measurement=arm, naive=thin_anchor, k_repeat=3
+    )
+    assert delta.completeness == pytest.approx(1 / 3)
+    assert delta.completeness < COMPLETENESS_BACKSTOP
+    # And the arm's own side, measured against a complete anchor, still
+    # clears it -- so the downgrade is the anchor's doing, not a blanket
+    # tightening of the rule.
+    complete = _delta_for(
+        arm_id="copro",
+        measurement=arm,
+        naive=_measurement("naive", (0.0, 0.0, 0.0), counts=(3, 3, 3)),
+        k_repeat=3,
+    )
+    assert complete.completeness == pytest.approx(1.0)
+
+
+def test_the_paired_minimum_is_taken_per_task_not_in_aggregate() -> None:
+    """Tasks do not fail evenly, and neither does the pairing.
+
+    Each side is thin on a *different* task here, so an aggregate rule
+    would report both sides at 2/3 and call the comparison 2/3 complete.
+    Per task, every one of the three is thin on one side or the other, so
+    the honest weight is lower than either side's own completeness.
+    """
+    delta = _delta_for(
+        arm_id="copro",
+        measurement=_measurement(
+            "copro", (1.0, 1.0, 1.0), completeness=7 / 9, counts=(1, 3, 3)
+        ),
+        naive=_measurement(
+            "naive", (0.0, 0.0, 0.0), completeness=7 / 9, counts=(3, 1, 1)
+        ),
+        k_repeat=3,
+    )
+    assert delta.completeness == pytest.approx(3 / 9)
 
 
 def test_an_unpaired_candidate_is_refused_rather_than_truncated() -> None:

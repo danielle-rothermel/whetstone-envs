@@ -19,8 +19,14 @@ from whetstone.eval import (
 from whetstone.eval import (
     EvalRejected as WhetstoneEvalRejected,
 )
-from whetstone.experiment.candidate import CandidateRef, candidate_reference
+from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
+from whetstone.experiment.candidate import (
+    Candidate,
+    CandidateRef,
+    candidate_reference,
+)
 from whetstone.experiment.reward import RewardRef
+from whetstone.optim.codex.mcp_bridge import CODEX_EVAL_INPUT_FIELDS
 from whetstone.optim.contracts import (
     IntentResolution,
     OptimResult,
@@ -64,6 +70,7 @@ if TYPE_CHECKING:
     from dr_store import ObjectStore
     from whetstone.eval import EvalResult
     from whetstone.experiment.sampling import EvalSplit
+    from whetstone.optim.contracts import OptimStepResult
 
     from whetstone_envs.instances import Instance
     from whetstone_envs.optim.experiment import PreparedExperiment
@@ -628,6 +635,123 @@ def _intent_resolution_source(
     )
 
 
+def _evidence_reward_ref(
+    *, store: ObjectStore, ref: TypedRef | None
+) -> RewardRef | None:
+    """The Reward the ``EvalEvidence`` at ``ref`` cites, if any."""
+    if ref is None or ref.schema_name != EVAL_EVIDENCE_SCHEMA:
+        return None
+    raw = store.get(ref.reference)
+    reward = raw.get("reward_ref") if isinstance(raw, dict) else None
+    if reward is None:
+        return None
+    return RewardRef.model_validate(reward)
+
+
+def _tool_evidence_sources(
+    step: OptimStepResult, *, store: ObjectStore
+) -> tuple[tuple[int, _TrajectoryResolutionSource], ...]:
+    """Trajectory rows for the evaluations a TOOL_USING step paid for.
+
+    Codex is the only such optimizer. It resolves no intent and mints no
+    search evidence by design -- its paid evaluations are cited from
+    ``tool_evidence`` instead -- so a projection reading only the intent
+    path renders a Codex run as having evaluated nothing, and the report
+    shows a terminal candidate with no measurement behind it.
+
+    Each row is attributed to the candidate the Tool Call actually built:
+    the ``base_ref`` the call named, mutated by the ``template`` it
+    submitted. That is the same reconstruction the adapter performs when
+    it rebuilds the accepted candidate, so the report attributes an
+    evaluation to what was measured rather than to the step's seed.
+
+    A refused call contributes no row: it bought nothing. A call that
+    terminalized with a failure does contribute one, carrying that
+    failure, because the run paid for it.
+
+    The reward cited is the ``EvalEvidence``'s own, not the Tool
+    Result's. The two are different records: the Tool Result's Reward
+    cites the evidence and carries the call's ``provenance_ordinal``,
+    while the report's embedded evaluation is projected from the
+    evidence, so citing the Tool Result's would make every row disagree
+    with the evidence rendered beneath it.
+    """
+    sources: list[tuple[int, _TrajectoryResolutionSource]] = []
+    for evidence in step.tool_evidence:
+        entry = evidence.store_entry
+        ordinal = entry.capacity_debit_ordinal
+        if ordinal is None:
+            # A refusal debits no capacity and evaluated nothing.
+            continue
+        record = evidence.result.record
+        call = entry.tool_call.record
+        # The wire keys are fixed by the Tool's input schema, whose one
+        # owner is whetstone-ai's ``CODEX_EVAL_INPUT_FIELDS`` -- the same
+        # constant ``optim/audit/codex.py`` checks the ledger against.
+        # Re-spelling them here would let this projection and the audit
+        # disagree about the surface a foreign agent was handed. The
+        # unpack pins the schema's arity as well as its names, so a
+        # widened or narrowed tool surface fails here rather than
+        # silently reading the wrong key.
+        #
+        # ``model_route`` is deliberately unread: it is the route the call
+        # asserted, which ``EngineToolEvaluator`` already validated
+        # against the engine, not part of the candidate being rebuilt.
+        #
+        # The wire key is not the payload field it lands in -- that is the
+        # run's mutation field, which the Tool Config names. They are
+        # different names for a reason and must not be conflated:
+        # ``EngineToolEvaluator`` reads the first and writes the second,
+        # and this reconstruction mirrors it.
+        base_ref_arg, _route_arg, template_arg = CODEX_EVAL_INPUT_FIELDS
+        candidate = candidate_reference(
+            Candidate(
+                candidate_id=str(call.call_id),
+                base_ref=TypedRef.model_validate(call.args[base_ref_arg]),
+                payload={
+                    str(call.tool_config.record.candidate_template_field): (
+                        call.args[template_arg]
+                    )
+                },
+            )
+        )
+        failed = record.terminal_failure is not None
+        eval_result_ref = (
+            record.evaluation_evidence_refs[0]
+            if record.evaluation_evidence_refs
+            else None
+        )
+        sources.append(
+            (
+                ordinal,
+                _TrajectoryResolutionSource(
+                    candidate=candidate,
+                    request_id=f"tool:{call.call_id}",
+                    outcome="failed" if failed else "completed",
+                    eval_result_ref=eval_result_ref,
+                    reward_ref=_evidence_reward_ref(
+                        store=store, ref=eval_result_ref
+                    ),
+                    classification=None,
+                    message=(
+                        None
+                        if record.terminal_failure is None
+                        else record.terminal_failure.message
+                    ),
+                    terminal_failure=(
+                        None
+                        if record.terminal_failure is None
+                        else cast(
+                            "dict[str, JsonValue]",
+                            record.terminal_failure.model_dump(mode="json"),
+                        )
+                    ),
+                ),
+            )
+        )
+    return tuple(sources)
+
+
 def _gepa_transcript_sources(  # noqa: PLR0912
     *, store: ObjectStore, optimizer_result: OptimResult
 ) -> tuple[tuple[int, int, _TrajectoryResolutionSource], ...]:
@@ -808,13 +932,17 @@ def project_trajectory_report(  # noqa: PLR0912, PLR0913, PLR0915
                     dispositions, candidate.record_ref, "rejected"
                 )
         resolution_indexes: list[int] = []
-        resolution_sources = tuple(
-            (index, _intent_resolution_source(resolution))
-            for index, resolution in enumerate(step.resolved_intents)
-        ) + tuple(
-            (invocation_ordinal, source)
-            for source_step, invocation_ordinal, source in gepa_sources
-            if source_step == step.step_index
+        resolution_sources = (
+            tuple(
+                (index, _intent_resolution_source(resolution))
+                for index, resolution in enumerate(step.resolved_intents)
+            )
+            + tuple(
+                (invocation_ordinal, source)
+                for source_step, invocation_ordinal, source in gepa_sources
+                if source_step == step.step_index
+            )
+            + _tool_evidence_sources(step, store=store)
         )
         if len({index for index, _source in resolution_sources}) != len(
             resolution_sources

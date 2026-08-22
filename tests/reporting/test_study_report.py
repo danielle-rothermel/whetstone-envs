@@ -71,6 +71,7 @@ from whetstone_envs.reporting.study_report import (
     STUDY_MANIFEST_COPY,
     UNPRICED,
     VALIDATION_CHECKLIST,
+    VERDICT_INCOMPLETE,
     VERDICT_INVALID,
     VERDICT_NO_IMPROVEMENT,
     VERDICT_NOT_VALIDATED,
@@ -275,6 +276,8 @@ def reported_manifest(stage0_manifest: StudyManifest) -> StudyManifest:
             arm_id="copro",
             optimizer="copro",
             demo_mode=None,
+            train_size=None,
+            val_size=None,
             control_identity_hash="d" * 64,
             seed_note="provider-seed-control-only",
             runs=(
@@ -286,6 +289,8 @@ def reported_manifest(stage0_manifest: StudyManifest) -> StudyManifest:
             arm_id="gepa",
             optimizer="gepa",
             demo_mode=None,
+            train_size=44,
+            val_size=44,
             control_identity_hash="e" * 64,
             seed_note="control-seed-field",
             runs=(_run("gepa-3000", seed=3000, passed=False),),
@@ -294,6 +299,8 @@ def reported_manifest(stage0_manifest: StudyManifest) -> StudyManifest:
             arm_id="null-random",
             optimizer="null-random",
             demo_mode=None,
+            train_size=None,
+            val_size=None,
             control_identity_hash="f" * 64,
             seed_note="control-seed-field",
             runs=(_run("nullA-5000", seed=5000, passed=True, unpriced=False),),
@@ -967,6 +974,51 @@ def test_a_clean_study_still_reports_its_improvement(
     assert VERDICT_INVALID not in render_markdown(report)
 
 
+def test_the_reports_anchor_name_matches_the_analysis_that_writes_it() -> None:
+    """Two spellings of one persisted candidate name, pinned equal.
+
+    The report spells it rather than importing it, so that rendering a
+    manifest does not pull in the optimizer stack. That is only safe while
+    the two agree: a rename on the writing side would otherwise leave the
+    report silently unable to find the anchor row.
+    """
+    from whetstone_envs.optim.study.analysis import NAIVE_CANDIDATE_NAME
+    from whetstone_envs.reporting.study_report import (
+        NAIVE_CANDIDATE_NAME as REPORT_NAME,
+    )
+
+    assert REPORT_NAME == NAIVE_CANDIDATE_NAME == "naive"
+
+
+def test_a_thin_anchor_is_visible_beside_the_paired_completeness(
+    reported_manifest: StudyManifest,
+) -> None:
+    """A downgraded row says which side of the pairing was thin.
+
+    Fails-before: the row carried only the arm's own completeness, so an
+    arm downgraded by *the anchor's* missing rows read as an arm that had
+    failed to measure itself. The paired number decides the verdict and
+    the anchor's own number is rendered beside it.
+    """
+    rows = tuple(
+        row.model_copy(
+            update={"completeness": 0.4, "anchor_completeness": 0.4}
+        )
+        if row.candidate_name == "copro"
+        else row
+        for row in reported_manifest.held_out
+    )
+    report = build_study_report(
+        reported_manifest.model_copy(update={"held_out": rows})
+    )
+    markdown = render_markdown(report)
+    assert "anchor completeness" in markdown
+    assert "completeness (paired)" in markdown
+    # The paired number is what the backstop reads, so the arm is reported
+    # incomplete rather than validated.
+    assert VERDICT_INCOMPLETE in markdown
+
+
 def test_a_failed_leakage_rule_downgrades_the_headline(
     reported_manifest: StudyManifest,
 ) -> None:
@@ -1128,13 +1180,26 @@ def test_every_non_evidence_pattern_matches_something_it_allows() -> None:
 # --------------------------------------------------------------------------
 
 
+def _split_by_arm_of(
+    manifest: StudyManifest,
+) -> dict[str, tuple[int, int] | None]:
+    """The per-arm partition the manifest pinned, or none per arm."""
+    design = manifest.design
+    assert design is not None
+    if manifest.pre_registration is not None:
+        return dict(manifest.pre_registration.split_by_arm)
+    return dict.fromkeys(design.k_run_by_arm)
+
+
 def _amended(manifest: StudyManifest) -> StudyManifest:
     """``manifest`` with an amended pre-registration block attached."""
     design = manifest.design
     assert design is not None
+    split_by_arm = _split_by_arm_of(manifest)
     prior = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1148,6 +1213,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
     current = pre_registration_design_hash(
         k_repeat=amended_k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1161,6 +1227,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
                 design_hash=current,
                 k_repeat=amended_k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
+                split_by_arm=split_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,
@@ -1212,9 +1279,11 @@ def test_an_original_pre_registration_renders_without_an_amendment(
     """The guard against a report that calls every design amended."""
     design = reported_manifest.design
     assert design is not None
+    split_by_arm = _split_by_arm_of(reported_manifest)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1228,6 +1297,7 @@ def test_an_original_pre_registration_renders_without_an_amendment(
                 design_hash=design_hash,
                 k_repeat=design.k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
+                split_by_arm=split_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,

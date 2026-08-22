@@ -21,15 +21,14 @@ from whetstone.optim.contracts import OptimResult
 
 from whetstone_envs.optim.cli import build_parser, main
 from whetstone_envs.optim.run import (
+    CODEX_DEFAULT_BINARY,
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_MIPROV2_SPLIT,
     DEFAULT_SPLIT_SIZES,
     GEPA_DEFAULT_SEED,
     MIPROV2_DEFAULT_SEED,
-    MIPROV2_SPLITS,
     OPTIMIZERS,
     SEED_DISPOSITION_CONTROL_FIELD,
     SEED_DISPOSITION_PROVIDER_ONLY,
@@ -145,30 +144,67 @@ def test_gepa_metric_call_ceiling_must_be_positive(tmp_path) -> None:
         )
 
 
-def test_codex_capacity_is_refused_until_its_adapter_lands(tmp_path) -> None:
-    """``codex_capacity`` is carried but nothing honours it yet.
-
-    Refusing beats accepting a cap no admission ledger enforces, which would
-    read as a respected capacity in the study manifest.
-    """
-    with pytest.raises(ValueError, match="cannot drive yet"):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("codex_capacity", 8),
+        ("codex_binary", "/usr/bin/false"),
+        ("codex_model", "some-agent-model"),
+        ("codex_reasoning_effort", "high"),
+        ("codex_wall_seconds", 30.0),
+    ],
+)
+def test_codex_settings_are_refused_on_another_optimizer(
+    tmp_path, field: str, value: object
+) -> None:
+    """A setting that looks honoured but is not misdescribes the arm."""
+    with pytest.raises(
+        ValueError, match="codex settings apply only to --optimizer codex"
+    ):
         run_optimizer(
             _spec(
-                output_dir=tmp_path / "codex-capacity",
-                codex_capacity=8,
+                optimizer="copro",
+                output_dir=tmp_path / f"codex-{field}",
+                **{field: value},
             )
         )
 
 
+def test_a_zero_codex_capacity_is_refused() -> None:
+    """A cap of zero admits nothing, so the run could buy no evaluation."""
+    with pytest.raises(ValueError, match="codex_capacity must be at least 1"):
+        run_optimizer(_spec(optimizer="codex", codex_capacity=0))
+
+
+def test_an_unknown_codex_reasoning_effort_is_refused() -> None:
+    with pytest.raises(ValueError, match="codex_reasoning_effort must be"):
+        run_optimizer(
+            _spec(optimizer="codex", codex_reasoning_effort="maximum")
+        )
+
+
 def test_the_runner_admits_only_the_optimizers_it_can_drive() -> None:
-    """``codex`` and the nulls are named by the protocol but not runnable.
+    """The nulls are named by the protocol but are controls, not optimizers.
 
     Admitting a name the runner cannot drive would fail inside the durable
     run boundary rather than at spec validation.
     """
-    assert OPTIMIZERS == ("copro", "gepa", "miprov2")
-    for absent in ("codex", "null-random", "null-identity"):
+    assert OPTIMIZERS == ("codex", "copro", "gepa", "miprov2")
+    for absent in ("null-random", "null-identity"):
         assert absent not in OPTIMIZERS
+
+
+def test_a_test_seam_is_refused_on_another_optimizer() -> None:
+    """The scripted-preflight seam belongs to the Codex arm alone."""
+    from whetstone_envs.optim.codex import CodexTestSeam
+
+    with pytest.raises(ValueError, match="codex_test_seam applies only"):
+        run_optimizer(
+            _spec(optimizer="copro"),
+            codex_test_seam=CodexTestSeam(
+                preflight=lambda **_kwargs: None, environment={}
+            ),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -222,6 +258,8 @@ def test_an_explicit_seed_reaches_the_gepa_control(tmp_path) -> None:
                 output_dir=tmp_path / "gepa-seeded",
                 run_id="gepa-seeded",
                 seed=3001,
+                train_size=1,
+                val_size=1,
             )
         )
     assert seen == [3001]
@@ -251,6 +289,8 @@ def test_an_explicit_seed_reaches_the_miprov2_control(tmp_path) -> None:
                 output_dir=tmp_path / "miprov2-seeded",
                 run_id="miprov2-seeded",
                 seed=2001,
+                train_size=1,
+                val_size=1,
             )
         )
     assert seen == [2001]
@@ -409,6 +449,8 @@ def test_gepa_metric_call_ceiling_reaches_the_control(tmp_path) -> None:
                 output_dir=tmp_path / "gepa-ceiling",
                 run_id="gepa-ceiling",
                 gepa_max_metric_calls=3,
+                train_size=1,
+                val_size=1,
             )
         )
     assert seen == [3]
@@ -468,10 +510,40 @@ def test_every_new_flag_reaches_the_spec_unchanged() -> None:
     assert spec.run_id == "study-run"
 
 
-def test_codex_capacity_flag_reaches_the_spec_and_is_then_refused() -> None:
-    """The flag parses; the runner is what refuses it."""
-    spec = _captured_spec(["--optimizer", "copro", "--codex-capacity", "8"])
+def test_the_codex_flags_reach_the_spec() -> None:
+    spec = _captured_spec(
+        [
+            "--optimizer",
+            "codex",
+            "--codex-capacity",
+            "8",
+            "--codex-binary",
+            "/opt/fake/codex",
+            "--codex-model",
+            "agent-model",
+            "--codex-reasoning-effort",
+            "high",
+            "--codex-wall-seconds",
+            "45",
+        ]
+    )
     assert spec.codex_capacity == 8
+    assert spec.codex_binary == "/opt/fake/codex"
+    assert spec.codex_model == "agent-model"
+    assert spec.codex_reasoning_effort == "high"
+    assert spec.codex_wall_seconds == 45.0
+
+
+def test_the_codex_binary_defaults_to_the_real_cli() -> None:
+    """A run that names no binary spawns the real Codex, not a stand-in.
+
+    The fake CLI is selectable only by an explicit flag, so no default
+    path can quietly run a scripted agent and report it as a Codex run.
+    """
+    spec = _captured_spec(["--optimizer", "codex"])
+    assert spec.codex_binary == CODEX_DEFAULT_BINARY
+    assert spec.codex_capacity is None
+    assert spec.codex_model is None
 
 
 def test_a_negative_pool_seed_start_is_accepted_by_the_parser() -> None:
@@ -488,6 +560,7 @@ def test_a_negative_pool_seed_start_is_accepted_by_the_parser() -> None:
         "--copro-breadth",
         "--gepa-max-metric-calls",
         "--codex-capacity",
+        "--codex-wall-seconds",
     ],
 )
 def test_count_flags_refuse_a_non_positive_value(flag: str) -> None:
@@ -522,9 +595,7 @@ def test_every_drivable_optimizer_parses(optimizer: str) -> None:
     assert spec.optimizer == optimizer
 
 
-@pytest.mark.parametrize(
-    "optimizer", ["codex", "null-random", "null-identity"]
-)
+@pytest.mark.parametrize("optimizer", ["null-random", "null-identity"])
 def test_optimizers_the_runner_cannot_drive_are_refused(
     optimizer: str,
 ) -> None:
@@ -550,7 +621,9 @@ def test_the_miprov2_shape_defaults_are_the_runners_own() -> None:
     spec = _spec()
     assert spec.miprov2_num_trials == DEFAULT_MIPROV2_NUM_TRIALS == 2
     assert spec.miprov2_num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES == 3
-    assert spec.miprov2_split == DEFAULT_MIPROV2_SPLIT.value == "single-task"
+    # The split has no default: a run must state what it trained on.
+    assert spec.train_size is None
+    assert spec.val_size is None
 
 
 @pytest.mark.parametrize(
@@ -568,18 +641,120 @@ def test_the_miprov2_shape_flags_reach_the_spec(
     assert getattr(spec, field) == int(value)
 
 
-@pytest.mark.parametrize("split", MIPROV2_SPLITS)
-def test_every_miprov2_split_reaches_the_spec(split: str) -> None:
-    spec = _captured_spec(["--optimizer", "miprov2", "--miprov2-split", split])
-    assert spec.miprov2_split == split
+@pytest.mark.parametrize("optimizer", ["miprov2", "gepa"])
+def test_the_train_val_split_reaches_the_spec(optimizer: str) -> None:
+    spec = _captured_spec(
+        [
+            "--optimizer",
+            optimizer,
+            "--train-size",
+            "1",
+            "--val-size",
+            "1",
+        ]
+    )
+    assert (spec.train_size, spec.val_size) == (1, 1)
 
 
-def test_an_unknown_miprov2_split_is_refused_at_the_parser() -> None:
+@pytest.mark.parametrize("optimizer", ["miprov2", "gepa"])
+def test_an_optimizer_with_a_train_val_concept_requires_one(
+    optimizer: str,
+) -> None:
+    """No default: an unstated split is refused rather than guessed."""
+    spec = _spec(optimizer=optimizer)
+    with pytest.raises(ValueError, match="requires an explicit"):
+        run_optimizer(spec)
+
+
+@pytest.mark.parametrize("optimizer", ["miprov2", "gepa"])
+@pytest.mark.parametrize("overrides", [{"train_size": 1}, {"val_size": 1}])
+def test_half_a_train_val_split_is_refused(
+    optimizer: str, overrides: dict[str, object]
+) -> None:
+    """Both sizes or neither; one alone cannot name a partition."""
+    spec = replace(_spec(optimizer=optimizer), **overrides)
+    with pytest.raises(ValueError, match="requires an explicit"):
+        run_optimizer(spec)
+
+
+def test_a_split_exceeding_the_internal_split_is_refused() -> None:
+    spec = _spec(optimizer="miprov2", train_size=2, val_size=2)
+    with pytest.raises(ValueError, match="exceeds the internal split of 2"):
+        run_optimizer(spec)
+
+
+def test_a_partial_gepa_partition_is_refused_before_the_run_boundary(
+    tmp_path: Path,
+) -> None:
+    """GEPA must cover the internal split exactly, and refuse early if not.
+
+    whetstone's GEPA factory builds its data registry from the whole
+    internal split and then requires the control's trainset and valset to
+    cover it, so ``train + val < internal`` is not a legal GEPA partition.
+
+    Fails-before: envs validated only ``<=``, so a partial partition passed
+    spec validation and was rejected by whetstone *inside* the durable run
+    boundary -- after the run directory existed. Asserting the directory is
+    absent is what makes "before the boundary" checkable.
+    """
+    output_dir = tmp_path / "run"
+    spec = replace(
+        _spec(optimizer="gepa", train_size=1, val_size=1),
+        split_sizes=(3, 2, 0),
+        output_dir=output_dir,
+    )
+    with pytest.raises(ValueError, match="cover the internal split exactly"):
+        run_optimizer(spec)
+    assert not output_dir.exists()
+
+
+def test_an_exact_gepa_partition_passes_validation() -> None:
+    """The coverage rule refuses a partial partition, not every partition."""
+    from whetstone_envs.optim.run import _validate_train_val_split
+
+    _validate_train_val_split(
+        replace(
+            _spec(optimizer="gepa", train_size=1, val_size=1),
+            split_sizes=(2, 2, 0),
+        )
+    )
+
+
+def test_miprov2_still_accepts_a_partition_inside_the_internal_split() -> None:
+    """The coverage rule is GEPA's alone; MIPROv2 keeps the ``<=`` rule.
+
+    MIPROv2 bootstraps from the trainset and scores on the valset without
+    building a registry over the whole split, so a partition that leaves
+    tasks unused is legal for it and must not be swept up by GEPA's rule.
+    """
+    from whetstone_envs.optim.run import _validate_train_val_split
+
+    _validate_train_val_split(
+        replace(
+            _spec(optimizer="miprov2", train_size=1, val_size=1),
+            split_sizes=(3, 2, 0),
+        )
+    )
+
+
+@pytest.mark.parametrize("optimizer", ["copro", "codex"])
+def test_a_train_val_split_is_refused_on_an_optimizer_without_one(
+    optimizer: str,
+) -> None:
+    """COPRO and Codex-direct have no train/val concept."""
+    spec = _spec(optimizer=optimizer, train_size=1, val_size=1)
+    with pytest.raises(ValueError, match="apply only to --optimizer"):
+        run_optimizer(spec)
+
+
+@pytest.mark.parametrize("flag", ["--train-size", "--val-size"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_a_non_positive_train_val_size_is_refused(
+    flag: str, value: str
+) -> None:
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(
-            ["--optimizer", "miprov2", "--miprov2-split", "nope"]
-        )
+        parser.parse_args(["--optimizer", "miprov2", flag, value])
 
 
 @pytest.mark.parametrize(
@@ -599,7 +774,6 @@ def test_a_non_positive_miprov2_shape_is_refused(
     [
         {"miprov2_num_trials": 10},
         {"miprov2_num_candidates": 6},
-        {"miprov2_split": "internal"},
     ],
 )
 def test_miprov2_settings_are_refused_on_another_optimizer(
@@ -619,7 +793,6 @@ def test_miprov2_settings_are_refused_on_another_optimizer(
             {"miprov2_num_candidates": 0},
             "miprov2_num_candidates must be at least 1",
         ),
-        ({"miprov2_split": "nope"}, "miprov2_split must be one of"),
     ],
 )
 def test_invalid_miprov2_settings_are_refused_at_spec_validation(

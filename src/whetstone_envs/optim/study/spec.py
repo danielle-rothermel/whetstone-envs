@@ -18,8 +18,11 @@ from dataclasses import dataclass, field
 from enum import UNIQUE, StrEnum, auto, verify
 from typing import TYPE_CHECKING
 
-from whetstone_envs.optim.miprov2 import MIPROV2_SPLITS
-from whetstone_envs.optim.study.manifest import read_study_manifest
+from whetstone_envs.optim.split import TRAIN_VAL_OPTIMIZERS
+from whetstone_envs.optim.study.manifest import (
+    PreRegistrationViolationError,
+    read_study_manifest,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -33,6 +36,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CI_LEVEL",
+    "CODEX_ARM_ID",
     "CODEX_EVALUATE_CALL_CAP",
     "CORRECTION_RULE",
     "HOLM_FAMILY_SIZE",
@@ -43,6 +47,9 @@ __all__ = [
     "K_RUN_PILOT",
     "K_RUN_STAGE2",
     "NULL_ARM_IDS",
+    "PROTOCOL_SPLIT_SIZES",
+    "PROTOCOL_TRAIN_SIZE",
+    "PROTOCOL_VAL_SIZE",
     "REAL_OPTIMIZER_ARM_IDS",
     "RESAMPLES",
     "SEED_RANGE_BY_OPTIMIZER",
@@ -56,6 +63,7 @@ __all__ = [
     "k_run_for",
     "load_study_spec",
     "next_k_cal",
+    "require_pinned_arms",
     "spec_from_manifest",
 ]
 
@@ -130,12 +138,17 @@ SEED_RANGE_BY_OPTIMIZER: dict[str, int] = {
     "null-identity": 6000,
 }
 
+#: The Codex arm, named where the study's spend guard reads it. It is the
+#: only arm whose runs can bill a foreign subscription, so the id is an
+#: owned constant rather than a literal repeated at each check.
+CODEX_ARM_ID = "codex"
+
 #: The four hypotheses. Order is the Holm family's input order.
 REAL_OPTIMIZER_ARM_IDS: tuple[str, ...] = (
     "copro",
     "miprov2",
     "gepa",
-    "codex",
+    CODEX_ARM_ID,
 )
 
 #: The two controls, in the order the report presents them.
@@ -217,7 +230,13 @@ class ArmSpec:
     #: honoured but is not is how a study comes to misdescribe its own arm.
     miprov2_num_trials: int | None = None
     miprov2_num_candidates: int | None = None
-    miprov2_split: str | None = None
+    #: The arm's explicit train/val partition of the internal split,
+    #: required for every optimizer with a train/val concept and refused on
+    #: the others. Design fields, not runtime knobs: they enter the
+    #: pre-registration hash, so an arm cannot quietly change what it
+    #: trained and scored on between pre-registration and the run.
+    train_size: int | None = None
+    val_size: int | None = None
 
     def __post_init__(self) -> None:
         if not self.arm_id.strip():
@@ -225,7 +244,6 @@ class ArmSpec:
         miprov2_settings = (
             self.miprov2_num_trials,
             self.miprov2_num_candidates,
-            self.miprov2_split,
         )
         if (
             any(value is not None for value in miprov2_settings)
@@ -247,13 +265,28 @@ class ArmSpec:
                 f"arm {self.arm_id!r} miprov2_num_candidates must be at "
                 "least 1"
             )
-        if (
-            self.miprov2_split is not None
-            and self.miprov2_split not in MIPROV2_SPLITS
-        ):
+        split_supplied = (
+            self.train_size is not None or self.val_size is not None
+        )
+        if self.optimizer in TRAIN_VAL_OPTIMIZERS:
+            if self.train_size is None or self.val_size is None:
+                raise ValueError(
+                    f"arm {self.arm_id!r} runs optimizer "
+                    f"{self.optimizer!r} and must declare train_size and "
+                    "val_size"
+                )
+            if self.train_size < 1:
+                raise ValueError(
+                    f"arm {self.arm_id!r} train_size must be at least 1"
+                )
+            if self.val_size < 1:
+                raise ValueError(
+                    f"arm {self.arm_id!r} val_size must be at least 1"
+                )
+        elif split_supplied:
             raise ValueError(
-                f"arm {self.arm_id!r} miprov2_split must be one of "
-                f"{list(MIPROV2_SPLITS)}"
+                f"arm {self.arm_id!r} sets a train/val split but runs "
+                f"optimizer {self.optimizer!r}"
             )
         if self.k_run < 1:
             raise ValueError(f"arm {self.arm_id!r} must run at least once")
@@ -266,11 +299,44 @@ class ArmSpec:
             raise ValueError(f"arm {self.arm_id!r} repeats a seed")
 
 
+#: The study protocol's three split sizes, in role order: internal,
+#: official, held-out.
+#:
+#: This is the Step 10 study's own pre-registration, and it is **not** the
+#: c19 generation default. ``whetstone_envs.c19.generation``'s
+#: ``DEFAULT_SPLIT_SIZES`` is ``(88, 132, 132)``: it describes what the
+#: generator hands back when nobody asks for anything, while the protocol
+#: pre-registered a held-out split of 440 so the design could resolve an
+#: MDE of 0.0622 at ``tau^2 = 0.05`` -- which 132 cannot. A study manifest
+#: records these three sizes in its ``splits`` block and every stage reads
+#: them from there, so this constant is the protocol's *declaration* of
+#: them, pinned by a golden test.
+PROTOCOL_SPLIT_SIZES: tuple[int, int, int] = (88, 132, 440)
+
+#: The protocol's train/val partition of the internal 88: half and half.
+#:
+#: An even split is the cheapest partition that keeps both halves
+#: meaningful. MIPROv2 evaluates every trial on the whole valset by
+#: default and GEPA scores its Pareto frontier there, so the valset is the
+#: per-trial cost driver -- 44 keeps one full pass affordable while still
+#: leaving the bootstrap a 44-task trainset to draw demonstrations from.
+#: Splitting 88 any further would buy trainset size at the price of a
+#: valset too small to separate arms. The two also *cover* the internal
+#: split exactly, which GEPA requires: its data registry is built from the
+#: whole internal split and its trainset and valset must partition it.
+PROTOCOL_TRAIN_SIZE = 44
+PROTOCOL_VAL_SIZE = 44
+
+
 def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
     """Every arm the study runs at ``stage``, in report order.
 
     Nulls are never dropped, so they are built from the same table as the
     real optimizers rather than appended conditionally.
+
+    The optimizers with a train/val concept carry the protocol's pinned
+    partition; the others must not carry one at all, so the sizes are
+    forwarded per arm rather than set for every arm.
     """
     arms: list[ArmSpec] = []
     for optimizer in (*REAL_OPTIMIZER_ARM_IDS, *NULL_ARM_IDS):
@@ -279,6 +345,14 @@ def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
             if optimizer in set(REAL_OPTIMIZER_ARM_IDS)
             else ArmKind.NULL
         )
+        splits = (
+            {
+                "train_size": PROTOCOL_TRAIN_SIZE,
+                "val_size": PROTOCOL_VAL_SIZE,
+            }
+            if optimizer in TRAIN_VAL_OPTIMIZERS
+            else {}
+        )
         arms.append(
             ArmSpec(
                 arm_id=optimizer,
@@ -286,6 +360,7 @@ def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
                 kind=kind,
                 k_run=k_run_for(optimizer, stage=stage),
                 seeds=arm_seeds(optimizer, stage=stage),
+                **splits,
             )
         )
     return tuple(arms)
@@ -424,7 +499,16 @@ def spec_from_manifest(
     Once Stage 0 has recorded a ``design`` block, that block wins: it is
     what the study actually pre-registered, including any adjustment the
     Stage-0 gate permitted.
+
+    **The rebuilt split is checked against the pinned one.** Each arm's
+    ``train_size``/``val_size`` are ordinary mutable record fields, while
+    ``pre_registration.split_by_arm`` is immutable and hashed. Reading the
+    runnable spec off the mutable side without comparing it to the pinned
+    side is what would let an edited ``ArmRecord`` run MIPROv2 or GEPA at a
+    partition the design never registered, under a design hash that still
+    validates. :func:`_require_pinned_split` refuses that.
     """
+    _require_pinned_split(manifest)
     design = manifest.design
     arms = tuple(
         ArmSpec(
@@ -438,6 +522,12 @@ def spec_from_manifest(
             k_run=_k_run_from(arm, design=design, stage=stage),
             seeds=_arm_seeds_from(arm, design=design, stage=stage),
             demo_mode=arm.demo_mode,
+            # Read back rather than re-derived from the protocol defaults:
+            # the manifest records the partition each arm was actually
+            # pre-registered at, and a spec that substituted today's default
+            # would let a rerun quietly measure a different design.
+            train_size=arm.train_size,
+            val_size=arm.val_size,
         )
         for arm in manifest.arms
     )
@@ -458,6 +548,99 @@ def spec_from_manifest(
         resamples=RESAMPLES if design is None else design.resamples,
         arms=arms,
     )
+
+
+def _require_pinned_split(manifest: StudyManifest) -> None:
+    """Refuse arm records that disagree with the pinned ``split_by_arm``.
+
+    The pre-registration is the truth about what partition each arm was
+    registered at, and it is immutable: ``write_study_manifest`` refuses any
+    write that does not carry the block back byte for byte. An
+    ``ArmRecord``'s ``train_size``/``val_size`` carry no such protection --
+    they are rewritten every time a stage merges runs -- so the two can
+    drift apart, and every stage after Stage 0 rebuilds its runnable spec
+    from the *unprotected* side.
+
+    That drift is the same class of error
+    :class:`~whetstone_envs.optim.study.manifest.PreRegistrationViolationError`
+    exists for -- a study running a design other than the one it registered
+    -- so it is refused as one rather than as a generic value error. A
+    manifest with no pre-registration yet has nothing to disagree with,
+    which is the pre-Stage-0 state.
+
+    An arm the pinned block does not name is a *different* case and is
+    left to the caller. Adding an arm and then re-pinning is exactly how
+    ``stage0 --replace-design`` records an amendment, and Stage 0 rebuilds
+    the spec before it writes the new block -- so refusing an unnamed arm
+    here would break the one legitimate path that produces one.
+    :func:`require_pinned_arms` is the check for the stages that spend,
+    where an unpinned arm really would run unregistered.
+    """
+    pinned = manifest.pre_registration
+    if pinned is None:
+        return
+    disagreements = [
+        f"{arm.arm_id}: records {(arm.train_size, arm.val_size)}, "
+        f"pre-registered {pinned.split_by_arm[arm.arm_id]}"
+        for arm in manifest.arms
+        if arm.arm_id in pinned.split_by_arm
+        and _recorded_split(arm) != pinned.split_by_arm[arm.arm_id]
+    ]
+    if disagreements:
+        raise PreRegistrationViolationError(
+            "these arm records disagree with the pre-registered "
+            "split_by_arm, so the spec they rebuild is not the design this "
+            "study registered: " + "; ".join(disagreements)
+        )
+
+
+def require_pinned_arms(manifest: StudyManifest) -> None:
+    """Refuse a spending stage whose arms the pre-registration never named.
+
+    ``split_by_arm`` names exactly the arms the design declared, so an arm
+    present in the manifest and absent from it appeared *after* the design
+    was pinned. Running it would spend on an arm no pre-registration ever
+    fixed a partition, a run count, or a place in the correction family
+    for -- which is the drift the pinned block exists to prevent, in its
+    purest form.
+
+    Separate from :func:`_require_pinned_split` and called only by the arm
+    stages, because Stage 0 legitimately sees this state: adding an arm and
+    re-pinning is how ``--replace-design`` records an amendment, and Stage 0
+    rebuilds the spec before writing the new block.
+    """
+    pinned = manifest.pre_registration
+    if pinned is None:
+        return
+    unpinned = sorted(
+        arm.arm_id
+        for arm in manifest.arms
+        if arm.arm_id not in pinned.split_by_arm
+    )
+    if unpinned:
+        raise PreRegistrationViolationError(
+            f"these arms are not named by the pre-registration: {unpinned}. "
+            "They were declared after the design was pinned, so running "
+            "them would spend on a design this study never registered; "
+            "re-pin with stage0 --replace-design to record the amendment"
+        )
+
+
+def _recorded_split(arm: ArmRecord) -> tuple[int, int] | None:
+    """The arm record's partition in the pinned block's own shape.
+
+    An arm whose optimizer has no train/val concept records both as
+    ``None`` and is pinned as ``None``; a half-set record is neither, and
+    compares unequal to any pinned value rather than being coerced into
+    one.
+    """
+    if arm.train_size is None and arm.val_size is None:
+        return None
+    if arm.train_size is None or arm.val_size is None:
+        # Reported through the caller's message as a disagreement: a record
+        # naming one half of a partition names no partition at all.
+        return (-1, -1)
+    return (arm.train_size, arm.val_size)
 
 
 def _split_spec(role: str, record: SplitRecord) -> SplitSpec:

@@ -1771,7 +1771,7 @@ wheels = [
 
 [[package]]
 name = "whetstone-ai"
-version = "0.1.6"
+version = "0.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-exec" },
@@ -1785,10 +1785,11 @@ dependencies = [
     { name = "optuna" },
     { name = "rich" },
     { name = "typer" },
+    { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/84/8f/a46061673147714f97940197dc1a5fbbb005f7cf3eb132db6849a15abae6/whetstone_ai-0.1.6.tar.gz", hash = "sha256:c52ad4d15650bfbf7a39437979799f2255dbeffd778444c630958e03d3f7e650", size = 371240, upload-time = "2026-08-22T16:05:42.469Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/56/39a3c00785ead9c5a6e3aa5fa1b1a86c9216c854ee6164e7715cd38cf20f/whetstone_ai-0.1.8.tar.gz", hash = "sha256:22645cd915d4f6045d6aadafc53f67f3164254690754db8a5d47c8f6f493d04d", size = 418110, upload-time = "2026-08-22T20:30:30.567Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/98/94/1fe2d7971104c41a152c9157c5bb8721bc994c696204386ed1ef1f5195c9/whetstone_ai-0.1.6-py3-none-any.whl", hash = "sha256:8dad35337395d7190894b829e7e799cf63136018e6d39dad759b7104194088f1", size = 474878, upload-time = "2026-08-22T16:05:40.99Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/12/e30539a9164f2fef935c54a49343cf2f470407fbc86812f96484b849f70a/whetstone_ai-0.1.8-py3-none-any.whl", hash = "sha256:0faa9149fc26e9d7b2cc41aaa0de152f2052ce886ab4dea011e482ace791e44f", size = 527021, upload-time = "2026-08-22T20:30:29.018Z" },
 ]
 
 [[package]]
@@ -1849,7 +1850,7 @@ requires-dist = [
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "rich", marker = "extra == 'optim'", specifier = "==15.0.0" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.6" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.8" },
 ]
 provides-extras = ["c18", "optim"]
 

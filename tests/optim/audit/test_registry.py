@@ -112,6 +112,77 @@ def test_a_run_that_completed_no_evaluation_fails_rather_than_passing(
     assert finding.evidence_refs == ()
 
 
+def test_a_tool_mediated_evaluation_counts_as_a_reported_number(
+    codex_run_dir,
+) -> None:
+    """A TOOL_USING run reports through tool evidence, and it resolves.
+
+    Codex resolves no intent and mints no search evidence by design, so a
+    shared invariant reading only those two paths would fail every honest
+    Codex run for reporting nothing. Its paid evaluations are cited from
+    the Tool Results instead, and each must resolve the same way.
+    """
+    evidence = load_run_evidence(codex_run_dir)
+    assert evidence.steps, "the fixture run persists steps"
+    assert all(
+        step.resolved_intents == () and step.search_evidence == ()
+        for step in evidence.steps
+    ), "a Codex run resolves no intent and mints no search evidence"
+    assert any(step.tool_evidence for step in evidence.steps)
+
+    finding = reported_numbers_resolve(evidence)
+
+    assert finding.status is AuditStatus.PASS
+    assert finding.evidence_refs
+
+
+def test_a_tool_result_citing_no_eval_evidence_fails(codex_run_dir) -> None:
+    """The negative: a paid tool call whose number resolves to nothing.
+
+    Stripping the citation leaves an admitted, capacity-debited call whose
+    score no record backs -- exactly the unbacked number this invariant
+    exists to catch, and unreachable through the intent paths.
+    """
+    evidence = load_run_evidence(codex_run_dir)
+    stripped = replace(
+        evidence,
+        steps=tuple(
+            replace(
+                step,
+                step=step.step.model_copy(
+                    update={
+                        "tool_evidence": tuple(
+                            tool.model_copy(
+                                update={
+                                    "result": tool.result.model_copy(
+                                        update={
+                                            "record": (
+                                                tool.result.record.model_copy(
+                                                    update={
+                                                        "evaluation_evidence"
+                                                        "_refs": ()
+                                                    }
+                                                )
+                                            )
+                                        }
+                                    )
+                                }
+                            )
+                            for tool in step.tool_evidence
+                        )
+                    }
+                ),
+            )
+            for step in evidence.steps
+        ),
+    )
+
+    finding = reported_numbers_resolve(stripped)
+
+    assert finding.status is AuditStatus.FAIL
+    assert "cites no eval result" in finding.detail
+
+
 def test_a_run_with_no_steps_at_all_is_not_applicable(copro_run_dir) -> None:
     """Nothing to resolve is a different fact from nothing resolving."""
     evidence = replace(load_run_evidence(copro_run_dir), steps=())

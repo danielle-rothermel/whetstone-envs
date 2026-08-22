@@ -132,6 +132,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   nothing over the seed, while COPRO does not set it, so under COPRO's control
   shape an unfilled round is a `copro_proposal_cardinality` terminal failure
   whose result still names the seed as the run's outcome.
+- The Step 10 study harness at `whetstone_envs.optim.study`: the design
+  record, the Stage-0 gate arithmetic, the selection-and-reporting harness,
+  and the leakage checks. `StudySpec` pre-registers the population, splits,
+  arms, and repeat counts before any provider spend, and keeps `k_cal` and
+  `k_repeat` separate fields — the Stage-0 calibration count is a
+  measurement input, and borrowing the design repeat count for it biases the
+  gate optimistically through `tau^2`'s `2 sigma^2 / k_cal` correction.
+  `run_stage0` calibrates the naive and ceiling anchors on internal,
+  official, and held-out through one procedure at `K_CAL = 4`, with the
+  doubling rule capped at 16 and refusing an odd count that no split-half
+  check could read.
+- `minimum_detectable_effect` is the study's single pre-registered MDE,
+  `(z_{1-alpha/2} + z_power) * sqrt((tau^2 + 2 sigma^2 / K) / T)`, computed
+  in the study's own code as one auditable line rather than read off
+  `analyze_power`'s surface, whose grid resolution would otherwise be able to
+  move the gate's design point. The power analysis is still the source of
+  `tau^2` and `sigma^2`; `within_variance_divergence` reports the pooled
+  within-variance estimate beside the shipped naive-arm-only one and flags a
+  divergence above 20%, so that caveat is a measured number rather than a
+  footnote. `evaluate_stage0_gate` reports all four gate conditions whether
+  or not they held, since the one permitted design adjustment is priced
+  against the measured MDE.
+- `report_arm` is the single entry point through which a held-out number can
+  enter the study, and it makes leakage rules L2 and L3 structural rather
+  than conventional. It scores every run on official, takes the arg-max,
+  persists the selection, *reads the persisted record back*, and only then
+  issues exactly one held-out evaluation against a ledger that refuses a
+  second one. A second selection for an arm and a second held-out evaluation
+  for a candidate are both refused before the provider call, so a violation
+  costs nothing rather than being detected after it was paid for. Anchors and
+  nulls reach held-out through `report_reference_candidate`, which keeps the
+  identical procedure and the identical once-only ledger without an arg-max
+  they have nothing to apply it to.
+- `study_leakage_check` runs L1-L5 mechanically over recorded evidence and
+  fails the study loudly before report generation (L6). L1 matches both the
+  evaluation role and the resolved Eval Config, since either alone would pass
+  a leak the other catches; L5 reads content-addressed task hashes rather
+  than task ids; and `check_held_out_nesting` encodes D5's growth rule, that
+  held-220 must be contained in held-440 for the anchors measured on the
+  first to describe the second.
+- `analyze_arms` computes each arm's paired bootstrap interval and applies
+  Holm over the four real optimizers only — nulls are controls, not
+  hypotheses, and correcting them would make a null harder to trip exactly
+  when tripping it matters. `null_triggers_downgrade` requires both magnitude
+  above the measured MDE and an interval excluding zero, so a small
+  significant delta does not void the study. `weighted_per_task_delta`
+  weights each task's delta by its achieved row count and keeps a
+  fully-missing task in the vector at zero weight rather than dropping it,
+  which would shrink `T` and tighten the interval dishonestly; an arm below
+  the 90% completeness backstop is reported but never claimed.
 - The C19 optimizer CLI and runner accept `--optimizer gepa` and
   `--optimizer miprov2` through the same shared runner path as COPRO.
 - `--num-seeds` on the CLI and `RunSpec.num_seeds` make repeats per task

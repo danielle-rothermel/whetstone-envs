@@ -1,0 +1,405 @@
+"""The study's leakage checks, L1-L6, as mechanical predicates.
+
+Each rule is a pure function over recorded evidence, so a violation is found
+by running the check rather than by reading the code that was supposed to
+prevent it. :func:`study_leakage_check` runs all five and fails the study
+loudly before any report is generated -- that is L6.
+
+**Detection is not prevention.** L2 and L3 are enforced structurally in
+:mod:`whetstone_envs.optim.study.selection`, where the ordering makes a
+violation unreachable. Re-checking them here catches a *different* failure:
+evidence that disagrees with the ledger, which means something wrote held-out
+evaluations outside ``report_arm``. A study that relied on L6 alone would
+discover its leak only after paying for it.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import UNIQUE, StrEnum, verify
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
+
+__all__ = [
+    "HeldOutObservation",
+    "LeakageCheckError",
+    "LeakageFinding",
+    "LeakageReport",
+    "LeakageRule",
+    "OptimizerEvalObservation",
+    "SplitIdentity",
+    "check_l1_optimizer_internal_only",
+    "check_l2_selection_once_per_arm",
+    "check_l3_held_out_once_per_candidate",
+    "check_l4_identical_held_out_procedure",
+    "check_l5_splits_disjoint",
+    "study_leakage_check",
+]
+
+
+@verify(UNIQUE)
+class LeakageRule(StrEnum):
+    """The five substantive rules, plus the check that runs them.
+
+    These identifiers are persisted in the manifest's ``leakage_check``
+    block and cited by the report, so they are an owned enum rather than
+    ad-hoc strings.
+    """
+
+    L1_OPTIMIZER_INTERNAL_ONLY = "L1"
+    L2_SELECTION_ONCE_PER_ARM = "L2"
+    L3_HELD_OUT_ONCE_PER_CANDIDATE = "L3"
+    L4_IDENTICAL_HELD_OUT_PROCEDURE = "L4"
+    L5_SPLITS_DISJOINT = "L5"
+    L6_CHECK_RAN = "L6"
+
+
+class LeakageCheckError(RuntimeError):
+    """The leakage check failed; the study must not report."""
+
+
+@dataclass(frozen=True, slots=True)
+class LeakageFinding:
+    """One rule's verdict and the evidence behind it."""
+
+    rule: LeakageRule
+    passed: bool
+    detail: str
+    offenders: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LeakageReport:
+    """Every rule's verdict. ``passed`` is the study's permission to report."""
+
+    findings: tuple[LeakageFinding, ...]
+
+    @property
+    def passed(self) -> bool:
+        return all(finding.passed for finding in self.findings)
+
+    def failures(self) -> tuple[LeakageFinding, ...]:
+        return tuple(
+            finding for finding in self.findings if not finding.passed
+        )
+
+    def finding(self, rule: LeakageRule) -> LeakageFinding:
+        for finding in self.findings:
+            if finding.rule is rule:
+                return finding
+        raise ValueError(f"no finding recorded for {rule.value}")
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizerEvalObservation:
+    """One evaluation an optimizer run caused, as L1 reads it.
+
+    ``eval_role`` is the role recorded on the persisted ``EvalEvidence`` and
+    ``resolved_eval_config_hash`` is the Eval Config the intent resolved
+    against. L1 needs both: matching the config alone would pass an
+    evaluation that reached the right config under the wrong role, and
+    matching the role alone would pass one that reached a second internal
+    config the run never declared.
+    """
+
+    run_id: str
+    step_index: int
+    resolution_index: int
+    eval_role: str
+    resolved_eval_config_hash: str
+
+    @property
+    def location(self) -> str:
+        return (
+            f"{self.run_id}:step{self.step_index}:"
+            f"resolution{self.resolution_index}"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class HeldOutObservation:
+    """One held-out evaluation, as L3 and L4 read it."""
+
+    candidate_name: str
+    eval_config_hash: str
+    repeats: int
+
+
+@dataclass(frozen=True, slots=True)
+class SplitIdentity:
+    """One split's content-addressed task identity, as L5 reads it."""
+
+    role: str
+    task_hashes: tuple[str, ...]
+
+
+#: The evaluation role an optimizer is allowed to see. Every other role is
+#: a leak by definition.
+INTERNAL_ROLE = "internal"
+
+
+def check_l1_optimizer_internal_only(
+    observations: Iterable[OptimizerEvalObservation],
+    *,
+    internal_eval_config_hash: str,
+) -> LeakageFinding:
+    """L1: an optimizer sees the internal split and nothing else.
+
+    Upstream already refuses a non-internal role inside ``CoproControl`` and
+    the runner passes ``EvalRole.INTERNAL`` explicitly, so this check is
+    expected to be redundant. It is here because "structurally prevented"
+    and "observed to have held" are different claims, and the study reports
+    the second.
+    """
+    offenders = tuple(
+        observation.location
+        for observation in observations
+        if observation.eval_role != INTERNAL_ROLE
+        or observation.resolved_eval_config_hash != internal_eval_config_hash
+    )
+    return LeakageFinding(
+        rule=LeakageRule.L1_OPTIMIZER_INTERNAL_ONLY,
+        passed=not offenders,
+        detail=(
+            "every optimizer evaluation resolved the internal Eval Config "
+            "under the internal role"
+            if not offenders
+            else f"{len(offenders)} optimizer evaluations left the internal "
+            "split"
+        ),
+        offenders=offenders,
+    )
+
+
+def check_l2_selection_once_per_arm(
+    *,
+    selected_arm_ids: Sequence[str],
+    expected_arm_ids: Iterable[str],
+) -> LeakageFinding:
+    """L2: exactly one selection entry per arm, and none for a stranger."""
+    expected = tuple(expected_arm_ids)
+    counts: dict[str, int] = {}
+    for arm_id in selected_arm_ids:
+        counts[arm_id] = counts.get(arm_id, 0) + 1
+    duplicated = tuple(
+        f"{arm_id} selected {count} times"
+        for arm_id, count in sorted(counts.items())
+        if count > 1
+    )
+    missing = tuple(
+        f"{arm_id} never selected"
+        for arm_id in expected
+        if arm_id not in counts
+    )
+    unexpected = tuple(
+        f"{arm_id} is not a study arm"
+        for arm_id in sorted(counts)
+        if arm_id not in set(expected)
+    )
+    offenders = duplicated + missing + unexpected
+    return LeakageFinding(
+        rule=LeakageRule.L2_SELECTION_ONCE_PER_ARM,
+        passed=not offenders,
+        detail=(
+            f"{len(expected)} arms each selected exactly once on official"
+            if not offenders
+            else "selection did not happen exactly once per arm"
+        ),
+        offenders=offenders,
+    )
+
+
+def check_l3_held_out_once_per_candidate(
+    observations: Iterable[HeldOutObservation],
+) -> LeakageFinding:
+    """L3: each reported candidate has exactly one held-out evaluation."""
+    counts: dict[str, int] = {}
+    for observation in observations:
+        counts[observation.candidate_name] = (
+            counts.get(observation.candidate_name, 0) + 1
+        )
+    offenders = tuple(
+        f"{name} evaluated {count} times on held-out"
+        for name, count in sorted(counts.items())
+        if count != 1
+    )
+    return LeakageFinding(
+        rule=LeakageRule.L3_HELD_OUT_ONCE_PER_CANDIDATE,
+        passed=not offenders,
+        detail=(
+            f"{len(counts)} reported candidates each evaluated once on "
+            "held-out"
+            if not offenders
+            else "a reported candidate was evaluated more than once"
+        ),
+        offenders=offenders,
+    )
+
+
+def check_l4_identical_held_out_procedure(
+    observations: Iterable[HeldOutObservation],
+) -> LeakageFinding:
+    """L4: anchors, nulls, and arms share one held-out procedure.
+
+    One Eval Config hash and one repeat count across every held-out
+    evaluation is what makes the paired comparison genuinely paired: a
+    candidate measured under a different config is being compared to the
+    anchors on different tasks or with different provider controls.
+    """
+    seen = tuple(observations)
+    if not seen:
+        return LeakageFinding(
+            rule=LeakageRule.L4_IDENTICAL_HELD_OUT_PROCEDURE,
+            passed=False,
+            detail="no held-out evaluations were recorded",
+        )
+    configs = sorted({observation.eval_config_hash for observation in seen})
+    repeats = sorted({observation.repeats for observation in seen})
+    offenders: list[str] = []
+    if len(configs) > 1:
+        offenders.extend(f"eval_config_hash {value}" for value in configs)
+    if len(repeats) > 1:
+        offenders.extend(f"repeats {value}" for value in repeats)
+    return LeakageFinding(
+        rule=LeakageRule.L4_IDENTICAL_HELD_OUT_PROCEDURE,
+        passed=not offenders,
+        detail=(
+            f"all {len(seen)} held-out evaluations share one Eval Config "
+            f"and {repeats[0]} repeats"
+            if not offenders
+            else "held-out evaluations did not share one procedure"
+        ),
+        offenders=tuple(offenders),
+    )
+
+
+def check_l5_splits_disjoint(
+    splits: Iterable[SplitIdentity],
+) -> LeakageFinding:
+    """L5: no task hash appears in two splits.
+
+    Task hashes are content-addressed over ``{task_id, prompt_inputs,
+    gold}``, so hash-disjointness is the real property; id-disjointness
+    implies it but not the reverse, which is why this reads hashes.
+    """
+    identities = tuple(splits)
+    offenders: list[str] = []
+    for index, left in enumerate(identities):
+        for right in identities[index + 1 :]:
+            shared = set(left.task_hashes) & set(right.task_hashes)
+            if shared:
+                offenders.append(
+                    f"{left.role} and {right.role} share "
+                    f"{len(shared)} task hashes"
+                )
+    offenders.extend(
+        f"{identity.role} repeats a task hash"
+        for identity in identities
+        if len(set(identity.task_hashes)) != len(identity.task_hashes)
+    )
+    return LeakageFinding(
+        rule=LeakageRule.L5_SPLITS_DISJOINT,
+        passed=not offenders,
+        detail=(
+            f"{len(identities)} splits are pairwise disjoint by task hash"
+            if not offenders
+            else "splits overlap by task hash"
+        ),
+        offenders=tuple(offenders),
+    )
+
+
+def check_held_out_nesting(
+    *, smaller: tuple[str, ...], larger: tuple[str, ...]
+) -> LeakageFinding:
+    """The D5 growth check: held-220 must be a subset of held-440.
+
+    Growing the held-out split at the Stage-0 gate is only safe if the
+    smaller split's tasks are all still in the larger one -- otherwise the
+    "same" split before and after the decision is two different populations,
+    and the anchors measured on the first do not describe the second.
+    """
+    missing = tuple(sorted(set(smaller) - set(larger)))
+    return LeakageFinding(
+        rule=LeakageRule.L5_SPLITS_DISJOINT,
+        passed=not missing,
+        detail=(
+            f"the {len(smaller)}-task held-out split is contained in the "
+            f"{len(larger)}-task one"
+            if not missing
+            else f"{len(missing)} tasks were dropped when held-out grew"
+        ),
+        offenders=missing,
+    )
+
+
+def study_leakage_check(  # noqa: PLR0913
+    *,
+    optimizer_observations: Iterable[OptimizerEvalObservation],
+    internal_eval_config_hash: str,
+    selected_arm_ids: Sequence[str],
+    expected_arm_ids: Iterable[str],
+    held_out_observations: Iterable[HeldOutObservation],
+    splits: Iterable[SplitIdentity],
+    strict: bool = True,
+) -> LeakageReport:
+    """L6: run L1-L5 over the study's artifacts and fail loudly.
+
+    ``strict`` raises on the first failing report rather than returning it.
+    That is the default because the caller this exists for is report
+    generation, and a report generated from leaking evidence is worse than
+    no report. Pass ``strict=False`` only to inspect the findings.
+    """
+    findings = [
+        check_l1_optimizer_internal_only(
+            optimizer_observations,
+            internal_eval_config_hash=internal_eval_config_hash,
+        ),
+        check_l2_selection_once_per_arm(
+            selected_arm_ids=selected_arm_ids,
+            expected_arm_ids=expected_arm_ids,
+        ),
+        check_l3_held_out_once_per_candidate(held_out_observations),
+        check_l4_identical_held_out_procedure(held_out_observations),
+        check_l5_splits_disjoint(splits),
+    ]
+    findings.append(
+        LeakageFinding(
+            rule=LeakageRule.L6_CHECK_RAN,
+            passed=all(finding.passed for finding in findings),
+            detail=(
+                f"L1-L5 ran over the study's artifacts; "
+                f"{sum(1 for f in findings if not f.passed)} failed"
+            ),
+        )
+    )
+    report = LeakageReport(findings=tuple(findings))
+    if strict and not report.passed:
+        summary = "; ".join(
+            f"{finding.rule.value}: {finding.detail}"
+            for finding in report.failures()
+        )
+        raise LeakageCheckError(f"study leakage check failed -- {summary}")
+    return report
+
+
+def held_out_observations_from_counts(
+    counts: Mapping[str, int], *, eval_config_hash: str, repeats: int
+) -> tuple[HeldOutObservation, ...]:
+    """Expand a per-candidate count into the observations L3 reads.
+
+    A convenience for callers holding a tally rather than a record per
+    evaluation; the checks themselves stay count-free so that a duplicate is
+    visible as two observations rather than as an integer a caller chose.
+    """
+    return tuple(
+        HeldOutObservation(
+            candidate_name=name,
+            eval_config_hash=eval_config_hash,
+            repeats=repeats,
+        )
+        for name, count in counts.items()
+        for _ in range(count)
+    )

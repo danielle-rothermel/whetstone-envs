@@ -6,10 +6,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-22
+
+### Changed
+
+- C19 optimizer runs record effect leases in a SQLite authority instead of an
+  in-memory one. The authority shares the run directory's `runtime.sqlite`
+  with the object store, mirroring whetstone-ai's platform CLI; the two
+  components own disjoint tables. Leases now outlive the process, so a re-run
+  against a completed run directory replays its recorded effects rather than
+  re-executing them. The runtime is closed on every exit path, releasing the
+  eval engine and the authority's connection.
+
 ### Added
 
-- The C19 optimizer CLI and runner accept `--optimizer gepa` through the
-  same `run_c19_optimizer` path as COPRO.
+- The C19 optimizer CLI and runner accept `--optimizer gepa` and
+  `--optimizer miprov2` through the same `run_c19_optimizer` path as COPRO.
+- MIPROv2 support for C19: `build_c19_miprov2_control`,
+  `build_c19_miprov2_adapter`, and `build_c19_miprov2_state` assemble the
+  control, adapter, and opening durable state on whetstone-ai's public
+  MIPROv2 surface. `--demo-mode fewshot|zeroshot|ground_only` selects the
+  demonstration regime. Demonstrations reach the candidate through MIPROv2's
+  own composed `### Demonstrations` section rather than a C19 placeholder:
+  `fewshot` searches over demo sets and renders the selected set, while
+  `zeroshot` and `ground_only` bootstrap demos only to ground instruction
+  proposals and leave the section empty. All three modes compose a template
+  that still satisfies the C19 `{grid}`/`{command}`/`{question}` contract.
+  Labeled demonstrations carry the task's oracle gold as the component's
+  `response` output, and the proposer's prompt model binds the experiment's
+  `ProviderCallConfig` reference, as COPRO and GEPA already do.
+- `--num-seeds` on the CLI and `C19RunSpec.num_seeds` make repeats per task
+  (`K_REPEAT`) a runner parameter instead of a hardcoded 1.
+- Trajectory reports carry a `spend` block projected from
+  `OptimResult.cost`: per-role billable calls, cached calls, token totals,
+  the priced/unpriced split, and a USD total only when every contributing
+  call carried a provider-reported price. Terminal and HTML trajectory views
+  render an unpriced role as `unpriced (n/total)` rather than as a zero. The
+  block's `schema_version` is pinned to the one whetstone-ai cost-report
+  version this package projects, so an embedded report at any other version
+  is rejected rather than reinterpreted.
 - A C19 evaluation CLI for task-family information, standalone fake or
   OpenRouter execution, strict local report publication, summary/failure/task
   inspection, and paired candidate comparison, exposed as the installed
@@ -27,13 +62,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Pin the `optim` extra to published `whetstone-ai==0.1.2`.
-- C19's GEPA adapter is assembled entirely from whetstone-ai's public
-  surface: `CanonicalGepaAdapterFactory`, `GepaHarnessAdapter`, and
-  `build_inline_proposal_executor`, with no private imports, no wrapper
-  views over the eval engine or object store, and no `GepaHarnessAdapter`
-  subclass. `build_c19_gepa_adapter` is now prompt services, a data
-  registry, control, and that assembly.
+- Pin the `optim` extra to published `whetstone-ai==0.1.6` and `dr-store`
+  to 0.2.6, which that release requires. 0.1.6 drives MIPROv2 through
+  `state.control.mutation_field`, so C19 runs MIPROv2 in every demonstration
+  mode, and it resolves the provider/`eval.drivers` import cycle, so the
+  optimizer CLI imports whetstone-ai's modules in any order.
+- C19 reaches whetstone-ai through its current production entry point:
+  `build_runtime` with an explicit adapter registry and effect authority,
+  replacing the removed `register_runtime`. Registry membership is part of
+  controller identity, so each run registers exactly the adapter it drives.
+- C19's GEPA adapter is built by `build_gepa_harness_adapter`, whetstone-ai's
+  canonical GEPA constructor, rather than by a hand-assembled authority
+  chain. `build_c19_gepa_adapter` is now the C19 prompt services and control
+  plus that one call, and the trainset/valset partition follows the control
+  instead of handing the search the union of both splits.
+- `prepare_c19_experiment` derives held-out rows into a full `EvalSplit`
+  under the `held_out` split role and passes it as `EvalConfigs.held_out`,
+  replacing the removed `held_out_task_hashes=` constructor argument.
+  `EvalConfigs` enforces split disjointness at construction, and
+  `held_out_task_hashes` remains readable as a derived property. An
+  experiment with no held-out rows leaves the split absent.
 - A GEPA run that finds no improvement completes by reporting the
   retained seed instead of substituting a candidate, and its steps carry
   resolvable eval and reward evidence for the evaluations its search
@@ -47,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   colorblind-safe blue navigation and green success emphasis.
 - Preserve the authoritative C19 `PoolSplit` beside each prepared Whetstone
   experiment so report projection joins evidence to source instances exactly.
+- `whetstone_envs.optim.experiment` owns the C19 provider-call-config
+  reference and the task-hash-to-gold mapping, so COPRO, GEPA, and MIPROv2
+  bind one derivation instead of per-optimizer copies.
 
 ## [0.2.1] - 2026-08-21
 

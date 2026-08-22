@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.2`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.6`.
 
 ## Installation
 
@@ -55,19 +55,31 @@ Install C18's pinned generator dependencies when generating its pools:
 uv add 'whetstone-envs[c18]'
 ```
 
-Install the optimizer adapter extra when running COPRO or GEPA against a
-task family. The extra pins published `whetstone-ai==0.1.2` from PyPI:
+Install the optimizer adapter extra when running COPRO, GEPA, or MIPROv2
+against a task family. The extra pins published `whetstone-ai==0.1.6` from
+PyPI:
 
 ```bash
 uv add 'whetstone-envs[optim]'
 ```
 
-The extra is Python 3.13/3.14 only. Both optimizers run on whetstone-ai's
-public surface: GEPA is assembled from `CanonicalGepaAdapterFactory`,
-`GepaHarnessAdapter`, and `build_inline_proposal_executor` with no private
-imports and no adapter subclassing, and a GEPA run that finds no improvement
-reports the retained seed rather than substituting a candidate. Run COPRO or
-GEPA on C19 in-process; artifacts write under
+The extra is Python 3.13/3.14 only. Every optimizer runs on whetstone-ai's
+public surface, with no private imports and no adapter subclassing:
+
+| Optimizer | Constructed by | Modes | Notes |
+| --- | --- | --- | --- |
+| `copro` | `configure_copro` + `CoproAdapter` | — | Proposal-only search over the mutation field. |
+| `gepa` | `build_gepa_harness_adapter` | — | Reflection search; the trainset is the internal eval split. A run that finds no improvement reports the retained seed rather than substituting a candidate. |
+| `miprov2` | `configure_miprov2` + `Miprov2Adapter` | `--demo-mode fewshot\|zeroshot\|ground_only` | Also binds an opening durable state (labeled trainset, proposal examples, RNG checkpoint). |
+
+`--demo-mode` selects MIPROv2's demonstration regime and is ignored by COPRO
+and GEPA. Demonstrations reach the candidate through MIPROv2's own composed
+`### Demonstrations` section rather than through a C19 placeholder: `fewshot`
+searches over demo sets and renders the selected set there, while `zeroshot`
+and `ground_only` still bootstrap demos to ground instruction proposals but
+leave the section empty. `--num-seeds` sets repeats per task (`K_REPEAT`).
+
+Runs happen in-process; artifacts write under
 `~/drotherm/data/runs/whetstone-envs/<run-id>/`, never inside the git tree:
 
 ```bash
@@ -75,6 +87,9 @@ uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer copro --transport fake --split-sizes 2,2,0
 uv run --extra optim python scripts/run-optim.py \
   --family c19 --optimizer gepa --transport fake --split-sizes 2,2,0
+uv run --extra optim python scripts/run-optim.py \
+  --family c19 --optimizer miprov2 --demo-mode fewshot \
+  --transport fake --split-sizes 2,2,0
 ```
 
 ## Evaluation and trajectory reports
@@ -96,8 +111,10 @@ uv run --extra optim whetstone-eval html RUN_DIR
 `--candidate-file NAME=PATH` adds a validated UTF-8 prompt template. An
 official run uses `--role official`; official evidence intentionally carries
 no reward. Standalone runs publish `runtime.sqlite` and a bounded 128 MiB
-canonical `eval-report.json`. COPRO and GEPA runs additionally publish
-`trajectory-report.json` under the same bound, inspected with:
+canonical `eval-report.json`. Optimizer runs additionally publish
+`trajectory-report.json` under the same bound, carrying a per-role spend
+block (calls, cached calls, tokens, and a USD total only when every billable
+call carried a provider-reported price). Inspect it with:
 
 ```bash
 uv run --extra optim whetstone-eval trajectory RUN_DIR

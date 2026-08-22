@@ -26,10 +26,12 @@ from whetstone.optim.contracts import (
     OptimResult,
     optimization_result_reference,
 )
+from whetstone.optim.cost import RoleCost, RunCostReport
 
 from whetstone_envs.probes import normalize
 from whetstone_envs.reporting.schema import (
     EVAL_REPORT_SCHEMA,
+    SPEND_SCHEMA_VERSION,
     TRAJECTORY_REPORT_SCHEMA,
     CandidateRecord,
     CandidateSource,
@@ -45,7 +47,10 @@ from whetstone_envs.reporting.schema import (
     ProviderErrorProjection,
     ReportedEvidence,
     ReportRef,
+    RoleSpend,
+    RoleSpendName,
     RowAccounting,
+    RunSpend,
     StratumSummary,
     TaskRecord,
     TrajectoryCandidate,
@@ -668,6 +673,43 @@ def _gepa_transcript_sources(  # noqa: PLR0912
     return tuple(sources)
 
 
+def _role_spend(role: RoleSpendName, report: RoleCost) -> RoleSpend:
+    return RoleSpend(
+        role=role,
+        calls=report.calls,
+        cached_calls=report.cached_calls,
+        input_tokens=report.input_tokens,
+        output_tokens=report.output_tokens,
+        priced_calls=report.priced_calls,
+        unpriced_calls=report.unpriced_calls,
+        rows_missing_token_breakdown=report.rows_missing_token_breakdown,
+        usd=report.usd,
+    )
+
+
+def project_run_spend(result: OptimResult) -> RunSpend | None:
+    """Project the run's cost report, when the result carries one.
+
+    ``OptimResult.cost`` travels as a serialized ``RunCostReport``; an empty
+    object means the run recorded no cost report at all.
+    """
+    payload = result.cost.to_json()
+    if not payload:
+        return None
+    cost = RunCostReport.model_validate(payload)
+    if cost.schema_version != SPEND_SCHEMA_VERSION:
+        raise ValueError(
+            "unsupported whetstone-ai cost report schema version "
+            f"{cost.schema_version}; this package projects only "
+            f"{SPEND_SCHEMA_VERSION}"
+        )
+    return RunSpend(
+        schema_version=SPEND_SCHEMA_VERSION,
+        task_model=_role_spend("task_model", cost.task_model),
+        proposer=_role_spend("proposer", cost.proposer),
+    )
+
+
 def project_trajectory_report(  # noqa: PLR0912, PLR0913, PLR0915
     *,
     store: ObjectStore,
@@ -916,7 +958,12 @@ def project_trajectory_report(  # noqa: PLR0912, PLR0913, PLR0915
             _required_ref(proposal.candidate.record_ref)
             for proposal in result.proposals
         ),
+        spend=project_run_spend(result),
     )
 
 
-__all__ = ["project_eval_report", "project_trajectory_report"]
+__all__ = [
+    "project_eval_report",
+    "project_run_spend",
+    "project_trajectory_report",
+]

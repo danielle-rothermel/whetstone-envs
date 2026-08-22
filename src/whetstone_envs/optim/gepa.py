@@ -2,26 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA
-from whetstone.core.identity import (
-    IdentityRef,
-    compute_identity_hash,
-    typed_ref_for_record,
-)
-from whetstone.experiment.candidate import candidate_reference
-from whetstone.optim.gepa.authorities import (
-    CanonicalGepaCandidateAssembler,
-    CanonicalGepaEvalAuthority,
-    CanonicalGepaProposalAuthority,
-    GepaCandidateFieldBinding,
-    GepaDataRegistry,
-)
+from whetstone.core.identity import compute_identity_hash
 from whetstone.optim.gepa.control import configure_gepa
-from whetstone.optim.gepa.factory import CanonicalGepaAdapterFactory
-from whetstone.optim.gepa.harness_adapter import (
-    GepaHarnessAdapter,
-    GepaHarnessAdapterFactory,
-)
+from whetstone.optim.gepa.factory import build_gepa_harness_adapter
 from whetstone.optim.gepa.prompts import (
     GepaComponentFormat,
     GepaPromptFormatDescriptor,
@@ -41,12 +24,14 @@ from whetstone_envs.c19 import PROBES
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_PROMPT_FIELDS,
+    c19_provider_call_config_ref,
 )
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
     from whetstone.eval.protocol import EvalEngine
     from whetstone.experiment.env import Experiment
+    from whetstone.optim.gepa.harness_adapter import GepaHarnessAdapter
     from whetstone.optim.proposal.proposer import ProposerTransport
 
 GEPA_COMPONENT_NAME = "generate"
@@ -54,7 +39,13 @@ _INLINE_EXECUTOR_SCHEMA = "whetstone_envs.c19.inline_proposal_executor"
 _COMPONENT_SCHEMA = "whetstone_envs.c19.gepa_component"
 
 
-def _c19_prompt_services() -> GepaPromptServices:
+def c19_gepa_prompt_services() -> GepaPromptServices:
+    """Reflection prompt services bound to the C19 placeholder contract.
+
+    The shared ``default_gepa_prompt_services`` binds a single ``{prompt}``
+    placeholder; C19 templates carry three, so the component format is
+    declared here rather than taken from the default.
+    """
     component_schema_hash = compute_identity_hash(
         schema=_COMPONENT_SCHEMA,
         schema_version=1,
@@ -96,39 +87,21 @@ def _gepa_transport(
     )
 
 
-def _provider_call_config_ref(experiment: Experiment) -> IdentityRef:
-    payload = experiment.rollout_graph.provider_call_config.model_dump(
-        mode="json"
-    )
-    record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
-    return IdentityRef(
-        record_ref=record_ref,
-        record_hash=record_ref.content_hash,
-    )
-
-
-def build_c19_gepa_adapter(
+def build_c19_gepa_control(
     *,
-    store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
-    run_id: str,
-    proposer_transport: ProposerTransport | None,
-) -> GepaHarnessAdapter:
-    """Assemble a real C19 GEPA adapter on the public factory surface."""
+    prompt_services: GepaPromptServices,
+    policy_identity_hash: str,
+):
+    """Resolve the C19 GEPA control over the engine's internal split."""
     prompt_adapter = PlainPromptAdapter()
-    prompt_services = _c19_prompt_services()
-    policy_identity_hash = compute_identity_hash(
-        schema=_INLINE_EXECUTOR_SCHEMA,
-        schema_version=1,
-        payload={"mode": "inline"},
-    )
     task_hashes = experiment.eval_configs.internal.task_set.task_hashes
     if engine.sampling.task_hashes != task_hashes:
         raise ValueError("GEPA trainset must be the internal eval split")
-    control = configure_gepa(
+    return configure_gepa(
         reflection_model=ProposerConfig(
-            provider_call_config=_provider_call_config_ref(experiment),
+            provider_call_config=c19_provider_call_config_ref(experiment),
         ),
         metric=engine.eval_config_ref,
         reward_policy_hash=experiment.reward_policy.identity_hash(),
@@ -151,26 +124,37 @@ def build_c19_gepa_adapter(
         max_metric_calls=len(task_hashes) + 1,
         reflection_minibatch_size=1,
     ).model_copy(update={"mutation_field": C19_MUTATION_FIELD})
-    registry = GepaDataRegistry.from_engine(store=store, engine=engine)
-    assembler = CanonicalGepaCandidateAssembler(
-        base_candidate=candidate_reference(experiment.initial_candidate),
-        fields=(
-            GepaCandidateFieldBinding(
-                component_name=GEPA_COMPONENT_NAME,
-                candidate_field=C19_MUTATION_FIELD,
-            ),
-        ),
+
+
+def build_c19_gepa_adapter(
+    *,
+    store: ObjectStore,
+    engine: EvalEngine,
+    experiment: Experiment,
+    run_id: str,
+    proposer_transport: ProposerTransport | None,
+) -> GepaHarnessAdapter:
+    """Assemble a real C19 GEPA adapter on the public factory surface."""
+    prompt_adapter = PlainPromptAdapter()
+    prompt_services = c19_gepa_prompt_services()
+    policy_identity_hash = compute_identity_hash(
+        schema=_INLINE_EXECUTOR_SCHEMA,
+        schema_version=1,
+        payload={"mode": "inline"},
     )
-    evaluation_authority = CanonicalGepaEvalAuthority(
+    control = build_c19_gepa_control(
+        engine=engine,
+        experiment=experiment,
+        prompt_services=prompt_services,
+        policy_identity_hash=policy_identity_hash,
+    )
+    return build_gepa_harness_adapter(
         store=store,
         engine=engine,
         control=control,
-        candidate_assembler=assembler,
-        data_registry=registry,
-    )
-    proposal_authority = CanonicalGepaProposalAuthority(
-        store=store,
-        control=control,
+        run_id=run_id,
+        initial_candidate=experiment.initial_candidate,
+        mutation_field=C19_MUTATION_FIELD,
         prompt_services=prompt_services,
         transport=_gepa_transport(
             engine=engine,
@@ -185,24 +169,11 @@ def build_c19_gepa_adapter(
             policy_identity_hash=policy_identity_hash,
         ),
     )
-    factory = CanonicalGepaAdapterFactory(
-        store=store,
-        run_id=run_id,
-        control=control,
-        evaluation_authority=evaluation_authority,
-        proposal_authority=proposal_authority,
-        prompt_services=prompt_services,
-    )
-    return GepaHarnessAdapter(
-        control=control,
-        seed_candidate={GEPA_COMPONENT_NAME: PROBES.naive_template},
-        trainset=registry.entries,
-        valset=None,
-        adapter_factory=GepaHarnessAdapterFactory(factory=factory),
-    )
 
 
 __all__ = [
     "GEPA_COMPONENT_NAME",
     "build_c19_gepa_adapter",
+    "build_c19_gepa_control",
+    "c19_gepa_prompt_services",
 ]

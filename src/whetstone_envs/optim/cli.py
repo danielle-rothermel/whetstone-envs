@@ -6,6 +6,9 @@ import traceback
 from pathlib import Path
 
 from whetstone_envs.optim.run import (
+    C19_DEMO_MODES,
+    C19_OPTIMIZERS,
+    C19_TRANSPORTS,
     C19RunSpec,
     default_output_dir,
     run_c19_optimizer,
@@ -25,17 +28,25 @@ def _split_sizes(value: str) -> tuple[int, int, int]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run COPRO or GEPA on a named whetstone-envs family.",
+        description=(
+            "Run COPRO, GEPA, or MIPROv2 on a named whetstone-envs family."
+        ),
     )
     parser.add_argument("--family", choices=("c19",), default="c19")
     parser.add_argument(
         "--optimizer",
-        choices=("copro", "gepa"),
+        choices=C19_OPTIMIZERS,
         required=True,
     )
     parser.add_argument(
+        "--demo-mode",
+        choices=C19_DEMO_MODES,
+        default="fewshot",
+        help="MIPROv2 demonstration regime; ignored by COPRO and GEPA.",
+    )
+    parser.add_argument(
         "--transport",
-        choices=("fake", "openrouter"),
+        choices=C19_TRANSPORTS,
         default="fake",
     )
     parser.add_argument(
@@ -46,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--model", default="openai/gpt-4.1-nano")
+    parser.add_argument(
+        "--num-seeds",
+        type=int,
+        default=1,
+        help="Repeats per task (K_REPEAT).",
+    )
     return parser
 
 
@@ -64,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=output,
                 run_id=run_id,
                 model=arguments.model,
+                demo_mode=arguments.demo_mode,
+                num_seeds=arguments.num_seeds,
             )
         )
     except DurableRunError as error:

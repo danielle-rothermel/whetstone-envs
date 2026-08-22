@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
+from whetstone.optim.contracts import OptimResult
 
 from whetstone_envs.reporting.projection import (
     _comparison,
@@ -101,3 +102,91 @@ def _single_success_report(report: EvalReport, index: int) -> EvalReport:
         ),
         results=(result,),
     )
+
+
+def test_project_run_spend_reads_the_serialized_cost_report() -> None:
+    from whetstone.optim.cost import RoleCost, RunCostReport
+
+    from whetstone_envs.reporting.projection import project_run_spend
+
+    report = RunCostReport(
+        task_model=RoleCost(
+            calls=4,
+            input_tokens=100,
+            output_tokens=20,
+            priced_calls=0,
+            unpriced_calls=4,
+            cached_calls=1,
+            rows_missing_token_breakdown=4,
+        ),
+        proposer=RoleCost(
+            calls=2,
+            input_tokens=30,
+            output_tokens=5,
+            priced_calls=2,
+            unpriced_calls=0,
+            usd=0.25,
+        ),
+    )
+
+    result = OptimResult.model_construct(
+        cost=ImmutableJsonObject(report.model_dump(mode="json"))
+    )
+
+    spend = project_run_spend(result)
+
+    assert spend is not None
+    assert spend.task_model.role == "task_model"
+    assert spend.task_model.calls == 4
+    assert spend.task_model.cached_calls == 1
+    assert spend.task_model.rows_missing_token_breakdown == 4
+    # No total when a contributing call carried no price.
+    assert spend.task_model.usd is None
+    assert spend.proposer.role == "proposer"
+    assert spend.proposer.usd == 0.25
+
+
+def test_project_run_spend_is_absent_without_a_cost_report() -> None:
+    from whetstone_envs.reporting.projection import project_run_spend
+
+    result = OptimResult.model_construct(cost=ImmutableJsonObject({}))
+
+    assert project_run_spend(result) is None
+
+
+def test_role_spend_rejects_a_total_alongside_unpriced_calls() -> None:
+    import pytest
+
+    from whetstone_envs.reporting.schema import RoleSpend
+
+    with pytest.raises(ValueError, match="reports no total spend"):
+        RoleSpend(
+            role="proposer",
+            calls=2,
+            cached_calls=0,
+            input_tokens=0,
+            output_tokens=0,
+            priced_calls=1,
+            unpriced_calls=1,
+            rows_missing_token_breakdown=0,
+            usd=1.0,
+        )
+
+
+def test_role_spend_requires_priced_and_unpriced_to_exhaust_calls() -> None:
+    import pytest
+
+    from whetstone_envs.reporting.schema import RoleSpend
+
+    with pytest.raises(ValueError, match="exhaust billable calls"):
+        RoleSpend(
+            role="task_model",
+            calls=5,
+            cached_calls=0,
+            input_tokens=0,
+            output_tokens=0,
+            priced_calls=1,
+            unpriced_calls=1,
+            rows_missing_token_breakdown=0,
+            usd=None,
+        )

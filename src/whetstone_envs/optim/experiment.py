@@ -14,7 +14,7 @@ from dr_providers import (
     RequestControl,
     TokenLimitParameter,
 )
-from whetstone.core.identity import typed_ref_for_record
+from whetstone.core.identity import IdentityRef, typed_ref_for_record
 from whetstone.eval import (
     SCHEMA_EVAL_PROCEDURE_CONFIG,
     EvalProcedureConfig,
@@ -36,6 +36,7 @@ from whetstone.experiment.graph.rollout_template import (
 )
 from whetstone.experiment.reward import RewardPolicy, RewardTerm
 from whetstone.experiment.sampling import (
+    HELD_OUT,
     INTERNAL_EVAL,
     OFFICIAL,
     EvalConfigs,
@@ -54,6 +55,9 @@ C19_DATASET_REVISION = "c19/v1"
 C19_MUTATION_FIELD = "prompt_template"
 C19_ROOT_BASE_SCHEMA = "whetstone_envs.c19.root_candidate"
 C19_PROMPT_FIELDS = ("grid", "command", "question")
+#: The C19 family names its single generated component output "response";
+#: demonstrations and traces carry the task gold under this exact key.
+C19_RESPONSE_FIELD = "response"
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,12 +240,26 @@ def prepare_c19_experiment(
         num_seeds=num_seeds,
     )
     held_out_rows = task_rows_from_instances(split.held_out)
+    held_out = (
+        derive_eval_split(
+            namespace=C19_NAMESPACE,
+            dataset_revision=C19_DATASET_REVISION,
+            split_role=HELD_OUT,
+            tasks=held_out_rows,
+            task_hash_of=_task_hash,
+            procedure=procedure,
+            aggregation=aggregation,
+            num_seeds=num_seeds,
+        )
+        if held_out_rows
+        else None
+    )
     eval_configs = EvalConfigs(
         env_name=C19_NAMESPACE,
         procedure_config_hash=procedure_hash,
         internal=internal,
         official=official,
-        held_out_task_hashes=tuple(row.task_hash for row in held_out_rows),
+        held_out=held_out,
     )
     resolved_initial = PROBES.naive_template
     resolved_ceiling = PROBES.ceiling_template
@@ -270,6 +288,45 @@ def prepare_c19_experiment(
     return PreparedC19Experiment(experiment=experiment, split=split)
 
 
+def c19_provider_call_config_ref(experiment: Experiment) -> IdentityRef:
+    """The typed reference to this experiment's provider call config.
+
+    Optimizer proposer transports resolve the prompt model through this
+    reference, so it must carry the ``PROVIDER_CALL_CONFIG_SCHEMA`` identity
+    of the experiment's rollout config -- not an execution-policy reference.
+    """
+    payload = experiment.rollout_graph.provider_call_config.model_dump(
+        mode="json"
+    )
+    record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
+    return IdentityRef(
+        record_ref=record_ref,
+        record_hash=record_ref.content_hash,
+    )
+
+
+def c19_gold_by_task_hash(experiment: Experiment) -> dict[str, str]:
+    """Map every prepared C19 task hash to its exact oracle gold.
+
+    The eval engine deliberately withholds gold from its sampling view, so
+    labeled demonstrations read it from the family's own experiment splits.
+    """
+    gold_by_hash: dict[str, str] = {}
+    for split in (
+        experiment.eval_configs.internal,
+        experiment.eval_configs.official,
+        experiment.eval_configs.held_out,
+    ):
+        if split is None:
+            continue
+        for task in split.tasks:
+            gold = getattr(task, "gold", None)
+            if not isinstance(gold, str):
+                raise TypeError("C19 task must expose a strict gold")
+            gold_by_hash[_task_hash(task)] = gold
+    return gold_by_hash
+
+
 def probe_candidates_from_templates(
     *,
     naive_template: str,
@@ -296,8 +353,11 @@ __all__ = [
     "C19_MUTATION_FIELD",
     "C19_NAMESPACE",
     "C19_PROMPT_FIELDS",
+    "C19_RESPONSE_FIELD",
     "PreparedC19Experiment",
     "c19_candidate",
+    "c19_gold_by_task_hash",
+    "c19_provider_call_config_ref",
     "c19_render_contract",
     "prepare_c19_experiment",
     "probe_candidates_from_templates",

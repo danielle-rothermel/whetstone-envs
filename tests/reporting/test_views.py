@@ -270,3 +270,67 @@ def test_default_trajectory_view_wraps_refs_relations_and_budgets() -> None:
         assert "Message: complete" in rendered
         assert "dddddddddd" not in rendered
         assert "..." not in rendered
+
+
+def _spend_report(usd, unpriced: int) -> TrajectoryReport:
+    from whetstone_envs.reporting.schema import RoleSpend, RunSpend
+
+    base = _candidate_report("prompt {grid}")
+    return base.model_copy(
+        update={
+            "spend": RunSpend(
+                schema_version=1,
+                task_model=RoleSpend(
+                    role="task_model",
+                    calls=4,
+                    cached_calls=2,
+                    input_tokens=400,
+                    output_tokens=80,
+                    priced_calls=4 - unpriced,
+                    unpriced_calls=unpriced,
+                    rows_missing_token_breakdown=unpriced,
+                    usd=usd,
+                ),
+                proposer=RoleSpend(
+                    role="proposer",
+                    calls=1,
+                    cached_calls=0,
+                    input_tokens=50,
+                    output_tokens=10,
+                    priced_calls=1,
+                    unpriced_calls=0,
+                    rows_missing_token_breakdown=0,
+                    usd=0.5,
+                ),
+            )
+        }
+    )
+
+
+def _render(report: TrajectoryReport) -> str:
+    stream = StringIO()
+    console = Console(
+        file=stream, width=200, color_system=None, force_terminal=False
+    )
+    render_trajectory(console, report, show_candidates=False)
+    return stream.getvalue()
+
+
+def test_trajectory_view_reports_spend_per_role() -> None:
+    rendered = _render(_spend_report(1.5, unpriced=0))
+    assert "Run spend" in rendered
+    assert "task_model" in rendered
+    assert "proposer" in rendered
+    assert "$1.500000" in rendered
+    assert "$0.500000" in rendered
+
+
+def test_trajectory_view_marks_an_unpriced_role_rather_than_zero() -> None:
+    rendered = _render(_spend_report(None, unpriced=4))
+    assert "unpriced (4/4)" in rendered
+    assert "$0.000000" not in rendered
+
+
+def test_trajectory_view_omits_spend_when_the_run_reported_none() -> None:
+    rendered = _render(_candidate_report("prompt {grid}"))
+    assert "Run spend" not in rendered

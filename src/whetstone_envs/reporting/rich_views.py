@@ -19,6 +19,7 @@ from whetstone_envs.reporting.schema import (
     EvalSuccess,
     Observation,
     ObservationState,
+    RoleSpend,
     TrajectoryReport,
 )
 
@@ -302,6 +303,7 @@ def render_trajectory(
             title=Text(f"Optimization trajectory: {report.run_id}"),
         )
     )
+    _render_spend(console, report)
     for step in report.steps:
         sections: list[Text | Padding] = [
             _trajectory_line(
@@ -424,6 +426,37 @@ def render_trajectory(
             )
         )
     console.print(Group(*panels))
+
+
+def _render_spend(console: Console, report: TrajectoryReport) -> None:
+    """Show what the run spent, per provider role."""
+    spend = report.spend
+    if spend is None:
+        return
+    table = Table(title="Run spend", box=None)
+    table.add_column("Role")
+    table.add_column("Calls", justify="right")
+    table.add_column("Cached", justify="right")
+    table.add_column("In tokens", justify="right")
+    table.add_column("Out tokens", justify="right")
+    table.add_column("USD", justify="right")
+    for role in (spend.task_model, spend.proposer):
+        table.add_row(
+            role.role,
+            str(role.calls),
+            str(role.cached_calls),
+            str(role.input_tokens),
+            str(role.output_tokens),
+            _format_usd(role),
+        )
+    console.print(table)
+
+
+def _format_usd(role: RoleSpend) -> str:
+    """A total only when every billable call carried a price."""
+    if role.usd is None:
+        return f"unpriced ({role.unpriced_calls}/{role.calls})"
+    return f"${role.usd:.6f}"
 
 
 def _trajectory_line(label: str, value: str) -> Text:

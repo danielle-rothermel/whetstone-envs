@@ -52,6 +52,7 @@ from pydantic import JsonValue
 
 from whetstone_envs.optim.study.manifest import (
     PROVENANCE_AMENDED,
+    STAGE_IDS,
     STUDY_MANIFEST_NAME,
     EvidencePointer,
     StageId,
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
         EvidenceStore,
         HeldOutRecord,
         RunRecord,
+        StageRecord,
     )
 
 __all__ = [
@@ -1283,6 +1285,7 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 ),
             )
         ),
+        *_transport_rows(manifest),
         Row(
             cells=(
                 Cell(text="Stage-1 precondition -- GEPA sizing (F9)"),
@@ -1372,6 +1375,16 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 "from what each stage writes into it. A stage that did not "
                 "write its record did not reach its gate."
             ),
+            (
+                "Each stage that ran also records the transport it ran on "
+                "and what it spent. The transport is the difference between "
+                "plumbing evidence and a study result: a stage on the fake "
+                "transport answers from the experiment's own gold and "
+                "measures nothing about a model. Every stage after Stage 0 "
+                "is refused unless it runs on the transport the anchors "
+                "were calibrated on, because every held-out delta is paired "
+                "against those anchors."
+            ),
         ),
         tables=(
             Table(
@@ -1379,6 +1392,78 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 rows=rows,
             ),
         ),
+    )
+
+
+def _transport_rows(manifest: StudyManifest) -> tuple[Row, ...]:
+    """One row per stage that ran, naming its transport and its spend.
+
+    Ordered by the stage sequence rather than by the manifest's storage
+    order, so a study whose Stage 0 was re-run after Stage 1 still reads in
+    the order the stages happen.
+    """
+    by_stage = {entry.stage: entry for entry in manifest.stages}
+    rows: list[Row] = []
+    for stage_id in STAGE_IDS:
+        record = by_stage.get(stage_id)
+        if record is None:
+            continue
+        rows.append(
+            Row(
+                cells=(
+                    Cell(
+                        text=(
+                            f"{_stage_label(record.stage)} -- transport "
+                            "and spend"
+                        )
+                    ),
+                    _presence_cell(present=True),
+                    Cell(
+                        figure=_manifest_figure(
+                            f"ran on {record.transport}; "
+                            f"{_stage_spend_detail(record)}",
+                            f"stages[{record.stage}]",
+                        )
+                    ),
+                )
+            )
+        )
+    return tuple(rows)
+
+
+def _stage_label(stage: str) -> str:
+    """The prose spelling of a stage id: ``stage0`` reads "Stage 0".
+
+    The manifest stores the wire spelling and the report renders the one a
+    reader reads. Keeping them distinct is also what keeps the stage name
+    out of the rendered-number guard: ``stage0`` is a label whose digit
+    means nothing, and a label indistinguishable from a measurement is
+    precisely what the guard exists to catch.
+    """
+    return f"Stage {stage.removeprefix('stage')}"
+
+
+def _stage_spend_detail(record: StageRecord) -> str:
+    """What one stage spent, or that it recorded no priced calls.
+
+    A stage with no spend records is not a free stage: it is one whose rows
+    carried no provider telemetry, which is what every fake-transport stage
+    looks like. Saying so beats printing a zero.
+    """
+    if not record.spend:
+        return "no priced calls recorded"
+    calls = sum(entry.calls for entry in record.spend)
+    tokens = sum(
+        entry.input_tokens + entry.output_tokens for entry in record.spend
+    )
+    unpriced = sum(entry.unpriced_calls for entry in record.spend)
+    total = (
+        None
+        if any(entry.usd is None for entry in record.spend)
+        else sum(entry.usd or 0.0 for entry in record.spend)
+    )
+    return (
+        f"{calls:,} calls, {tokens:,} tokens, {_usd(total, unpriced, calls)}"
     )
 
 

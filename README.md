@@ -267,6 +267,57 @@ WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
   --codex-capacity 8 --allow-real-codex
 ```
 
+### Study transports and the per-stage ledger
+
+A study stage evaluates on one of two transports, named per invocation:
+
+```bash
+uv run --extra optim whetstone-study run \
+  --study-dir STUDY_DIR --stage stage0 --transport openrouter
+uv run --extra optim whetstone-study plan --study-dir STUDY_DIR
+uv run --extra optim whetstone-study report --study-dir STUDY_DIR --out OUT_DIR
+```
+
+`--transport fake` is the default and reaches no provider: the transport
+answers from the experiment's own gold, so the numbers are evidence about
+the plumbing and about nothing else. `--transport openrouter` spends, and
+takes its key from `OPENROUTER_API_KEY`. A missing or blank key is refused
+**before the store is opened, the pool is generated, or any engine is
+bound**, so an unauthorized paid run leaves no half-initialized study
+directory behind and exits non-zero. The key is checked for presence only
+and never reaches an error message.
+
+Models come from the manifest's own `models` block — `task_model` for the
+evaluations and `proposer_model` for the optimizers' proposal route — so
+selecting a transport does not select a model.
+
+**The transport is an invocation property that the manifest records.** Like
+`--allow-real-codex` it stays out of the pre-registration hash, so two
+studies differing only in it pre-register identically. Unlike it, every
+stage writes a `stages` entry naming the transport it ran on, because a
+stage run on `fake` and a stage run on `openrouter` are different evidence
+for the same claim.
+
+That record is what makes the cross-stage rule checkable: **a study whose
+Stage 0 calibrated its anchors on one transport refuses to run Stage 1 or
+Stage 2 on the other**, before any arm runs. Every held-out delta is paired
+against those anchors, so a cross-transport subtraction is not a comparison
+and there is no flag that makes it one — a toy study that wants the other
+transport re-runs Stage 0 on it under `--replace-design`.
+
+Each stage record also carries what the stage spent, one entry per provider
+role, in the same shape a run reports. Stage 0's anchors evaluate through
+the engine rather than through an optimizer run, so their spend is
+re-derived from the persisted output rows the evaluations left behind —
+measured, never accumulated while the stage ran. `whetstone-study plan`
+prints that ledger beneath its estimated budget, `run` echoes it, and the
+report prints it beside each stage's transport. A role with any unpriced
+call reports no USD total at all rather than a partial sum that would look
+authoritative. A fake-transport stage records no spend at all: its rows are
+real rows and the shared row rule counts them as billable-and-unpriced,
+which is right for a provider row and wrong for a stage that reached no
+provider.
+
 ## Evaluation and trajectory reports
 
 Explain C19, run a standalone fake evaluation, and inspect the saved report:

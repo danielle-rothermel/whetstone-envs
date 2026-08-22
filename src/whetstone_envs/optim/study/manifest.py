@@ -87,8 +87,18 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: kept the verdict nowhere, so a Stage 2 invoked straight after Stage 0 --
 #: or after a Stage 1 whose gate failed -- ran the full five-run design
 #: without the pilot ever having cleared the fan-out check the pilot exists
-#: to perform.
-STUDY_MANIFEST_SCHEMA_VERSION = 5
+#: to perform. v5 also carries ``anchor_completeness`` on each held-out row,
+#: so a downgraded paired delta can be read as the anchor's loss rather than
+#: the arm's.
+#: v6 adds ``stages``: one record per stage that ran, naming the transport
+#: it ran on and the spend it produced. A stage run on the fake transport
+#: and a stage run against a provider are different evidence for the same
+#: claim, and v5 could not tell them apart -- a study could calibrate its
+#: anchors for free and then report paid optimizer runs against them
+#: without anything in the manifest saying so. The transport is a property
+#: of the invocation rather than of the design, so it is recorded here and
+#: deliberately kept out of the pre-registration hash.
+STUDY_MANIFEST_SCHEMA_VERSION = 6
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -142,6 +152,7 @@ class ManifestKey(StrEnum):
     MODELS = "models"
     PRE_REGISTRATION = "pre_registration"
     DESIGN = "design"
+    STAGES = "stages"
     GEPA_SIZING = "gepa_sizing"
     FANOUT_CHECK = "fanout_check"
     CALL_COUNT_GATE = "call_count_gate"
@@ -174,6 +185,29 @@ class StageId(StrEnum):
 
 #: The stage names a CLI accepts, in run order.
 STAGE_IDS: tuple[str, ...] = tuple(member.value for member in StageId)
+
+
+@verify(UNIQUE)
+class TransportName(StrEnum):
+    """The transports a stage may run on.
+
+    Persisted on every stage record, so these are stored identity rather
+    than a local vocabulary: ``fake`` names the offline transport that
+    answers from the experiment's own gold, and ``openrouter`` names the
+    billed provider route. The distinction is the whole point of recording
+    it -- a number measured on ``fake`` is plumbing evidence and a number
+    measured on ``openrouter`` is a study result, and nothing downstream
+    can tell them apart without this field.
+    """
+
+    FAKE = "fake"
+    OPENROUTER = "openrouter"
+
+
+#: The transport names the CLI accepts, in the order they are offered.
+TRANSPORT_NAMES: tuple[str, ...] = tuple(
+    member.value for member in TransportName
+)
 
 
 class _StrictModel(BaseModel):
@@ -1148,6 +1182,69 @@ class C18Record(_StrictModel):
 
 
 # --------------------------------------------------------------------------
+# Stages
+# --------------------------------------------------------------------------
+
+
+class StageRecord(_StrictModel):
+    """One stage that ran: on which transport, and what it spent.
+
+    **The transport is evidence, not design.** It is a property of the
+    invocation -- like the real-Codex authorization -- so it never enters
+    the pre-registration hash, and two studies that differ only in it
+    pre-register identically. It is recorded all the same, because a stage
+    calibrated on the fake transport and a stage calibrated against a
+    provider are different evidence for the same claim, and every number
+    the report prints downstream of a stage inherits which one it was.
+
+    ``spend`` is the stage's own provider spend, one entry per role, in the
+    same record shape a run reports. Stage 0's anchors spend through the
+    evaluation engine rather than through an optimizer run, so without this
+    the study's most expensive calibration would be the one part of the
+    accounting with no total. A stage that spent nothing measurable -- a
+    fake-transport stage, whose rows carry no provider telemetry -- records
+    an empty tuple rather than a fabricated zero-cost role.
+    """
+
+    stage: StrictStr
+    transport: StrictStr
+    spend: tuple[RunSpendRecord, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_stage(self) -> StageRecord:
+        if self.stage not in STAGE_IDS:
+            raise ValueError(
+                f"a stage record names one of {list(STAGE_IDS)}, "
+                f"got {self.stage!r}"
+            )
+        if self.transport not in TRANSPORT_NAMES:
+            raise ValueError(
+                f"a stage record names one of {list(TRANSPORT_NAMES)}, "
+                f"got {self.transport!r}"
+            )
+        roles = [entry.role for entry in self.spend]
+        if len(set(roles)) != len(roles):
+            raise ValueError("each provider role is reported once per stage")
+        return self
+
+
+def recorded_transport(
+    stages: tuple[StageRecord, ...], stage: StageId | str
+) -> str | None:
+    """The transport ``stage`` ran on, or ``None`` if it has not run.
+
+    Owned here beside the record rather than at each caller, because "which
+    transport did this study's Stage 0 run on" is the question the
+    cross-stage refusal is built from and it must have one answer.
+    """
+    wanted = stage.value if isinstance(stage, StageId) else stage
+    for entry in stages:
+        if entry.stage == wanted:
+            return entry.transport
+    return None
+
+
+# --------------------------------------------------------------------------
 # The manifest
 # --------------------------------------------------------------------------
 
@@ -1228,6 +1325,7 @@ class StudyManifest(_StrictModel):
     models: ModelsRecord
     pre_registration: PreRegistrationRecord | None = None
     design: DesignRecord | None = None
+    stages: tuple[StageRecord, ...] = ()
     gepa_sizing: GepaSizingRecord | None = None
     fanout_check: FanoutCheckRecord | None = None
     call_count_gate: CallCountGateRecord | None = None
@@ -1267,6 +1365,13 @@ class StudyManifest(_StrictModel):
         _validate_design_matches_pre_registration(
             pre_registration=self.pre_registration, design=self.design
         )
+        stage_ids = [entry.stage for entry in self.stages]
+        if len(set(stage_ids)) != len(stage_ids):
+            # A stage records what it ran on. Two records for one stage
+            # would mean the study could not say which transport its
+            # numbers came from, which is the whole reason the block
+            # exists; a re-run replaces its record rather than appending.
+            raise ValueError("each stage is recorded at most once")
         arm_ids = [arm.arm_id for arm in self.arms]
         if len(set(arm_ids)) != len(arm_ids):
             raise ValueError("arm ids are distinct")
@@ -1634,6 +1739,7 @@ __all__ = [
     "STUDY_MANIFEST_SCHEMA_NAME",
     "STUDY_MANIFEST_SCHEMA_VERSION",
     "STUDY_STORE_NAME",
+    "TRANSPORT_NAMES",
     "AdapterSwapRecord",
     "ArmRecord",
     "BalanceRecord",
@@ -1663,11 +1769,14 @@ __all__ = [
     "SplitRecord",
     "SplitsRecord",
     "StageId",
+    "StageRecord",
     "StudyManifest",
+    "TransportName",
     "check_manifest_pointers",
     "format_pointer_report",
     "pre_registration_design_hash",
     "read_study_manifest",
+    "recorded_transport",
     "study_manifest_path",
     "write_study_manifest",
 ]

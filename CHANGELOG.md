@@ -6,6 +6,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The study harness runs on the real OpenRouter transport.**
+  `whetstone-study run --transport openrouter` binds the same provider
+  route the single-run path already used — the seeded OpenRouter call
+  config, `ProviderKind.OPENROUTER`, and `OPENROUTER_API_KEY` — for every
+  role engine and for the arms' optimizer runner, so Stage 0, Stage 1, and
+  Stage 2 can spend. One live transport is bound per stage rather than per
+  engine binding, because a stage rebinds an engine on every scored
+  candidate and a per-binding client would open a connection pool per
+  evaluation. Models still come from the manifest's `models` block; the
+  transport selects a route, not a model. `--transport fake` remains the
+  default and the fake path is unchanged: its prepared experiment carries
+  no provider call config, so every Eval Config hash it derives is what it
+  was before a paid path existed.
+- **A paid stage with no key is refused before anything is opened.**
+  `--transport openrouter` without a non-blank `OPENROUTER_API_KEY` fails
+  ahead of the store, the pool, and every engine, so an unauthorized run
+  leaves no half-initialized study directory and exits non-zero. The key is
+  checked for presence only and never reaches an error message; a wrong key
+  is the provider's refusal to make.
+- **Each stage records the transport it ran on, and a study will not mix
+  them.** The manifest gains a `stages` block (schema `v6`) with one
+  `StageRecord` per stage naming its transport and its spend. Like the
+  real-Codex authorization the transport is an invocation property and
+  stays out of the pre-registration hash, so two studies differing only in
+  it pre-register identically — but it is recorded, because a stage run on
+  the fake transport and a stage run against a provider are different
+  evidence for the same claim. A study whose Stage 0 calibrated on one
+  transport refuses to run an arm stage on the other, **before any arm
+  runs**: every held-out delta is paired against those anchors, so a
+  cross-transport subtraction is not a comparison and no flag makes it one.
+  A toy re-runs Stage 0 under `--replace-design`. A re-run replaces its
+  stage record rather than appending a second one, and the manifest refuses
+  two records for one stage.
+- **Stage 0's anchors produce a spend record, and every stage total is
+  printed.** Anchor evaluations reach the provider through the evaluation
+  engine rather than through an optimizer run, so they had no
+  `OptimResult.cost` and no total. `optim/study/spend.py` re-derives one
+  from the persisted `EvalOutputRow` usage fields behind each anchor's
+  evidence, aggregated through whetstone's own `aggregate_role_cost` so the
+  honesty split — cached, priced, unpriced, missing token breakdown — and
+  the rule that an absent `usd` is "not knowable" rather than "zero" are
+  the shared aggregator's rather than a restatement. Evidence is
+  de-duplicated by reference, matching how a run's aggregation counts one
+  evaluation once. `whetstone-study plan` prints the measured ledger
+  beneath its estimated budget, `run` echoes the stage's transport and
+  ledger, and the report prints each stage's transport and spend in its
+  stage history. A fake-transport stage records no spend at all: its rows
+  are real rows, so the shared row rule counts them as billable and
+  unpriced — right for a provider row, and a bill nobody owes for a stage
+  that reached no provider.
+
 ### Fixed
 - `stage0 --replace-design` that records an amendment discards the previous
   Stage-1 call-count verdict: a pilot gate describes the design it was

@@ -30,6 +30,7 @@ from whetstone_envs.optim.study.manifest import (
     STUDY_MANIFEST_SCHEMA,
     STUDY_MANIFEST_SCHEMA_NAME,
     STUDY_MANIFEST_SCHEMA_VERSION,
+    TRANSPORT_NAMES,
     AdapterSwapRecord,
     ArmRecord,
     BalanceRecord,
@@ -57,6 +58,7 @@ from whetstone_envs.optim.study.manifest import (
     SplitsRecord,
     StageId,
     StudyManifest,
+    TransportName,
     check_manifest_pointers,
     format_pointer_report,
     pre_registration_design_hash,
@@ -280,8 +282,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 5
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v5"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 6
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v6"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -305,6 +307,7 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "models",
         "pre_registration",
         "design",
+        "stages",
         "gepa_sizing",
         "fanout_check",
         "call_count_gate",
@@ -330,6 +333,11 @@ def test_split_and_stage_names_are_pinned() -> None:
         "stage2",
     ]
     assert STAGE_IDS == ("stage0", "stage1", "stage2")
+    assert [member.value for member in TransportName] == [
+        "fake",
+        "openrouter",
+    ]
+    assert TRANSPORT_NAMES == ("fake", "openrouter")
 
 
 def test_serialized_document_keys_match_the_owned_wire_keys() -> None:
@@ -488,7 +496,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v6"
+    payload["schema"] = "whetstone_envs.step10_study/v7"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 

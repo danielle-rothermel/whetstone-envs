@@ -30,6 +30,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from dr_store import ObjectStore
 from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate
 
@@ -60,11 +61,15 @@ from whetstone_envs.optim.study.manifest import (
     PreRegistrationRecord,
     RunRecord,
     SplitsRecord,
+    StageRecord,
     StudyManifest,
+    TransportName,
     pre_registration_design_hash,
     read_study_manifest,
+    recorded_transport,
     write_study_manifest,
 )
+from whetstone_envs.optim.study.manifest import StageId as ManifestStageId
 from whetstone_envs.optim.study.power import COMPLETENESS_RULE, MDE_FORMULA
 from whetstone_envs.optim.study.selection import (
     ArmReport,
@@ -81,15 +86,20 @@ from whetstone_envs.optim.study.spec import (
     require_pinned_arms,
     spec_from_manifest,
 )
+from whetstone_envs.optim.study.spend import stage_spend_records
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
+
+    from whetstone.eval.schema import EvalEvidence
 
     from whetstone_envs.optim.study.spec import ArmSpec, StudySpec
 
 __all__ = [
     "SEED_NOTE_CONTROL_FIELD",
     "SEED_NOTE_PROVIDER_ONLY",
+    "STAGE0_TRANSPORT_STAGE",
     "STAGE_PREFLIGHT_ROOT_NAME",
     "ArmRunResult",
     "OptimizerRunner",
@@ -97,6 +107,7 @@ __all__ = [
     "StageError",
     "StageResult",
     "call_count_within_estimate",
+    "require_matching_transport",
     "run_arm_stage",
     "run_stage",
     "run_stage0_into_manifest",
@@ -217,6 +228,17 @@ class StageEnvironment:
     #: contract; the guard passes it straight through to
     #: ``preflight_codex_session``, which names the real type.
     codex_test_seam: object | None = None
+    #: Which transport this invocation bound. Unlike the Codex
+    #: authorization, this one *is* recorded: it does not change what the
+    #: study is designed to measure, but it changes what every number a
+    #: stage produces is evidence of, so the stage writes it into the
+    #: manifest and the cross-stage check reads it back.
+    transport: str = TransportName.FAKE.value
+    #: The study's evidence store, when the caller bound one. A stage that
+    #: evaluates through the engine prices what it evaluated by reading its
+    #: own persisted output rows back out of this store; without it the
+    #: stage records no spend rather than guessing at one.
+    store: ObjectStore | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +257,107 @@ class StageResult:
     #: What the post-measurement analysis wrote, when one ran. ``None`` for
     #: Stage 0, and for an arm stage whose environment carries no anchors.
     analysis: AnalysisResult | None = None
+
+
+# --------------------------------------------------------------------------
+# Transport: recorded per stage, checked across them
+# --------------------------------------------------------------------------
+
+#: The stage whose transport every later stage must match. Stage 0 buys the
+#: anchors, and every efficacy number in the study is a delta against them,
+#: so it is Stage 0's transport that decides what the whole study measured.
+STAGE0_TRANSPORT_STAGE = StageId.STAGE0
+
+
+def require_matching_transport(
+    manifest: StudyManifest,
+    *,
+    stage: StageId | ManifestStageId,
+    transport: str,
+) -> None:
+    """Refuse a stage running on a transport its anchors did not.
+
+    Every efficacy number is a paired delta against the Stage-0 anchors, so
+    anchors measured on the fake transport and arms measured against a
+    provider are not two halves of one comparison -- they are two different
+    experiments subtracted from each other. There is no flag that makes it
+    acceptable, because the resulting number would not mean anything a flag
+    could qualify: a toy study that wants the other transport re-runs Stage
+    0 on it, which is cheap precisely because it is a toy.
+
+    Stage 0 is exempt from the check against itself; ``--replace-design``
+    is the existing, recorded way to re-calibrate, and it rewrites the
+    stage record along with the design.
+
+    Stages are compared by value rather than by identity. Two ``StageId``
+    enums with the same members exist in this package -- the spec's and the
+    manifest's -- and an identity test would silently pass whichever one it
+    was not given, turning a guard into a no-op for half its callers.
+    """
+    if stage.value == STAGE0_TRANSPORT_STAGE.value:
+        return
+    anchored = recorded_transport(manifest.stages, STAGE0_TRANSPORT_STAGE)
+    if anchored is None or anchored == transport:
+        return
+    raise StageError(
+        f"{stage.value} was asked to run on transport {transport!r}, but "
+        f"this study calibrated its anchors on {anchored!r}; every "
+        "held-out delta is paired against those anchors, so the two cannot "
+        "be compared. Re-run stage0 on "
+        f"{transport!r} with --replace-design, or run {stage.value} on "
+        f"{anchored!r}"
+    )
+
+
+def _stages_with(
+    manifest: StudyManifest, record: StageRecord
+) -> tuple[StageRecord, ...]:
+    """``manifest.stages`` with ``record`` replacing any same-stage entry.
+
+    A re-run replaces rather than appends: the manifest holds at most one
+    record per stage, because two would leave the study unable to say which
+    transport its numbers came from.
+    """
+    others = tuple(
+        entry for entry in manifest.stages if entry.stage != record.stage
+    )
+    return (*others, record)
+
+
+def _stage_record(
+    *,
+    stage: StageId,
+    environment: StageEnvironment,
+    evidence: Iterable[EvalEvidence] = (),
+) -> StageRecord:
+    """One stage's record: the transport it ran on, and what it spent.
+
+    Two conditions gate the spend, and both mean "not measured" rather
+    than "free":
+
+    * **A fake-transport stage records none.** Its rows are real rows -- a
+      generation happened and the row proves it -- so the shared row rule
+      counts them as billable-and-unpriced, which is the right answer for a
+      provider row and the wrong one for a stage that reached no provider.
+      Reporting "112 unpriced calls" for a stage that spent nothing would
+      be a bill nobody owes.
+    * **A caller that bound no store records none**, because the rows are
+      read back out of it and there is nothing to read.
+
+    In both cases the record still carries the transport, which is the
+    fact the cross-stage check needs.
+    """
+    paid = environment.transport != TransportName.FAKE.value
+    spend = (
+        stage_spend_records(store=environment.store, evidence=evidence)
+        if paid and environment.store is not None
+        else ()
+    )
+    return StageRecord(
+        stage=stage.value,
+        transport=environment.transport,
+        spend=spend,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -302,6 +425,18 @@ def run_stage0_into_manifest(
         update={
             "design": design,
             "pre_registration": pre_registration,
+            # What this calibration ran on, and what it cost. Written in
+            # the same update as the design, because a design recorded
+            # without the transport that measured it is exactly the
+            # ambiguity the stage block exists to remove.
+            "stages": _stages_with(
+                manifest,
+                _stage_record(
+                    stage=StageId.STAGE0,
+                    environment=environment,
+                    evidence=result.evidence,
+                ),
+            ),
             # Stage 0 is where each role's Eval Config first exists, so it
             # is where the manifest learns it. Without this the manifest
             # carries whatever placeholder it was created with, and L1 --
@@ -616,6 +751,12 @@ def run_arm_stage(
         raise StageError(
             f"{stage.value} requires a recorded design; run stage0 first"
         )
+    # Before the arms run, not after: an arm stage on the wrong transport
+    # would spend a full pilot or full design before anyone could see that
+    # its deltas are paired against anchors from a different experiment.
+    require_matching_transport(
+        manifest, stage=stage, transport=environment.transport
+    )
     # The design's ``k_run_by_arm`` is the *full* pre-registration, so it
     # says how many runs Stage 2 gets, not how many this stage does. Stage 1
     # spends a prefix of the same seeds, which is what makes "Stage 1's runs
@@ -648,7 +789,20 @@ def run_arm_stage(
     )
     write_study_manifest(
         study_dir,
-        manifest.model_copy(update={"arms": arm_records}),
+        manifest.model_copy(
+            update={
+                "arms": arm_records,
+                # The stage's transport, recorded as soon as its arms have
+                # run. Its spend is not restated here: an arm stage spends
+                # through optimizer runs, and each run already records its
+                # own per-role bill, so a stage total is the sum of those
+                # rather than a second measurement of the same calls.
+                "stages": _stages_with(
+                    manifest,
+                    _stage_record(stage=stage, environment=environment),
+                ),
+            }
+        ),
         replace=True,
     )
 

@@ -227,11 +227,14 @@ def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
         stage: str,
         replace_design: bool = False,
         allow_real_codex: bool = False,
+        transport: str = "fake",
     ) -> StudyManifest:
         assert replace_design is False
         # An unflagged invocation authorizes no spend. Asserted rather than
-        # ignored: the default is what stops an accidental Codex bill.
+        # ignored: the default is what stops an accidental Codex bill, and
+        # the fake transport is what stops an accidental provider bill.
         assert allow_real_codex is False
+        assert transport == "fake"
         seen.append((study_dir, stage))
         return _minimal_manifest()
 

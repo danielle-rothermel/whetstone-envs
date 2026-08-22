@@ -43,6 +43,7 @@ dependencies = [
 
 [project.scripts]
 whetstone-eval = "whetstone_envs.reporting.cli:main"
+whetstone-study = "whetstone_envs.optim.study.cli:main"
 
 [project.optional-dependencies]
 c18 = [

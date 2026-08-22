@@ -383,6 +383,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **`whetstone-study` is an installed console script.** The study CLI
+  named itself `whetstone-study` and its `__main__` documented the console
+  script, but nothing registered one, so only
+  `python -m whetstone_envs.optim.study` actually worked. Both entry points
+  now resolve to the same `main`.
 - **The pre-registered held-out split is 440, not 220.** The c19 protocol
   splits are now internal 88 / official 132 / held-out 440, using 660 of
   the 704 available instances. Doubling the reporting split halves the

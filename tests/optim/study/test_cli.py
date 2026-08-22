@@ -83,6 +83,25 @@ def test_parser_names_the_console_script() -> None:
     assert build_parser().prog == PROGRAM_NAME == "whetstone-study"
 
 
+def test_the_console_script_is_registered_and_is_this_program() -> None:
+    """``whetstone-study`` is installed, and it is this module's ``main``.
+
+    The parser naming itself ``whetstone-study`` proves nothing about
+    whether anything installs that name; this reads the distribution's own
+    entry points, so a program documented as a console script cannot ship
+    without one.
+    """
+    from importlib.metadata import entry_points
+
+    scripts = {
+        entry.name: entry.value
+        for entry in entry_points(group="console_scripts")
+        if entry.name == PROGRAM_NAME
+    }
+    assert scripts == {PROGRAM_NAME: "whetstone_envs.optim.study.cli:main"}
+    assert entry_points(group="console_scripts")[PROGRAM_NAME].load() is main
+
+
 def test_parser_requires_a_subcommand() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args([])

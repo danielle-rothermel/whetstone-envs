@@ -63,7 +63,6 @@ from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
     CODEX_ADAPTER_KEY,
-    CODEX_DEFAULT_AGENT_MODEL,
     CODEX_DEFAULT_BINARY,
     CODEX_EVALUATE_CALL_CAP,
     CODEX_REASONING_EFFORTS,
@@ -74,6 +73,7 @@ from whetstone_envs.optim.codex import (
     build_codex_control,
     codex_run_root,
     refuse_unauthorized_real_codex,
+    resolve_codex_agent_model,
 )
 from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
 from whetstone_envs.optim.experiment import provider_call_config_ref
@@ -626,7 +626,7 @@ def _bind_optimizer(  # noqa: PLR0913
             engine=engine,
             experiment=experiment,
             family=validated.family,
-            model=spec.codex_model or CODEX_DEFAULT_AGENT_MODEL,
+            model=resolve_codex_agent_model(spec.codex_model),
             max_tool_calls=spec.codex_capacity,
             codex_binary=spec.codex_binary,
             reasoning_effort=CodexReasoningEffort(spec.codex_reasoning_effort),

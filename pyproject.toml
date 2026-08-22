@@ -198,7 +198,12 @@ include = [
     "src/whetstone_envs/optim/**",
     "src/whetstone_envs/reporting/**",
     "tests/optim/**",
+    "tests/real_codex/**",
     "tests/reporting/**",
+    # Only the anti-drift test, which reaches for the optimizer's own
+    # eval-node runners on purpose to prove they agree with the
+    # whetstone-free scorer registry.
+    "tests/scoring/test_families.py",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

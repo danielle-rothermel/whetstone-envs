@@ -623,6 +623,71 @@ def test_an_unusable_codex_refuses_before_any_arm_runs(
     assert exc.value.__cause__ is not None
 
 
+def test_the_preflight_probes_the_agent_model_not_the_task_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The guard clears the route the Codex arm will actually open.
+
+    The task model and the Codex agent model are different products on
+    different routes: the task model is an OpenRouter route the Codex CLI
+    cannot run at all, and a subscription session refuses it before the
+    agent emits a token.
+
+    Fails-before: the preflight passed ``spec.task_model``, so it probed a
+    route no arm would ever use. On this machine the scripted seam accepts
+    anything, so the wrong model went unnoticed here -- but a real study
+    would clear the guard against a route the CLI refuses and then fail on
+    the Codex arm's turn, after the arms ahead of it had been paid for,
+    which is the exact late failure this preflight exists to prevent.
+
+    Asserted on the seam's own ``model`` kwarg, which is the value the
+    production preflight forwards to the session probe.
+    """
+    from whetstone_envs.optim.codex import (
+        ALLOW_REAL_CODEX_ENV,
+        ALLOW_REAL_CODEX_ENV_VALUE,
+        CODEX_DEFAULT_AGENT_MODEL,
+        CodexTestSeam,
+        resolve_codex_agent_model,
+    )
+
+    monkeypatch.setenv(ALLOW_REAL_CODEX_ENV, ALLOW_REAL_CODEX_ENV_VALUE)
+    study_dir = _codex_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.1 * index
+        for arm in spec.arms
+        for index, seed in enumerate(arm.seeds, start=1)
+    }
+    harness = _Harness(study_dir, scores=scores)
+
+    probed: list[object] = []
+
+    def _capture(**kwargs: object) -> None:
+        from whetstone.testing.runtime import scripted_codex_preflight
+
+        probed.append(kwargs.get("model"))
+        scripted_codex_preflight()
+
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=harness.environment(
+            real_codex_authorized=True,
+            codex_test_seam=CodexTestSeam(preflight=_capture, environment={}),
+        ),
+    )
+
+    assert probed, "the Codex arm's preflight never ran"
+    expected = resolve_codex_agent_model(None)
+    assert expected == CODEX_DEFAULT_AGENT_MODEL
+    assert probed == [expected]
+    # The task model is the wrong route, and naming it here is what makes
+    # the assertion above a real discrimination rather than a tautology.
+    assert spec.task_model != expected
+    assert spec.task_model not in probed
+
+
 def test_a_stage_with_no_codex_arm_needs_no_authorization(
     tmp_path: Path,
 ) -> None:

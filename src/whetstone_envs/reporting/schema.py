@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from enum import UNIQUE, StrEnum, verify
-from functools import cache
-from types import SimpleNamespace
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -18,15 +16,9 @@ from pydantic import (
 )
 
 from whetstone_envs.probes import normalize
-
-if TYPE_CHECKING:
-    from whetstone.eval.eval_procedure import EvalProcedureRunner
+from whetstone_envs.scoring.families import family_score
 
 # Persisted literals are owned here and pinned directly by golden tests.
-#: The node id the schema's own score re-derivation passes to a family
-#: scorer. Not a persisted value and never stored: the runners ignore it,
-#: and it exists so the call is self-describing in a traceback.
-_VALIDATION_NODE_ID = "schema_score_validation"
 
 EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v1"
 TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
@@ -52,32 +44,21 @@ SPLIT_ROLE_BY_REPORT_ROLE: dict[EvalRoleName, str] = {
 }
 
 
-@cache
-def _family_scorer(family: str) -> EvalProcedureRunner:
-    """The eval-node runner the family registry binds to ``family``.
-
-    Cached because a report validates every scored observation and the
-    runners are stateless by contract -- workers reconstruct them from
-    ``runner_type()`` with no constructor state -- so one instance per
-    family is the same object the run itself scored through.
-
-    Imported inside the function rather than at module scope: the family
-    registry pulls in the whole optimizer stack, and this module is also
-    read by report consumers that never build an experiment.
-    """
-    from whetstone_envs.optim.families import family_spec  # noqa: PLC0415
-
-    return family_spec(family).eval_runner()
-
-
 def _family_score(*, family: str, output_text: str, gold: str) -> float:
     """What ``family``'s own scorer yields for one observation.
 
     The report's scores are not the schema's to invent -- they are the
     run's -- so validating them means re-deriving them the way the run
-    did. The family registry is the single owner of "how a generation
-    becomes a score" (``FamilySpec.eval_runner``), and this routes
-    through it rather than restating any family's rule here.
+    did. :mod:`whetstone_envs.scoring.families` is the single owner of
+    "how a generation becomes a score", and both the eval runners and this
+    check route through it rather than restating any family's rule.
+
+    That registry holds only the pure per-family rule and imports no part
+    of the optimizer stack, so validating a scored report works on a base
+    install. Routing this check through the optimizer's family registry
+    instead pulled in whetstone-ai, which the ``optim`` extra installs only
+    on Python 3.13+, and made reading any scored report fail where it was
+    merely being read.
 
     Hard-coding normalized exact match, which is what this check used to
     do, is a c19 rule wearing a family-agnostic name: c18 scores the
@@ -87,22 +68,8 @@ def _family_score(*, family: str, output_text: str, gold: str) -> float:
     refused the whole report. That failure had nothing to do with the
     row and everything to do with the check, and it took down
     publication for the entire run.
-
-    ``node_id`` and the procedure-config hash are the runner's, not
-    this check's; both runners ignore them, and a runner that did not
-    would be scoring on something a persisted report does not carry.
     """
-    score, _output, _metadata = _family_scorer(family).run_eval_node(
-        node_id=_VALIDATION_NODE_ID,
-        node_inputs={"provider_generation": output_text},
-        evaluation_procedure_config_hash="",
-        task=SimpleNamespace(gold=gold),
-    )
-    if score is None:
-        raise ValueError(
-            f"the {family} scorer returned no score for a scored observation"
-        )
-    return float(score)
+    return family_score(family=family, output_text=output_text, gold=gold)
 
 
 class _StrictModel(BaseModel):

@@ -60,6 +60,14 @@ FAMILY_ADAPTER_FILES = frozenset({"c18_experiment.py", "families.py"})
 #: that predates the c18 split and kept its own module, so a call appearing
 #: in one family's trace and not the other's is the adapter swap working
 #: rather than a leak.
+#:
+#: ``scoring_runner.py`` stays exempt after the per-family *scoring rules*
+#: moved to :mod:`whetstone_envs.scoring.families`, which is outside
+#: ``OPTIM_ROOT`` and so out of this guard's scope entirely. What remains
+#: here is the c19 eval-node runner, which still names its own family to
+#: look its rule up -- a family adapter naming its family, which is the
+#: exemption working rather than a leak. Verified by deleting it from this
+#: set: the source-level guard then reports ``scoring_runner.py: ['c19']``.
 FAMILY_CONTRACT_FILES = frozenset({"experiment.py", "scoring_runner.py"})
 
 #: Split sizes small enough to keep a fake-transport run a smoke run, and

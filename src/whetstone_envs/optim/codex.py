@@ -103,6 +103,29 @@ CODEX_EVALUATE_CALL_CAP = 8
 #: the agent model as uncontrolled either way (OQ1).
 CODEX_DEFAULT_AGENT_MODEL = "gpt-5.6-sol"
 
+
+def resolve_codex_agent_model(codex_model: str | None) -> str:
+    """The model a Codex *agent* session runs, given an arm's override.
+
+    The one owner of "which model does the Codex route use". Every caller
+    that names a Codex session -- the runner that builds the control, and
+    the study stage that preflights the arm before buying the arms ahead
+    of it -- resolves it here, so a preflight cannot probe a different
+    route than the run it is clearing.
+
+    That drift is not hypothetical: the study preflight passed the run's
+    ``task_model``, which is an OpenRouter route the Codex CLI cannot run
+    at all. The probe therefore tested a route no arm would use, and a
+    real study would clear preflight and then fail on the Codex arm's
+    turn -- exactly the late failure the preflight exists to prevent.
+
+    ``None`` means the arm did not override the agent model and takes
+    :data:`CODEX_DEFAULT_AGENT_MODEL`. It never means the run's task
+    model: the two are different products on different routes.
+    """
+    return codex_model or CODEX_DEFAULT_AGENT_MODEL
+
+
 #: Where a Codex run's dr-exec job records live, beneath the run's own
 #: output directory. One directory per run, so a completed run's spawn
 #: evidence stays beside the artifacts it produced.
@@ -501,4 +524,5 @@ __all__ = [
     "codex_run_root",
     "preflight_codex_session",
     "refuse_unauthorized_real_codex",
+    "resolve_codex_agent_model",
 ]

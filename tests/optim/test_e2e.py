@@ -972,6 +972,13 @@ def test_codex_a_call_rejected_after_admission_still_publishes(
     assert row.eval_report is None
     assert row.reward is None
     assert row.terminal_failure is None
+    # The *reason* survives. The structured failure is evidence the
+    # schema forbids on a rejected row, but the message is not, and it is
+    # the only account of why a paid-for call scored nothing that reaches
+    # the projected trajectory. Dropping it left the row saying a call was
+    # rejected and giving the reader no way to find out what went wrong.
+    assert row.message
+    assert row.message == evidence.result.record.terminal_failure.message
 
 
 @requires_codex_sandbox

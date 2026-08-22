@@ -49,6 +49,12 @@ from whetstone.optim.tools.admission import _ENTRY_TABLE, ToolCallState
 from whetstone.optim.tools.contracts import RefusalClass
 
 from tests.conftest import REAL_CODEX_LADDER_SESSION
+from tests.real_codex.preconditions import (
+    REAL_CODEX_BINARY_ENV,
+    REAL_CODEX_ENV,
+    SANDBOX_EXEC_PATH,
+    real_codex_precondition_failure,
+)
 from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
@@ -58,10 +64,10 @@ from whetstone_envs.optim.run import RunSpec, run_optimizer
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-#: The opt-in for this package. Absent or not "1", every rung is skipped.
-REAL_CODEX_ENV = "WHETSTONE_ENVS_REAL_CODEX"
-#: Where the real binary is expected. Overridable for a non-brew install.
-REAL_CODEX_BINARY_ENV = "WHETSTONE_ENVS_REAL_CODEX_BINARY"
+#: The opt-in, the binary override, and the sandbox path live in
+#: :mod:`tests.real_codex.preconditions` beside the decision written in
+#: terms of them, and are re-exported here so every rung keeps importing
+#: them from the conftest.
 DEFAULT_REAL_CODEX_BINARY = "/opt/homebrew/bin/codex"
 
 #: Every rung's wall budget. Generous enough that a real session finishing
@@ -146,85 +152,6 @@ def pytest_collection_modifyitems(
         item.add_marker(skip)
 
 
-#: Where macOS keeps the only process-isolation mechanism this ladder will
-#: run under. Mirrors the runner's own ``_MACOS_SANDBOX_EXEC``: a rung that
-#: reaches the runner without it fails opaquely, so the precondition names
-#: the same file rather than trusting the platform tag alone.
-SANDBOX_EXEC_PATH = Path("/usr/bin/sandbox-exec")
-
-
-def real_codex_precondition_failure(  # noqa: PLR0911, PLR0913
-    *,
-    opted_in: bool,
-    platform: str,
-    binary_found: bool,
-    binary: str,
-    sandbox_exec_found: bool,
-    auth_found: bool,
-    auth_home: Path,
-    spend_opt_in: str | None,
-) -> str | None:
-    """Why this machine cannot host the ladder, or ``None`` if it can.
-
-    A pure function of the environment, so the whole decision matrix is
-    testable without a macOS host, a Codex binary, or a live session.
-
-    The opt-in is what makes an unmet precondition an *error*. Without
-    ``WHETSTONE_ENVS_REAL_CODEX=1`` the ladder is simply not requested and
-    the collection hook skips it. With the opt-in, the operator asked for
-    a real run, and every one of these conditions means they will not get
-    one -- so the answer is a message the caller raises, never a skip.
-    Skipping here is what would let a Linux host, a missing binary, or an
-    absent ``sandbox-exec`` produce an all-skipped session that
-    ``scripts/check-real-codex.sh`` reports as "all rungs passed": pytest
-    exits 0 on a fully skipped session.
-
-    ``spend_opt_in`` is checked here for the same reason. Every rung
-    drives the production ``run_optimizer`` path, which refuses a real
-    Codex run unless :data:`ALLOW_REAL_CODEX_ENV` names its exact value.
-    Without it every rung raises ``RealCodexRefusedError`` -- a wall of
-    identical failures whose real cause is one missing variable. Naming it
-    once, before any rung runs, is the difference between a diagnosis and
-    a pile of tracebacks.
-    """
-    if not opted_in:
-        return None
-    if platform != "darwin":
-        return (
-            f"{REAL_CODEX_ENV}=1 was set on {platform!r}, but the Codex "
-            "sandbox is macOS sandbox-exec only. Run the ladder on macOS "
-            f"or unset {REAL_CODEX_ENV}."
-        )
-    if not sandbox_exec_found:
-        return (
-            f"{REAL_CODEX_ENV}=1 was set but {SANDBOX_EXEC_PATH} is not "
-            "present; the ladder refuses to drive the real CLI without "
-            "kernel-enforced process isolation."
-        )
-    if not binary_found:
-        return (
-            f"{REAL_CODEX_ENV}=1 was set but the real Codex binary was "
-            f"not found at {binary!r}; set {REAL_CODEX_BINARY_ENV} to "
-            "its path."
-        )
-    if not auth_found:
-        return (
-            f"{REAL_CODEX_ENV}=1 was set but no Codex session was found "
-            f"under {auth_home} ({'/'.join(CODEX_AUTH_FILENAMES)}); "
-            "run `codex login` first."
-        )
-    if spend_opt_in != ALLOW_REAL_CODEX_ENV_VALUE:
-        return (
-            f"{REAL_CODEX_ENV}=1 was set but "
-            f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} was "
-            "not: every rung drives the production run path, which "
-            "refuses a real Codex run without the deliberate spend "
-            "opt-in. Set both, or unset "
-            f"{REAL_CODEX_ENV}."
-        )
-    return None
-
-
 def _observe_real_codex_preconditions() -> str | None:
     """Read the machine, then let the pure function decide."""
     binary = real_codex_binary()
@@ -242,7 +169,12 @@ def _observe_real_codex_preconditions() -> str | None:
             (home / name).is_file() for name in CODEX_AUTH_FILENAMES
         ),
         auth_home=home,
+        # Passed from their real owners so the split module cannot become
+        # a second spelling of either fact.
+        auth_filenames=CODEX_AUTH_FILENAMES,
         spend_opt_in=os.environ.get(ALLOW_REAL_CODEX_ENV),
+        spend_opt_in_env=ALLOW_REAL_CODEX_ENV,
+        spend_opt_in_value=ALLOW_REAL_CODEX_ENV_VALUE,
     )
 
 

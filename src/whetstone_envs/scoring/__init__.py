@@ -6,6 +6,12 @@ from whetstone_envs.scoring.aggregation import (
     aggregate_task,
 )
 from whetstone_envs.scoring.exact_match import exact_match
+from whetstone_envs.scoring.families import (
+    FAMILY_SCORERS,
+    FamilyScorer,
+    family_score,
+    scorable_family_ids,
+)
 from whetstone_envs.scoring.observations import (
     Observation,
     Outcome,
@@ -15,7 +21,9 @@ from whetstone_envs.scoring.observations import (
 )
 
 __all__ = [
+    "FAMILY_SCORERS",
     "Aggregate",
+    "FamilyScorer",
     "Observation",
     "Outcome",
     "aggregate",
@@ -24,6 +32,8 @@ __all__ = [
     "aggregate_task",
     "exact_match",
     "failed",
+    "family_score",
     "missing",
+    "scorable_family_ids",
     "scored",
 ]

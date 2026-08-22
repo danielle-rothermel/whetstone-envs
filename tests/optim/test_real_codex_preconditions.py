@@ -20,15 +20,24 @@ from pathlib import Path
 
 import pytest
 
-from tests.real_codex.conftest import (
+from tests.real_codex.preconditions import (
     REAL_CODEX_BINARY_ENV,
     REAL_CODEX_ENV,
     real_codex_precondition_failure,
 )
-from whetstone_envs.optim.codex import (
-    ALLOW_REAL_CODEX_ENV,
-    ALLOW_REAL_CODEX_ENV_VALUE,
-)
+
+#: The spend opt-in, spelled here rather than imported from
+#: ``whetstone_envs.optim.codex``. Importing it would pull the optimizer
+#: stack -- and whetstone-ai with it -- back into this module and undo the
+#: split: these tests exist to cover the gate on a base install, which is
+#: the Python 3.12 job where the ladder is most likely to go quietly green.
+#: ``tests/real_codex/conftest.py`` passes the real constants to the
+#: decision function, and
+#: ``test_the_conftest_passes_the_real_spend_opt_in`` pins that these two
+#: literals still match their owners wherever whetstone-ai is installed.
+ALLOW_REAL_CODEX_ENV = 'WHETSTONE_ENVS_ALLOW_REAL_CODEX'
+ALLOW_REAL_CODEX_ENV_VALUE = '1'
+CODEX_AUTH_FILENAMES = ('auth.json', '.credentials.json')
 
 _AUTH_HOME = Path("/home/someone/.codex")
 
@@ -60,7 +69,10 @@ def _decide(  # noqa: PLR0913
         sandbox_exec_found=sandbox_exec_found,
         auth_found=auth_found,
         auth_home=auth_home,
+        auth_filenames=CODEX_AUTH_FILENAMES,
         spend_opt_in=spend_opt_in,
+        spend_opt_in_env=ALLOW_REAL_CODEX_ENV,
+        spend_opt_in_value=ALLOW_REAL_CODEX_ENV_VALUE,
     )
 
 
@@ -194,3 +206,31 @@ def test_the_failure_message_never_carries_credential_material() -> None:
     assert str(_AUTH_HOME) in failure
     for secret_ish in ("token", "OPENAI_API_KEY", "Bearer", "eyJ"):
         assert secret_ish not in failure
+
+
+def test_the_conftest_passes_the_real_spend_opt_in() -> None:
+    """The literals above still match the constants that own them.
+
+    This module spells the spend opt-in and the credential filenames
+    rather than importing them, so that the gate's own coverage survives
+    on a base install. That trade is only safe if the copies cannot drift,
+    so wherever whetstone-ai *is* installed this pins them against their
+    real owners -- and against the values the conftest actually passes to
+    the decision function.
+    """
+    pytest.importorskip("whetstone.optim.codex.containment")
+
+    from whetstone.optim.codex.containment import (
+        CODEX_AUTH_FILENAMES as REAL_AUTH_FILENAMES,
+    )
+
+    from whetstone_envs.optim.codex import (
+        ALLOW_REAL_CODEX_ENV as REAL_ENV,
+    )
+    from whetstone_envs.optim.codex import (
+        ALLOW_REAL_CODEX_ENV_VALUE as REAL_VALUE,
+    )
+
+    assert ALLOW_REAL_CODEX_ENV == REAL_ENV
+    assert ALLOW_REAL_CODEX_ENV_VALUE == REAL_VALUE
+    assert tuple(CODEX_AUTH_FILENAMES) == tuple(REAL_AUTH_FILENAMES)

@@ -753,16 +753,20 @@ def _tool_evidence_sources(
                         store=store, ref=eval_result_ref
                     ),
                     classification=None,
-                    # A rejected row carries no durable eval result, and
-                    # the schema requires every one of these to be absent
-                    # -- including the message and the failure itself.
-                    # The reason the call was rejected stays readable in
-                    # the run's own Tool Result rather than being
-                    # restated in a row shape that cannot hold it.
+                    # A rejected row carries no durable eval result, so
+                    # every *evidence* field the schema forbids on it
+                    # stays absent -- the refs, the reward, the hydrated
+                    # report, and the structured failure below.
+                    #
+                    # The message is not evidence and the schema permits
+                    # it on a rejected row, so it is preserved: it is the
+                    # only place the reason a post-admission call was
+                    # rejected survives in the projected trajectory.
+                    # Dropping it left the row saying a call was rejected
+                    # with no readable account of why.
                     message=(
                         None
                         if record.terminal_failure is None
-                        or outcome == "rejected"
                         else record.terminal_failure.message
                     ),
                     terminal_failure=(

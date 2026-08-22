@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -325,3 +326,42 @@ def test_the_run_root_lives_beneath_the_output_directory(tmp_path) -> None:
     """A run's spawn evidence stays beside the artifacts it produced."""
     assert codex_run_root(tmp_path) == tmp_path / CODEX_RUN_ROOT_NAME
     assert CODEX_RUN_ROOT_NAME == "codex-runs"
+
+
+def test_no_production_module_imports_the_testing_package() -> None:
+    """The scripted preflight must be unreachable from the shipped path.
+
+    A preflight that production could substitute is not a preflight. The
+    stand-in lives in ``whetstone.testing``; if any module under ``src/``
+    imported that package, a production run could reach it, and the
+    guarantee that no budgeted Codex run starts without a proven session
+    would rest on nobody having wired it up yet.
+
+    An ``import`` statement is the violation, not a mention: the module
+    docstring that explains why the seam exists names the package on
+    purpose.
+    """
+    import re
+
+    import whetstone_envs
+
+    root = Path(whetstone_envs.__file__).resolve().parent
+    importing = re.compile(
+        r"^\s*(?:from|import)\s+whetstone\.testing\b", re.MULTILINE
+    )
+    offenders = sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if importing.search(path.read_text(encoding="utf-8"))
+    )
+    assert offenders == []
+
+
+def test_the_run_spec_carries_no_preflight_seam() -> None:
+    """A serialized spec must not be able to name a stand-in."""
+    from dataclasses import fields
+
+    from whetstone_envs.optim.run import RunSpec
+
+    names = {field.name for field in fields(RunSpec)}
+    assert not any("seam" in name or "preflight" in name for name in names)

@@ -32,6 +32,12 @@ Verified read paths (whetstone-ai ``miprofix-ai`` @ ``716976f2``):
   skipped mutations under ``GEPA_SKIPPED_MUTATIONS_KEY``.
 - MIPROv2 state -- the same snapshot dict under ``MIPROV2_STATE_KEY``
   validates as ``Miprov2State``, whose ``study_transcript`` is inline.
+- The optimizer control -- ``result.run.record.optimizer_config`` is an
+  ``IdentityRef``, so the control record itself lives in the store at its
+  ``record_ref``. It is loaded raw here and each optimizer's audit validates
+  it as its own control type; the ``record_hash`` is that control's identity
+  hash, so an audit can check the persisted control is the one the run
+  claims rather than trusting a state-delta echo of it.
 
 ``store.get`` returns a decoded Python object, so ``model_validate`` is the
 correct call. The ``model_validate_json(json.dumps(...))`` idiom seen
@@ -194,6 +200,11 @@ class RunEvidence:
     steps: tuple[StepEvidence, ...]
     eval_evidence_by_ref: dict[TypedRef, EvalEvidence]
     gepa_terminal: GepaTerminalEvidence | None
+    #: The optimizer control record as persisted, still raw. Each
+    #: optimizer's audit validates it as its own control type. None when the
+    #: run's ``optimizer_config`` ref resolves to nothing -- itself an
+    #: auditable defect, so loading returns rather than raising.
+    control_record: dict[str, object] | None
 
     @property
     def run_id(self) -> str:
@@ -207,6 +218,16 @@ class RunEvidence:
         a caller-supplied claim that could disagree with the artifact.
         """
         return str(self.result.run.record.adapter_key)
+
+    @property
+    def control_ref(self) -> TypedRef:
+        """Where the run says its optimizer control is stored."""
+        return self.result.run.record.optimizer_config.record_ref
+
+    @property
+    def control_identity_hash(self) -> str:
+        """The control identity hash the run binds itself to."""
+        return str(self.result.run.record.optimizer_config.record_hash)
 
     def eval_evidence(self, ref: TypedRef) -> EvalEvidence | None:
         """The ``EvalEvidence`` at ``ref``, or None if it is a failure record.
@@ -402,6 +423,10 @@ def load_run_evidence(run_dir: Path) -> RunEvidence:
         frozen_steps = tuple(steps)
         eval_evidence = _collect_eval_evidence(store, frozen_steps)
         gepa_terminal = _load_gepa_terminal(store, frozen_steps)
+        raw_control = _get_optional(
+            store, result.run.record.optimizer_config.record_ref
+        )
+        control_record = raw_control if isinstance(raw_control, dict) else None
 
     return RunEvidence(
         run_dir=run_dir,
@@ -409,6 +434,7 @@ def load_run_evidence(run_dir: Path) -> RunEvidence:
         steps=frozen_steps,
         eval_evidence_by_ref=eval_evidence,
         gepa_terminal=gepa_terminal,
+        control_record=control_record,
     )
 
 

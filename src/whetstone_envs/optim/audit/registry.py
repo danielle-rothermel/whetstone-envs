@@ -24,6 +24,7 @@ from whetstone_envs.optim.audit._evidence import (
     evidence_ref,
     load_run_evidence,
 )
+from whetstone_envs.optim.audit.copro import COPRO_INVARIANTS
 from whetstone_envs.optim.audit.schema import (
     AuditFinding,
     AuditReport,
@@ -125,7 +126,7 @@ SHARED_INVARIANTS: tuple[Invariant, ...] = (reported_numbers_resolve,)
 #: tuples here; the shared set is spliced in so a generic invariant is never
 #: forgotten for a newly added optimizer.
 INVARIANTS_BY_OPTIMIZER: dict[str, tuple[Invariant, ...]] = {
-    COPRO_OPTIMIZER: SHARED_INVARIANTS,
+    COPRO_OPTIMIZER: SHARED_INVARIANTS + COPRO_INVARIANTS,
     MIPROV2_OPTIMIZER: SHARED_INVARIANTS,
     GEPA_OPTIMIZER: SHARED_INVARIANTS,
     CODEX_OPTIMIZER: SHARED_INVARIANTS,

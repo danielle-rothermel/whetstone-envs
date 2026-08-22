@@ -20,12 +20,18 @@ self-verifying in two ways that a naive rewrite trips over:
 2. Step requests form a chain: step *i*'s request must cite step *i-1*'s
    exact ``record_ref``, state ref, and history ref ("each later Step
    Request must cite the prior exact result").
+3. The ``OptimRun`` record is embedded once at the top and again inside
+   every step request, each copy verifying its own ``record_ref`` and
+   ``config_hash``.
 
 So :func:`mutate_run` re-seals after mutating -- it recomputes each step's
 wrapper ref from its mutated record and re-threads the chain forward. That
 keeps the negative fixture a *valid* ``OptimResult`` that violates only the
 semantic invariant under test, which is the point: an artifact that failed
 schema validation would prove nothing about the invariant.
+:func:`reseal_run_binding` does the same for a mutation of the run record
+itself, which is how an invariant over the run's *configuration* -- its
+optimizer control, its seed candidate -- gets a negative fixture.
 
 This module is test tooling, not part of the audited path.
 """
@@ -37,7 +43,10 @@ import shutil
 from typing import TYPE_CHECKING, Any
 
 from dr_store.sync import open_sqlite
+from whetstone.core.identity import typed_ref_for_record
 from whetstone.optim.contracts import (
+    OPTIM_RUN_SCHEMA,
+    OptimRun,
     OptimStepRequest,
     OptimStepResult,
     step_request_reference,
@@ -190,6 +199,57 @@ def _request_ref(request_record: dict[str, Any]) -> dict[str, Any]:
     return reference.record_ref.model_dump(mode="json")
 
 
+def reseal_run_binding(document: dict[str, Any]) -> dict[str, Any]:
+    """Re-derive the run wrapper from its record and re-embed it everywhere.
+
+    Some invariants are only violable by changing what the run says it was
+    *configured* to do -- its optimizer control, its initial candidate, its
+    mutation field. Those live on the ``OptimRun`` record, which is embedded
+    once at the top of ``result.json`` and again inside every step request,
+    each copy self-verifying its own ``record_ref`` and ``config_hash``.
+
+    So a control-level mutation needs three things resealed, in order: the
+    run wrapper's own refs, the identical wrapper inside every step request,
+    and then the step chain. :func:`reseal_step_chain` does the last, but it
+    reseals step 0's request only when a prior step forced it to -- which a
+    run-level mutation does not. This does all of it.
+
+    Mutate ``document["run"]["record"]`` first, then call this.
+    """
+    wrapper = document.get("run")
+    if not isinstance(wrapper, dict) or not isinstance(
+        wrapper.get("record"), dict
+    ):
+        raise MutationError("result.json carries no run record")
+    record = wrapper["record"]
+    try:
+        run = OptimRun.model_validate(record)
+    except ValueError as error:
+        raise MutationError(
+            f"mutated run is not a valid OptimRun: {error}"
+        ) from error
+    resealed = {
+        "record": record,
+        "record_ref": typed_ref_for_record(
+            OPTIM_RUN_SCHEMA, run.record_content()
+        ).model_dump(mode="json"),
+        "config_hash": run.identity_hash(),
+    }
+    document["run"] = resealed
+    steps = document.get("step_results")
+    if not isinstance(steps, list):
+        raise MutationError("result.json carries no step_results list")
+    for index, step_wrapper in enumerate(steps):
+        request = step_wrapper.get("record", {}).get("request")
+        if not isinstance(request, dict) or not isinstance(
+            request.get("record"), dict
+        ):
+            raise MutationError(f"step {index} carries no request record")
+        request["record"]["run"] = resealed
+        request["record_ref"] = _request_ref(request["record"])
+    return reseal_step_chain(document)
+
+
 def mutate_run(
     source: Path,
     destination: Path,
@@ -224,5 +284,6 @@ __all__ = [
     "mutate_json_field",
     "mutate_run",
     "put_record",
+    "reseal_run_binding",
     "reseal_step_chain",
 ]

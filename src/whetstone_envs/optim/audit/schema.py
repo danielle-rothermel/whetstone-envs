@@ -48,6 +48,22 @@ class InvariantId(StrEnum):
     #: evidence in the run's own store.
     REPORTED_NUMBERS_RESOLVE = "reported_numbers_resolve"
 
+    # --- COPRO -----------------------------------------------------------
+    #: Each proposal round measured exactly ``control.breadth`` occurrences.
+    COPRO_BREADTH_PER_DEPTH = "copro_breadth_per_depth"
+    #: Step count is ``control.depth + 1``, or fewer under a failure.
+    COPRO_DEPTH_STEPS = "copro_depth_steps"
+    #: Every evaluation used the control's internal Eval Config and role.
+    COPRO_INTERNAL_ONLY = "copro_internal_only"
+    #: The accepted candidate is the best measured so far, ties to earlier.
+    COPRO_BEST_SO_FAR = "copro_best_so_far"
+    #: Candidates proposed in one round have pairwise distinct bases.
+    COPRO_DISTINCT_BASES = "copro_distinct_bases"
+    #: COPRO evaluates through intents only; it runs no search.
+    COPRO_NO_SEARCH_EVALS = "copro_no_search_evals"
+    #: The terminal candidate was minted in this run, or honestly retained.
+    COPRO_TERMINAL_PROVENANCE = "copro_terminal_provenance"
+
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(

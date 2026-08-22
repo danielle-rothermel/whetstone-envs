@@ -32,7 +32,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   self-verifying step wrapper refs and request chain, so a fixture stays
   schema-valid and fails only the semantic invariant under test, and it
   refuses a no-op rewrite that would let a negative test pass for the wrong
-  reason.
+  reason. `reseal_run_binding` extends this to a mutation of the `OptimRun`
+  record itself -- its optimizer control or seed candidate -- which is
+  embedded in every step request and so needs re-deriving in all of them.
+- `optim/audit/copro.py`: COPRO's seven fidelity invariants, each a pure
+  function over the run's evidence returning a finding with an evidence-ref
+  citation for every judgment, and each shipping a negative fixture built
+  from a real fake-transport run on which that invariant alone fails.
+  `COPRO_BREADTH_PER_DEPTH` counts each round's measured occurrences against
+  the persisted control's `breadth`; `COPRO_DEPTH_STEPS` checks the step
+  count is `depth + 1` unless a terminal failure is recorded;
+  `COPRO_INTERNAL_ONLY` checks every completed evaluation bound the
+  control's internal Eval Config and recorded the internal role;
+  `COPRO_BEST_SO_FAR` checks the finalizing step selected a candidate
+  holding the maximum measured internal reward; `COPRO_DISTINCT_BASES`
+  checks proposals within a round carry distinct bases;
+  `COPRO_NO_SEARCH_EVALS` checks no step recorded search evidence; and
+  `COPRO_TERMINAL_PROVENANCE` walks the terminal candidate's base chain back
+  to the run's declared `initial_candidate_ref`. Missing or unreadable
+  evidence reports FAIL rather than raising, so a defective run is judged
+  rather than left unaudited.
+- `RunEvidence` now resolves the run's optimizer control record, so an audit
+  reads the configured search from the content-addressed control the run
+  binds itself to rather than from a state-delta echo written by the code
+  path under audit.
+
+### Notes
+
+- `COPRO_TERMINAL_PROVENANCE` ships narrower than the Step 10 assignment's
+  Section 3.4 text, in two respects, both recorded in its docstring. Its
+  "the terminal candidate is a proposal minted in this run, or the seed
+  under `seed_retained`" clauses are already schema invariants of
+  `OptimResult` and `OptimStepResult` -- proposals must equal the final
+  step's accepted candidates, every proposal must bind an exact request
+  candidate and differ from it on the mutation field alone, and a
+  seed-retaining step must accept nothing and name the exact run seed -- so
+  no schema-valid artifact can violate them, and an invariant with no
+  failing fixture does not ship. The invariant instead covers the one
+  provenance fact nothing structural ties together: that the terminal
+  candidate's base chain reaches the run's declared
+  `initial_candidate_ref`. Its "never `PROBES.ceiling_template`" clause is
+  omitted as a task-family literal, which Section 3.5 makes a design defect
+  in an audit; it is also unusable in CI, because the fake transport
+  proposes the ceiling template by construction.
+- `COPRO_DISTINCT_BASES` passes without comparing anything on a run at the
+  smallest admissible `breadth` of 2, where the seed round proposes one
+  candidate and re-measures the initial one. The finding says so explicitly
+  rather than reporting a bare PASS. A run with a genuinely multi-draft
+  round is not producible on the fake transport today: the scripted proposer
+  supplies two bodies, one of which is the seed itself and is rejected as a
+  no-op mutation.
 
 ### Changed
 

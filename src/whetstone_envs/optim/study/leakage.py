@@ -62,12 +62,32 @@ class LeakageCheckError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class LeakageFinding:
-    """One rule's verdict and the evidence behind it."""
+    """One rule's verdict and the evidence behind it.
+
+    ``checked`` distinguishes "this rule held" from "this rule had no
+    evidence to hold against". The difference is load-bearing: every one of
+    these predicates is vacuously true over an empty observation set, and a
+    vacuous truth reported as a pass is exactly how a study comes to claim a
+    leakage rule nobody verified. An unchecked finding never counts as
+    passed.
+    """
 
     rule: LeakageRule
     passed: bool
     detail: str
     offenders: tuple[str, ...] = ()
+    checked: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.checked and self.offenders:
+            raise ValueError(
+                f"{self.rule.value} reports offenders, so it was checked"
+            )
+
+    @property
+    def holds(self) -> bool:
+        """Whether this rule was checked *and* held."""
+        return self.checked and self.passed
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,11 +98,21 @@ class LeakageReport:
 
     @property
     def passed(self) -> bool:
-        return all(finding.passed for finding in self.findings)
+        """The study's permission to report: every rule checked and held."""
+        return all(finding.holds for finding in self.findings)
 
     def failures(self) -> tuple[LeakageFinding, ...]:
+        """Rules that were checked and did not hold."""
         return tuple(
-            finding for finding in self.findings if not finding.passed
+            finding
+            for finding in self.findings
+            if finding.checked and not finding.passed
+        )
+
+    def unchecked(self) -> tuple[LeakageFinding, ...]:
+        """Rules that had no evidence to be checked against."""
+        return tuple(
+            finding for finding in self.findings if not finding.checked
         )
 
     def finding(self, rule: LeakageRule) -> LeakageFinding:
@@ -153,9 +183,23 @@ def check_l1_optimizer_internal_only(
     and "observed to have held" are different claims, and the study reports
     the second.
     """
+    seen = tuple(observations)
+    if not seen:
+        # Vacuously true, which is not a check. L1's evidence is each run's
+        # own intent resolutions, so a caller holding none has not verified
+        # the rule and must not be told it passed.
+        return LeakageFinding(
+            rule=LeakageRule.L1_OPTIMIZER_INTERNAL_ONLY,
+            passed=False,
+            detail=(
+                "no optimizer evaluations were supplied, so this rule had "
+                "nothing to check"
+            ),
+            checked=False,
+        )
     offenders = tuple(
         observation.location
-        for observation in observations
+        for observation in seen
         if observation.eval_role != INTERNAL_ROLE
         or observation.resolved_eval_config_hash != internal_eval_config_hash
     )
@@ -163,8 +207,8 @@ def check_l1_optimizer_internal_only(
         rule=LeakageRule.L1_OPTIMIZER_INTERNAL_ONLY,
         passed=not offenders,
         detail=(
-            "every optimizer evaluation resolved the internal Eval Config "
-            "under the internal role"
+            f"all {len(seen)} optimizer evaluations resolved the internal "
+            "Eval Config under the internal role"
             if not offenders
             else f"{len(offenders)} optimizer evaluations left the internal "
             "split"
@@ -212,14 +256,19 @@ def check_l2_selection_once_per_arm(
 
 
 def check_l3_held_out_once_per_candidate(
-    observations: Iterable[HeldOutObservation],
+    candidate_names: Iterable[str],
 ) -> LeakageFinding:
-    """L3: each reported candidate has exactly one held-out evaluation."""
+    """L3: each reported candidate has exactly one held-out evaluation.
+
+    Takes names rather than observations because what L3 limits is
+    evaluations *issued*. An evaluation that was issued and never returned
+    carries no procedure to describe, but it has still spent the
+    candidate's one shot, so it must count here even though L4 has nothing
+    to compare it against.
+    """
     counts: dict[str, int] = {}
-    for observation in observations:
-        counts[observation.candidate_name] = (
-            counts.get(observation.candidate_name, 0) + 1
-        )
+    for name in candidate_names:
+        counts[name] = counts.get(name, 0) + 1
     offenders = tuple(
         f"{name} evaluated {count} times on held-out"
         for name, count in sorted(counts.items())
@@ -341,6 +390,7 @@ def study_leakage_check(  # noqa: PLR0913
     internal_eval_config_hash: str,
     selected_arm_ids: Sequence[str],
     expected_arm_ids: Iterable[str],
+    held_out_candidate_names: Iterable[str],
     held_out_observations: Iterable[HeldOutObservation],
     splits: Iterable[SplitIdentity],
     strict: bool = True,
@@ -361,25 +411,34 @@ def study_leakage_check(  # noqa: PLR0913
             selected_arm_ids=selected_arm_ids,
             expected_arm_ids=expected_arm_ids,
         ),
-        check_l3_held_out_once_per_candidate(held_out_observations),
+        check_l3_held_out_once_per_candidate(held_out_candidate_names),
         check_l4_identical_held_out_procedure(held_out_observations),
         check_l5_splits_disjoint(splits),
     ]
+    ran = tuple(finding.rule.value for finding in findings if finding.checked)
+    skipped = tuple(
+        finding.rule.value for finding in findings if not finding.checked
+    )
+    failed = sum(
+        1 for finding in findings if finding.checked and not finding.passed
+    )
+    detail = f"{', '.join(ran) or 'no rules'} ran; {failed} failed"
+    if skipped:
+        detail += f"; {', '.join(skipped)} had no evidence to check"
     findings.append(
         LeakageFinding(
             rule=LeakageRule.L6_CHECK_RAN,
-            passed=all(finding.passed for finding in findings),
-            detail=(
-                f"L1-L5 ran over the study's artifacts; "
-                f"{sum(1 for f in findings if not f.passed)} failed"
-            ),
+            # L6 is the roll-up, so it holds only when every rule it rolls
+            # up was both checked and passing.
+            passed=all(finding.holds for finding in findings),
+            detail=detail,
         )
     )
     report = LeakageReport(findings=tuple(findings))
     if strict and not report.passed:
         summary = "; ".join(
             f"{finding.rule.value}: {finding.detail}"
-            for finding in report.failures()
+            for finding in (*report.failures(), *report.unchecked())
         )
         raise LeakageCheckError(f"study leakage check failed -- {summary}")
     return report

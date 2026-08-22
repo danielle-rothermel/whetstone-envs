@@ -133,16 +133,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shape an unfilled round is a `copro_proposal_cardinality` terminal failure
   whose result still names the seed as the run's outcome.
 - The Step 10 study harness at `whetstone_envs.optim.study`: the design
-  record, the Stage-0 gate arithmetic, the selection-and-reporting harness,
-  and the leakage checks. `StudySpec` pre-registers the population, splits,
-  arms, and repeat counts before any provider spend, and keeps `k_cal` and
-  `k_repeat` separate fields — the Stage-0 calibration count is a
-  measurement input, and borrowing the design repeat count for it biases the
-  gate optimistically through `tau^2`'s `2 sigma^2 / k_cal` correction.
-  `run_stage0` calibrates the naive and ceiling anchors on internal,
-  official, and held-out through one procedure at `K_CAL = 4`, with the
-  doubling rule capped at 16 and refusing an odd count that no split-half
-  check could read.
+  record, the Stage-0 gate arithmetic, the stage runner, the
+  selection-and-reporting harness, the leakage checks, the study manifest,
+  and the `whetstone-study` CLI they are reached through. `StudySpec`
+  pre-registers the population, splits, arms, and repeat counts before any
+  provider spend, and keeps `k_cal` and `k_repeat` separate fields — the
+  Stage-0 calibration count is a measurement input, and borrowing the design
+  repeat count for it biases the gate optimistically through `tau^2`'s
+  `2 sigma^2 / k_cal` correction. `run_stage0` calibrates the naive and
+  ceiling anchors on internal, official, and held-out through one procedure
+  at `K_CAL = 4`, with the doubling rule capped at 16 and refusing an odd
+  count that no split-half check could read.
 - `minimum_detectable_effect` is the study's single pre-registered MDE,
   `(z_{1-alpha/2} + z_power) * sqrt((tau^2 + 2 sigma^2 / K) / T)`, computed
   in the study's own code as one auditable line rather than read off
@@ -159,19 +160,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   than conventional. It scores every run on official, takes the arg-max,
   persists the selection, *reads the persisted record back*, and only then
   issues exactly one held-out evaluation against a ledger that refuses a
-  second one. A second selection for an arm and a second held-out evaluation
-  for a candidate are both refused before the provider call, so a violation
-  costs nothing rather than being detected after it was paid for. Anchors and
-  nulls reach held-out through `report_reference_candidate`, which keeps the
-  identical procedure and the identical once-only ledger without an arg-max
-  they have nothing to apply it to.
+  second one. Two ledgers satisfy that contract: `SelectionLog` holds it in
+  memory for a dry run, and `ManifestSelectionLog` writes each selection into
+  the study's own `study.json` through `write_study_manifest(replace=True)`
+  and reads it back off disk, so a paid stage's ordering is a filesystem fact
+  rather than a variable still in scope and a crash between selecting and
+  measuring leaves the selection recorded. A second selection for an arm and
+  a second held-out evaluation for a candidate are both refused before the
+  provider call, so a violation costs nothing rather than being detected
+  after it was paid for. Anchors and nulls reach held-out through
+  `report_reference_candidate`, which keeps the identical procedure and the
+  identical once-only ledger without an arg-max they have nothing to apply.
+- `held_out_claims` closes L3's real window. A held-out *row* carries a
+  Holm-corrected p-value, which is a whole-study computation that cannot
+  exist until every arm is measured — so waiting for the row would leave the
+  gap between paying for an evaluation and recording that it happened
+  completely unguarded. A claim is instead written *before* the evaluation is
+  issued and completed with its result when it returns, so a stage that
+  crashes mid-evaluation resumes knowing the candidate already spent its one
+  shot, and an outstanding claim reads as a crashed evaluation rather than as
+  one that never happened. `StudyManifest` refuses two claims for one
+  candidate, refuses a half-recorded measurement, and refuses a held-out row
+  with no completed claim behind it — a reported number whose evaluation was
+  never claimed came from outside `report_arm`, which is exactly the leak L3
+  exists to catch. L3 and L4 read the claims rather than the rows for the
+  same reason: each claim carries the Eval Config and repeat count its own
+  evaluation used, while the rows are written from one study-wide config and
+  would agree by construction whether or not the evaluations did. The two
+  rules read different slices of the same claims — L3 counts every claim,
+  because what it limits is evaluations *issued* and a crashed one still
+  spent the candidate's shot, while L4 compares only completed ones, because
+  an outstanding claim has no procedure to compare and substituting the
+  study's own values for it would rebuild the tautology.
+- `LeakageFinding` distinguishes "this rule held" from "this rule had no
+  evidence to hold against". Every one of these predicates is vacuously true
+  over an empty observation set, and a vacuous truth reported as a pass is
+  how a study comes to claim a leakage rule nobody verified — so an
+  unchecked finding never counts as passed, `LeakageReport.passed` requires
+  every rule to have been checked *and* held, and L6's detail names the
+  rules that actually ran rather than claiming all five did.
 - `study_leakage_check` runs L1-L5 mechanically over recorded evidence and
-  fails the study loudly before report generation (L6). L1 matches both the
+  fails the study loudly before report generation (L6), reached from the CLI
+  as `whetstone-study leakage-check --study-dir`. L1 matches both the
   evaluation role and the resolved Eval Config, since either alone would pass
   a leak the other catches; L5 reads content-addressed task hashes rather
   than task ids; and `check_held_out_nesting` encodes D5's growth rule, that
   held-220 must be contained in held-440 for the anchors measured on the
-  first to describe the second.
+  first to describe the second. Run from a manifest, L1 is reported
+  `NOT CHECKED` and **fails the command**: its evidence is each run's own
+  intent resolutions, which live in the run stores, and an empty observation
+  set is vacuously true rather than checked.
 - `analyze_arms` computes each arm's paired bootstrap interval and applies
   Holm over the four real optimizers only — nulls are controls, not
   hypotheses, and correcting them would make a null harder to trip exactly
@@ -182,6 +220,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fully-missing task in the vector at zero weight rather than dropping it,
   which would shrink `T` and tighten the interval dishonestly; an arm below
   the 90% completeness backstop is reported but never claimed.
+- The stage runner at `whetstone_envs.optim.study.stages` turns a stage into
+  a manifest. Stage 0 calibrates and writes the `design` block every later
+  stage reads; Stages 1 and 2 run each arm's optimizer, file its runs, and
+  route every held-out number through `report_arm`. An arm stage refuses to
+  start without a recorded design, and Stage 0 refuses a study that has not
+  declared its arms — `k_run_by_arm` is a pre-registration, so a placeholder
+  would read as a design. `spec_from_manifest` reads those run counts from
+  the design table via `k_run_for`, never from `len(arm.runs)`: how many
+  runs an arm has executed is progress, not design, and reading it as design
+  would make an unstarted study look like a one-run-per-arm study and
+  under-report the whole budget by a factor of `K_RUN`. An arm naming an
+  optimizer with no assigned seed range is refused rather than seeded from
+  zero, matching every other read of that table.
+- An arm stage is resumable, which matters because it is the path that
+  spends. A seed whose run is already recorded is not re-executed — that is
+  what makes "Stage 1's runs count toward Stage 2" a checkable property of
+  the seeds rather than an assertion — and the merged arm record keeps every
+  previously recorded run instead of replacing the list, so a stage that
+  crashed after paying for some runs does not discard them. Selecting over a
+  subset of an arm's runs is refused loudly rather than quietly turning a
+  `K_RUN = 5` arg-max into a `K_RUN = 3` one.
+- Stage 1 applies the call-count gate rather than merely defining it. Each
+  run's measured task calls are compared against its pre-spend estimate at
+  the `1.5x` tolerance, and an overrun refuses the stage *before* any
+  held-out evaluation is issued, so the study does not pay for a number it
+  is about to refuse to trust. The gate runs at Stage 1 only: it exists to
+  catch a fan-out bug before Stage 2 pays five times over for the same
+  defect, and re-running it at Stage 2 would restate a fact the pilot
+  already settled. Every provider-touching collaborator arrives as a
+  callable on `StageEnvironment`, so the whole harness runs end to end on a
+  fake transport with zero provider calls;
+  `whetstone_envs.optim.study.environment` is where the real ones come from,
+  regenerating the pre-registered pool deterministically from the manifest's
+  own `n_per_stratum` and `pool_seed_start` rather than drawing a fresh
+  sample of the same size — and then *checking* it, by comparing every
+  regenerated split's content-addressed task hashes against the ones the
+  manifest recorded. A mismatch refuses the bind, because the alternative is
+  a study whose Stage-2 numbers describe different tasks than its Stage-0
+  anchors did, and only a hash comparison catches a generator whose output
+  changed while its shape did not.
+- The Step 10 study manifest at `whetstone_envs.optim.study.manifest`.
+  `study.json` is the study's single accounting surface: every number the
+  report prints is a field of `StudyManifest` or a deterministic function of
+  evidence the manifest names, and it names that evidence as an
+  `EvidencePointer` — a `(schema_name, content_hash)` pair the run's object
+  store resolves — so the report generator never recomputes a score from a
+  loose file. The manifest carries the population and its three
+  content-addressed splits, the models and what the study could not control,
+  the design's `K_CAL`/`K_REPEAT`/`K_RUN` and power arithmetic, the GEPA
+  sizing and fan-out preconditions, the arms and their runs with per-run
+  audit verdicts, cost pointers, and spend, the selection and held-out
+  records, the balance at each spend gate, the leakage verdict, and the
+  second family's runs and adapter-swap result.
+- The manifest schema lives in the repository and its instances do not.
+  `STUDY_MANIFEST_SCHEMA` and the `ManifestKey` wire-key enum own every
+  persisted literal, and `tests/optim/study/test_manifest.py` pins each one
+  as a written-out string rather than deriving it from a field name, so a
+  rename that changed stored identity fails the golden test. A study
+  instance is a durable work document, so `write_study_manifest` refuses to
+  write inside any detected repository — the same rule run artifacts follow.
+- Two of the study's pre-registered rules are structural rather than
+  conventional. `StudyManifest` refuses a second selection for one arm (L2)
+  and a second held-out row for one candidate (L3), and `SplitsRecord`
+  refuses overlapping splits at construction (L5), so those leakages are
+  impossible to record rather than merely detectable afterwards.
+- `write_study_manifest` never overwrites an existing manifest silently:
+  replacement is an explicit `replace=True`, and the default raises
+  `ManifestExistsError` with the untouched original left in place. It
+  validates by round-tripping the exact bytes that will land, so a manifest
+  is written only if what lands re-validates.
+- `check_manifest_pointers` resolves every evidence pointer a manifest cites
+  against a named store, walking the model's own fields rather than a
+  hand-kept list, and reports one verdict per pointer. Distinct pointers
+  resolve once each; a pointer whose record is absent or whose bytes drifted
+  fails the check rather than reaching the report as a number nobody can
+  reproduce.
+- Every optimizer run now writes `cost.json` beside `result.json` and
+  content-addresses the same bytes into its own `runtime.sqlite`, so the
+  manifest's per-run `cost_ref` is a pointer `manifest check` resolves rather
+  than a number typed in by hand. It is a pinned-key *projection* —
+  `result.json` stays the authority — and it carries the full honesty split
+  per role: billable calls, cached calls, the priced/unpriced split, calls
+  the provider priced without a token breakdown, and a USD total only when
+  every contributing call carried a price. A run whose result records no cost
+  report writes no `cost.json`, because an all-zero document would claim the
+  run was free rather than unmeasured.
+- The `whetstone-study` console script at
+  `whetstone_envs.optim.study.cli`. `plan` prints the run matrix and two
+  budgets; `run --stage stage0|stage1|stage2` runs a stage through the
+  harness; `leakage-check` runs L1-L6 over a study directory; `report` hands
+  the manifest to the report generator; `manifest check <path>` resolves
+  every evidence pointer against the run store beside the manifest or one
+  named by `--store`. The spec loader and the stage runner default to the
+  real implementations, so the CLI is the study's actual entry point; the
+  report generator stays injected until its wave lands and `report` says so
+  rather than failing obscurely. Every collaborator is still named as a
+  protocol and overridable, which is how the ordering is tested
+  independently of the wiring.
+- `plan` prints its two budgets separately because they are known to
+  different degrees. The selection-and-reporting budget is *derived* from
+  the matrix, so a spec cannot assert a budget its matrix does not imply.
+  The optimizer-side budget is an *estimate* from the control defaults in a
+  new `whetstone_envs.optim.study.gates`, labelled as one, and it dominates
+  the total. Each constant carries its derivation: MIPROv2's `fewshot` range
+  is the **F10-corrected** 1,870-2,458 task calls per run — seven
+  bootstrapping plans over a cursor walk, 28 rows best case and 616 worst,
+  never the protocol's original 72 — and the Stage-1 "within 1.5x" gate
+  divides by the ceiling, so a low naive anchor, which causes *more*
+  bootstrap rows, does not read as a budget overrun. GEPA's estimate is its
+  resolved 732 metric calls, COPRO's and both nulls' are derived from the
+  configured breadth and depth, and Codex reports its cap of 8 admitted
+  evaluate-calls as a cap rather than an estimate: per OQ3 it is excluded
+  from the call-count comparison and gated on capacity respect instead,
+  because applying a fan-out detector to a non-deterministic agent invites a
+  false abort. An arm the estimator does not recognize reports "no estimate"
+  rather than a number derived from a guess.
+- `FamilySpec.build_candidate` mints one validated candidate from a
+  template, reading the family's own `ExperimentContract` the way
+  `render_contract` does, so how a candidate is built is family knowledge
+  like its pool generator. The study's anchors reach the engine through it
+  rather than through a c19 import, which is the C3 boundary working as
+  intended.
 - The C19 optimizer CLI and runner accept `--optimizer gepa` and
   `--optimizer miprov2` through the same shared runner path as COPRO.
 - `--num-seeds` on the CLI and `RunSpec.num_seeds` make repeats per task

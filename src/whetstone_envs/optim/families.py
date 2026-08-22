@@ -45,7 +45,10 @@ from whetstone_envs.probes import ProbePair
 if TYPE_CHECKING:
     from dr_providers import ProviderCallConfig
     from whetstone.eval.eval_procedure import EvalProcedureRunner
-    from whetstone.experiment.candidate import TemplateRenderContract
+    from whetstone.experiment.candidate import (
+        Candidate,
+        TemplateRenderContract,
+    )
 
     from whetstone_envs.optim.experiment import PreparedExperiment
     from whetstone_envs.pools import TaskPool
@@ -103,6 +106,18 @@ class EvalRunnerFactory(Protocol):
     """Build the eval-node runner that scores this family's generations."""
 
     def __call__(self) -> EvalProcedureRunner: ...
+
+
+class CandidateBuilder(Protocol):
+    """Build one validated candidate from a template.
+
+    The study's anchors and every scored representative candidate reach the
+    engine through this, so a family that mints candidates differently --
+    a different root base schema, a different payload field -- is a
+    registration rather than a change to whatever builds them.
+    """
+
+    def __call__(self, *, candidate_id: str, template: str) -> Candidate: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +193,20 @@ class FamilySpec:
     def render_contract(self) -> TemplateRenderContract:
         """The contract every template for this family must satisfy."""
         return self.contract.render_contract()
+
+    def build_candidate(
+        self, *, candidate_id: str, template: str
+    ) -> Candidate:
+        """Mint one validated candidate from a template.
+
+        The study's anchors and every scored representative candidate reach
+        the engine through this. A family that mints candidates differently
+        -- a different root base schema, a different payload field -- says
+        so in its ``contract``, so this stays one path rather than a branch.
+        """
+        return self.contract.candidate(
+            candidate_id=candidate_id, template=template
+        )
 
     def proposal_bodies(self) -> tuple[str, ...]:
         """Scripted proposer bodies for a fake-transport run.

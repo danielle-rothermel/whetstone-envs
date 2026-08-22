@@ -27,8 +27,8 @@ from whetstone_envs.optim.experiment import (
     prepare_c19_experiment,
 )
 from whetstone_envs.optim.provider import (
-    c19_fake_gold_by_prompt,
-    c19_fake_transport_factory,
+    fake_gold_by_prompt,
+    fake_transport_factory,
 )
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
 from whetstone_envs.optim.study.anchors import ANCHOR_ROLES, run_stage0
@@ -65,7 +65,11 @@ def toy_study(tmp_path):
     prepared = prepare_c19_experiment(
         pool, split_sizes=TOY_SPLIT_SIZES, num_seeds=1
     )
-    gold_by_prompt = c19_fake_gold_by_prompt(prepared.experiment)
+    gold_by_prompt = fake_gold_by_prompt(
+        prepared.experiment,
+        render_contract=c19_render_contract(),
+        ceiling_template=PROBES.ceiling_template,
+    )
 
     with open_sqlite(str(tmp_path / "runtime.sqlite")) as store:
         built: list[object] = []
@@ -88,9 +92,11 @@ def toy_study(tmp_path):
                 eval_runner=ExactMatchEvalProcedureRunner(),
                 mutation_field=C19_MUTATION_FIELD,
                 render_contract=c19_render_contract(),
-                transport_factory=c19_fake_transport_factory(
-                    gold_by_prompt=c19_fake_gold_by_prompt(
-                        role_prepared.experiment
+                transport_factory=fake_transport_factory(
+                    gold_by_prompt=fake_gold_by_prompt(
+                        role_prepared.experiment,
+                        render_contract=c19_render_contract(),
+                        ceiling_template=PROBES.ceiling_template,
                     )
                 ),
             )

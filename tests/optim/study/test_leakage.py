@@ -55,15 +55,26 @@ def _clean_splits() -> tuple[SplitIdentity, ...]:
     )
 
 
-def _run_check(
+def _run_check(  # noqa: PLR0913
     *,
     optimizer_observations: tuple[OptimizerEvalObservation, ...] | None = None,
     selected_arm_ids: list[str] | None = None,
     held_out_observations: tuple[HeldOutObservation, ...] | None = None,
+    held_out_candidate_names: list[str] | None = None,
     splits: tuple[SplitIdentity, ...] | None = None,
     strict: bool = True,
 ) -> LeakageReport:
-    """Run L6 over a clean study, with one part optionally mutated."""
+    """Run L6 over a clean study, with one part optionally mutated.
+
+    ``held_out_candidate_names`` defaults to the names in
+    ``held_out_observations``, which is the shape a study without crashed
+    evaluations has: every issued evaluation returned.
+    """
+    observations = (
+        _clean_held_out_observations()
+        if held_out_observations is None
+        else held_out_observations
+    )
     return study_leakage_check(
         optimizer_observations=(
             _clean_optimizer_observations()
@@ -75,11 +86,12 @@ def _run_check(
             list(ARM_IDS) if selected_arm_ids is None else selected_arm_ids
         ),
         expected_arm_ids=ARM_IDS,
-        held_out_observations=(
-            _clean_held_out_observations()
-            if held_out_observations is None
-            else held_out_observations
+        held_out_candidate_names=(
+            [entry.candidate_name for entry in observations]
+            if held_out_candidate_names is None
+            else held_out_candidate_names
         ),
+        held_out_observations=observations,
         splits=_clean_splits() if splits is None else splits,
         strict=strict,
     )
@@ -157,14 +169,18 @@ def test_l2_catches_a_selection_for_a_non_arm() -> None:
 
 def test_l3_catches_a_candidate_evaluated_twice_on_held_out() -> None:
     """The leak that would let a study shop for its best held-out number."""
-    leaking = held_out_observations_from_counts(
-        {"copro": 2, "miprov2": 1, "naive": 1},
-        eval_config_hash=HELD_OUT_CONFIG,
-        repeats=3,
+    finding = check_l3_held_out_once_per_candidate(
+        ["copro", "copro", "miprov2", "naive"]
     )
-    finding = check_l3_held_out_once_per_candidate(leaking)
     assert not finding.passed
     assert finding.offenders == ("copro evaluated 2 times on held-out",)
+
+
+def test_l3_counts_an_evaluation_that_was_issued_and_never_returned() -> None:
+    """A crashed evaluation still spent the candidate's one shot, so a
+    second attempt at it is the leak L3 names."""
+    finding = check_l3_held_out_once_per_candidate(["naive", "naive"])
+    assert not finding.passed
 
 
 def test_l4_catches_a_candidate_measured_under_a_different_config() -> None:

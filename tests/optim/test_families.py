@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 pytest.importorskip("whetstone.experiment.env")
@@ -37,9 +39,9 @@ from whetstone_envs.optim.families import (
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
 
 
-def _c19_like_spec(**overrides) -> FamilySpec:
+def _c19_like_spec(**overrides: object) -> FamilySpec:
     """A spec shaped like c19's, for testing the registry's own rules."""
-    fields = {
+    fields: dict[str, Any] = {
         "family_id": FamilyId.C18.value,
         "contract": C19_CONTRACT,
         "task_context": "A test family's task.",
@@ -181,3 +183,25 @@ def test_the_registry_generates_the_family_pool_it_names() -> None:
     assert [instance.id for instance in through_registry.as_sequence()] == [
         instance.id for instance in direct.as_sequence()
     ]
+
+
+def test_a_family_mints_its_own_candidates() -> None:
+    """The study's anchors and representatives reach the engine through the
+    registry, so how a candidate is built is family knowledge like any
+    other -- not something a caller reaches around the registry for."""
+    spec = family_spec("c19")
+    candidate = spec.build_candidate(
+        candidate_id="c19-naive", template=spec.probes.naive_template
+    )
+    assert candidate.candidate_id == "c19-naive"
+    assert candidate.payload[spec.mutation_field] == (
+        spec.probes.naive_template
+    )
+
+
+def test_a_candidate_that_breaks_the_render_contract_is_refused() -> None:
+    spec = family_spec("c19")
+    with pytest.raises(ValueError, match="field"):
+        spec.build_candidate(
+            candidate_id="c19-broken", template="no placeholders here"
+        )

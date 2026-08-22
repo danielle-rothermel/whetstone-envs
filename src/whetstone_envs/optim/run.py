@@ -75,6 +75,7 @@ from whetstone_envs.optim.provider import (
     fake_transport_factory,
     openrouter_seeded_call_config,
 )
+from whetstone_envs.optim.run_cost import project_run_cost, write_run_cost
 from whetstone_envs.reporting.projection import project_trajectory_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
@@ -609,6 +610,13 @@ def run_optimizer(spec: RunSpec) -> Path:
                 result.model_dump_json(indent=2),
                 encoding="utf-8",
             )
+            # ``cost.json`` beside ``result.json``, so a reader can price a
+            # run without parsing a whole optimization result. It is written
+            # only when the result carries a cost report: an all-zero
+            # document would claim the run was free rather than unmeasured.
+            cost = project_run_cost(result, run_id=resolved_run_id)
+            if cost is not None:
+                write_run_cost(resolved_output, cost, store=store)
             trajectory = project_trajectory_report(
                 store=cast("ObjectStore", store),
                 prepared=prepared,

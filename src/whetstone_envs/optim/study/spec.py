@@ -16,6 +16,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import UNIQUE, StrEnum, auto, verify
+from typing import TYPE_CHECKING
+
+from whetstone_envs.optim.study.manifest import read_study_manifest
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from whetstone_envs.optim.study.manifest import (
+        ArmRecord,
+        DesignRecord,
+        SplitRecord,
+        StudyManifest,
+    )
 
 __all__ = [
     "CI_LEVEL",
@@ -40,7 +53,9 @@ __all__ = [
     "arm_seeds",
     "default_arms",
     "k_run_for",
+    "load_study_spec",
     "next_k_cal",
+    "spec_from_manifest",
 ]
 
 
@@ -292,6 +307,22 @@ class StudySpec:
         return (self.internal.size, self.official.size, self.held_out.size)
 
     @property
+    def arm_ids(self) -> tuple[str, ...]:
+        """Every arm this study runs, in report order.
+
+        The CLI's ``plan`` reads this and ``k_run_by_arm`` rather than the
+        ``ArmSpec`` records themselves: a run matrix is arms and their run
+        counts, and naming only that keeps the pre-spend answer independent
+        of how an arm is configured.
+        """
+        return tuple(arm.arm_id for arm in self.arms)
+
+    @property
+    def k_run_by_arm(self) -> dict[str, int]:
+        """Each arm's run count, keyed by arm id."""
+        return {arm.arm_id: arm.k_run for arm in self.arms}
+
+    @property
     def real_arms(self) -> tuple[ArmSpec, ...]:
         """The hypotheses, in Holm-family order."""
         return tuple(arm for arm in self.arms if arm.kind is ArmKind.REAL)
@@ -320,3 +351,134 @@ def next_k_cal(k_cal: int) -> int:
             f"at {k_cal} is a finding, not a reason to keep doubling"
         )
     return doubled
+
+
+# --------------------------------------------------------------------------
+# Reading the design back off a study directory
+# --------------------------------------------------------------------------
+
+
+def spec_from_manifest(
+    manifest: StudyManifest, *, stage: StageId = StageId.STAGE2
+) -> StudySpec:
+    """Recover the pre-registered design from a persisted manifest.
+
+    The manifest is the study's own record of its design, so it is also the
+    spec's source of truth once a study exists: reading the spec back from
+    ``study.json`` means there is one persisted design rather than a second
+    file that could disagree with it.
+
+    ``stage`` supplies the run counts a manifest written **before** Stage 0
+    does not yet carry. Those counts are the pre-registration -- five runs
+    per real optimizer at Stage 2, one for null-B -- so they come from
+    :func:`k_run_for`, never from how many runs an arm happens to have
+    executed. Reading them off the runs would make a study that has not
+    started look like a study designed to run each arm once, and ``plan``
+    would then under-report the budget by the whole factor of ``K_RUN``.
+    Stage 2 is the default because it is the full design; a caller pricing
+    the pilot passes ``StageId.STAGE1``.
+
+    Once Stage 0 has recorded a ``design`` block, that block wins: it is
+    what the study actually pre-registered, including any adjustment the
+    Stage-0 gate permitted.
+    """
+    design = manifest.design
+    arms = tuple(
+        ArmSpec(
+            arm_id=arm.arm_id,
+            optimizer=arm.optimizer,
+            kind=(
+                ArmKind.REAL
+                if arm.optimizer in set(REAL_OPTIMIZER_ARM_IDS)
+                else ArmKind.NULL
+            ),
+            k_run=_k_run_from(arm, design=design, stage=stage),
+            seeds=_arm_seeds_from(arm, design=design, stage=stage),
+            demo_mode=arm.demo_mode,
+        )
+        for arm in manifest.arms
+    )
+    return StudySpec(
+        study_id=manifest.study_id,
+        family=manifest.population.family,
+        n_per_stratum=manifest.population.n_per_stratum,
+        pool_seed_start=manifest.population.pool_seed_start,
+        internal=_split_spec("internal", manifest.splits.internal),
+        official=_split_spec("official", manifest.splits.official),
+        held_out=_split_spec("held_out", manifest.splits.held_out),
+        task_model=manifest.models.task_model,
+        proposer_model=manifest.models.proposer_model,
+        k_cal=K_CAL_INITIAL if design is None else design.k_cal,
+        k_repeat=3 if design is None else design.k_repeat,
+        bootstrap_seed=0 if design is None else design.bootstrap_seed,
+        ci_level=CI_LEVEL if design is None else design.ci_level,
+        resamples=RESAMPLES if design is None else design.resamples,
+        arms=arms,
+    )
+
+
+def _split_spec(role: str, record: SplitRecord) -> SplitSpec:
+    # ``SplitRecord`` and ``SplitSpec`` carry the same three facts under the
+    # same names; the manifest owns the persisted form and the spec owns the
+    # design, so the translation lives here rather than either type
+    # depending on the other.
+    return SplitSpec(
+        role=role,
+        size=record.size,
+        task_hashes=record.task_hashes,
+        eval_config_hash=record.eval_config_hash,
+    )
+
+
+def _arm_seeds_from(
+    arm: ArmRecord, *, design: DesignRecord | None, stage: StageId
+) -> tuple[int, ...]:
+    """The arm's seeds, preferring the ones its runs actually used.
+
+    A run whose optimizer carries no control seed records ``None``, so a
+    partially-run arm falls back to its pre-registered range rather than
+    inventing a seed the run never had. An arm whose optimizer is not in
+    the seed table is refused rather than seeded from zero: every other
+    lookup of that table raises, and a silently-seeded unknown arm would
+    collide with whatever else defaulted the same way.
+    """
+    recorded = tuple(run.seed for run in arm.runs if run.seed is not None)
+    k_run = _k_run_from(arm, design=design, stage=stage)
+    if len(recorded) == k_run and len(set(recorded)) == k_run:
+        return recorded
+    try:
+        base = SEED_RANGE_BY_OPTIMIZER[arm.optimizer]
+    except KeyError as error:
+        raise ValueError(
+            f"arm {arm.arm_id!r} names unknown optimizer {arm.optimizer!r}; "
+            f"seeded optimizers are {tuple(SEED_RANGE_BY_OPTIMIZER)}"
+        ) from error
+    return tuple(base + offset for offset in range(k_run))
+
+
+def _k_run_from(
+    arm: ArmRecord, *, design: DesignRecord | None, stage: StageId
+) -> int:
+    """The arm's pre-registered run count at ``stage``.
+
+    A recorded design wins, because it is what the study pre-registered.
+    Absent one, the count comes from :func:`k_run_for` -- the design table
+    -- and never from ``len(arm.runs)``: how many runs an arm has executed
+    is progress, not design, and reading it as design makes an unstarted
+    study look like a one-run-per-arm study.
+    """
+    if design is not None and arm.arm_id in design.k_run_by_arm:
+        return design.k_run_by_arm[arm.arm_id]
+    return k_run_for(arm.optimizer, stage=stage)
+
+
+def load_study_spec(
+    study_dir: Path, *, stage: StageId = StageId.STAGE2
+) -> StudySpec:
+    """Load a study directory's pre-registered design.
+
+    This is the CLI's default spec loader: ``plan`` reads the design from
+    the same ``study.json`` every other subcommand reads, so a planned
+    budget and a recorded run cannot describe different studies.
+    """
+    return spec_from_manifest(read_study_manifest(study_dir), stage=stage)

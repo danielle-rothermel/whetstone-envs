@@ -1,0 +1,607 @@
+"""The ``whetstone-study`` CLI.
+
+Every subcommand is exercised with injected collaborators, so these tests
+run without Wave 4a's harness and without Wave 6's report generator. The
+``manifest check`` tests are the exception: they resolve pointers against a
+store a real fake-transport optimizer run produced in-test, which is the
+only way to prove the checker reads the store the study actually writes.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING
+
+import pytest
+import rfc8785
+
+pytest.importorskip("whetstone.experiment.env")
+
+from dr_store.sync import open_sqlite
+
+from whetstone_envs.optim.run_cost import RUN_COST_SCHEMA_NAME
+from whetstone_envs.optim.study.cli import (
+    DEFAULT_STORE_NAME,
+    EXIT_CHECK_FAILED,
+    EXIT_ERROR,
+    EXIT_OK,
+    NO_ESTIMATE,
+    NOT_CHECKED,
+    OPTIMIZER_BUDGET_HEADING,
+    PROGRAM_NAME,
+    build_parser,
+    main,
+    plan_lines,
+)
+from whetstone_envs.optim.study.manifest import (
+    STUDY_MANIFEST_NAME,
+    ArmRecord,
+    EvidencePointer,
+    RunRecord,
+    RunSpendRecord,
+    StudyManifest,
+    read_study_manifest,
+    study_manifest_path,
+    write_study_manifest,
+)
+
+from .conftest import toy_manifest
+from .test_manifest import _minimal_manifest
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from pathlib import Path
+
+
+class _Spec:
+    """A stand-in for Wave 4a's ``StudySpec``, structural only."""
+
+    def __init__(self) -> None:
+        self.study_id = "step10-fixture"
+        self.arm_ids = ("copro", "null-identity")
+        self.k_run_by_arm: Mapping[str, int] = {
+            "copro": 5,
+            "null-identity": 1,
+        }
+        self.k_repeat = 3
+        self.split_sizes = (88, 132, 220)
+
+
+# --------------------------------------------------------------------------
+# parser
+# --------------------------------------------------------------------------
+
+
+def test_parser_names_the_console_script() -> None:
+    assert build_parser().prog == PROGRAM_NAME == "whetstone-study"
+
+
+def test_parser_requires_a_subcommand() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([])
+
+
+def test_run_rejects_an_unknown_stage() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["run", "--study-dir", "/tmp/s", "--stage", "stage9"]  # noqa: S108
+        )
+
+
+# --------------------------------------------------------------------------
+# plan
+# --------------------------------------------------------------------------
+
+
+def test_plan_lines_derive_the_budget_from_the_matrix() -> None:
+    lines = plan_lines(_Spec())
+    text = "\n".join(lines)
+    assert "study: step10-fixture" in text
+    assert "splits: internal=88 official=132 held_out=220" in text
+    # 5 runs x 132 official tasks x 3 repeats, and 1 x 132 x 3.
+    assert "total official rows: 2376" in text
+    # One representative candidate per arm on held-out: 2 x 220 x 3.
+    assert "total held-out rows: 1320" in text
+    assert "total selection+report rows: 3696" in text
+
+
+def test_plan_prints_the_matrix(tmp_path: Path, capsys) -> None:
+    code = main(
+        ["plan", "--study-dir", str(tmp_path)],
+        load_spec=lambda study_dir: _Spec(),  # noqa: ARG005
+    )
+    assert code == EXIT_OK
+    out = capsys.readouterr().out
+    assert "copro" in out
+    assert "null-identity" in out
+    assert "total selection+report rows: 3696" in out
+
+
+def test_plan_passes_the_study_directory_to_its_loader(
+    tmp_path: Path,
+) -> None:
+    seen: list[Path] = []
+
+    def load(study_dir: Path) -> _Spec:
+        seen.append(study_dir)
+        return _Spec()
+
+    assert main(["plan", "--study-dir", str(tmp_path)], load_spec=load) == (
+        EXIT_OK
+    )
+    assert seen == [tmp_path]
+
+
+def test_plan_defaults_to_the_real_manifest_backed_loader(
+    tmp_path: Path, capsys
+) -> None:
+    """The default wiring is the real loader, not a stub or a gap report."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, _minimal_manifest())
+    assert main(["plan", "--study-dir", str(study_dir)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "study: step10-2026-08-22" in out
+    # The minimal manifest carries no design, so the loader falls back to
+    # the spec's own defaults rather than inventing measured ones.
+    assert "K_REPEAT: 3" in out
+
+
+def test_plan_on_a_missing_manifest_fails_cleanly(
+    tmp_path: Path, capsys
+) -> None:
+    assert main(["plan", "--study-dir", str(tmp_path)]) == EXIT_ERROR
+    assert capsys.readouterr().err.strip()
+
+
+# --------------------------------------------------------------------------
+# run
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("stage", ["stage0", "stage1", "stage2"])
+def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
+    seen: list[tuple[Path, str]] = []
+
+    def run_stage(*, study_dir: Path, stage: str) -> StudyManifest:
+        seen.append((study_dir, stage))
+        return _minimal_manifest()
+
+    code = main(
+        ["run", "--study-dir", str(tmp_path), "--stage", stage],
+        run_stage=run_stage,
+    )
+    assert code == EXIT_OK
+    assert seen == [(tmp_path, stage)]
+    out = capsys.readouterr().out
+    assert f"{stage} complete for study step10-2026-08-22" in out
+    assert str(tmp_path / STUDY_MANIFEST_NAME) in out
+
+
+def test_run_defaults_to_the_real_stage_harness(
+    tmp_path: Path, capsys
+) -> None:
+    """The default runner reaches the harness, not a wiring-gap report.
+
+    A study directory with no manifest now fails on the manifest read
+    inside the harness, which is what proves the default is wired: the old
+    behaviour was to refuse before touching the directory at all.
+    """
+    code = main(["run", "--study-dir", str(tmp_path), "--stage", "stage0"])
+    assert code == EXIT_ERROR
+    error = capsys.readouterr().err
+    assert "not wired into this CLI yet" not in error
+    assert STUDY_MANIFEST_NAME in error
+
+
+# --------------------------------------------------------------------------
+# report
+# --------------------------------------------------------------------------
+
+
+def test_report_hands_the_manifest_to_its_generator(
+    tmp_path: Path, capsys
+) -> None:
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, _minimal_manifest())
+    packet = tmp_path / "packet"
+    seen: list[tuple[str, Path]] = []
+
+    def generate(*, manifest: StudyManifest, out_dir: Path) -> Path:
+        seen.append((manifest.study_id, out_dir))
+        return out_dir / "report.html"
+
+    code = main(
+        [
+            "report",
+            "--study-dir",
+            str(study_dir),
+            "--out",
+            str(packet),
+        ],
+        generate_report=generate,
+    )
+    assert code == EXIT_OK
+    assert seen == [("step10-2026-08-22", packet)]
+    assert str(packet / "report.html") in capsys.readouterr().out
+
+
+def test_report_on_a_missing_manifest_fails_cleanly(
+    tmp_path: Path, capsys
+) -> None:
+    code = main(
+        [
+            "report",
+            "--study-dir",
+            str(tmp_path),
+            "--out",
+            str(tmp_path / "packet"),
+        ],
+        generate_report=lambda *, manifest, out_dir: out_dir,  # noqa: ARG005
+    )
+    assert code == EXIT_ERROR
+    assert capsys.readouterr().err.strip()
+
+
+def test_report_without_a_generator_reports_the_wiring_gap(
+    tmp_path: Path, capsys
+) -> None:
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, _minimal_manifest())
+    code = main(
+        [
+            "report",
+            "--study-dir",
+            str(study_dir),
+            "--out",
+            str(tmp_path / "packet"),
+        ]
+    )
+    assert code == EXIT_ERROR
+    assert "not wired into this CLI yet" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# manifest check, against a real fake-transport run artifact
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def fake_run_dir(tmp_path_factory) -> Path:
+    """One completed fake-transport COPRO run, reused by the checks below.
+
+    This is a real optimizer run through the shared runner: it writes a
+    ``runtime.sqlite`` the checker resolves against, so the pointer check is
+    proven against the store shape the study actually produces rather than
+    against a hand-built double.
+    """
+    from whetstone_envs.optim.run import RunSpec, run_optimizer
+
+    output = tmp_path_factory.mktemp("study-cli") / "copro-run"
+    return run_optimizer(
+        RunSpec(
+            optimizer="copro",
+            transport="fake",
+            split_sizes=(2, 2, 0),
+            run_id="c19-copro-study-cli",
+            output_dir=output,
+        )
+    )
+
+
+def _pointer_from(ref: dict[str, str]) -> EvidencePointer:
+    return EvidencePointer(
+        schema_name=ref["schema_name"],
+        content_hash=ref["content_hash"],
+    )
+
+
+def _stored_pointers(run_dir: Path) -> tuple[EvidencePointer, ...]:
+    """Three pointers the run itself persisted, all real store records.
+
+    The first step's own result ref stands in for a manifest's
+    ``result_ref`` and its first eval-evidence ref for an ``audit_ref``. The
+    third is the run's own ``cost.json``, content-addressed into the same
+    store by the runner, so ``manifest check`` proves the cost pointer
+    resolves rather than merely being well-formed.
+    """
+    result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    step = result["step_results"][0]
+    return (
+        _pointer_from(step["record_ref"]),
+        _pointer_from(
+            step["record"]["resolved_intents"][0]["eval_result_ref"]
+        ),
+        _cost_pointer(run_dir),
+    )
+
+
+def _cost_pointer(run_dir: Path) -> EvidencePointer:
+    """The ``(schema, hash)`` pair the run's stored cost document has."""
+    payload = json.loads((run_dir / "cost.json").read_text(encoding="utf-8"))
+    with open_sqlite(str(run_dir / DEFAULT_STORE_NAME)) as store:
+        reference, _ = store.put(RUN_COST_SCHEMA_NAME, payload)
+    return EvidencePointer(
+        schema_name=reference.schema,
+        content_hash=reference.content_hash,
+    )
+
+
+def _manifest_citing(pointers: tuple[EvidencePointer, ...]) -> StudyManifest:
+    result_ref, audit_ref, cost_ref = pointers
+    return _minimal_manifest().model_copy(
+        update={
+            "arms": (
+                ArmRecord(
+                    arm_id="copro",
+                    optimizer="copro",
+                    demo_mode=None,
+                    control_identity_hash="d" * 64,
+                    seed_note="provider-seed-control-only",
+                    runs=(
+                        RunRecord(
+                            run_id="c19-copro-study-cli",
+                            seed=None,
+                            artifact_dir="/tmp/runs/c19-copro",  # noqa: S108
+                            result_ref=result_ref,
+                            audit_ref=audit_ref,
+                            cost_ref=cost_ref,
+                            audit_passed=True,
+                            spend=(
+                                RunSpendRecord(
+                                    role="task_model",
+                                    calls=4,
+                                    cached_calls=0,
+                                    input_tokens=40,
+                                    output_tokens=8,
+                                    priced_calls=0,
+                                    unpriced_calls=4,
+                                    rows_missing_token_breakdown=4,
+                                    usd=None,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+
+
+def test_pointers_from_a_real_run_resolve_in_its_store(
+    tmp_path: Path, fake_run_dir: Path, capsys
+) -> None:
+    manifest = _manifest_citing(_stored_pointers(fake_run_dir))
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, manifest)
+    code = main(
+        [
+            "manifest",
+            "check",
+            str(study_manifest_path(study_dir)),
+            "--store",
+            str(fake_run_dir / DEFAULT_STORE_NAME),
+        ]
+    )
+    assert code == EXIT_OK
+    out = capsys.readouterr().out
+    assert "3 evidence pointers resolved" in out
+    assert out.count("ok ") == 3
+
+
+def test_a_mutated_pointer_fails_the_check(
+    tmp_path: Path, fake_run_dir: Path, capsys
+) -> None:
+    pointers = _stored_pointers(fake_run_dir)
+    mutated = (
+        pointers[0].model_copy(update={"content_hash": "0" * 64}),
+        pointers[1],
+        pointers[2],
+    )
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, _manifest_citing(mutated))
+    code = main(
+        [
+            "manifest",
+            "check",
+            str(study_manifest_path(study_dir)),
+            "--store",
+            str(fake_run_dir / DEFAULT_STORE_NAME),
+        ]
+    )
+    assert code == EXIT_CHECK_FAILED
+    captured = capsys.readouterr()
+    assert "MISSING" in captured.out
+    assert "1 of 3 evidence pointers did not resolve" in captured.err
+
+
+def test_check_defaults_to_the_store_beside_the_manifest(
+    tmp_path: Path, fake_run_dir: Path, capsys
+) -> None:
+    manifest = _manifest_citing(_stored_pointers(fake_run_dir))
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, manifest)
+    (study_dir / DEFAULT_STORE_NAME).write_bytes(
+        (fake_run_dir / DEFAULT_STORE_NAME).read_bytes()
+    )
+    code = main(["manifest", "check", str(study_dir / STUDY_MANIFEST_NAME)])
+    assert code == EXIT_OK
+    assert "3 evidence pointers resolved" in capsys.readouterr().out
+
+
+def test_check_reports_a_missing_store(tmp_path: Path, capsys) -> None:
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, _minimal_manifest())
+    code = main(["manifest", "check", str(study_dir)])
+    assert code == EXIT_CHECK_FAILED
+    assert "no evidence store at" in capsys.readouterr().err
+
+
+def test_check_accepts_a_directory(tmp_path: Path, fake_run_dir: Path) -> None:
+    manifest = _manifest_citing(_stored_pointers(fake_run_dir))
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, manifest)
+    assert read_study_manifest(study_dir) == manifest
+    code = main(
+        [
+            "manifest",
+            "check",
+            str(study_dir),
+            "--store",
+            str(fake_run_dir / DEFAULT_STORE_NAME),
+        ]
+    )
+    assert code == EXIT_OK
+
+
+def test_the_run_store_holds_the_records_the_manifest_cites(
+    fake_run_dir: Path,
+) -> None:
+    """The pointers are real store records, not merely well-formed."""
+    pointers = _stored_pointers(fake_run_dir)
+    with open_sqlite(str(fake_run_dir / DEFAULT_STORE_NAME)) as store:
+        for pointer in pointers:
+            assert store.get(pointer.as_object_reference()) is not None
+
+
+# --------------------------------------------------------------------------
+# The default wiring, end to end on a fake transport
+# --------------------------------------------------------------------------
+
+
+def test_stage0_runs_end_to_end_through_the_cli(
+    tmp_path: Path, capsys
+) -> None:
+    """The wiring test: no injected collaborators, real harness, real
+    anchors, fake transport, zero provider calls."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+
+    assert (
+        main(["run", "--study-dir", str(study_dir), "--stage", "stage0"])
+        == EXIT_OK
+    )
+    out = capsys.readouterr().out
+    assert "stage0 complete for study step10-toy" in out
+    assert str(study_dir / STUDY_MANIFEST_NAME) in out
+
+    # The design the real harness measured is on disk, not a stub.
+    design = read_study_manifest(study_dir).design
+    assert design is not None
+    assert design.k_cal == 4
+    assert design.mde_formula.startswith("MDE(T, K)")
+    assert set(design.k_run_by_arm) == {"copro", "null-identity"}
+
+
+def test_plan_reads_the_design_stage0_measured(tmp_path: Path, capsys) -> None:
+    """``plan`` and ``run`` describe one study, because both read one file."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    main(["run", "--study-dir", str(study_dir), "--stage", "stage0"])
+    capsys.readouterr()
+
+    assert main(["plan", "--study-dir", str(study_dir)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "splits: internal=4 official=4 held_out=6" in out
+    assert "copro" in out
+    assert "null-identity" in out
+
+
+def test_plan_labels_the_optimizer_budget_as_an_estimate(
+    tmp_path: Path, capsys
+) -> None:
+    """The number is large and unmeasured, so the label carries the caveat."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    main(["plan", "--study-dir", str(study_dir)])
+    out = capsys.readouterr().out
+    assert OPTIMIZER_BUDGET_HEADING in out
+    assert "ESTIMATE" in out
+    assert "total optimizer-side calls:" in out
+    # The derived budget stays separate and stays labelled as derived.
+    assert "selection and reporting rows (derived from the matrix):" in out
+    assert "total selection+report rows:" in out
+
+
+def test_plan_states_each_estimate_s_derivation() -> None:
+    """A number without a derivation cannot be re-checked when a default
+    moves, so ``plan`` prints the basis beside every arm."""
+    lines = plan_lines(_Spec())
+    text = "\n".join(lines)
+    assert "basis:" in text
+    # COPRO's derivation is its own search shape.
+    assert "breadth 2" in text
+
+
+def test_plan_says_no_estimate_rather_than_guessing() -> None:
+    """An arm the estimator does not know reports that, not a number."""
+
+    class _UnknownArmSpec(_Spec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.arm_ids = ("copro", "something-new")
+            self.k_run_by_arm = {"copro": 2, "something-new": 2}
+
+    text = "\n".join(plan_lines(_UnknownArmSpec()))
+    assert NO_ESTIMATE in text
+
+
+# --------------------------------------------------------------------------
+# leakage-check
+# --------------------------------------------------------------------------
+
+
+def test_leakage_check_reports_every_rule(tmp_path: Path, capsys) -> None:
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    code = main(["leakage-check", "--study-dir", str(study_dir)])
+    out = capsys.readouterr().out
+    for rule in ("L1", "L2", "L3", "L4", "L5", "L6"):
+        assert f" {rule} ::" in out
+    # A study with no held-out evaluations has not earned a pass.
+    assert code == EXIT_CHECK_FAILED
+
+
+def test_leakage_check_reports_l1_as_unchecked_not_passed(
+    tmp_path: Path, capsys
+) -> None:
+    """An empty observation set is vacuously true, and a vacuous truth is
+    not a check -- so it fails the command rather than passing it."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    assert main(["leakage-check", "--study-dir", str(study_dir)]) == (
+        EXIT_CHECK_FAILED
+    )
+    captured = capsys.readouterr()
+    assert f"{NOT_CHECKED} L1 ::" in captured.out
+    assert "could not be checked from the manifest" in captured.err
+
+
+def test_leakage_check_catches_overlapping_splits(
+    tmp_path: Path, capsys
+) -> None:
+    """L5 over content-addressed hashes, on a manifest that got past its
+    own validator because the overlap was introduced after construction."""
+    study_dir = tmp_path / "study"
+    manifest = toy_manifest()
+    write_study_manifest(study_dir, manifest)
+    payload = json.loads(
+        (study_dir / STUDY_MANIFEST_NAME).read_text(encoding="utf-8")
+    )
+    payload["splits"]["official"]["task_hashes"][0] = payload["splits"][
+        "internal"
+    ]["task_hashes"][0]
+    (study_dir / STUDY_MANIFEST_NAME).write_bytes(rfc8785.dumps(payload))
+
+    code = main(["leakage-check", "--study-dir", str(study_dir)])
+    # The manifest's own validator refuses the overlap on read, which is a
+    # stronger guarantee than the check: L5 never gets the chance to fail
+    # because the document cannot be loaded at all.
+    assert code == EXIT_ERROR
+    assert "share" in capsys.readouterr().err
+
+
+def test_leakage_check_on_a_missing_manifest_fails_cleanly(
+    tmp_path: Path, capsys
+) -> None:
+    assert main(["leakage-check", "--study-dir", str(tmp_path)]) == EXIT_ERROR
+    assert capsys.readouterr().err.strip()

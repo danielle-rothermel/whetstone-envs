@@ -21,6 +21,7 @@ from whetstone_envs.optim.study.spec import (
     default_arms,
     k_run_for,
     next_k_cal,
+    spec_from_manifest,
 )
 
 
@@ -173,3 +174,84 @@ def test_default_arms_never_drop_the_nulls() -> None:
     for stage in (StageId.STAGE1, StageId.STAGE2):
         arm_ids = tuple(arm.arm_id for arm in default_arms(stage=stage))
         assert set(NULL_ARM_IDS) <= set(arm_ids)
+
+
+# --------------------------------------------------------------------------
+# Recovering the design from a manifest
+# --------------------------------------------------------------------------
+
+
+def test_an_unstarted_study_recovers_its_pre_registered_run_counts() -> None:
+    """The bug this guards: reading `K_RUN` off `len(arm.runs)` makes a
+    study that has not started look like a one-run-per-arm study, and
+    under-reports the whole budget by a factor of `K_RUN`."""
+    from .conftest import toy_manifest
+
+    spec = spec_from_manifest(toy_manifest())
+    assert spec.k_run_by_arm == {"copro": 5, "null-identity": 1}
+    assert spec.arm_ids == ("copro", "null-identity")
+
+
+def test_the_pilot_prices_the_pilot_not_the_full_design() -> None:
+    from .conftest import toy_manifest
+
+    pilot = spec_from_manifest(toy_manifest(), stage=StageId.STAGE1)
+    assert pilot.k_run_by_arm == {"copro": 2, "null-identity": 1}
+
+
+def test_a_recorded_design_wins_over_the_table() -> None:
+    """Stage 0 may have recorded one permitted adjustment; that is the
+    study's design, not whatever the table said before it ran."""
+    from whetstone_envs.optim.study.manifest import DesignRecord
+
+    from .conftest import toy_manifest
+
+    manifest = toy_manifest()
+    adjusted = manifest.model_copy(
+        update={
+            "design": DesignRecord(
+                k_cal=4,
+                k_repeat=3,
+                k_run_by_arm={"copro": 3, "null-identity": 1},
+                ci_level=0.95,
+                resamples=10_000,
+                bootstrap_seed=0,
+                correction="holm-bonferroni",
+                m=4,
+                mde_formula="MDE(T, K) = ...",
+                mde_measured=0.1,
+                tau_sq=0.01,
+                sigma_sq=0.02,
+                completeness_rule="achieved-count-weighted-per-task-delta",
+                completeness_backstop=0.90,
+            )
+        }
+    )
+    assert spec_from_manifest(adjusted).k_run_by_arm == {
+        "copro": 3,
+        "null-identity": 1,
+    }
+
+
+def test_an_arm_naming_an_unseeded_optimizer_is_refused() -> None:
+    """Every other read of the seed table raises on an unknown optimizer;
+    seeding one from zero would collide with anything else that defaulted
+    the same way."""
+    from whetstone_envs.optim.study.manifest import ArmRecord
+
+    from .conftest import toy_manifest
+
+    manifest = toy_manifest(
+        arms=(
+            ArmRecord(
+                arm_id="mystery",
+                optimizer="not-an-optimizer",
+                demo_mode=None,
+                control_identity_hash="f" * 64,
+                seed_note="provider-seed-control-only",
+                runs=(),
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="unknown optimizer"):
+        spec_from_manifest(manifest)

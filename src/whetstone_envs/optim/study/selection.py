@@ -32,11 +32,25 @@ from typing import TYPE_CHECKING, Protocol
 
 from whetstone.eval.analysis import bootstrap_paired_delta_ci, holm_adjust
 
+from whetstone_envs.optim.study.manifest import (
+    SELECTION_RULE_ARGMAX_OFFICIAL,
+    read_study_manifest,
+    write_study_manifest,
+)
+from whetstone_envs.optim.study.manifest import (
+    HeldOutClaimRecord as PersistedHeldOutClaim,
+)
+from whetstone_envs.optim.study.manifest import (
+    SelectionRecord as PersistedSelectionRecord,
+)
 from whetstone_envs.optim.study.power import COMPLETENESS_BACKSTOP
 from whetstone_envs.optim.study.spec import CI_LEVEL, RESAMPLES
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from pathlib import Path
+
+    from whetstone_envs.optim.study.manifest import StudyManifest
 
 __all__ = [
     "SELECTION_RULE",
@@ -46,9 +60,11 @@ __all__ = [
     "CandidateScore",
     "HeldOutEvaluator",
     "HeldOutMeasurement",
+    "ManifestSelectionLog",
     "OfficialScorer",
     "RunCandidate",
     "SelectionError",
+    "SelectionLedger",
     "SelectionLog",
     "SelectionRecord",
     "analyze_arms",
@@ -58,8 +74,9 @@ __all__ = [
 ]
 
 #: The pre-registered selection rule, recorded verbatim on every selection.
-#: Persisted, so it is a named constant rather than an inline string.
-SELECTION_RULE = "argmax-official"
+#: The manifest owns the persisted literal, so this is an alias rather than
+#: a second spelling that could drift from the stored one.
+SELECTION_RULE = SELECTION_RULE_ARGMAX_OFFICIAL
 
 
 class SelectionError(RuntimeError):
@@ -164,6 +181,35 @@ class SelectionRecord:
             )
 
 
+class SelectionLedger(Protocol):
+    """The ordering guard ``report_arm`` reaches held-out through.
+
+    Two implementations satisfy it. :class:`SelectionLog` holds the ledger
+    in memory, which is what a test or a dry run wants. :class:`
+    ManifestSelectionLog` writes each selection into the study's own
+    ``study.json`` and reads it back off disk, which is what a paid stage
+    wants: the held-out call then depends on a *durable* record, so a crash
+    between selecting and measuring leaves the selection recorded rather
+    than lost.
+
+    Both refuse a second selection per arm (L2) and a second held-out
+    evaluation per candidate (L3), because that refusal is the mechanism,
+    not the storage.
+    """
+
+    def record_selection(self, record: SelectionRecord) -> None: ...
+
+    def selection_for(self, arm_id: str) -> SelectionRecord | None: ...
+
+    def require_selection(self, arm_id: str) -> SelectionRecord: ...
+
+    def claim_held_out(self, candidate_name: str) -> None: ...
+
+    def complete_held_out(self, measurement: HeldOutMeasurement) -> None: ...
+
+    def held_out_count(self, candidate_name: str) -> int: ...
+
+
 @dataclass(slots=True)
 class SelectionLog:
     """The study's selection ledger, and the guard on held-out spend.
@@ -218,6 +264,20 @@ class SelectionLog:
             )
         self.held_out_measured.append(candidate_name)
 
+    def complete_held_out(self, measurement: HeldOutMeasurement) -> None:
+        """Record that a claimed evaluation returned.
+
+        The in-memory ledger claims and completes in one list because a
+        process that lost the claim lost the measurement with it; the
+        distinction only earns its keep in the durable ledger, where a
+        crash can separate the two.
+        """
+        if measurement.candidate_name not in self.held_out_measured:
+            raise SelectionError(
+                f"candidate {measurement.candidate_name!r} completed a "
+                "held-out evaluation it never claimed"
+            )
+
     def held_out_count(self, candidate_name: str) -> int:
         return self.held_out_measured.count(candidate_name)
 
@@ -257,7 +317,7 @@ def report_arm(  # noqa: PLR0913
     runs: tuple[RunCandidate, ...],
     score_official: OfficialScorer,
     evaluate_held_out: HeldOutEvaluator,
-    log: SelectionLog,
+    log: SelectionLedger,
     candidate_name: str | None = None,
 ) -> ArmReport:
     """Select this arm's representative on official, then measure it once.
@@ -320,6 +380,9 @@ def report_arm(  # noqa: PLR0913
     held_out = evaluate_held_out(
         candidate_name=reported_name, template=representative.template
     )
+    # The claim is completed with what the evaluation returned, so a claim
+    # left outstanding names a crashed evaluation rather than a missing one.
+    log.complete_held_out(held_out)
     return ArmReport(
         arm_id=arm_id,
         selection=selection,
@@ -334,7 +397,7 @@ def report_reference_candidate(
     candidate_name: str,
     template: str,
     evaluate_held_out: HeldOutEvaluator,
-    log: SelectionLog,
+    log: SelectionLedger,
 ) -> HeldOutMeasurement:
     """Measure an anchor or null seed on held-out, once, with no selection.
 
@@ -345,7 +408,11 @@ def report_reference_candidate(
     and L4 hold for the anchors too, rather than only for the arms.
     """
     log.claim_held_out(candidate_name)
-    return evaluate_held_out(candidate_name=candidate_name, template=template)
+    measurement = evaluate_held_out(
+        candidate_name=candidate_name, template=template
+    )
+    log.complete_held_out(measurement)
+    return measurement
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,3 +525,164 @@ def null_triggers_downgrade(
     selection over nothing produced a real, detectable movement.
     """
     return abs(null_delta) > mde_measured and excludes_zero
+
+
+class ManifestSelectionLog:
+    """The durable ledger: selections live in the study's own manifest.
+
+        Every mutation goes through ``write_study_manifest(replace=True)`` and
+        every read goes back through ``read_study_manifest``. Nothing is cached
+        between calls, which is the point: ``report_arm`` reads the selection
+        back from disk immediately before issuing its held-out evaluation, so
+        "persisted before measured" is a property of the filesystem rather than
+        of a variable that happened to still be in scope.
+
+    Held-out claims are durable too, and they have to be written *before*
+        the evaluation rather than after: a held-out row carries a
+        Holm-corrected p-value, which is a whole-study computation that cannot
+        exist until every arm is measured, so waiting for the row would leave
+        the window between paying for an evaluation and recording that it
+        happened completely unguarded. The manifest's ``held_out_claims`` block
+        closes it. A claim is written when the evaluation is issued and
+        completed with its result when it returns, so a stage that crashes
+        mid-evaluation resumes knowing the candidate already spent its one
+        shot, and an outstanding claim is legible as a crashed evaluation
+        rather than as one that never happened.
+    """
+
+    def __init__(self, study_dir: Path) -> None:
+        self._study_dir = study_dir
+
+    @property
+    def study_dir(self) -> Path:
+        """Where this ledger persists."""
+        return self._study_dir
+
+    def _read(self) -> StudyManifest:
+        return read_study_manifest(self._study_dir)
+
+    def record_selection(self, record: SelectionRecord) -> None:
+        """Persist an arm's selection into ``study.json`` (L2)."""
+        manifest = self._read()
+        if any(
+            existing.arm_id == record.arm_id for existing in manifest.selection
+        ):
+            raise SelectionError(
+                f"arm {record.arm_id!r} already selected a representative "
+                "run; selection happens exactly once per arm"
+            )
+        self._write(
+            manifest.model_copy(
+                update={
+                    "selection": (
+                        *manifest.selection,
+                        PersistedSelectionRecord(
+                            arm_id=record.arm_id,
+                            selected_run_id=record.selected_run_id,
+                            official_score=record.official_score,
+                            rule=record.rule,
+                        ),
+                    )
+                }
+            )
+        )
+
+    def selection_for(self, arm_id: str) -> SelectionRecord | None:
+        for entry in self._read().selection:
+            if entry.arm_id == arm_id:
+                return SelectionRecord(
+                    arm_id=entry.arm_id,
+                    selected_run_id=entry.selected_run_id,
+                    official_score=entry.official_score,
+                    rule=entry.rule,
+                )
+        return None
+
+    def require_selection(self, arm_id: str) -> SelectionRecord:
+        """Read the persisted selection back, or refuse to proceed."""
+        record = self.selection_for(arm_id)
+        if record is None:
+            raise SelectionError(
+                f"arm {arm_id!r} has no persisted selection; held-out "
+                "evaluation is unreachable before selection is recorded"
+            )
+        return record
+
+    def claim_held_out(self, candidate_name: str) -> None:
+        """Claim this candidate's one held-out evaluation, durably (L3).
+
+        The write happens before the evaluation is issued. That ordering is
+        the guarantee: a crash after the provider call but before any result
+        is recorded still leaves the claim on disk, so the candidate cannot
+        quietly be measured a second time on resume.
+        """
+        manifest = self._read()
+        if self._claim_index(manifest, candidate_name) is not None:
+            raise SelectionError(
+                f"candidate {candidate_name!r} was already evaluated on "
+                "held-out; each reported candidate is evaluated exactly once"
+            )
+        self._write(
+            manifest.model_copy(
+                update={
+                    "held_out_claims": (
+                        *manifest.held_out_claims,
+                        PersistedHeldOutClaim(candidate_name=candidate_name),
+                    )
+                }
+            )
+        )
+
+    def complete_held_out(self, measurement: HeldOutMeasurement) -> None:
+        """Attach the returned measurement to its outstanding claim."""
+        manifest = self._read()
+        index = self._claim_index(manifest, measurement.candidate_name)
+        if index is None:
+            raise SelectionError(
+                f"candidate {measurement.candidate_name!r} completed a "
+                "held-out evaluation it never claimed"
+            )
+        claims = list(manifest.held_out_claims)
+        if claims[index].completed:
+            raise SelectionError(
+                f"candidate {measurement.candidate_name!r} already completed "
+                "its held-out evaluation"
+            )
+        claims[index] = PersistedHeldOutClaim(
+            candidate_name=measurement.candidate_name,
+            eval_config_hash=measurement.eval_config_hash,
+            repeats=measurement.repeats,
+            mean=measurement.mean,
+            completeness=measurement.completeness,
+        )
+        self._write(
+            manifest.model_copy(update={"held_out_claims": tuple(claims)})
+        )
+
+    def held_out_count(self, candidate_name: str) -> int:
+        """How many held-out evaluations this candidate has claimed.
+
+        A claim counts whether or not it has completed, because the thing
+        L3 limits is evaluations issued, not results recorded.
+        """
+        return sum(
+            1
+            for entry in self._read().held_out_claims
+            if entry.candidate_name == candidate_name
+        )
+
+    @staticmethod
+    def _claim_index(manifest: StudyManifest, name: str) -> int | None:
+        for index, entry in enumerate(manifest.held_out_claims):
+            if entry.candidate_name == name:
+                return index
+        return None
+
+    def _write(self, manifest: StudyManifest) -> None:
+        try:
+            write_study_manifest(self._study_dir, manifest, replace=True)
+        except ValueError as error:
+            # The manifest's own rules are the same rules this ledger
+            # enforces, so a refusal is the protocol violation it names,
+            # not a write failure.
+            raise SelectionError(str(error)) from error

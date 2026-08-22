@@ -20,6 +20,10 @@ from whetstone_envs.probes import normalize
 # Persisted literals are owned here and pinned directly by golden tests.
 EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v1"
 TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
+#: The only whetstone-ai cost-report schema version this package projects.
+#: An embedded report at any other version carries semantics this schema has
+#: not been checked against, so it is rejected rather than reinterpreted.
+SPEND_SCHEMA_VERSION = 1
 CandidateSource = Literal["naive", "ceiling", "custom", "optimized"]
 EvalRoleName = Literal["internal", "official"]
 RoleSpendName = Literal["task_model", "proposer"]
@@ -520,7 +524,7 @@ class RoleSpend(_StrictModel):
 class RunSpend(_StrictModel):
     """The run's cost report, one entry per provider role."""
 
-    schema_version: StrictInt
+    schema_version: Literal[1]
     task_model: RoleSpend
     proposer: RoleSpend
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA, ProviderKind
+from dr_providers import ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     RegisteredRuntime,
@@ -15,11 +15,7 @@ from whetstone.coordination.runtime_bootstrap import (
     prepare_gepa_run,
     prepare_miprov2_run,
 )
-from whetstone.core.identity import (
-    IdentityRef,
-    compute_identity_hash,
-    typed_ref_for_record,
-)
+from whetstone.core.identity import compute_identity_hash
 from whetstone.core.leasing import EffectLeaseAuthority
 from whetstone.core.roles import EvalRole
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -50,6 +46,7 @@ from whetstone.provider.language_model import PlainPromptAdapter
 from whetstone_envs.c19 import PROBES, generate_pool
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
+    c19_provider_call_config_ref,
     c19_render_contract,
     prepare_c19_experiment,
 )
@@ -125,17 +122,6 @@ def _provider_config_resolver(experiment: Experiment):
         return provider_config
 
     return resolve
-
-
-def _provider_call_config_ref(experiment: Experiment) -> IdentityRef:
-    payload = experiment.rollout_graph.provider_call_config.model_dump(
-        mode="json"
-    )
-    record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
-    return IdentityRef(
-        record_ref=record_ref,
-        record_hash=record_ref.content_hash,
-    )
 
 
 def _c19_proposal_contract() -> CoproProposalContractRecord:
@@ -304,6 +290,7 @@ def _prepare_launch(  # noqa: PLR0913
                 ),
                 control=control,
                 engine=engine,
+                experiment=experiment,
                 adapter=miprov2_adapter,
             ),
             render_contract=render_contract,
@@ -390,7 +377,7 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
             )
         defaults = CoproInjectedDefaults(
             prompt_model=ProposerConfig(
-                provider_call_config=_provider_call_config_ref(experiment),
+                provider_call_config=c19_provider_call_config_ref(experiment),
                 temperature=None,
             ),
             proposal_contract=_c19_proposal_contract(),

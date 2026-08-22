@@ -301,3 +301,38 @@ def test_run_spend_rejects_a_role_filed_under_the_wrong_name() -> None:
     )
     with pytest.raises(ValidationError, match="task_model role"):
         RunSpend(schema_version=1, task_model=role, proposer=role)
+
+
+def test_run_spend_schema_version_is_pinned_to_the_supported_value() -> None:
+    """FAILS-BEFORE probe: an unknown cost-report version must be rejected."""
+    from whetstone.optim.cost import COST_REPORT_SCHEMA_VERSION
+
+    from whetstone_envs.reporting.schema import (
+        SPEND_SCHEMA_VERSION,
+        RoleSpend,
+        RunSpend,
+    )
+
+    assert SPEND_SCHEMA_VERSION == 1
+    assert SPEND_SCHEMA_VERSION == COST_REPORT_SCHEMA_VERSION
+
+    role = RoleSpend(
+        role="task_model",
+        calls=0,
+        cached_calls=0,
+        input_tokens=0,
+        output_tokens=0,
+        priced_calls=0,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=None,
+    )
+    proposer = role.model_copy(update={"role": "proposer"})
+    payload = RunSpend(
+        schema_version=SPEND_SCHEMA_VERSION,
+        task_model=role,
+        proposer=proposer,
+    ).model_dump(mode="json")
+    payload["schema_version"] = 999
+    with pytest.raises(ValidationError, match="schema_version"):
+        RunSpend.model_validate(payload)

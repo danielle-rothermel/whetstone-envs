@@ -1,6 +1,6 @@
 [project]
 name = "whetstone-envs"
-version = "0.2.1"
+version = "0.2.2"
 description = "Reproducible quick-test environment contracts and task families."
 readme = "README.md"
 license = "MIT AND Apache-2.0"

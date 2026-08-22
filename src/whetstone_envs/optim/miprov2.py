@@ -66,6 +66,9 @@ from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_NAMESPACE,
     C19_PROMPT_FIELDS,
+    C19_RESPONSE_FIELD,
+    c19_gold_by_task_hash,
+    c19_provider_call_config_ref,
     c19_render_contract,
 )
 
@@ -132,7 +135,7 @@ def build_c19_miprov2_control(  # noqa: PLR0913
     bootstrapped, labeled = _demo_maxima(demo_mode)
     defaults = Miprov2InjectedDefaults(
         prompt_model=ProposerConfig(
-            provider_call_config=engine.provider_execution_policy_ref,
+            provider_call_config=c19_provider_call_config_ref(experiment),
             temperature=1.0,
         ),
         bootstrap_eval_source=engine.eval_config_ref,
@@ -254,11 +257,12 @@ def c19_miprov2_run(
     )
 
 
-def build_c19_miprov2_state(
+def build_c19_miprov2_state(  # noqa: PLR0913
     *,
     run: OptimRunRef,
     control: Miprov2Control,
     engine: EvalEngine,
+    experiment: Experiment,
     adapter: Miprov2Adapter,
     budget: Miprov2EffectBudget | None = None,
 ) -> Miprov2State:
@@ -287,6 +291,16 @@ def build_c19_miprov2_state(
         task.task_hash: dict(task.prompt_inputs)
         for task in engine.sampling.tasks
     }
+    # The engine's sampling view withholds gold, so a labeled demonstration
+    # reads its output from the family's own experiment splits. A demo with
+    # an empty output would teach the model to answer with nothing.
+    gold_by_hash = c19_gold_by_task_hash(experiment)
+    missing = set(control.trainset_task_hashes) - set(gold_by_hash)
+    if missing:
+        raise ValueError(
+            "C19 MIPROv2 trainset tasks have no gold in the experiment: "
+            f"{', '.join(sorted(missing))}"
+        )
     labeled_trainset = tuple(
         LabeledTaskDemo(
             source_task_hash=task_hash,
@@ -294,7 +308,7 @@ def build_c19_miprov2_state(
                 {component_id: dict(inputs_by_hash[task_hash])}
             ),
             outputs_by_component=ImmutableJsonObject(
-                {component_id: {"response": ""}}
+                {component_id: {C19_RESPONSE_FIELD: gold_by_hash[task_hash]}}
             ),
         )
         for task_hash in control.trainset_task_hashes

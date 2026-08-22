@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-22
+
 ### Changed
 
 - C19 optimizer runs record effect leases in a SQLite authority instead of an
@@ -30,13 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `zeroshot` and `ground_only` bootstrap demos only to ground instruction
   proposals and leave the section empty. All three modes compose a template
   that still satisfies the C19 `{grid}`/`{command}`/`{question}` contract.
+  Labeled demonstrations carry the task's oracle gold as the component's
+  `response` output, and the proposer's prompt model binds the experiment's
+  `ProviderCallConfig` reference, as COPRO and GEPA already do.
 - `--num-seeds` on the CLI and `C19RunSpec.num_seeds` make repeats per task
   (`K_REPEAT`) a runner parameter instead of a hardcoded 1.
 - Trajectory reports carry a `spend` block projected from
   `OptimResult.cost`: per-role billable calls, cached calls, token totals,
   the priced/unpriced split, and a USD total only when every contributing
   call carried a provider-reported price. Terminal and HTML trajectory views
-  render an unpriced role as `unpriced (n/total)` rather than as a zero.
+  render an unpriced role as `unpriced (n/total)` rather than as a zero. The
+  block's `schema_version` is pinned to the one whetstone-ai cost-report
+  version this package projects, so an embedded report at any other version
+  is rejected rather than reinterpreted.
 - A C19 evaluation CLI for task-family information, standalone fake or
   OpenRouter execution, strict local report publication, summary/failure/task
   inspection, and paired candidate comparison, exposed as the installed
@@ -87,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   colorblind-safe blue navigation and green success emphasis.
 - Preserve the authoritative C19 `PoolSplit` beside each prepared Whetstone
   experiment so report projection joins evidence to source instances exactly.
+- `whetstone_envs.optim.experiment` owns the C19 provider-call-config
+  reference and the task-hash-to-gold mapping, so COPRO, GEPA, and MIPROv2
+  bind one derivation instead of per-optimizer copies.
 
 ## [0.2.1] - 2026-08-21
 

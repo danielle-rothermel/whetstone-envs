@@ -31,6 +31,7 @@ from whetstone.optim.cost import RoleCost, RunCostReport
 from whetstone_envs.probes import normalize
 from whetstone_envs.reporting.schema import (
     EVAL_REPORT_SCHEMA,
+    SPEND_SCHEMA_VERSION,
     TRAJECTORY_REPORT_SCHEMA,
     CandidateRecord,
     CandidateSource,
@@ -696,8 +697,14 @@ def project_run_spend(result: OptimResult) -> RunSpend | None:
     if not payload:
         return None
     cost = RunCostReport.model_validate(payload)
+    if cost.schema_version != SPEND_SCHEMA_VERSION:
+        raise ValueError(
+            "unsupported whetstone-ai cost report schema version "
+            f"{cost.schema_version}; this package projects only "
+            f"{SPEND_SCHEMA_VERSION}"
+        )
     return RunSpend(
-        schema_version=cost.schema_version,
+        schema_version=SPEND_SCHEMA_VERSION,
         task_model=_role_spend("task_model", cost.task_model),
         proposer=_role_spend("proposer", cost.proposer),
     )

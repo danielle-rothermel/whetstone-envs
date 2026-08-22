@@ -14,6 +14,9 @@ from whetstone.optim.miprov2.render import compose_user_prompt_template
 from whetstone_envs.c19 import generate_pool
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
+    C19_RESPONSE_FIELD,
+    c19_gold_by_task_hash,
+    c19_provider_call_config_ref,
     c19_render_contract,
     prepare_c19_experiment,
 )
@@ -35,6 +38,7 @@ from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
+    from whetstone.core.identity import ImmutableJsonObject
 
 
 @pytest.fixture
@@ -184,7 +188,11 @@ def test_adapter_and_opening_state_bind_the_exact_run(
         experiment=prepared.experiment,
     )
     state = build_c19_miprov2_state(
-        run=run_ref, control=control, engine=engine, adapter=adapter
+        run=run_ref,
+        control=control,
+        engine=engine,
+        experiment=prepared.experiment,
+        adapter=adapter,
     )
     assert state.run == run_ref
     assert state.control.identity_hash() == control.identity_hash()
@@ -227,3 +235,48 @@ def test_control_requires_two_tasks_to_split(tmp_path) -> None:
             build_c19_miprov2_control(
                 engine=engine, experiment=single.experiment
             )
+
+
+def test_prompt_model_binds_the_experiment_provider_call_config(
+    engine_and_store, prepared
+) -> None:
+    engine, _store = engine_and_store
+    control = build_c19_miprov2_control(
+        engine=engine, experiment=prepared.experiment
+    )
+    expected = c19_provider_call_config_ref(prepared.experiment)
+    assert control.prompt_model.provider_call_config == expected
+
+
+def test_labeled_demos_carry_the_task_gold(engine_and_store, prepared) -> None:
+    """FAILS-BEFORE probe for empty labeled demo outputs."""
+    engine, store = engine_and_store
+    control = build_c19_miprov2_control(
+        engine=engine, experiment=prepared.experiment
+    )
+    adapter = build_c19_miprov2_adapter(
+        store=store, engine=engine, control=control
+    )
+    run_ref = c19_miprov2_run_ref(
+        run_id="c19-miprov2-gold",
+        control=control,
+        experiment=prepared.experiment,
+    )
+    state = build_c19_miprov2_state(
+        run=run_ref,
+        control=control,
+        engine=engine,
+        experiment=prepared.experiment,
+        adapter=adapter,
+    )
+    gold_by_hash = c19_gold_by_task_hash(prepared.experiment)
+    assert state.labeled_trainset
+    for demo in state.labeled_trainset:
+        outputs = cast(
+            "ImmutableJsonObject",
+            demo.outputs_by_component[MIPROV2_COMPONENT_ID],
+        ).to_json()
+        assert outputs == {
+            C19_RESPONSE_FIELD: gold_by_hash[demo.source_task_hash]
+        }
+        assert outputs[C19_RESPONSE_FIELD]

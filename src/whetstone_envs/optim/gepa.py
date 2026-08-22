@@ -2,12 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA
-from whetstone.core.identity import (
-    IdentityRef,
-    compute_identity_hash,
-    typed_ref_for_record,
-)
+from whetstone.core.identity import compute_identity_hash
 from whetstone.optim.gepa.control import configure_gepa
 from whetstone.optim.gepa.factory import build_gepa_harness_adapter
 from whetstone.optim.gepa.prompts import (
@@ -29,6 +24,7 @@ from whetstone_envs.c19 import PROBES
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     C19_PROMPT_FIELDS,
+    c19_provider_call_config_ref,
 )
 
 if TYPE_CHECKING:
@@ -91,17 +87,6 @@ def _gepa_transport(
     )
 
 
-def _provider_call_config_ref(experiment: Experiment) -> IdentityRef:
-    payload = experiment.rollout_graph.provider_call_config.model_dump(
-        mode="json"
-    )
-    record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
-    return IdentityRef(
-        record_ref=record_ref,
-        record_hash=record_ref.content_hash,
-    )
-
-
 def build_c19_gepa_control(
     *,
     engine: EvalEngine,
@@ -116,7 +101,7 @@ def build_c19_gepa_control(
         raise ValueError("GEPA trainset must be the internal eval split")
     return configure_gepa(
         reflection_model=ProposerConfig(
-            provider_call_config=_provider_call_config_ref(experiment),
+            provider_call_config=c19_provider_call_config_ref(experiment),
         ),
         metric=engine.eval_config_ref,
         reward_policy_hash=experiment.reward_policy.identity_hash(),

@@ -1134,13 +1134,26 @@ def test_every_non_evidence_pattern_matches_something_it_allows() -> None:
 # --------------------------------------------------------------------------
 
 
+def _split_by_arm_of(
+    manifest: StudyManifest,
+) -> dict[str, tuple[int, int] | None]:
+    """The per-arm partition the manifest pinned, or none per arm."""
+    design = manifest.design
+    assert design is not None
+    if manifest.pre_registration is not None:
+        return dict(manifest.pre_registration.split_by_arm)
+    return dict.fromkeys(design.k_run_by_arm)
+
+
 def _amended(manifest: StudyManifest) -> StudyManifest:
     """``manifest`` with an amended pre-registration block attached."""
     design = manifest.design
     assert design is not None
+    split_by_arm = _split_by_arm_of(manifest)
     prior = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1154,6 +1167,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
     current = pre_registration_design_hash(
         k_repeat=amended_k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1167,6 +1181,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
                 design_hash=current,
                 k_repeat=amended_k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
+                split_by_arm=split_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,
@@ -1218,9 +1233,11 @@ def test_an_original_pre_registration_renders_without_an_amendment(
     """The guard against a report that calls every design amended."""
     design = reported_manifest.design
     assert design is not None
+    split_by_arm = _split_by_arm_of(reported_manifest)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        split_by_arm=split_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1234,6 +1251,7 @@ def test_an_original_pre_registration_renders_without_an_amendment(
                 design_hash=design_hash,
                 k_repeat=design.k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
+                split_by_arm=split_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,

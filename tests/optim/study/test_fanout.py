@@ -232,6 +232,8 @@ def gepa_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
             num_seeds=1,
             seed=3000,
             gepa_max_metric_calls=40,
+            train_size=2,
+            val_size=2,
             run_id="c19-gepa-observed",
             output_dir=output,
         )

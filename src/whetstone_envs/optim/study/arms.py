@@ -48,6 +48,7 @@ from whetstone_envs.optim.run_cost import (
     project_run_cost,
 )
 from whetstone_envs.optim.study.anchors import EngineBinder
+from whetstone_envs.optim.study.fanout import planned_rows_in_directory
 from whetstone_envs.optim.study.manifest import (
     EvidencePointer,
     RunRecord,
@@ -448,7 +449,7 @@ class StudyOptimizerRunner:
                 audit_passed=report.passed,
                 spend=(() if cost is None else tuple(cost.spend)),
             ),
-            observed_task_calls=_observed_task_calls(result),
+            observed_task_calls=_observed_task_calls(result, run_dir=run_dir),
         )
 
     def _run_null(
@@ -606,29 +607,22 @@ def _template_of(candidate: object) -> str | None:
     return value if type(value) is str else None
 
 
-def _observed_task_calls(result: OptimResult) -> int:
-    """How many task-model evaluations this run actually issued.
+def _observed_task_calls(result: OptimResult, *, run_dir: Path) -> int:
+    """Task-model **rows** this run actually scheduled.
 
-    Counted from the run's own completed intent resolutions rather than
-    from its budget, because the Stage-1 gate exists to catch a fan-out
-    whose budget accounting was itself wrong.
+    Counted from the run's own eval evidence rather than from its budget,
+    because the Stage-1 gate exists to catch a fan-out whose budget
+    accounting was itself wrong.
+
+    The count is delegated to :func:`planned_rows_in_directory` so the
+    gate's numerator is the same number the F16 fan-out measurement
+    reports. The unit is rows -- ``EvalEvidence.row_accounting.planned``,
+    which is what the pre-spend estimate is expressed in -- and each
+    eval-evidence record is counted once no matter how many steps cite it.
+
+    ``result`` is accepted so callers keep passing the record they already
+    read, but the rows live in the run's store rather than inline on it,
+    which is why the directory is what gets read.
     """
-    total = 0
-    for step_ref in result.step_results:
-        step = step_ref.record
-        for resolution in step.resolved_intents:
-            total += _rows_in(resolution)
-        for search in step.search_evidence:
-            total += _rows_in(search)
-    return total
-
-
-def _rows_in(resolution: object) -> int:
-    """Task calls one resolution accounts for, or zero when it reports none."""
-    evidence = getattr(resolution, "eval_result_ref", None)
-    if evidence is None:
-        return 0
-    tasks = getattr(resolution, "data_ids", None)
-    if tasks is None:
-        return 1
-    return len(tuple(tasks))
+    del result
+    return planned_rows_in_directory(run_dir)

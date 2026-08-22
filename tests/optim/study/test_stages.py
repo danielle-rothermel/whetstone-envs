@@ -9,6 +9,7 @@ and an ordering is proven by observing it, not by running an optimizer.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -778,3 +779,160 @@ def test_replace_design_is_refused_on_an_arm_stage(tmp_path: Path) -> None:
             environment=harness.environment(),
             replace_design=True,
         )
+
+
+# --------------------------------------------------------------------------
+# Crashing between two arms' held-out evaluations
+# --------------------------------------------------------------------------
+
+
+class _CrashingHarness(_Harness):
+    """A harness that dies once, after ``crash_after`` arms have reported.
+
+    The crash lands where the deadlock lives: between two arms, with the
+    first arm's selection and completed held-out claim already durable and
+    the rest of the stage unrun.
+    """
+
+    def __init__(
+        self,
+        study_dir: Path,
+        *,
+        scores: dict[str, float],
+        crash_after: int,
+    ) -> None:
+        super().__init__(study_dir, scores=scores)
+        self._crash_after = crash_after
+        self._completed = 0
+
+    def score_official(self, candidate: RunCandidate) -> CandidateScore:
+        # Crash while scoring the *next* arm, once the target number of arms
+        # have finished. Scoring precedes selection, so the interrupted arm
+        # has neither selected nor claimed: this is the between-arms window,
+        # not the in-flight-evaluation one.
+        if self._completed >= self._crash_after:
+            raise _InjectedCrashError(candidate.run_id)
+        return super().score_official(candidate)
+
+    def evaluate_held_out(
+        self, *, candidate_name: str, template: str
+    ) -> HeldOutMeasurement:
+        measurement = super().evaluate_held_out(
+            candidate_name=candidate_name, template=template
+        )
+        self._completed += 1
+        return measurement
+
+
+class _InjectedCrashError(RuntimeError):
+    """Stands in for the process dying mid-stage."""
+
+
+def test_a_stage_that_crashed_between_arms_resumes(tmp_path: Path) -> None:
+    """**A crash mid-stage must not strand every paid run forever.**
+
+    ``report_arm`` persists each arm's selection as it goes, and the ledger
+    refuses a second selection per arm per stage. A resume that re-reported
+    every arm would therefore hit that refusal on the arms that already
+    selected -- turning a recoverable crash into a permanent failure with
+    the study's paid runs stranded behind it.
+
+    The resumed stage must instead rebuild the already-reported arms from
+    what is durable, spend nothing further, and return the same selections.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 + index / 100
+        for arm in spec.arms
+        for index, seed in enumerate(arm.seeds)
+    }
+    crashing = _CrashingHarness(study_dir, scores=scores, crash_after=1)
+    with pytest.raises(_InjectedCrashError):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=crashing.environment(),
+        )
+    # The crash landed where it was aimed. Selection is persisted before
+    # held-out is issued, so the arm the crash interrupted has a durable
+    # selection too -- what distinguishes the arm that already *paid* is a
+    # completed held-out claim.
+    crashed_manifest = read_study_manifest(study_dir)
+    stage1 = StageId.STAGE1.value
+    completed = tuple(
+        entry.candidate_name
+        for entry in crashed_manifest.held_out_claims
+        if entry.stage == stage1 and entry.completed
+    )
+    assert len(completed) == 1
+    first_arm = completed[0]
+    # The reported arm left its selection behind, which is exactly the
+    # state that makes a naive re-report hit "already selected".
+    assert first_arm in {
+        entry.arm_id
+        for entry in crashed_manifest.selection
+        if entry.stage == stage1
+    }
+    first_selection = next(
+        entry
+        for entry in crashed_manifest.selection
+        if entry.arm_id == first_arm and entry.stage == stage1
+    )
+
+    resumed = _Harness(study_dir, scores=scores)
+
+    def _load_recorded_run(
+        *, arm: ArmSpec, run: RunRecord
+    ) -> ArmRunResult | None:
+        """Re-read a recorded run without re-running it.
+
+        A resumed stage selects over every recorded seed, so the runs paid
+        for before the crash have to arrive from their records rather than
+        from the runner -- which is the whole point of not re-paying.
+        """
+        del arm
+        assert run.seed is not None, "a recorded run at a stage seed"
+        return ArmRunResult(
+            candidate=RunCandidate(
+                run_id=run.run_id,
+                seed=run.seed,
+                candidate_name=run.run_id,
+                template="{grid} {command} {question}",
+            ),
+            record=run,
+            observed_task_calls=resumed.task_calls,
+        )
+
+    environment = resumed.environment()
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=replace(environment, load_recorded_run=_load_recorded_run),
+    )
+
+    # Nothing was re-run: every seed was already recorded before the crash.
+    assert not [event for event in resumed.events if event.startswith("run:")]
+    # And the arm that already spent its one held-out shot did not spend a
+    # second one -- the ledger's claim is what it must be rebuilt from.
+    assert f"held_out:{first_arm}" not in resumed.events
+
+    # The resumed report agrees with what was persisted before the crash.
+    rebuilt = next(
+        report for report in result.arms if report.arm_id == first_arm
+    )
+    assert rebuilt.selection.selected_run_id == (
+        first_selection.selected_run_id
+    )
+    assert rebuilt.selection.official_score == first_selection.official_score
+    # Every arm is reported, and each selected exactly once.
+    assert {report.arm_id for report in result.arms} == {
+        arm.arm_id for arm in spec.arms
+    }
+    final = read_study_manifest(study_dir)
+    stage1_selections = [
+        entry for entry in final.selection if entry.stage == stage1
+    ]
+    assert len(stage1_selections) == len(
+        {entry.arm_id for entry in stage1_selections}
+    )

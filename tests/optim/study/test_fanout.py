@@ -35,6 +35,10 @@ pytest.importorskip("whetstone.experiment.env")
 
 from whetstone_envs.optim.run import RunSpec, run_optimizer
 from whetstone_envs.optim.run_cost import RUN_COST_NAME
+from whetstone_envs.optim.study.arms import (
+    _observed_task_calls,
+    _read_optim_result,
+)
 from whetstone_envs.optim.study.fanout import (
     INTENT_SOURCE,
     measure_run_directory,
@@ -192,3 +196,104 @@ def test_every_measured_evaluation_names_its_surface(
 def test_the_study_splits_minibatch_size_is_pinned() -> None:
     """The measured runs used the protocol's own minibatch size."""
     assert MEASURED_MIPROV2_MINIBATCH_TASKS == 35
+
+
+# --------------------------------------------------------------------------
+# The Stage-1 gate reads the same rows this module measures
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def gepa_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One GEPA fake run, whose evidence is cited more than once.
+
+    GEPA re-emits its whole replayed prefix as search evidence on every
+    step, so an un-deduplicated count grows with the step count while the
+    paid rows stay flat. That divergence is what makes this fixture a real
+    discrimination for the dedup below rather than a second MIPROv2 case.
+    """
+    output = tmp_path_factory.mktemp("fanout") / "gepa-observed"
+    return run_optimizer(
+        RunSpec(
+            optimizer="gepa",
+            transport="fake",
+            split_sizes=(4, 2, 0),
+            n_per_stratum=1,
+            num_seeds=1,
+            seed=3000,
+            gepa_max_metric_calls=40,
+            run_id="c19-gepa-observed",
+            output_dir=output,
+        )
+    )
+
+
+@pytest.fixture(scope="module")
+def copro_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One COPRO fake run, which evaluates through resolved intents."""
+    output = tmp_path_factory.mktemp("fanout") / "copro-observed"
+    return run_optimizer(
+        RunSpec(
+            optimizer="copro",
+            transport="fake",
+            split_sizes=(4, 2, 0),
+            n_per_stratum=1,
+            num_seeds=1,
+            seed=1000,
+            run_id="c19-copro-observed",
+            output_dir=output,
+        )
+    )
+
+
+@pytest.mark.parametrize("fixture_name", ["copro_run", "gepa_run"])
+def test_the_gate_counts_the_rows_the_measurement_counts(
+    fixture_name: str, request: pytest.FixtureRequest
+) -> None:
+    """**The Stage-1 gate's unit is planned rows, not evaluations.**
+
+    ``_observed_task_calls`` is the numerator the Stage-1 budget gate
+    divides by its pre-spend estimate, so it has to be in the same unit as
+    that estimate: task-model rows. Counting one per completed evaluation
+    instead understates a run by its rows-per-evaluation factor, and the
+    gate then cannot see the fan-out it exists to catch.
+
+    The assertion is against this module's own measurement rather than a
+    literal, so the two counters cannot drift apart silently.
+    """
+    run_dir = request.getfixturevalue(fixture_name)
+    result = _read_optim_result(run_dir)
+    expected = sum(
+        intent.planned for intent in measure_run_directory(run_dir).intents
+    )
+    assert expected > 0, "the fixture run planned no rows at all"
+    assert _observed_task_calls(result, run_dir=run_dir) == expected
+
+
+def test_repeated_citations_of_one_evaluation_count_once(
+    gepa_run: Path,
+) -> None:
+    """GEPA's replayed prefix must not inflate the gate's numerator.
+
+    Every step re-cites the evaluations before it, so counting citations
+    rather than distinct evaluations grows the total in the step count
+    while the paid rows do not move. At a long budget that overstates the
+    run past the gate's tolerance and aborts a stage that was inside it.
+    """
+    result = _read_optim_result(gepa_run)
+    citations = sum(
+        1
+        for step_ref in result.step_results
+        for _ in (
+            *step_ref.record.resolved_intents,
+            *step_ref.record.search_evidence,
+        )
+    )
+    distinct = len(measure_run_directory(gepa_run).intents)
+    assert citations > distinct, (
+        "this GEPA run cites no evaluation twice, so it does not exercise "
+        "the deduplication at all"
+    )
+    assert _observed_task_calls(result, run_dir=gepa_run) == sum(
+        intent.planned for intent in measure_run_directory(gepa_run).intents
+    )

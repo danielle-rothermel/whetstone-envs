@@ -241,6 +241,23 @@ class SelectionLedger(Protocol):
 
     def complete_held_out(self, measurement: HeldOutMeasurement) -> None: ...
 
+    def completed_claim_for(
+        self, candidate_name: str
+    ) -> HeldOutMeasurement | None:
+        """The measurement a completed claim recorded, if there is one.
+
+        This is what lets a stage that crashed partway through reporting
+        resume: the arm's held-out evaluation is already paid for and its
+        result is durable, so the report is rebuilt from the claim instead
+        of re-issuing an evaluation the ledger would refuse anyway.
+
+        An *outstanding* claim returns None. A claim is written before the
+        evaluation is issued, so an incomplete one means the process died
+        with that evaluation in flight -- which is a different fact from a
+        completed measurement, and the caller has to treat it as one.
+        """
+        ...
+
     def held_out_count(self, candidate_name: str) -> int: ...
 
 
@@ -319,6 +336,18 @@ class SelectionLog:
                 f"candidate {measurement.candidate_name!r} completed a "
                 "held-out evaluation it never claimed"
             )
+
+    def completed_claim_for(
+        self, candidate_name: str
+    ) -> HeldOutMeasurement | None:
+        """Always None: this ledger keeps no measurement to rebuild from.
+
+        Rebuilding an arm's report from a claim is a *durable*-ledger
+        capability. A process holding this ledger lost its measurements
+        with itself, so reporting one here would be a fabrication.
+        """
+        del candidate_name
+        return None
 
     def held_out_count(self, candidate_name: str) -> int:
         return self.held_out_measured.count(candidate_name)
@@ -747,9 +776,44 @@ class ManifestSelectionLog:
             repeats=measurement.repeats,
             mean=measurement.mean,
             completeness=measurement.completeness,
+            per_task=measurement.per_task,
+            per_task_counts=measurement.per_task_counts,
         )
         self._write(
             manifest.model_copy(update={"held_out_claims": tuple(claims)})
+        )
+
+    def completed_claim_for(
+        self, candidate_name: str
+    ) -> HeldOutMeasurement | None:
+        """The measurement a completed claim recorded, if any.
+
+        A resumed stage rebuilds an already-reported arm from this
+        rather than re-issuing an evaluation the ledger refuses.
+        """
+        manifest = self._read()
+        index = self._claim_index(manifest, candidate_name)
+        if index is None:
+            return None
+        claim = manifest.held_out_claims[index]
+        if (
+            claim.mean is None
+            or claim.eval_config_hash is None
+            or claim.repeats is None
+            or claim.completeness is None
+            # Without the vector there is no paired delta to rebuild from,
+            # and inventing one would report a number nobody measured.
+            or not claim.per_task
+        ):
+            return None
+        return HeldOutMeasurement(
+            candidate_name=claim.candidate_name,
+            per_task=claim.per_task,
+            mean=claim.mean,
+            eval_config_hash=claim.eval_config_hash,
+            repeats=claim.repeats,
+            completeness=claim.completeness,
+            per_task_counts=claim.per_task_counts,
         )
 
     def held_out_count(self, candidate_name: str) -> int:

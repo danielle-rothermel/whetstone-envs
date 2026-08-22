@@ -65,6 +65,8 @@ __all__ = [
     "IntentRowCount",
     "measure_fanout",
     "measure_run_directory",
+    "planned_rows",
+    "planned_rows_in_directory",
 ]
 
 
@@ -280,3 +282,26 @@ def _row_count(  # noqa: PLR0913
 def measure_run_directory(run_dir: Path) -> FanoutMeasurement:
     """Measure fan-out for the completed run at ``run_dir``."""
     return measure_fanout(load_run_evidence(run_dir))
+
+
+def planned_rows(evidence: RunEvidence) -> int:
+    """Task-model rows this run's evaluations actually scheduled.
+
+    The Stage-1 budget gate divides this by a pre-spend estimate expressed
+    in rows, so it must be a row count and not an evaluation count: a
+    numerator that scored one per evaluation would understate the run by
+    its rows-per-evaluation factor and hide exactly the fan-out the gate
+    exists to catch.
+
+    It is :func:`measure_fanout`'s ``planned_rows`` rather than a second
+    traversal, so the gate and the F16 measurement cannot drift apart --
+    including the per-record deduplication, without which GEPA's replayed
+    prefix would inflate the count with the step number and false-abort a
+    long run that was inside its budget.
+    """
+    return measure_fanout(evidence).planned_rows
+
+
+def planned_rows_in_directory(run_dir: Path) -> int:
+    """Task-model rows the completed run at ``run_dir`` scheduled."""
+    return planned_rows(load_run_evidence(run_dir))

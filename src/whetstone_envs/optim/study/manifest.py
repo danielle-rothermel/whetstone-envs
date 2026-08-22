@@ -822,6 +822,18 @@ class HeldOutClaimRecord(_StrictModel):
     repeats: StrictInt | None = None
     mean: StrictFloat | None = None
     completeness: StrictFloat | None = None
+    #: The per-task vector the evaluation returned. The paired delta is
+    #: computed from this vector rather than from ``mean``, so recording it
+    #: is what lets a resumed stage rebuild an arm's report instead of
+    #: re-issuing an evaluation it already paid for. Always empty on an
+    #: outstanding claim; a completed claim written before this field
+    #: existed may also be empty, and a resume treats that as unrebuildable
+    #: rather than as a measurement it can fabricate.
+    per_task: tuple[StrictFloat, ...] = ()
+    #: Rows achieved per task, aligned with ``per_task``. Optional even on
+    #: a completed claim, because the measurement itself treats it as
+    #: optional and falls back to spreading completeness evenly.
+    per_task_counts: tuple[StrictInt, ...] = ()
 
     @model_validator(mode="after")
     def _validate_claim(self) -> HeldOutClaimRecord:
@@ -842,6 +854,12 @@ class HeldOutClaimRecord(_StrictModel):
             0.0 <= self.completeness <= 1.0
         ):
             raise ValueError("completeness is a proportion in [0, 1]")
+        if self.per_task_counts and len(self.per_task_counts) != len(
+            self.per_task
+        ):
+            raise ValueError(
+                "per_task_counts aligns with per_task when it is recorded"
+            )
         completed = (
             self.eval_config_hash,
             self.repeats,
@@ -855,6 +873,10 @@ class HeldOutClaimRecord(_StrictModel):
             # outstanding or it carries the whole result.
             raise ValueError(
                 "a held-out claim is either outstanding or fully measured"
+            )
+        if self.mean is None and self.per_task:
+            raise ValueError(
+                "an outstanding held-out claim has no per-task vector"
             )
         return self
 

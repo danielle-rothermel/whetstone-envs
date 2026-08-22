@@ -425,6 +425,8 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "repeats",
         "mean",
         "completeness",
+        "per_task",
+        "per_task_counts",
     ]
     assert list(payload["held_out"][0]) == [
         "candidate_name",

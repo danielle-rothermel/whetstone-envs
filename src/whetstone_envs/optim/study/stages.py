@@ -468,13 +468,13 @@ def run_arm_stage(
     # each made once, over different run sets, and neither can be made twice.
     log = ManifestSelectionLog(study_dir, stage=stage.value)
     reports = tuple(
-        report_arm(
+        _report_or_rebuild_arm(
             arm_id=arm.arm_id,
             runs=tuple(result.candidate for result in run_results[arm.arm_id]),
             score_official=_require(environment.score_official),
             evaluate_held_out=_require(environment.evaluate_held_out),
             log=log,
-            stage=stage.value,
+            stage=stage,
         )
         for arm in spec.arms
     )
@@ -495,6 +495,88 @@ def run_arm_stage(
         manifest=read_study_manifest(study_dir),
         arms=reports,
         analysis=analysis,
+    )
+
+
+def _report_or_rebuild_arm(  # noqa: PLR0913
+    *,
+    arm_id: str,
+    runs: tuple[RunCandidate, ...],
+    score_official: OfficialScorer,
+    evaluate_held_out: HeldOutEvaluator,
+    log: ManifestSelectionLog,
+    stage: StageId,
+) -> ArmReport:
+    """Report this arm, or rebuild the report it already produced.
+
+    ``report_arm`` persists each arm's selection as it goes and the ledger
+    refuses a second selection per arm per stage, so a stage that crashed
+    partway through reporting cannot simply re-report every arm on resume:
+    the arms that already selected would raise, and the study's paid runs
+    would be stranded behind a failure that never clears.
+
+    An arm whose selection *and* completed held-out claim are both durable
+    has already been fully reported. Its report is rebuilt from those
+    records rather than re-derived, which is what makes resume cost nothing:
+    no second selection, and no second held-out evaluation of a candidate
+    that already spent its one shot.
+
+    An arm that selected but never claimed crashed in the window *between*
+    the two writes, before any provider call. It continues from the
+    selection: the held-out evaluation it never issued is still owed, and
+    issuing it now costs exactly what the uncrashed stage would have cost.
+
+    An arm with an *outstanding* claim is the one case that cannot be
+    continued. The claim is written before the evaluation is issued, so
+    whether the provider was billed is not knowable from here -- re-issuing
+    would risk paying twice and skipping would report a number nobody
+    measured -- and it is refused with the recovery named.
+    """
+    selection = log.selection_for(arm_id)
+    if selection is None:
+        return report_arm(
+            arm_id=arm_id,
+            runs=runs,
+            score_official=score_official,
+            evaluate_held_out=evaluate_held_out,
+            log=log,
+            stage=stage.value,
+        )
+    representative = next(
+        (run for run in runs if run.run_id == selection.selected_run_id), None
+    )
+    if representative is None:
+        raise StageError(
+            f"arm {arm_id!r} persisted a selection for run "
+            f"{selection.selected_run_id!r} at {stage.value}, but that run "
+            "is not among the runs this stage loaded"
+        )
+    official_scores = tuple(score_official(run) for run in runs)
+    claim = log.completed_claim_for(arm_id)
+    if claim is None:
+        if log.held_out_count(arm_id) > 0:
+            raise StageError(
+                f"arm {arm_id!r} claimed a held-out evaluation at "
+                f"{stage.value} that never completed, so the process died "
+                "with it in flight. That evaluation cannot be re-issued "
+                "without risking a second charge for it: complete the "
+                "outstanding entry in the manifest's 'held_out_claims' "
+                "block from the evaluation's own evidence, or start a "
+                "fresh study directory."
+            )
+        # Selected but never claimed: the crash landed between the two
+        # writes, so nothing was issued and nothing was paid for.
+        log.claim_held_out(arm_id)
+        claim = evaluate_held_out(
+            candidate_name=arm_id, template=representative.template
+        )
+        log.complete_held_out(claim)
+    return ArmReport(
+        arm_id=arm_id,
+        selection=selection,
+        official_scores=official_scores,
+        representative=representative,
+        held_out=claim,
     )
 
 

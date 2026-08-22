@@ -217,7 +217,11 @@ class RoleScorer:
             eval_config_hash=str(evidence.eval_config_ref.config_hash),
             repeats=evidence.num_seeds,
             completeness=_completeness_of(evidence),
-            evidence_ref=None,
+            # The measured per-task row counts, so O7's weighting reads
+            # what each task actually achieved rather than spreading one
+            # study-wide completeness evenly across tasks that did not
+            # fail evenly.
+            per_task_counts=evidence.per_task_counts,
         )
 
 

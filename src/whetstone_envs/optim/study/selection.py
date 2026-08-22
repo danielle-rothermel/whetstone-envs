@@ -142,6 +142,12 @@ class HeldOutMeasurement:
     eval_config_hash: str
     repeats: int
     completeness: float
+    #: Rows achieved per task, aligned with ``per_task``. Empty when the
+    #: caller has only the aggregate, in which case the completeness
+    #: weighting falls back to spreading it evenly -- which is an
+    #: approximation, so the measured vector is preferred wherever it
+    #: exists.
+    per_task_counts: tuple[int, ...] = ()
     evidence_ref: tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
@@ -151,6 +157,16 @@ class HeldOutMeasurement:
             )
         if not 0.0 <= self.completeness <= 1.0:
             raise ValueError("completeness must be a fraction in [0, 1]")
+        if self.per_task_counts and len(self.per_task_counts) != len(
+            self.per_task
+        ):
+            raise ValueError(
+                f"candidate {self.candidate_name!r} has "
+                f"{len(self.per_task_counts)} per-task row counts for "
+                f"{len(self.per_task)} tasks"
+            )
+        if any(count < 0 for count in self.per_task_counts):
+            raise ValueError("per-task row counts are non-negative")
 
 
 class OfficialScorer(Protocol):

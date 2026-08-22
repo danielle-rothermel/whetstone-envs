@@ -291,17 +291,17 @@ def _delta_for(
 
     The weighting flows into the per-task vector rather than only into a
     variance estimate, so a ragged cell shrinks its own contribution to the
-    point estimate as well as to the interval.
+    point estimate as well as to the interval, and it reads each task's
+    *measured* row count rather than one study-wide completeness spread
+    evenly -- tasks do not fail evenly, and the whole point of the
+    weighting is that a task which achieved fewer rows says less.
     """
     if len(measurement.per_task) != len(naive.per_task):
         raise ValueError(
             f"candidate {arm_id!r} and the naive anchor measured different "
             "numbers of held-out tasks, so their comparison is not paired"
         )
-    achieved = tuple(
-        round(measurement.completeness * k_repeat)
-        for _ in measurement.per_task
-    )
+    achieved = _achieved_counts(measurement, k_repeat=k_repeat)
     weighted, completeness = weighted_per_task_delta(
         arm_per_task=measurement.per_task,
         naive_per_task=naive.per_task,
@@ -317,6 +317,25 @@ def _delta_for(
         naive_per_task=(0.0,) * len(weighted),
         completeness=completeness,
     )
+
+
+def _achieved_counts(
+    measurement: HeldOutMeasurement, *, k_repeat: int
+) -> tuple[int, ...]:
+    """Rows achieved per task, measured where the evidence carried them.
+
+    The fallback spreads the aggregate completeness evenly, which is an
+    approximation and is used only when a caller supplied no per-task
+    vector. It is clamped to the planned count because the weighting is
+    defined over a fraction of what was scheduled, and a rounded value
+    above it would be a task claiming more rows than it was allotted.
+    """
+    if measurement.per_task_counts:
+        return tuple(
+            min(count, k_repeat) for count in measurement.per_task_counts
+        )
+    even = min(round(measurement.completeness * k_repeat), k_repeat)
+    return (even,) * len(measurement.per_task)
 
 
 def _null_downgrade(

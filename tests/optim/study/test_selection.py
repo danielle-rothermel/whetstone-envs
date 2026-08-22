@@ -401,3 +401,48 @@ def test_more_arms_than_the_family_declares_is_refused() -> None:
             resamples=200,
             seed=7,
         )
+
+
+# --------------------------------------------------------------------------
+# Held-out measurements carry what each task achieved
+# --------------------------------------------------------------------------
+
+
+def test_a_measurement_may_carry_its_per_task_row_counts() -> None:
+    """O7's weighting reads measured rows, not one spread average."""
+    measurement = HeldOutMeasurement(
+        candidate_name="copro",
+        per_task=(1.0, 0.0, 1.0),
+        mean=2 / 3,
+        eval_config_hash=HELD_OUT_CONFIG,
+        repeats=3,
+        completeness=7 / 9,
+        per_task_counts=(3, 1, 3),
+    )
+    assert measurement.per_task_counts == (3, 1, 3)
+
+
+def test_row_counts_must_align_with_the_tasks_they_describe() -> None:
+    with pytest.raises(ValueError, match="per-task row counts for"):
+        HeldOutMeasurement(
+            candidate_name="copro",
+            per_task=(1.0, 0.0, 1.0),
+            mean=2 / 3,
+            eval_config_hash=HELD_OUT_CONFIG,
+            repeats=3,
+            completeness=1.0,
+            per_task_counts=(3, 3),
+        )
+
+
+def test_a_measurement_without_row_counts_is_still_valid() -> None:
+    """The vector is optional: a caller may hold only the aggregate."""
+    measurement = HeldOutMeasurement(
+        candidate_name="naive",
+        per_task=(1.0, 0.0),
+        mean=0.5,
+        eval_config_hash=HELD_OUT_CONFIG,
+        repeats=3,
+        completeness=1.0,
+    )
+    assert measurement.per_task_counts == ()

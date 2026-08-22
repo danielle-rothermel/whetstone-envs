@@ -62,6 +62,8 @@ from whetstone_envs.optim.families import (
 )
 from whetstone_envs.optim.gepa import build_gepa_adapter
 from whetstone_envs.optim.miprov2 import (
+    DEFAULT_MIPROV2_FULL_EVAL_STEPS,
+    DEFAULT_MIPROV2_MINIBATCH,
     DEMO_MODES,
     Miprov2DemoMode,
     build_miprov2_adapter,
@@ -166,6 +168,25 @@ class RunSpec:
     #: GEPA's paid metric-call ceiling. ``None`` keeps the family default of
     #: one full pass over the trainset plus one reflection minibatch.
     gepa_max_metric_calls: int | None = None
+    #: Whether MIPROv2 evaluates each trial on a sampled minibatch rather
+    #: than the whole validation split. Off by default, which is the
+    #: schedule this runner has always produced; the protocol's auto-light
+    #: configuration turns it on.
+    miprov2_minibatch: bool = DEFAULT_MIPROV2_MINIBATCH
+    #: Tasks per minibatched trial. ``None`` takes the whole validation
+    #: split, which is what a non-minibatched trial evaluates.
+    miprov2_minibatch_size: int | None = None
+    #: Trials between full-validation re-evaluations of the incumbent.
+    miprov2_minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS
+    #: Extra scripted proposer bodies for a fake-transport run, appended to
+    #: the family's own. The family scripts a ceiling draft and the naive
+    #: seed; the seed is rejected as a no-op mutation, so a fake round can
+    #: only ever land one accepted draft. Supplying further distinct bodies
+    #: is what lets a ``breadth`` above 2 produce a genuinely multi-draft
+    #: round. Each must satisfy the family's render contract, which the
+    #: proposal path re-validates. Refused on a real transport, where the
+    #: proposer -- not the runner -- writes the bodies.
+    extra_proposal_bodies: tuple[str, ...] = ()
     #: The Codex arm's admitted evaluate-call cap. Carried so a spec is
     #: complete before its adapter lands; rejected on other optimizers so it
     #: cannot look honoured when nothing reads it.
@@ -178,6 +199,35 @@ class RunSpec:
 #: arm carried an explicit control seed and which did not.
 SEED_DISPOSITION_CONTROL_FIELD = "control-seed-field"
 SEED_DISPOSITION_PROVIDER_ONLY = "provider-seed-control-only"
+
+
+def _validate_miprov2_settings(spec: RunSpec) -> None:
+    """Refuse MIPROv2 minibatch settings the run cannot honour.
+
+    Like the other optimizer-scoped settings, these are refused at spec
+    validation rather than inside the durable run boundary, and refused on
+    another optimizer rather than silently ignored -- a setting that looks
+    honoured but is not is how a study comes to misdescribe its own arm.
+    """
+    non_default = (
+        spec.miprov2_minibatch != DEFAULT_MIPROV2_MINIBATCH
+        or spec.miprov2_minibatch_size is not None
+        or spec.miprov2_minibatch_full_eval_steps
+        != DEFAULT_MIPROV2_FULL_EVAL_STEPS
+    )
+    if non_default and spec.optimizer != "miprov2":
+        raise ValueError(
+            "miprov2 minibatch settings apply only to --optimizer miprov2"
+        )
+    if (
+        spec.miprov2_minibatch_size is not None
+        and spec.miprov2_minibatch_size < 1
+    ):
+        raise ValueError("miprov2_minibatch_size must be at least 1")
+    if spec.miprov2_minibatch_full_eval_steps < 1:
+        raise ValueError(
+            "miprov2_minibatch_full_eval_steps must be at least 1"
+        )
 
 
 def seed_disposition(optimizer: str) -> str:
@@ -221,18 +271,24 @@ def _proposal_contract(family: FamilySpec) -> CoproProposalContractRecord:
 COPRO_EXECUTOR_SCHEMA_SUFFIX = "copro_proposal_executor"
 
 
-def _copro_adapter(
+def _copro_adapter(  # noqa: PLR0913
     *,
     engine: EvalEngine,
     control: CoproControl,
     prompt_adapter: PlainPromptAdapter,
     proposer_transport: ProposerTransport | None,
     family: FamilySpec,
+    extra_proposal_bodies: tuple[str, ...] = (),
 ) -> CoproAdapter:
-    """The COPRO adapter this run drives, scripted when transport is fake."""
+    """The COPRO adapter this run drives, scripted when transport is fake.
+
+    ``extra_proposal_bodies`` extends the family's scripted bodies so a
+    fake run at a wider ``breadth`` proposes genuinely distinct drafts
+    rather than re-offering the seed.
+    """
     transport = proposer_transport or FakeProposerTransport(
         {},
-        default=family.proposal_bodies(),
+        default=family.proposal_bodies(extra_proposal_bodies),
         execution_policy_hash=engine.execution_policy_identity_hash(),
         prompt_adapter_identity_hash=prompt_adapter_identity_hash(
             prompt_adapter
@@ -283,6 +339,11 @@ def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
             )
         if spec.gepa_max_metric_calls < 1:
             raise ValueError("gepa_max_metric_calls must be at least 1")
+    _validate_miprov2_settings(spec)
+    if spec.extra_proposal_bodies and spec.transport != "fake":
+        raise ValueError(
+            "extra_proposal_bodies applies only to --transport fake"
+        )
     if spec.codex_capacity is not None:
         # The Codex adapter is not in this package yet, so no optimizer can
         # honour a capacity cap. Refusing beats silently ignoring it.
@@ -354,6 +415,7 @@ def _bind_optimizer(  # noqa: PLR0913
                 prompt_adapter=prompt_adapter,
                 proposer_transport=proposer_transport,
                 family=validated.family,
+                extra_proposal_bodies=spec.extra_proposal_bodies,
             ),
         )
     if spec.optimizer == "gepa":
@@ -378,6 +440,9 @@ def _bind_optimizer(  # noqa: PLR0913
         family=validated.family,
         demo_mode=validated.demo_mode,
         seed=MIPROV2_DEFAULT_SEED if spec.seed is None else spec.seed,
+        minibatch=spec.miprov2_minibatch,
+        minibatch_size=spec.miprov2_minibatch_size,
+        minibatch_full_eval_steps=spec.miprov2_minibatch_full_eval_steps,
     )
     miprov2_adapter = build_miprov2_adapter(
         store=store,
@@ -656,6 +721,8 @@ __all__ = [
     "COPRO_EXECUTOR_SCHEMA_SUFFIX",
     "DEFAULT_COPRO_BREADTH",
     "DEFAULT_COPRO_DEPTH",
+    "DEFAULT_MIPROV2_FULL_EVAL_STEPS",
+    "DEFAULT_MIPROV2_MINIBATCH",
     "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_SPLIT_SIZES",
     "DEMO_MODES",

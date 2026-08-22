@@ -8,6 +8,8 @@ from pathlib import Path
 from whetstone_envs.optim.run import (
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
+    DEFAULT_MIPROV2_FULL_EVAL_STEPS,
+    DEFAULT_MIPROV2_MINIBATCH,
     DEFAULT_SPLIT_SIZES,
     DEMO_MODES,
     MIN_COPRO_BREADTH,
@@ -168,6 +170,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--miprov2-minibatch",
+        action="store_true",
+        default=DEFAULT_MIPROV2_MINIBATCH,
+        help=(
+            "Evaluate each MIPROv2 trial on a sampled minibatch rather than "
+            "the whole validation split."
+        ),
+    )
+    parser.add_argument(
+        "--miprov2-minibatch-size",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Tasks per minibatched MIPROv2 trial. Defaults to the whole "
+            "validation split."
+        ),
+    )
+    parser.add_argument(
+        "--miprov2-minibatch-full-eval-steps",
+        type=_positive_int,
+        default=DEFAULT_MIPROV2_FULL_EVAL_STEPS,
+        help=(
+            "Trials between full-validation re-evaluations of the MIPROv2 "
+            "incumbent."
+        ),
+    )
+    parser.add_argument(
         "--codex-capacity",
         type=_positive_int,
         default=None,
@@ -204,6 +233,11 @@ def main(argv: list[str] | None = None) -> int:
                 copro_breadth=arguments.copro_breadth,
                 copro_depth=arguments.copro_depth,
                 gepa_max_metric_calls=arguments.gepa_max_metric_calls,
+                miprov2_minibatch=arguments.miprov2_minibatch,
+                miprov2_minibatch_size=arguments.miprov2_minibatch_size,
+                miprov2_minibatch_full_eval_steps=(
+                    arguments.miprov2_minibatch_full_eval_steps
+                ),
                 codex_capacity=arguments.codex_capacity,
             )
         )

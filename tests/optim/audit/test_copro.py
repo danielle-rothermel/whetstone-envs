@@ -289,7 +289,33 @@ def test_distinct_bases_says_so_when_it_had_no_pair_to_check(
     """
     finding = copro_distinct_bases(load_run_evidence(copro_run_dir))
     assert finding.status is AuditStatus.PASS
-    assert "no round could reuse a base" in finding.detail
+    assert "no round could duplicate one" in finding.detail
+
+
+def test_distinct_bases_really_compares_a_multi_draft_round(
+    copro_multi_draft_run_dir,
+) -> None:
+    """The passing case must be a comparison, not an empty loop.
+
+    A ``breadth`` of 3 over two iterations gives a seed round of two drafts
+    and a history round of three, so this asserts the invariant actually
+    reached multi-draft rounds and cited the proposals it compared.
+    """
+    evidence = load_run_evidence(copro_multi_draft_run_dir)
+    multi_draft = [
+        entry
+        for entry in evidence.steps
+        if len(entry.step.proposed_candidates) >= 2
+    ]
+    assert multi_draft, "the fixture produced no multi-draft round"
+
+    finding = copro_distinct_bases(evidence)
+    assert finding.status is AuditStatus.PASS
+    assert "multi-draft rounds is a distinct candidate" in finding.detail
+    # One ref per compared proposal, so the citation covers what it judged.
+    assert len(finding.evidence_refs) == sum(
+        len(entry.step.proposed_candidates) for entry in multi_draft
+    )
 
 
 def test_no_search_evals_reads_every_step(copro_run_dir) -> None:

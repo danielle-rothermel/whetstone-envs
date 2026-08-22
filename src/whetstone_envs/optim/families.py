@@ -208,7 +208,7 @@ class FamilySpec:
             candidate_id=candidate_id, template=template
         )
 
-    def proposal_bodies(self) -> tuple[str, ...]:
+    def proposal_bodies(self, extra: tuple[str, ...] = ()) -> tuple[str, ...]:
         """Scripted proposer bodies for a fake-transport run.
 
         A seed optimizer asks for one draft and keeps the naive initial
@@ -216,8 +216,20 @@ class FamilySpec:
         optimizer rejects a no-op mutation. Every body satisfies the
         family's render contract, which the runner's proposal path
         re-validates.
+
+        ``extra`` supplies further distinct drafts, and they are placed
+        *before* the naive body rather than after it. The transport serves
+        bodies by slot, and the naive body is the seed: a draft filling its
+        slot is rejected as a no-op mutation, so anything after it occupies
+        a slot the optimizer never requests. Ordering the extras first is
+        what makes a wider ``breadth`` produce a genuinely multi-draft
+        round instead of an underfilled one.
         """
-        return (self.probes.ceiling_template, self.probes.naive_template)
+        return (
+            self.probes.ceiling_template,
+            *extra,
+            self.probes.naive_template,
+        )
 
 
 _C19_SPEC = FamilySpec(

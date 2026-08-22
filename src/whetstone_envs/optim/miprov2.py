@@ -88,6 +88,13 @@ MIPROV2_COMPONENT_ID = "generate"
 MIN_MIPROV2_TASKS = 2
 #: The family-namespaced schema name for MIPROv2's inline executor policy.
 INLINE_EXECUTOR_SCHEMA_SUFFIX = "miprov2_proposal_executor"
+#: Minibatching is off by default: every trial then evaluates the whole
+#: validation split, which is the schedule this runner has always produced.
+#: The protocol's auto-light configuration turns it on explicitly.
+DEFAULT_MIPROV2_MINIBATCH = False
+#: Trials between full-validation re-evaluations of the incumbent. Only
+#: observable once ``minibatch`` is on.
+DEFAULT_MIPROV2_FULL_EVAL_STEPS = 1
 
 DEMO_MODES = tuple(mode.value for mode in Miprov2DemoMode)
 
@@ -125,8 +132,17 @@ def build_miprov2_control(  # noqa: PLR0913
     # bootstrap candidate.
     num_candidates: int = 3,
     seed: int = 9,
+    minibatch: bool = DEFAULT_MIPROV2_MINIBATCH,
+    minibatch_size: int | None = None,
+    minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS,
 ) -> Miprov2Control:
-    """Resolve one family's MIPROv2 control against the engine."""
+    """Resolve one family's MIPROv2 control against the engine.
+
+    ``minibatch_size`` defaults to the whole validation split, which is what
+    a non-minibatched run evaluates on every trial. The protocol's
+    auto-light configuration turns ``minibatch`` on and sizes the batch
+    below that, so the periodic full evaluation becomes observable.
+    """
     prompt_adapter = PlainPromptAdapter()
     task_hashes = tuple(engine.sampling.task_hashes)
     if len(task_hashes) < MIN_MIPROV2_TASKS:
@@ -134,6 +150,21 @@ def build_miprov2_control(  # noqa: PLR0913
             "MIPROv2 needs at least two tasks to split train and val"
         )
     bootstrapped, labeled = _demo_maxima(demo_mode)
+    valset = task_hashes[1:]
+    resolved_minibatch_size = (
+        len(valset) if minibatch_size is None else minibatch_size
+    )
+    if resolved_minibatch_size < 1:
+        raise ValueError("minibatch_size must be at least 1")
+    if resolved_minibatch_size > len(valset):
+        # ``configure_miprov2`` refuses a batch larger than the valset, and
+        # refusing here keeps the failure outside the durable run boundary.
+        raise ValueError(
+            f"minibatch_size {resolved_minibatch_size} exceeds the "
+            f"validation split of {len(valset)}"
+        )
+    if minibatch_full_eval_steps < 1:
+        raise ValueError("minibatch_full_eval_steps must be at least 1")
     defaults = Miprov2InjectedDefaults(
         prompt_model=ProposerConfig(
             provider_call_config=provider_call_config_ref(experiment),
@@ -177,9 +208,9 @@ def build_miprov2_control(  # noqa: PLR0913
         num_trials=num_trials,
         seed=seed,
         init_temperature=1.0,
-        minibatch=False,
-        minibatch_size=len(task_hashes[1:]),
-        minibatch_full_eval_steps=1,
+        minibatch=minibatch,
+        minibatch_size=resolved_minibatch_size,
+        minibatch_full_eval_steps=minibatch_full_eval_steps,
         demo_mode=demo_mode,
         defaults=defaults,
     )
@@ -366,6 +397,8 @@ def miprov2_run_ref(
 
 
 __all__ = [
+    "DEFAULT_MIPROV2_FULL_EVAL_STEPS",
+    "DEFAULT_MIPROV2_MINIBATCH",
     "DEMO_MODES",
     "INLINE_EXECUTOR_SCHEMA_SUFFIX",
     "MIPROV2_COMPONENT_ID",

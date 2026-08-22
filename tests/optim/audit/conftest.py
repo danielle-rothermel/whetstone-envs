@@ -37,6 +37,43 @@ def copro_run_dir(tmp_path_factory) -> Path:
     )
 
 
+#: Three further scripted proposer bodies, each satisfying C19's render
+#: contract. They are what lets a fake COPRO run at ``breadth`` 3 fill a
+#: genuinely multi-draft round: the family scripts a ceiling draft and the
+#: naive seed, and a draft filling the seed's slot is rejected as a no-op
+#: mutation, so without these a wider round underfills and the run ends in
+#: a proposal-cardinality failure.
+_DRAFT_BODY_TAIL = "Grid:\n{grid}\n\nActions: {command}\n\n{question}\nAnswer."
+MULTI_DRAFT_PROPOSAL_BODIES = (
+    f"Alpha: reason step by step.\n\n{_DRAFT_BODY_TAIL}",
+    f"Beta: trace each move.\n\n{_DRAFT_BODY_TAIL}",
+    f"Gamma: simulate carefully.\n\n{_DRAFT_BODY_TAIL}",
+)
+
+
+@pytest.fixture(scope="session")
+def copro_multi_draft_run_dir(tmp_path_factory) -> Path:
+    """A fake COPRO run whose rounds really do propose several drafts.
+
+    ``breadth=3`` with ``depth=2`` gives a seed round of two drafts and a
+    history round of three, so an invariant over "proposals within a round"
+    has real pairs to compare instead of passing vacuously.
+    """
+    output = tmp_path_factory.mktemp("audit-runs-multi") / "copro"
+    return run_optimizer(
+        RunSpec(
+            optimizer="copro",
+            transport="fake",
+            split_sizes=(2, 2, 0),
+            output_dir=output,
+            run_id="c19-copro-audit-multi-draft",
+            copro_breadth=3,
+            copro_depth=2,
+            extra_proposal_bodies=MULTI_DRAFT_PROPOSAL_BODIES,
+        )
+    )
+
+
 @pytest.fixture
 def mutable_run_dir(copro_run_dir, tmp_path) -> Path:
     """A per-test copy of the run, safe to mutate into a negative fixture."""

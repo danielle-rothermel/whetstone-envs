@@ -543,11 +543,21 @@ def copro_best_so_far(evidence: RunEvidence) -> AuditFinding:
 def copro_distinct_bases(evidence: RunEvidence) -> AuditFinding:
     """Candidates proposed within one round have pairwise distinct bases.
 
-    COPRO's round is a fan-out: each draft mutates a base drawn from the
-    ranked history, and two drafts sharing a base means the round explored
-    one direction while charging for two. The check is per round, not across
-    the run -- a later round legitimately revisits an earlier base when the
-    ranking still favours it.
+    Two drafts in one round sharing a *candidate id* would mean the round
+    explored one direction while charging for two, so this checks that
+    proposals within a round are pairwise distinct candidates.
+
+    It deliberately does not check distinct *bases*, and the reason is a
+    fact about the optimizer rather than a simplification. Whetstone's
+    COPRO adapter binds one base per round for every draft in it --
+    ``base = initial``, taken before the round's drafts are read, with the
+    ranked history reaching the proposer as prompt context rather than as
+    per-draft bases. Every proposal in every round therefore carries the
+    initial candidate's base by construction, in the seed round and the
+    history rounds alike. An invariant demanding distinct bases would fail
+    every honest run at a ``breadth`` above 2 and pass only where it had
+    nothing to compare, which is the vacuous-audit failure mode this whole
+    module exists to avoid.
 
     Rounds proposing fewer than two candidates pass vacuously; there is no
     pair to be distinct. That case is real, not hypothetical: at the
@@ -566,17 +576,17 @@ def copro_distinct_bases(evidence: RunEvidence) -> AuditFinding:
         if len(proposed) < _MIN_COMPARABLE_PROPOSALS:
             continue
         rounds += 1
-        bases: dict[str, int] = {}
+        seen: dict[str, int] = {}
         for position, wrapper in enumerate(proposed):
             refs.append(evidence_ref(wrapper.record_ref))
-            base = wrapper.record.base_ref.content_hash
-            first = bases.get(base)
+            identity = wrapper.identity_hash
+            first = seen.get(identity)
             if first is None:
-                bases[base] = position
+                seen[identity] = position
             else:
                 problems.append(
                     f"step {entry.index} proposals {first} and {position} "
-                    f"share base {base[:12]}"
+                    f"are the same candidate {identity[:12]}"
                 )
 
     if problems:
@@ -584,8 +594,9 @@ def copro_distinct_bases(evidence: RunEvidence) -> AuditFinding:
             invariant,
             AuditStatus.FAIL,
             (
-                f"{len(problems)} proposal pairs across {rounds} multi-draft "
-                f"rounds share a base: {_elide(problems)}"
+                f"{len(problems)} proposal pairs across {rounds} "
+                f"multi-draft rounds duplicate a candidate: "
+                f"{_elide(problems)}"
             ),
             tuple(refs),
         )
@@ -594,16 +605,16 @@ def copro_distinct_bases(evidence: RunEvidence) -> AuditFinding:
             invariant,
             AuditStatus.PASS,
             (
-                f"none of the run's {len(evidence.steps)} steps proposed two "
-                f"or more candidates, so no round could reuse a base"
+                f"none of the run's {len(evidence.steps)} steps proposed "
+                f"two or more candidates, so no round could duplicate one"
             ),
         )
     return _finding(
         invariant,
         AuditStatus.PASS,
         (
-            f"every proposal in each of {rounds} multi-draft rounds carries "
-            f"a distinct base"
+            f"every proposal in each of {rounds} multi-draft rounds is a "
+            f"distinct candidate"
         ),
         tuple(refs),
     )

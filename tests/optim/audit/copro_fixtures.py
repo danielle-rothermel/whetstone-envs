@@ -231,15 +231,15 @@ def unselected_candidate_scored_higher(
 def two_proposals_sharing_one_base(source: Path, destination: Path) -> Path:
     """A round whose drafts explored one direction while charging for two.
 
-    The twin differs from the first proposal only in its candidate id, so it
-    necessarily carries the same ``base_ref`` -- which is the violation,
-    stated as directly as the format allows.
+    The twin is byte-identical to the first proposal, so the two wrappers
+    carry the same candidate identity: the round paid for two drafts and
+    got one. Appending it rather than replacing an existing proposal keeps
+    every resolved intent still citing a proposal it can name.
     """
 
     def add_twin(proposals: list[dict[str, Any]]) -> list[dict[str, Any]]:
         record = json.loads(json.dumps(proposals[0]["record"]))
-        record["candidate_id"] = f"{record['candidate_id']}:twin"
-        return [proposals[0], _candidate_wrapper(record)]
+        return [*proposals, _candidate_wrapper(record)]
 
     return mutate_run(source, destination, FIRST_STEP_PROPOSALS, add_twin)
 

@@ -15,14 +15,14 @@ Four runs back these tests, all fake transport and zero provider calls:
   actually minibatches. Without it that invariant would be permanently
   ``NOT_APPLICABLE``, which the assignment names as a defect.
 
-**Why the minibatched run is built here rather than through a spec flag.**
-``whetstone_envs/optim/miprov2.py`` pins ``minibatch=False`` when it resolves
-the C19 control, and that module belongs to another wave's file set. Rather
-than reach into it, these tests patch the ``configure_miprov2`` symbol that
-module imports, forcing the minibatch schedule while every other part of the
-run -- the engine, the adapter, the store, the persisted evidence -- stays
-exactly the production path. The result is a genuine run, not a hand-built
-artifact.
+**How the minibatched run is built.** Minibatching is a runner setting:
+``RunSpec.miprov2_minibatch``, ``miprov2_minibatch_size``, and
+``miprov2_minibatch_full_eval_steps`` reach ``configure_miprov2`` through the
+ordinary path, defaulting to the non-minibatched schedule. The fixture asks
+for the schedule the protocol's auto-light configuration uses, so every part
+of the run -- the engine, the adapter, the store, the persisted evidence --
+is the production path, and the setting exercised is the one a study would
+actually set.
 
 **On mutation sites.** ``Miprov2State`` is comprehensively self-verifying: it
 cross-checks its transcript against the control, the control against the
@@ -140,13 +140,16 @@ def _transcript(evidence: RunEvidence) -> StudyTranscript:
 # --------------------------------------------------------------------------
 
 
-def _run(
+def _run(  # noqa: PLR0913
     *,
     run_id: str,
     demo_mode: str,
     output: Path,
     split_sizes: tuple[int, int, int] = (2, 2, 0),
     n_per_stratum: int | None = None,
+    minibatch: bool = False,
+    minibatch_size: int | None = None,
+    minibatch_full_eval_steps: int = 1,
 ) -> Path:
     from whetstone_envs.optim.run import RunSpec, run_optimizer
 
@@ -159,6 +162,9 @@ def _run(
             n_per_stratum=n_per_stratum,
             output_dir=output,
             run_id=run_id,
+            miprov2_minibatch=minibatch,
+            miprov2_minibatch_size=minibatch_size,
+            miprov2_minibatch_full_eval_steps=minibatch_full_eval_steps,
         )
     )
 
@@ -181,34 +187,21 @@ def miprov2_runs(tmp_path_factory) -> dict[str, Path]:
 def minibatched_run(tmp_path_factory) -> Path:
     """A real MIPROv2 run that actually minibatches its trials.
 
-    ``optim/miprov2.py`` pins ``minibatch=False``, so the schedule is forced
-    by patching the ``configure_miprov2`` symbol that module imports. Only
-    the schedule changes: the control still resolves through whetstone's own
-    ``configure_miprov2``, and the run drives the production path end to end.
+    Minibatching is a runner setting, so this asks for the schedule through
+    ``RunSpec`` rather than patching what the module imports: the run drives
+    the production path end to end, and the setting under test is the one a
+    study would actually use.
     """
-    import whetstone_envs.optim.miprov2 as envs_miprov2
-
-    original = envs_miprov2.configure_miprov2
-
-    def minibatched(**kwargs: Any) -> Any:
-        forced: dict[str, Any] = {
-            **kwargs,
-            "minibatch": True,
-            "minibatch_size": 2,
-            "minibatch_full_eval_steps": 1,
-            "num_trials": 3,
-        }
-        return original(**forced)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(envs_miprov2, "configure_miprov2", minibatched)
-        return _run(
-            run_id="c19-miprov2-audit-minibatch",
-            demo_mode="fewshot",
-            output=tmp_path_factory.mktemp("miprov2-minibatch") / "run",
-            split_sizes=(6, 2, 0),
-            n_per_stratum=4,
-        )
+    return _run(
+        run_id="c19-miprov2-audit-minibatch",
+        demo_mode="fewshot",
+        output=tmp_path_factory.mktemp("miprov2-minibatch") / "run",
+        split_sizes=(6, 2, 0),
+        n_per_stratum=4,
+        minibatch=True,
+        minibatch_size=2,
+        minibatch_full_eval_steps=1,
+    )
 
 
 # --------------------------------------------------------------------------

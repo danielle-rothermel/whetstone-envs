@@ -108,6 +108,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fake-transport run in all three demo modes, plus one run with minibatching
   enabled so the periodic-full-evaluation invariant is exercised rather than
   permanently `NOT_APPLICABLE`.
+- `COPRO_DISTINCT_BASES` now checks that proposals within a round are
+  pairwise distinct *candidates* rather than that they carry distinct
+  *bases*. Whetstone's COPRO adapter binds one base per round for every
+  draft in it -- `base = initial`, taken before the round's drafts are read,
+  with the ranked history reaching the proposer as prompt context rather
+  than as per-draft bases -- so every proposal in every round carries the
+  initial candidate's base by construction. The old rule could only have
+  failed an honest run at a `breadth` above 2 and passed where it had
+  nothing to compare. The invariant keeps its wire value and its
+  "explicitly vacuous" reporting, and now ships a negative fixture: a round
+  whose second proposal is a copy of its first.
+- MIPROv2's trial schedule is a runner setting. `RunSpec.miprov2_minibatch`,
+  `miprov2_minibatch_size`, and `miprov2_minibatch_full_eval_steps` -- and the
+  matching `--miprov2-minibatch{,-size,-full-eval-steps}` flags -- reach
+  `configure_miprov2` through the ordinary path, defaulting to the
+  non-minibatched schedule the runner always produced. `optim/miprov2.py` used
+  to pin `minibatch=False`, so the protocol's auto-light configuration was
+  unreachable and `MIPRO_PERIODIC_FULL_EVAL` could only be exercised by
+  patching the symbol that module imports; the audit fixture now asks for the
+  schedule through the spec, so the setting under test is the one a study
+  would set. A non-default value on another optimizer is refused at spec
+  validation rather than silently ignored.
+- `RunSpec.extra_proposal_bodies` supplies further scripted proposer bodies
+  for a fake-transport run, and `FamilySpec.proposal_bodies` takes them.
+  They are ordered *before* the family's naive body, because the naive body
+  is the seed: a draft filling its slot is rejected as a no-op mutation, so
+  bodies after it occupy slots the optimizer never requests. Without this a
+  fake COPRO run above the smallest `breadth` underfills its round and ends
+  in a proposal-cardinality failure, which is why no fake run had a
+  genuinely multi-draft round to audit. Refused on a real transport, where
+  the proposer writes the bodies.
 
 ### Notes
 

@@ -98,7 +98,21 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: without anything in the manifest saying so. The transport is a property
 #: of the invocation rather than of the design, so it is recorded here and
 #: deliberately kept out of the pre-registration hash.
-STUDY_MANIFEST_SCHEMA_VERSION = 6
+#: v7 pushes the transport down onto each run and adds ``amendments``.
+#:
+#: * ``RunRecord`` gains ``transport``. v6 recorded a transport per *stage*,
+#:   which names what the latest invocation of that stage bound -- not what
+#:   the runs beneath it were measured on. A resumed stage keeps the runs it
+#:   already paid for, so a stage row and its runs can disagree, and the
+#:   cross-transport refusal had nothing but the stage row to check.
+#: * ``amendments`` records evidence a re-calibration invalidated and
+#:   dropped. ``stage0 --replace-design`` onto a different transport
+#:   invalidates the arm stages twice over -- the design changed and the
+#:   evidence came from elsewhere -- and v6 left both in place, so a Stage 2
+#:   could reuse fake runs against freshly bought anchors. Dropping them
+#:   silently would leave a manifest indistinguishable from one whose arm
+#:   stages simply never ran, so what was dropped is recorded.
+STUDY_MANIFEST_SCHEMA_VERSION = 7
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -151,6 +165,7 @@ class ManifestKey(StrEnum):
     SPLITS = "splits"
     MODELS = "models"
     PRE_REGISTRATION = "pre_registration"
+    AMENDMENTS = "amendments"
     DESIGN = "design"
     STAGES = "stages"
     GEPA_SIZING = "gepa_sizing"
@@ -854,6 +869,17 @@ class RunRecord(_StrictModel):
     cost_ref: EvidencePointer
     audit_passed: StrictBool
     spend: tuple[RunSpendRecord, ...]
+    #: The transport this run executed on.
+    #:
+    #: **A run's transport is its own evidence, not its stage's.** A stage
+    #: record says what the *latest* invocation of that stage bound; the
+    #: runs beneath it may have been produced by an earlier invocation on
+    #: another transport, because a resumed stage keeps the runs it already
+    #: paid for. Without this field, a run measured against the experiment's
+    #: own gold and a run measured against a provider are indistinguishable
+    #: once recorded, and the cross-transport refusal can only ever check
+    #: the stage rows rather than the evidence itself.
+    transport: StrictStr
 
     @model_validator(mode="after")
     def _validate_run(self) -> RunRecord:
@@ -861,6 +887,11 @@ class RunRecord(_StrictModel):
             raise ValueError("a run has a nonblank id")
         if not self.artifact_dir.strip():
             raise ValueError("a run names its artifact directory")
+        if self.transport not in TRANSPORT_NAMES:
+            raise ValueError(
+                f"a run records one of {list(TRANSPORT_NAMES)}, "
+                f"got {self.transport!r}"
+            )
         roles = [entry.role for entry in self.spend]
         if len(set(roles)) != len(roles):
             raise ValueError("a run reports each provider role once")
@@ -1228,6 +1259,100 @@ class StageRecord(_StrictModel):
         return self
 
 
+#: Why an amendment dropped evidence: the design was replaced onto a
+#: transport the dropped evidence was not measured on. Pinned because the
+#: report reads it back and an operator greps for it.
+AMENDMENT_REASON_TRANSPORT_CHANGE = "replace-design-across-transports"
+
+#: Every amendment reason the manifest accepts.
+AMENDMENT_REASONS: tuple[str, ...] = (AMENDMENT_REASON_TRANSPORT_CHANGE,)
+
+
+class AmendmentRecord(_StrictModel):
+    """Evidence a re-calibration invalidated, recorded rather than erased.
+
+    ``stage0 --replace-design`` onto a different transport invalidates the
+    arm stages twice over: the design they were run against no longer
+    exists, and their evidence was measured somewhere else. Dropping them
+    silently would leave a manifest that reads like a study which simply
+    never ran those stages, and keeping them would let Stage 2 reuse runs
+    from another experiment against freshly bought anchors.
+
+    So they are dropped *and* the drop is recorded. What this names is
+    what the study once held and no longer does, which is the one fact a
+    reader cannot recover from the manifest's current contents.
+    """
+
+    #: When this amendment was recorded, ISO-8601.
+    at: StrictStr
+    #: Which stage's re-run caused it. Always ``stage0`` today; recorded
+    #: rather than assumed, because a later amendment path would be a
+    #: different fact under the same key.
+    amended_stage: StrictStr
+    reason: StrictStr
+    #: The transport the dropped evidence was measured on, and the one the
+    #: re-calibration bound. Both named, because "this study changed
+    #: transport" is not actionable without knowing in which direction.
+    from_transport: StrictStr
+    to_transport: StrictStr
+    #: The stage records dropped, by stage id.
+    dropped_stages: tuple[StrictStr, ...]
+    #: Every arm run dropped, by run id. Named individually because a count
+    #: cannot be checked against the artifacts still on disk.
+    dropped_run_ids: tuple[StrictStr, ...]
+    dropped_selections: StrictInt
+    dropped_held_out_claims: StrictInt
+    dropped_held_out_rows: StrictInt
+    #: Whether the pilot's call-count verdict went with them.
+    dropped_call_count_gate: StrictBool
+
+    @model_validator(mode="after")
+    def _validate_amendment(self) -> AmendmentRecord:
+        if not self.at.strip():
+            raise ValueError("an amendment records when it happened")
+        if self.amended_stage not in STAGE_IDS:
+            raise ValueError(
+                f"an amendment names one of {list(STAGE_IDS)}, "
+                f"got {self.amended_stage!r}"
+            )
+        if self.reason not in AMENDMENT_REASONS:
+            raise ValueError(
+                f"an amendment reason is one of {list(AMENDMENT_REASONS)}; "
+                f"got {self.reason!r}"
+            )
+        for name, value in (
+            ("from_transport", self.from_transport),
+            ("to_transport", self.to_transport),
+        ):
+            if value not in TRANSPORT_NAMES:
+                raise ValueError(
+                    f"an amendment's {name} is one of "
+                    f"{list(TRANSPORT_NAMES)}, got {value!r}"
+                )
+        if self.from_transport == self.to_transport:
+            raise ValueError(
+                "a transport-change amendment names two different transports"
+            )
+        for stage in self.dropped_stages:
+            if stage not in STAGE_IDS:
+                raise ValueError(
+                    f"a dropped stage is one of {list(STAGE_IDS)}, "
+                    f"got {stage!r}"
+                )
+        if len(set(self.dropped_stages)) != len(self.dropped_stages):
+            raise ValueError("each dropped stage is named once")
+        if len(set(self.dropped_run_ids)) != len(self.dropped_run_ids):
+            raise ValueError("each dropped run is named once")
+        counts = (
+            self.dropped_selections,
+            self.dropped_held_out_claims,
+            self.dropped_held_out_rows,
+        )
+        if any(value < 0 for value in counts):
+            raise ValueError("an amendment's drop counts are non-negative")
+        return self
+
+
 def recorded_transport(
     stages: tuple[StageRecord, ...], stage: StageId | str
 ) -> str | None:
@@ -1324,6 +1449,10 @@ class StudyManifest(_StrictModel):
     splits: SplitsRecord
     models: ModelsRecord
     pre_registration: PreRegistrationRecord | None = None
+    #: Evidence a re-calibration invalidated and dropped, in the order it
+    #: was dropped. Append-only: an amendment records what the study once
+    #: held, so removing one would erase the very fact it exists to keep.
+    amendments: tuple[AmendmentRecord, ...] = ()
     design: DesignRecord | None = None
     stages: tuple[StageRecord, ...] = ()
     gepa_sizing: GepaSizingRecord | None = None
@@ -1725,6 +1854,8 @@ def format_pointer_report(report: PointerCheckReport) -> Iterable[str]:
 
 
 __all__ = [
+    "AMENDMENT_REASONS",
+    "AMENDMENT_REASON_TRANSPORT_CHANGE",
     "COMPLETENESS_BACKSTOP",
     "CORRECTION_FAMILY_SIZE",
     "CORRECTION_HOLM_BONFERRONI",
@@ -1741,6 +1872,7 @@ __all__ = [
     "STUDY_STORE_NAME",
     "TRANSPORT_NAMES",
     "AdapterSwapRecord",
+    "AmendmentRecord",
     "ArmRecord",
     "BalanceRecord",
     "C18Record",

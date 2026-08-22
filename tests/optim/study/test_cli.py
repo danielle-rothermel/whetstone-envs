@@ -47,6 +47,7 @@ from whetstone_envs.optim.study.manifest import (
     RunRecord,
     RunSpendRecord,
     StudyManifest,
+    TransportName,
     read_study_manifest,
     study_manifest_path,
     write_study_manifest,
@@ -464,6 +465,7 @@ def _manifest_citing(pointers: tuple[EvidencePointer, ...]) -> StudyManifest:
                             audit_ref=audit_ref,
                             cost_ref=cost_ref,
                             audit_passed=True,
+                            transport=TransportName.FAKE.value,
                             spend=(
                                 RunSpendRecord(
                                     role="task_model",

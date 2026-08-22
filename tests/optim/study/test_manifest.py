@@ -19,6 +19,7 @@ from dr_store.document_file.errors import DocumentReadError
 from pydantic import ValidationError
 
 from whetstone_envs.optim.study.manifest import (
+    AMENDMENT_REASON_TRANSPORT_CHANGE,
     COMPLETENESS_BACKSTOP,
     CORRECTION_FAMILY_SIZE,
     CORRECTION_HOLM_BONFERRONI,
@@ -32,6 +33,7 @@ from whetstone_envs.optim.study.manifest import (
     STUDY_MANIFEST_SCHEMA_VERSION,
     TRANSPORT_NAMES,
     AdapterSwapRecord,
+    AmendmentRecord,
     ArmRecord,
     BalanceRecord,
     C18Record,
@@ -112,6 +114,7 @@ def _run(
         audit_ref=_pointer(AUDIT_SCHEMA, audit),
         cost_ref=_pointer(COST_SCHEMA, cost),
         audit_passed=True,
+        transport=TransportName.FAKE.value,
         spend=(
             RunSpendRecord(
                 role="task_model",
@@ -192,6 +195,21 @@ def _full_manifest() -> StudyManifest:
                 sigma_sq=0.05,
                 completeness_rule="achieved-count weighted per task",
                 completeness_backstop=COMPLETENESS_BACKSTOP,
+            ),
+            "amendments": (
+                AmendmentRecord(
+                    at="2026-08-22T12:00:00+00:00",
+                    amended_stage="stage0",
+                    reason=AMENDMENT_REASON_TRANSPORT_CHANGE,
+                    from_transport="fake",
+                    to_transport="openrouter",
+                    dropped_stages=("stage1",),
+                    dropped_run_ids=("copro-seed1000",),
+                    dropped_selections=1,
+                    dropped_held_out_claims=2,
+                    dropped_held_out_rows=1,
+                    dropped_call_count_gate=True,
+                ),
             ),
             "gepa_sizing": GepaSizingRecord(
                 steps_per_run=732,
@@ -282,8 +300,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 6
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v6"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 7
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v7"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -306,6 +324,7 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "splits",
         "models",
         "pre_registration",
+        "amendments",
         "design",
         "stages",
         "gepa_sizing",
@@ -397,6 +416,19 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "minibatch_intents",
         "full_valset_intents",
     ]
+    assert list(payload["amendments"][0]) == [
+        "at",
+        "amended_stage",
+        "reason",
+        "from_transport",
+        "to_transport",
+        "dropped_stages",
+        "dropped_run_ids",
+        "dropped_selections",
+        "dropped_held_out_claims",
+        "dropped_held_out_rows",
+        "dropped_call_count_gate",
+    ]
     assert list(payload["call_count_gate"]) == [
         "stage",
         "passed",
@@ -422,6 +454,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "cost_ref",
         "audit_passed",
         "spend",
+        "transport",
     ]
     assert list(payload["arms"][0]["runs"][0]["spend"][0]) == [
         "role",
@@ -496,7 +529,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v7"
+    payload["schema"] = "whetstone_envs.step10_study/v8"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 

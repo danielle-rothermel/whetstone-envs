@@ -483,6 +483,11 @@ class StudyOptimizerRunner:
                 cost_ref=pointers["cost"],
                 audit_passed=report.passed,
                 spend=(() if cost is None else tuple(cost.spend)),
+                # The run's own transport, not the stage's. A resumed
+                # stage keeps runs an earlier invocation paid for, so the
+                # stage row and its runs can disagree -- and the
+                # cross-transport refusal checks the runs.
+                transport=self.transport,
             ),
             observed_task_calls=_observed_task_calls(result, run_dir=run_dir),
         )
@@ -535,6 +540,7 @@ class StudyOptimizerRunner:
                 cost_ref=pointer,
                 audit_passed=True,
                 spend=(),
+                transport=self.transport,
             ),
             observed_task_calls=0,
         )

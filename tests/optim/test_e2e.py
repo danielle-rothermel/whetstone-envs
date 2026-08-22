@@ -461,29 +461,35 @@ requires_codex_sandbox = pytest.mark.skipif(
 )
 
 
-def _codex_run(
+def _codex_run(  # noqa: PLR0913
     *,
     tmp_path: Path,
     run_id: str,
     templates: tuple[str, ...],
     selected: str | None,
     capacity: int | None = CODEX_EVALUATE_CALL_CAP,
+    family: str = "c19",
+    n_per_stratum: int | None = None,
 ) -> Path:
-    """One Codex arm run over the c19 family, agent decisions scripted."""
+    """One Codex arm run over one family, agent decisions scripted."""
     return run_optimizer(
         RunSpec(
             optimizer="codex",
             transport="fake",
+            family=family,
             split_sizes=CODEX_SPLIT_SIZES,
             output_dir=tmp_path / run_id,
             run_id=run_id,
             codex_capacity=capacity,
+            n_per_stratum=n_per_stratum,
         ),
         codex_test_seam=codex_test_seam(
             steps=codex_tool_steps(
                 templates=templates,
                 selected=selected,
                 scratch=tmp_path,
+                family_id=family,
+                split_sizes=CODEX_SPLIT_SIZES,
             ),
             binary_dir=tmp_path / "codex-bin",
         ),
@@ -660,6 +666,41 @@ def test_codex_audit_passes_on_a_fresh_run(tmp_path) -> None:
         templates=(PROBES.ceiling_template,),
         selected="c1",
     )
+    report = audit_run(output)
+    assert report.optimizer == "codex"
+    assert report.passed, [
+        (finding.invariant_id, finding.detail)
+        for finding in report.findings
+        if finding.status.value == "fail"
+    ]
+
+
+@requires_codex_sandbox
+def test_codex_runs_the_second_family_unchanged(tmp_path) -> None:
+    """C3 generality: the Codex arm names no family of its own.
+
+    Everything family-specific -- the render contract, the mutation
+    field, the task set the one Tool evaluates, and the experiment the
+    out-of-process MCP server rebuilds -- is read from the family
+    registry, so c18 runs through the identical path with no code change
+    and audits the same way.
+    """
+    from whetstone_envs.c18 import PROBES as C18_PROBES
+    from whetstone_envs.optim.audit.registry import audit_run
+
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c18-codex-e2e",
+        templates=(C18_PROBES.ceiling_template,),
+        selected="c1",
+        family="c18",
+        n_per_stratum=1,
+    )
+    result = OptimResult.model_validate_json(
+        (output / "result.json").read_text(encoding="utf-8")
+    )
+    assert result.terminal_failure is None, result.terminal_failure
+    assert len(result.step_results[-1].record.tool_evidence) == 1
     report = audit_run(output)
     assert report.optimizer == "codex"
     assert report.passed, [

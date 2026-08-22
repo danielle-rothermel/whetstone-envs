@@ -32,6 +32,11 @@ from typing import TYPE_CHECKING, Protocol
 from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate
 
+from whetstone_envs.optim.study.analysis import (
+    AnalysisResult,
+    measure_reference_candidates,
+    write_held_out_analysis,
+)
 from whetstone_envs.optim.study.anchors import (
     EngineBinder,
     Stage0Result,
@@ -47,10 +52,12 @@ from whetstone_envs.optim.study.manifest import (
     CORRECTION_HOLM_BONFERRONI,
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
+    STUDY_STORE_NAME,
     ArmRecord,
     DesignRecord,
     PreRegistrationRecord,
     RunRecord,
+    SplitsRecord,
     StudyManifest,
     pre_registration_design_hash,
     read_study_manifest,
@@ -114,6 +121,26 @@ class ArmRunResult:
     observed_task_calls: int
 
 
+class RecordedRunLoader(Protocol):
+    """Re-read a run an earlier stage already paid for.
+
+    Stage 2 selects over the union of its own runs and Stage 1's, so it has
+    to see the terminal candidate of a run this process never executed.
+    Loading it from the run's own artifacts is what makes "Stage 1's runs
+    count toward Stage 2" real rather than a refusal: the alternative is
+    paying for the new seeds and then declining to select, which is the
+    worst of both.
+
+    Returning ``None`` means the recorded run's artifacts are gone. That is
+    reported by the caller as the accounting problem it is, rather than
+    silently narrowing the arg-max to whatever happened to load.
+    """
+
+    def __call__(
+        self, *, arm: ArmSpec, run: RunRecord
+    ) -> ArmRunResult | None: ...
+
+
 class OptimizerRunner(Protocol):
     """Run one arm's optimizer at one seed and report what it produced.
 
@@ -146,6 +173,9 @@ class StageEnvironment:
     run_optimizer: OptimizerRunner | None = None
     score_official: OfficialScorer | None = None
     evaluate_held_out: HeldOutEvaluator | None = None
+    #: How a stage re-reads a run an earlier stage recorded. Absent, a
+    #: stage that finds one refuses rather than selecting over a subset.
+    load_recorded_run: RecordedRunLoader | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +191,9 @@ class StageResult:
     manifest: StudyManifest
     stage0: Stage0Result | None = None
     arms: tuple[ArmReport, ...] = ()
+    #: What the post-measurement analysis wrote, when one ran. ``None`` for
+    #: Stage 0, and for an arm stage whose environment carries no anchors.
+    analysis: AnalysisResult | None = None
 
 
 # --------------------------------------------------------------------------
@@ -223,7 +256,21 @@ def run_stage0_into_manifest(
     design = _design_record(spec, result)
     pre_registration = _pre_registration_record(design, replaced=pinned)
     updated = manifest.model_copy(
-        update={"design": design, "pre_registration": pre_registration}
+        update={
+            "design": design,
+            "pre_registration": pre_registration,
+            # Stage 0 is where each role's Eval Config first exists, so it
+            # is where the manifest learns it. Without this the manifest
+            # carries whatever placeholder it was created with, and L1 --
+            # which compares each optimizer evaluation's resolved config
+            # against the recorded internal one -- can only ever fail.
+            "splits": _splits_with_measured_configs(
+                manifest.splits,
+                result=result,
+                bind_engine=environment.bind_engine,
+                k_repeat=spec.k_repeat,
+            ),
+        }
     )
     # An amendment is only an amendment when it actually changes the pinned
     # block. A re-calibration that lands on the same design writes the
@@ -244,6 +291,54 @@ def run_stage0_into_manifest(
         stage=StageId.STAGE0,
         manifest=read_study_manifest(study_dir),
         stage0=result,
+    )
+
+
+def _splits_with_measured_configs(
+    splits: SplitsRecord,
+    *,
+    result: Stage0Result,
+    bind_engine: EngineBinder,
+    k_repeat: int,
+) -> SplitsRecord:
+    """Record the Eval Config each role is *reported* under.
+
+    The task hashes are left alone: those are the population's identity and
+    the bind already refused a run whose regenerated tasks disagreed with
+    them. What changes is the config hash, which cannot be known before an
+    engine is bound and is therefore the one field a pre-Stage-0 manifest
+    can only guess at.
+
+    **The repeat count is part of an Eval Config's identity, so the config
+    recorded is the design's, not the calibration's.** Stage 0 calibrates at
+    ``K_CAL`` and every later evaluation runs at ``K_REPEAT``; recording the
+    calibration's config would make L1 compare each optimizer evaluation
+    against a config nothing but Stage 0 ever used, and the rule would fail
+    on every clean study. Binding the engine again at ``K_REPEAT`` costs
+    nothing -- no evaluation is issued -- and yields the config the runs
+    actually resolve.
+    """
+    del result
+    by_role = {
+        role: bind_engine(
+            role=role, num_seeds=k_repeat
+        ).eval_config_ref.config_hash
+        for role in (
+            EvalRole.INTERNAL,
+            EvalRole.OFFICIAL,
+            EvalRole.HELD_OUT,
+        )
+    }
+    return SplitsRecord(
+        internal=splits.internal.model_copy(
+            update={"eval_config_hash": str(by_role[EvalRole.INTERNAL])}
+        ),
+        official=splits.official.model_copy(
+            update={"eval_config_hash": str(by_role[EvalRole.OFFICIAL])}
+        ),
+        held_out=splits.held_out.model_copy(
+            update={"eval_config_hash": str(by_role[EvalRole.HELD_OUT])}
+        ),
     )
 
 
@@ -369,7 +464,9 @@ def run_arm_stage(
         spec=spec, stage=stage, run_results=run_results, design=manifest.design
     )
 
-    log = ManifestSelectionLog(study_dir)
+    # One ledger per stage: the pilot's selection and the full design's are
+    # each made once, over different run sets, and neither can be made twice.
+    log = ManifestSelectionLog(study_dir, stage=stage.value)
     reports = tuple(
         report_arm(
             arm_id=arm.arm_id,
@@ -377,14 +474,79 @@ def run_arm_stage(
             score_official=_require(environment.score_official),
             evaluate_held_out=_require(environment.evaluate_held_out),
             log=log,
+            stage=stage.value,
         )
         for arm in spec.arms
+    )
+    # The anchors and the statistics are a second pass on purpose: a
+    # Holm-corrected p-value is a whole-study computation that cannot exist
+    # until every arm has been measured, so the rows are written after the
+    # last held-out evaluation rather than beside each one.
+    analysis = _analyse_stage(
+        study_dir=study_dir,
+        stage=stage,
+        environment=environment,
+        reports=reports,
+        k_repeat=manifest.design.k_repeat,
+        log=log,
     )
     return StageResult(
         stage=stage,
         manifest=read_study_manifest(study_dir),
         arms=reports,
+        analysis=analysis,
     )
+
+
+def _analyse_stage(  # noqa: PLR0913
+    *,
+    study_dir: Path,
+    stage: StageId,
+    environment: StageEnvironment,
+    reports: tuple[ArmReport, ...],
+    k_repeat: int,
+    log: ManifestSelectionLog,
+) -> AnalysisResult | None:
+    """Measure the anchors, then write every candidate's held-out row.
+
+    Returns ``None`` when the environment supplies no anchor templates,
+    which is the state a test injecting its own collaborators reaches. A
+    stage bound through
+    :func:`~whetstone_envs.optim.study.environment.bound_stage_environment`
+    always has them, so the operational path always analyses.
+    """
+    naive = _candidate_template(environment.naive_candidate)
+    ceiling = _candidate_template(environment.ceiling_candidate)
+    if naive is None or ceiling is None:
+        return None
+    references = measure_reference_candidates(
+        naive_template=naive,
+        ceiling_template=ceiling,
+        evaluate_held_out=_require(environment.evaluate_held_out),
+        log=log,
+    )
+    return write_held_out_analysis(
+        study_dir=study_dir,
+        store_path=study_dir / STUDY_STORE_NAME,
+        arms=reports,
+        references=references,
+        k_repeat=k_repeat,
+        stage=stage.value,
+    )
+
+
+def _candidate_template(candidate: Candidate) -> str | None:
+    """The prompt an anchor candidate renders, or None when it carries none.
+
+    Read off the candidate's own payload rather than passed alongside it, so
+    the anchor measured on held-out is the same object Stage 0 calibrated
+    with rather than a template that merely resembles it.
+    """
+    payload = getattr(candidate, "payload", None)
+    if payload is None:
+        return None
+    value = payload.get("prompt_template")
+    return value if type(value) is str else None
 
 
 def _run_every_arm(
@@ -423,10 +585,11 @@ def _run_every_arm(
         if not merged_runs:
             raise StageError(f"arm {arm.arm_id!r} produced no runs")
         results_by_arm[arm.arm_id] = _candidates_for(
-            arm_id=arm.arm_id,
+            arm=arm,
             stage_seeds=stage_seeds,
             fresh=fresh,
             existing_runs=existing_runs,
+            load_recorded_run=environment.load_recorded_run,
         )
         records.append(
             _arm_record(arm, runs=merged_runs, sample=fresh, prior=existing)
@@ -479,33 +642,70 @@ def _check_call_counts(
 
 def _candidates_for(
     *,
-    arm_id: str,
+    arm: ArmSpec,
     stage_seeds: tuple[int, ...],
     fresh: tuple[ArmRunResult, ...],
     existing_runs: tuple[RunRecord, ...],
+    load_recorded_run: RecordedRunLoader | None,
 ) -> tuple[ArmRunResult, ...]:
-    """The candidates this stage selects between.
+    """The candidates this stage selects between, in seed order.
 
-    Selection is over every run at this stage's seeds, including ones an
-    earlier stage already paid for. A previously recorded run whose
-    terminal candidate this process never saw cannot be scored, so it is
-    refused loudly: silently selecting over a subset would quietly turn a
-    ``K_RUN = 5`` arg-max into a ``K_RUN = 3`` one.
+    Selection is over **every** run at this stage's seeds, including ones an
+    earlier stage already paid for. Stage 2 therefore has to see Stage 1's
+    terminal candidates, which this process did not produce, so they are
+    re-read from their own artifacts through ``load_recorded_run``.
+
+    Two failures are refused rather than worked around, because both would
+    quietly turn a ``K_RUN = 5`` arg-max into a smaller one: a stage with no
+    loader that finds a recorded run, and a recorded run whose artifacts no
+    longer load. Re-running the seed instead is not an option -- it would
+    pay a second time for a run the study already bought and recorded.
+
+    The result is ordered by the stage's own seed order rather than by
+    "loaded then fresh", so the arg-max's tie-break -- earliest run wins --
+    means the earliest *seed*, whichever stage happened to execute it.
     """
-    if len(fresh) == len(stage_seeds):
-        return fresh
-    reusable = {run.seed for run in existing_runs if run.seed is not None}
-    missing = sorted(
-        seed
-        for seed in stage_seeds
-        if seed in reusable
-        and seed not in {result.candidate.seed for result in fresh}
-    )
-    raise StageError(
-        f"arm {arm_id!r} has recorded runs at seeds {missing} whose terminal "
-        "candidates this process did not load; selection would silently run "
-        "over a subset of the arm's runs"
-    )
+    by_seed = {result.candidate.seed: result for result in fresh}
+    missing_artifacts: list[int] = []
+    unloadable: list[int] = []
+    for run in existing_runs:
+        if run.seed is None or run.seed in by_seed:
+            continue
+        if run.seed not in set(stage_seeds):
+            # A recorded run outside this stage's seed set is not part of
+            # this stage's selection; it stays recorded and unselected.
+            continue
+        if load_recorded_run is None:
+            missing_artifacts.append(run.seed)
+            continue
+        loaded = load_recorded_run(arm=arm, run=run)
+        if loaded is None:
+            unloadable.append(run.seed)
+            continue
+        by_seed[run.seed] = loaded
+    if missing_artifacts:
+        raise StageError(
+            f"arm {arm.arm_id!r} has recorded runs at seeds "
+            f"{sorted(missing_artifacts)} and this stage was given no way "
+            "to load them; selection would silently run over a subset of "
+            "the arm's runs"
+        )
+    if unloadable:
+        raise StageError(
+            f"arm {arm.arm_id!r} recorded runs at seeds {sorted(unloadable)} "
+            "whose artifacts no longer load; selection would silently run "
+            "over a subset of the arm's runs, and re-running them would pay "
+            "twice for runs this study already bought"
+        )
+    selected = tuple(by_seed[seed] for seed in stage_seeds if seed in by_seed)
+    if len(selected) != len(stage_seeds):
+        absent = sorted(set(stage_seeds) - set(by_seed))
+        raise StageError(
+            f"arm {arm.arm_id!r} is missing runs at seeds {absent}; every "
+            "seed this stage declares must be run or loaded before the "
+            "arg-max is taken"
+        )
+    return selected
 
 
 def _arm_record(

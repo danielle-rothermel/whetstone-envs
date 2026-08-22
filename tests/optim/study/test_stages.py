@@ -15,6 +15,10 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from whetstone_envs.optim.study.analysis import (
+    CEILING_CANDIDATE_NAME,
+    NAIVE_CANDIDATE_NAME,
+)
 from whetstone_envs.optim.study.environment import bound_stage_environment
 from whetstone_envs.optim.study.manifest import (
     PROVENANCE_AMENDED,
@@ -163,7 +167,7 @@ class _Harness:
         self.scores = scores
         self.task_calls = task_calls
         self.events: list[str] = []
-        self.selection_seen_at_held_out: list[bool] = []
+        self.selection_seen_at_held_out: list[tuple[str, bool]] = []
 
     def run_optimizer(
         self, *, arm: ArmSpec, seed: int, study_dir: Path
@@ -209,9 +213,12 @@ class _Harness:
         # Read the manifest off disk at the moment of the call: that is the
         # thing the ordering promises.
         self.selection_seen_at_held_out.append(
-            any(
-                entry.arm_id == candidate_name
-                for entry in read_study_manifest(self.study_dir).selection
+            (
+                candidate_name,
+                any(
+                    entry.arm_id == candidate_name
+                    for entry in read_study_manifest(self.study_dir).selection
+                ),
             )
         )
         return HeldOutMeasurement(
@@ -289,11 +296,19 @@ def test_stage1_runs_every_arm_then_selects_then_measures(
     )
 
     # Every run is scored on official; exactly one candidate per arm
-    # reaches held-out.
+    # reaches held-out, plus the two anchors the analysis pass measures
+    # through the identical procedure (L4).
     held_out_events = [
-        event for event in harness.events if event.startswith("held_out:")
+        event.removeprefix("held_out:")
+        for event in harness.events
+        if event.startswith("held_out:")
     ]
-    assert len(held_out_events) == len(spec.arms)
+    assert set(held_out_events) == {
+        *(arm.arm_id for arm in spec.arms),
+        NAIVE_CANDIDATE_NAME,
+        CEILING_CANDIDATE_NAME,
+    }
+    assert len(held_out_events) == len(set(held_out_events))
     # The last seed has the highest score, so it is the representative.
     for report in result.arms:
         assert report.selection.selected_run_id == report.representative.run_id
@@ -315,8 +330,17 @@ def test_the_selection_is_durable_before_the_held_out_call(
         stage=StageId.STAGE1,
         environment=harness.environment(),
     )
-    assert harness.selection_seen_at_held_out
-    assert all(harness.selection_seen_at_held_out)
+    # Every *arm* measurement saw its own persisted selection. The anchors
+    # have no selection to see -- there is one candidate by construction --
+    # so they are excluded rather than asserted about.
+    arm_ids = {arm.arm_id for arm in spec.arms}
+    seen = [
+        seen
+        for name, seen in harness.selection_seen_at_held_out
+        if name in arm_ids
+    ]
+    assert len(seen) == len(arm_ids)
+    assert all(seen)
 
 
 def test_every_run_is_scored_before_any_arm_is_measured(
@@ -348,16 +372,27 @@ def test_every_run_is_scored_before_any_arm_is_measured(
 def test_an_arm_stage_without_its_collaborators_refuses(
     tmp_path: Path,
 ) -> None:
+    """A stage that cannot run, score, or measure refuses before spending.
+
+    The bound environment supplies all three, so the refusal is shown
+    against one deliberately stripped of them -- which is the state any
+    caller assembling a ``StageEnvironment`` by hand can reach.
+    """
     study_dir = _calibrated_study(tmp_path)
-    with (
-        bound_stage_environment(study_dir) as environment,
-        pytest.raises(StageError, match="optimizer runner"),
-    ):
-        run_arm_stage(
-            study_dir=study_dir,
-            stage=StageId.STAGE1,
-            environment=environment,
+    with bound_stage_environment(study_dir) as bound:
+        stripped = StageEnvironment(
+            bind_engine=bound.bind_engine,
+            naive_candidate=bound.naive_candidate,
+            ceiling_candidate=bound.ceiling_candidate,
+            task_ids_by_role=bound.task_ids_by_role,
+            pool_ceiling=bound.pool_ceiling,
         )
+        with pytest.raises(StageError, match="optimizer runner"):
+            run_arm_stage(
+                study_dir=study_dir,
+                stage=StageId.STAGE1,
+                environment=stripped,
+            )
 
 
 def test_copro_and_null_b_record_the_honest_seed_note(
@@ -403,7 +438,7 @@ def test_a_second_selection_for_an_arm_is_refused_on_disk(
     )
     # A fresh ledger over the same directory sees the persisted selections,
     # and refuses a second one for an arm that already has one.
-    log = ManifestSelectionLog(study_dir)
+    log = ManifestSelectionLog(study_dir, stage=StageId.STAGE1.value)
     assert log.selection_for("copro") is not None
     with pytest.raises(SelectionError, match="already selected"):
         log.record_selection(
@@ -411,6 +446,7 @@ def test_a_second_selection_for_an_arm_is_refused_on_disk(
                 arm_id="copro",
                 selected_run_id=log.require_selection("copro").selected_run_id,
                 official_score=0.9,
+                stage=StageId.STAGE1.value,
             )
         )
 
@@ -436,7 +472,7 @@ def test_rerunning_a_finished_stage_refuses_rather_than_repaying(
     )
 
     resumed = _Harness(study_dir, scores=scores)
-    with pytest.raises(StageError, match="did not load"):
+    with pytest.raises(StageError, match="no way to load them"):
         run_arm_stage(
             study_dir=study_dir,
             stage=StageId.STAGE1,
@@ -549,10 +585,16 @@ def test_an_arm_stage_leaves_a_completed_claim_per_arm(
         environment=harness.environment(),
     )
     claims = read_study_manifest(study_dir).held_out_claims
+    # Both anchors are claimed too: they reach held-out through the same
+    # ledger and the same once-only rule as an arm, which is what makes L3
+    # and L4 hold for them rather than only for the arms.
     assert {claim.candidate_name for claim in claims} == {
-        arm.arm_id for arm in spec.arms
+        *(arm.arm_id for arm in spec.arms),
+        NAIVE_CANDIDATE_NAME,
+        CEILING_CANDIDATE_NAME,
     }
     assert all(claim.completed for claim in claims)
+    assert {claim.stage for claim in claims} == {StageId.STAGE1.value}
 
 
 def test_binding_refuses_a_population_that_no_longer_matches(

@@ -84,6 +84,11 @@ STUDY_MANIFEST_SCHEMA = (
 #: The manifest's filename inside a study directory.
 STUDY_MANIFEST_NAME = "study.json"
 
+#: The evidence store a study directory keeps beside its manifest. Owned
+#: here because it is part of a study directory's layout, and every module
+#: that resolves a pointer needs it without importing the binder.
+STUDY_STORE_NAME = "runtime.sqlite"
+
 #: A study manifest retains per-split task-hash vectors and one entry per
 #: run, not per row, so it stays far smaller than an evaluation report.
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
@@ -757,17 +762,32 @@ class SelectionRecord(_StrictModel):
     This record is what makes an L3 violation impossible rather than merely
     detectable: ``report_arm`` reads it back before issuing the held-out
     evaluation and raises if it is absent.
+
+    ``stage`` is part of the record because the study selects twice for a
+    reason: Stage 1's pilot arg-max is over two runs and Stage 2's is over
+    all five, and the second is the study's reported selection. L2 is "once
+    per arm **per stage**", which is what the pre-registration actually
+    describes -- a pilot that could not select would have no preliminary
+    delta to gate on, and a Stage 2 that could not select would have paid
+    for three more runs it was forbidden to use.
     """
 
     arm_id: StrictStr
     selected_run_id: StrictStr
     official_score: StrictFloat
     rule: StrictStr
+    stage: StrictStr = StageId.STAGE2.value
 
     @model_validator(mode="after")
     def _validate_selection(self) -> SelectionRecord:
         if not self.arm_id.strip() or not self.selected_run_id.strip():
             raise ValueError("a selection names its arm and chosen run")
+        if self.stage not in set(STAGE_IDS):
+            raise ValueError(
+                f"a selection names one of {STAGE_IDS}; got {self.stage!r}"
+            )
+        if self.stage == StageId.STAGE0.value:
+            raise ValueError("stage0 selects nothing; it runs no optimizers")
         if self.rule != SELECTION_RULE_ARGMAX_OFFICIAL:
             raise ValueError(
                 "this study pre-registered "
@@ -797,6 +817,7 @@ class HeldOutClaimRecord(_StrictModel):
     """
 
     candidate_name: StrictStr
+    stage: StrictStr = StageId.STAGE2.value
     eval_config_hash: StrictStr | None = None
     repeats: StrictInt | None = None
     mean: StrictFloat | None = None
@@ -806,6 +827,11 @@ class HeldOutClaimRecord(_StrictModel):
     def _validate_claim(self) -> HeldOutClaimRecord:
         if not self.candidate_name.strip():
             raise ValueError("a held-out claim names its candidate")
+        if self.stage not in set(STAGE_IDS):
+            raise ValueError(
+                f"a held-out claim names one of {STAGE_IDS}; "
+                f"got {self.stage!r}"
+            )
         if self.eval_config_hash is not None and (
             not self.eval_config_hash.strip()
         ):
@@ -1083,11 +1109,13 @@ class StudyManifest(_StrictModel):
         arm_ids = [arm.arm_id for arm in self.arms]
         if len(set(arm_ids)) != len(arm_ids):
             raise ValueError("arm ids are distinct")
-        selected = [entry.arm_id for entry in self.selection]
+        selected = [(entry.arm_id, entry.stage) for entry in self.selection]
         if len(set(selected)) != len(selected):
-            # L2 as a structural rule: one selection per arm, never two.
-            raise ValueError("each arm is selected at most once")
-        unknown = set(selected) - set(arm_ids)
+            # L2 as a structural rule: one selection per arm per stage,
+            # never two. The stage is part of the key because the pilot and
+            # the full design each select once, over different run sets.
+            raise ValueError("each arm is selected at most once per stage")
+        unknown = {arm_id for arm_id, _stage in selected} - set(arm_ids)
         if unknown:
             raise ValueError(
                 f"selection names unknown arms: {sorted(unknown)}"
@@ -1099,11 +1127,19 @@ class StudyManifest(_StrictModel):
                     f"arm {entry.arm_id!r} selected run "
                     f"{entry.selected_run_id!r}, which it did not run"
                 )
-        claimed = [entry.candidate_name for entry in self.held_out_claims]
+        claimed = [
+            (entry.candidate_name, entry.stage)
+            for entry in self.held_out_claims
+        ]
         if len(set(claimed)) != len(claimed):
             # L3 as a structural rule, at the moment the evaluation is
             # issued rather than at the moment its statistics are known.
-            raise ValueError("each candidate claims held-out at most once")
+            # Scoped by stage for the same reason selection is: the pilot's
+            # representative candidate and the full design's are different
+            # candidates, each measured exactly once.
+            raise ValueError(
+                "each candidate claims held-out at most once per stage"
+            )
         names = [entry.candidate_name for entry in self.held_out]
         if len(set(names)) != len(names):
             raise ValueError("each candidate is evaluated on held-out once")
@@ -1436,6 +1472,7 @@ __all__ = [
     "STUDY_MANIFEST_SCHEMA",
     "STUDY_MANIFEST_SCHEMA_NAME",
     "STUDY_MANIFEST_SCHEMA_VERSION",
+    "STUDY_STORE_NAME",
     "AdapterSwapRecord",
     "ArmRecord",
     "BalanceRecord",

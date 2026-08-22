@@ -39,7 +39,13 @@ from whetstone_envs.optim.provider import (
     fake_transport_factory,
 )
 from whetstone_envs.optim.rows import task_rows_from_instances
+from whetstone_envs.optim.study.arms import (
+    BuildCandidate,
+    RoleScorer,
+    StudyOptimizerRunner,
+)
 from whetstone_envs.optim.study.manifest import (
+    STUDY_STORE_NAME,
     SplitsRecord,
     read_study_manifest,
 )
@@ -57,16 +63,20 @@ if TYPE_CHECKING:
     from whetstone_envs.pools import PoolSplit
 
 __all__ = [
+    "FAKE_TRANSPORT",
     "SPLIT_ROLE_BY_EVAL_ROLE",
     "STUDY_STORE_NAME",
     "anchor_candidates",
     "bound_stage_environment",
 ]
 
-#: The store a study directory keeps its calibration evidence in. Anchor
-#: evaluations are the study's own records, not a run's, so they live beside
-#: ``study.json`` rather than inside any one run directory.
-STUDY_STORE_NAME = "runtime.sqlite"
+#: The only transport the study harness binds today. Named rather than
+#: inline so the refusal below and the default above cannot drift apart.
+FAKE_TRANSPORT = "fake"
+
+#: Re-exported from the manifest, which owns a study directory's layout.
+#: Anchor evaluations are the study's own records, not a run's, so they live
+#: beside ``study.json`` rather than inside any one run directory.
 
 #: The split each evaluation role binds to, spelled as whetstone spells it.
 SPLIT_ROLE_BY_EVAL_ROLE: dict[EvalRole, str] = {
@@ -132,7 +142,7 @@ def _require_recorded_population(
 
 @contextmanager
 def bound_stage_environment(
-    study_dir: Path, *, transport: str = "fake"
+    study_dir: Path, *, transport: str = FAKE_TRANSPORT
 ) -> Iterator[StageEnvironment]:
     """Open a study's store and bind one engine per evaluation role.
 
@@ -140,7 +150,7 @@ def bound_stage_environment(
     is exercised without provider calls; a paid stage names ``openrouter``
     explicitly, so no code path reaches a provider by omission.
     """
-    if transport != "fake":
+    if transport != FAKE_TRANSPORT:
         # The provider-backed binder belongs with the stage that spends, and
         # spending is authorized at a gate rather than by a default. Naming
         # the gap beats a partially-wired live path that looks ready.
@@ -203,20 +213,58 @@ def bound_stage_environment(
                 ),
             )
 
+        task_ids_by_role = {
+            EvalRole.INTERNAL: tuple(
+                instance.id for instance in split.internal_eval
+            ),
+            EvalRole.OFFICIAL: tuple(
+                instance.id for instance in split.official
+            ),
+            EvalRole.HELD_OUT: tuple(
+                instance.id for instance in split.held_out
+            ),
+        }
+        # The design's repeat count, not the calibration's: an arm stage
+        # measures the design, and Stage 0 records what that design is. A
+        # manifest with no design yet has no arm stage to run either, so
+        # falling back to one repeat only affects Stage 0's own bind.
+        k_repeat = 1 if manifest.design is None else manifest.design.k_repeat
+        build_candidate = BuildCandidate(population.family)
+        official = RoleScorer(
+            bind_engine=bind_engine,
+            role=EvalRole.OFFICIAL,
+            task_ids=task_ids_by_role[EvalRole.OFFICIAL],
+            num_seeds=k_repeat,
+            build_candidate=build_candidate,
+        )
+        held_out = RoleScorer(
+            bind_engine=bind_engine,
+            role=EvalRole.HELD_OUT,
+            task_ids=task_ids_by_role[EvalRole.HELD_OUT],
+            num_seeds=k_repeat,
+            build_candidate=build_candidate,
+        )
+        runner = StudyOptimizerRunner(
+            study_dir=study_dir,
+            family_id=population.family,
+            transport=transport,
+            split_sizes=split_sizes,
+            n_per_stratum=population.n_per_stratum,
+            pool_seed_start=population.pool_seed_start,
+            task_model=manifest.models.task_model,
+            proposer_model=manifest.models.proposer_model,
+            num_seeds=k_repeat,
+            naive_template=family.probes.naive_template,
+            store_path=study_dir / STUDY_STORE_NAME,
+        )
         yield StageEnvironment(
             bind_engine=bind_engine,
             naive_candidate=naive,
             ceiling_candidate=ceiling,
-            task_ids_by_role={
-                EvalRole.INTERNAL: tuple(
-                    instance.id for instance in split.internal_eval
-                ),
-                EvalRole.OFFICIAL: tuple(
-                    instance.id for instance in split.official
-                ),
-                EvalRole.HELD_OUT: tuple(
-                    instance.id for instance in split.held_out
-                ),
-            },
+            task_ids_by_role=task_ids_by_role,
             pool_ceiling=sum(split_sizes),
+            run_optimizer=runner,
+            score_official=official.score_official,
+            evaluate_held_out=held_out.evaluate_held_out,
+            load_recorded_run=runner.load_recorded_run,
         )

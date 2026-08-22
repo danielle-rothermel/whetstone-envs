@@ -36,13 +36,16 @@ from whetstone_envs.optim.study.gates import estimate_optimizer_calls
 from whetstone_envs.optim.study.leakage import (
     HeldOutObservation,
     LeakageRule,
+    OptimizerEvalObservation,
     SplitIdentity,
+    optimizer_observations_for_study,
     study_leakage_check,
 )
 from whetstone_envs.optim.study.manifest import (
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
     SplitName,
+    StageId,
     check_manifest_pointers,
     format_pointer_report,
     read_study_manifest,
@@ -352,15 +355,23 @@ def _run_leakage_check(*, study_dir: Path) -> int:
     those from artifacts would check a different set of facts than the ones
     the report will print.
 
-    L1 is the exception. It is a rule over each optimizer run's own intent
-    resolutions, which live in the run stores rather than in the manifest,
-    so this command cannot check it and reports it as unchecked. **An
-    unchecked rule fails the command**, exactly as a violated one does:
-    from the reader's side, a study whose L1 nobody checked and one whose
-    L1 failed make the same claim. The audit package reads the run evidence
-    directly and is what turns this into a pass.
+    L1 is the exception, and it is read from the runs themselves. It is a
+    rule over each optimizer run's own intent resolutions, which live in
+    the run stores rather than in the manifest, so this command opens every
+    run directory the manifest names and extracts the role and Eval Config
+    each completed resolution ran under. A study whose runs are gone -- or
+    which has run none -- yields no observations and L1 is reported
+    unchecked. **An unchecked rule fails the command**, exactly as a
+    violated one does: from the reader's side, a study whose L1 nobody
+    checked and one whose L1 failed make the same claim.
     """
-    report = _leakage_report(read_study_manifest(study_dir))
+    manifest = read_study_manifest(study_dir)
+    report = _leakage_report(
+        manifest,
+        observations=optimizer_observations_for_study(
+            _recorded_run_dirs(manifest)
+        ),
+    )
     _emit(_format_leakage(report))
     unchecked = report.unchecked()
     # L6 is the roll-up of the other rules, so it is excluded from the
@@ -382,16 +393,37 @@ def _run_leakage_check(*, study_dir: Path) -> int:
     return EXIT_OK
 
 
-def _leakage_report(manifest: StudyManifest) -> LeakageReport:
-    """Run the mechanical checks over what the manifest recorded."""
+def _recorded_run_dirs(manifest: StudyManifest) -> tuple[Path, ...]:
+    """Every run directory this manifest names, arms and c18 alike.
+
+    Read off the manifest rather than by walking a directory, so the runs
+    L1 is checked over are exactly the runs the study recorded -- a stray
+    directory beside them is not evidence this study produced.
+    """
+    recorded = [run for arm in manifest.arms for run in arm.runs]
+    if manifest.c18 is not None:
+        recorded.extend(manifest.c18.runs)
+    return tuple(Path(run.artifact_dir) for run in recorded)
+
+
+def _leakage_report(
+    manifest: StudyManifest,
+    *,
+    observations: tuple[OptimizerEvalObservation, ...] = (),
+) -> LeakageReport:
+    """Run the mechanical checks over what the manifest recorded.
+
+    L1's evidence is per-run and lives in the run stores rather than in the
+    manifest, so it is passed in by the caller that opened them. An empty
+    set still reports L1 as *not checked* rather than as passed -- a study
+    whose runs are gone cannot establish the rule, and saying it passed
+    would be the vacuous claim this check exists to avoid.
+    """
     splits = manifest.splits
     return study_leakage_check(
-        # L1's evidence is per-run and not in the manifest, so it is run
-        # over an empty observation set: vacuously true, and reported as
-        # not checked rather than as passed.
-        optimizer_observations=(),
+        optimizer_observations=observations,
         internal_eval_config_hash=splits.internal.eval_config_hash,
-        selected_arm_ids=[entry.arm_id for entry in manifest.selection],
+        selected_arm_ids=_selected_arm_ids(manifest),
         expected_arm_ids=[arm.arm_id for arm in manifest.arms],
         held_out_candidate_names=_held_out_claim_names(manifest),
         held_out_observations=_held_out_observations(manifest),
@@ -413,6 +445,31 @@ def _leakage_report(manifest: StudyManifest) -> LeakageReport:
     )
 
 
+def _reported_stage(manifest: StudyManifest) -> str:
+    """Which stage's records L2 and L3 are checked over.
+
+    A study selects once per arm *per stage*, and the reported result is
+    the latest stage that ran: a pilot's selection is not a second
+    selection of the study's representative candidate, it is a different
+    decision over a smaller run set. Checking both together would report
+    every arm as selected twice, which describes the design rather than a
+    leak.
+    """
+    stages = {entry.stage for entry in manifest.selection}
+    for candidate in (StageId.STAGE2.value, StageId.STAGE1.value):
+        if candidate in stages:
+            return candidate
+    return StageId.STAGE2.value
+
+
+def _selected_arm_ids(manifest: StudyManifest) -> list[str]:
+    """Every arm the reported stage selected a representative for."""
+    stage = _reported_stage(manifest)
+    return [
+        entry.arm_id for entry in manifest.selection if entry.stage == stage
+    ]
+
+
 def _held_out_observations(
     manifest: StudyManifest,
 ) -> tuple[HeldOutObservation, ...]:
@@ -432,6 +489,7 @@ def _held_out_observations(
     still count for L3, which
     :func:`_held_out_claim_names` supplies separately.
     """
+    stage = _reported_stage(manifest)
     return tuple(
         HeldOutObservation(
             candidate_name=entry.candidate_name,
@@ -439,7 +497,7 @@ def _held_out_observations(
             repeats=entry.repeats or 0,
         )
         for entry in manifest.held_out_claims
-        if entry.completed
+        if entry.completed and entry.stage == stage
     )
 
 
@@ -449,10 +507,15 @@ def _held_out_claim_names(manifest: StudyManifest) -> tuple[str, ...]:
     Outstanding claims are included: what L3 limits is evaluations
     *issued*, so a crashed one has still spent the candidate's one shot.
     """
-    return tuple(entry.candidate_name for entry in manifest.held_out_claims)
+    stage = _reported_stage(manifest)
+    return tuple(
+        entry.candidate_name
+        for entry in manifest.held_out_claims
+        if entry.stage == stage
+    )
 
 
-#: How L1 is reported when the manifest carries no per-run evidence for it.
+#: How a rule is reported when the study carries no evidence for it.
 NOT_CHECKED = "NOT CHECKED"
 
 

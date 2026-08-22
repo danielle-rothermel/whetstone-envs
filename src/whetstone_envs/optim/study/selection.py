@@ -35,6 +35,7 @@ from whetstone.eval.analysis import bootstrap_paired_delta_ci, holm_adjust
 from whetstone_envs.optim.study.manifest import (
     CORRECTION_FAMILY_SIZE,
     SELECTION_RULE_ARGMAX_OFFICIAL,
+    StageId,
     read_study_manifest,
     write_study_manifest,
 )
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
     from whetstone_envs.optim.study.manifest import StudyManifest
 
 __all__ = [
+    "DEFAULT_SELECTION_STAGE",
     "SELECTION_RULE",
     "ArmDelta",
     "ArmReport",
@@ -78,6 +80,11 @@ __all__ = [
 #: The manifest owns the persisted literal, so this is an alias rather than
 #: a second spelling that could drift from the stored one.
 SELECTION_RULE = SELECTION_RULE_ARGMAX_OFFICIAL
+
+#: The stage a selection or claim records when its caller does not name one.
+#: Stage 2 is the study's reported stage, so an unnamed selection is the
+#: reported one rather than an anonymous one.
+DEFAULT_SELECTION_STAGE = StageId.STAGE2.value
 
 
 class SelectionError(RuntimeError):
@@ -167,12 +174,20 @@ class HeldOutEvaluator(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SelectionRecord:
-    """The persisted decision: which run represents this arm, and why."""
+    """The persisted decision: which run represents this arm, and why.
+
+    ``stage`` scopes the decision, because the study selects once per arm
+    *per stage*: the pilot's arg-max runs over two runs and the full
+    design's over five, and only the second is the study's reported
+    selection. Both are recorded so the pilot's preliminary delta is
+    checkable rather than overwritten.
+    """
 
     arm_id: str
     selected_run_id: str
     official_score: float
     rule: str = SELECTION_RULE
+    stage: str = DEFAULT_SELECTION_STAGE
 
     def __post_init__(self) -> None:
         if self.rule != SELECTION_RULE:
@@ -180,6 +195,8 @@ class SelectionRecord:
                 f"selection rule must be {SELECTION_RULE!r}; a different "
                 "rule is a different pre-registration"
             )
+        if not self.stage.strip():
+            raise ValueError("a selection names the stage that made it")
 
 
 class SelectionLedger(Protocol):
@@ -224,19 +241,27 @@ class SelectionLog:
 
     records: list[SelectionRecord] = field(default_factory=list)
     held_out_measured: list[str] = field(default_factory=list)
+    #: The stage this log scopes its refusals to. One log per stage, so a
+    #: pilot and the full design each select once without either being able
+    #: to select twice.
+    stage: str = DEFAULT_SELECTION_STAGE
 
     def record_selection(self, record: SelectionRecord) -> None:
         """Persist an arm's selection, refusing a second one (L2)."""
-        if any(existing.arm_id == record.arm_id for existing in self.records):
+        if any(
+            existing.arm_id == record.arm_id and existing.stage == record.stage
+            for existing in self.records
+        ):
             raise SelectionError(
                 f"arm {record.arm_id!r} already selected a representative "
-                "run; selection happens exactly once per arm"
+                f"run at {record.stage}; selection happens exactly once "
+                "per arm per stage"
             )
         self.records.append(record)
 
     def selection_for(self, arm_id: str) -> SelectionRecord | None:
         for record in self.records:
-            if record.arm_id == arm_id:
+            if record.arm_id == arm_id and record.stage == self.stage:
                 return record
         return None
 
@@ -320,6 +345,7 @@ def report_arm(  # noqa: PLR0913
     evaluate_held_out: HeldOutEvaluator,
     log: SelectionLedger,
     candidate_name: str | None = None,
+    stage: str = DEFAULT_SELECTION_STAGE,
 ) -> ArmReport:
     """Select this arm's representative on official, then measure it once.
 
@@ -363,6 +389,7 @@ def report_arm(  # noqa: PLR0913
             arm_id=arm_id,
             selected_run_id=best.run_id,
             official_score=best.score,
+            stage=stage,
         )
     )
     # Read back rather than reuse: the held-out call must depend on the
@@ -376,6 +403,11 @@ def report_arm(  # noqa: PLR0913
             f"{representative.run_id!r}"
         )
 
+    # The reported candidate keeps the arm's own name: the report keys its
+    # held-out rows by it, and a stage-decorated name would leave the
+    # study's own result unfindable. The *claim* is what carries the stage,
+    # so the pilot and the full design each get exactly one held-out
+    # evaluation without either colliding with the other.
     reported_name = candidate_name or arm_id
     log.claim_held_out(reported_name)
     held_out = evaluate_held_out(
@@ -578,13 +610,21 @@ class ManifestSelectionLog:
         rather than as one that never happened.
     """
 
-    def __init__(self, study_dir: Path) -> None:
+    def __init__(
+        self, study_dir: Path, *, stage: str = DEFAULT_SELECTION_STAGE
+    ) -> None:
         self._study_dir = study_dir
+        self._stage = stage
 
     @property
     def study_dir(self) -> Path:
         """Where this ledger persists."""
         return self._study_dir
+
+    @property
+    def stage(self) -> str:
+        """The stage whose selections and claims this ledger owns."""
+        return self._stage
 
     def _read(self) -> StudyManifest:
         return read_study_manifest(self._study_dir)
@@ -593,11 +633,13 @@ class ManifestSelectionLog:
         """Persist an arm's selection into ``study.json`` (L2)."""
         manifest = self._read()
         if any(
-            existing.arm_id == record.arm_id for existing in manifest.selection
+            existing.arm_id == record.arm_id and existing.stage == record.stage
+            for existing in manifest.selection
         ):
             raise SelectionError(
                 f"arm {record.arm_id!r} already selected a representative "
-                "run; selection happens exactly once per arm"
+                f"run at {record.stage}; selection happens exactly once "
+                "per arm per stage"
             )
         self._write(
             manifest.model_copy(
@@ -609,6 +651,7 @@ class ManifestSelectionLog:
                             selected_run_id=record.selected_run_id,
                             official_score=record.official_score,
                             rule=record.rule,
+                            stage=record.stage,
                         ),
                     )
                 }
@@ -617,12 +660,13 @@ class ManifestSelectionLog:
 
     def selection_for(self, arm_id: str) -> SelectionRecord | None:
         for entry in self._read().selection:
-            if entry.arm_id == arm_id:
+            if entry.arm_id == arm_id and entry.stage == self._stage:
                 return SelectionRecord(
                     arm_id=entry.arm_id,
                     selected_run_id=entry.selected_run_id,
                     official_score=entry.official_score,
                     rule=entry.rule,
+                    stage=entry.stage,
                 )
         return None
 
@@ -648,14 +692,18 @@ class ManifestSelectionLog:
         if self._claim_index(manifest, candidate_name) is not None:
             raise SelectionError(
                 f"candidate {candidate_name!r} was already evaluated on "
-                "held-out; each reported candidate is evaluated exactly once"
+                f"held-out at {self._stage}; each reported candidate is "
+                "evaluated exactly once"
             )
         self._write(
             manifest.model_copy(
                 update={
                     "held_out_claims": (
                         *manifest.held_out_claims,
-                        PersistedHeldOutClaim(candidate_name=candidate_name),
+                        PersistedHeldOutClaim(
+                            candidate_name=candidate_name,
+                            stage=self._stage,
+                        ),
                     )
                 }
             )
@@ -678,6 +726,7 @@ class ManifestSelectionLog:
             )
         claims[index] = PersistedHeldOutClaim(
             candidate_name=measurement.candidate_name,
+            stage=self._stage,
             eval_config_hash=measurement.eval_config_hash,
             repeats=measurement.repeats,
             mean=measurement.mean,
@@ -697,12 +746,12 @@ class ManifestSelectionLog:
             1
             for entry in self._read().held_out_claims
             if entry.candidate_name == candidate_name
+            and entry.stage == self._stage
         )
 
-    @staticmethod
-    def _claim_index(manifest: StudyManifest, name: str) -> int | None:
+    def _claim_index(self, manifest: StudyManifest, name: str) -> int | None:
         for index, entry in enumerate(manifest.held_out_claims):
-            if entry.candidate_name == name:
+            if entry.candidate_name == name and entry.stage == self._stage:
                 return index
         return None
 

@@ -416,9 +416,11 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "selected_run_id",
         "official_score",
         "rule",
+        "stage",
     ]
     assert list(payload["held_out_claims"][0]) == [
         "candidate_name",
+        "stage",
         "eval_config_hash",
         "repeats",
         "mean",

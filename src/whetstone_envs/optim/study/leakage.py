@@ -19,8 +19,13 @@ from dataclasses import dataclass
 from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING
 
+from whetstone.optim.contracts import IntentOutcome
+
+from whetstone_envs.optim.audit._evidence import load_run_evidence
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
+    from pathlib import Path
 
 __all__ = [
     "HeldOutObservation",
@@ -35,6 +40,8 @@ __all__ = [
     "check_l3_held_out_once_per_candidate",
     "check_l4_identical_held_out_procedure",
     "check_l5_splits_disjoint",
+    "optimizer_observations_for_study",
+    "optimizer_observations_from_run",
     "study_leakage_check",
 ]
 
@@ -442,6 +449,77 @@ def study_leakage_check(  # noqa: PLR0913
         )
         raise LeakageCheckError(f"study leakage check failed -- {summary}")
     return report
+
+
+def optimizer_observations_from_run(
+    run_dir: Path,
+) -> tuple[OptimizerEvalObservation, ...]:
+    """Every evaluation one optimizer run caused, as L1 reads it.
+
+    L1's evidence is per-run and lives in the run's own store, not in the
+    study manifest, which is why the manifest-only check could never do
+    more than report the rule unchecked. This reads it: each completed
+    intent resolution names the Eval Config it resolved against, and the
+    evidence that resolution addresses names the role it ran under. L1
+    needs both -- the config alone would pass an evaluation that reached
+    the right config under the wrong role, and the role alone would pass
+    one that reached a second internal config the run never declared.
+
+    A rejected or failed intent is skipped, because whetstone deliberately
+    writes no eval evidence for one; demanding evidence there would make an
+    honest refusal look like a leak.
+    """
+    evidence = load_run_evidence(run_dir)
+    observations: list[OptimizerEvalObservation] = []
+    for step in evidence.steps:
+        for index, resolution in enumerate(step.resolved_intents):
+            if resolution.outcome is not IntentOutcome.COMPLETED:
+                continue
+            reference = resolution.eval_result_ref
+            if reference is None:
+                continue
+            found = evidence.eval_evidence(reference)
+            if found is None:
+                # A completed resolution addressing something that is not
+                # eval evidence is an auditable defect, and
+                # ``reported_numbers_resolve`` is the invariant that reports
+                # it. L1 is about which split was seen, so it reads the
+                # resolutions that carry one.
+                continue
+            observations.append(
+                OptimizerEvalObservation(
+                    run_id=evidence.run_id,
+                    step_index=step.index,
+                    resolution_index=index,
+                    eval_role=str(found.eval_role.value),
+                    resolved_eval_config_hash=str(
+                        resolution.resolved_eval_config.config_hash
+                    ),
+                )
+            )
+    return tuple(observations)
+
+
+def optimizer_observations_for_study(
+    run_dirs: Iterable[Path],
+) -> tuple[OptimizerEvalObservation, ...]:
+    """L1's evidence across every run a study recorded.
+
+    A run directory that no longer holds its artifacts is skipped rather
+    than raising: the caller reports L1 as unchecked when the result is
+    empty, which is the same verdict a missing run produces, and a crash
+    would replace a legible finding with a traceback.
+    """
+    observations: list[OptimizerEvalObservation] = []
+    for run_dir in run_dirs:
+        if not (run_dir / RUN_RESULT_NAME).is_file():
+            continue
+        observations.extend(optimizer_observations_from_run(run_dir))
+    return tuple(observations)
+
+
+#: The artifact whose presence marks a readable run directory.
+RUN_RESULT_NAME = "result.json"
 
 
 def held_out_observations_from_counts(

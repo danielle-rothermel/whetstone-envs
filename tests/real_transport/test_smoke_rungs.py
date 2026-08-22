@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+pytest.importorskip("whetstone.experiment.env")
+
 from tests.real_transport.conftest import (
     SMOKE_MODEL,
     SMOKE_SPLIT_SIZES,

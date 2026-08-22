@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+pytest.importorskip("whetstone.experiment.env")
+
 from whetstone_envs.optim.audit import AuditStatus, audit_run
 from whetstone_envs.optim.nulls import NULL_RANDOM_OPTIMIZER
 from whetstone_envs.optim.run import OPTIMIZERS, RunSpec, run_optimizer

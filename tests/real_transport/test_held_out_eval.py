@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+pytest.importorskip("whetstone.experiment.env")
+
 from tests.real_transport.conftest import SMOKE_MODEL, SMOKE_SPLIT_SIZES
 from whetstone_envs.reporting.execution import (
     C19EvalSpec,

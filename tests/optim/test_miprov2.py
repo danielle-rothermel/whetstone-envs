@@ -22,9 +22,14 @@ from whetstone_envs.optim.experiment import (
 )
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.miprov2 import (
+    DEFAULT_MIPROV2_NUM_CANDIDATES,
+    DEFAULT_MIPROV2_NUM_TRIALS,
+    DEFAULT_MIPROV2_SPLIT,
     DEMO_MODES,
     MIPROV2_COMPONENT_ID,
+    MIPROV2_SPLITS,
     Miprov2DemoMode,
+    Miprov2Split,
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
@@ -295,3 +300,137 @@ def test_labeled_demos_carry_the_task_gold(engine_and_store, prepared) -> None:
             C19.response_field: gold_by_hash[demo.source_task_hash]
         }
         assert outputs[C19.response_field]
+
+
+# --------------------------------------------------------------------------
+# Search shape and split
+# --------------------------------------------------------------------------
+
+
+def test_the_default_search_shape_is_this_runners_own(
+    engine_and_store, prepared
+) -> None:
+    """Wave 3's measured call counts are the cost of *these* numbers.
+
+    Both are below the protocol's auto-light 10 and 6, which is exactly the
+    caveat Wave 3 recorded; the defaults stay put so the fake-transport
+    end-to-end tests remain fast.
+    """
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine, experiment=prepared.experiment, family=C19
+    )
+    assert DEFAULT_MIPROV2_NUM_TRIALS == 2
+    assert DEFAULT_MIPROV2_NUM_CANDIDATES == 3
+    assert control.num_trials == DEFAULT_MIPROV2_NUM_TRIALS
+    assert control.num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES
+
+
+def test_the_protocol_shape_reaches_the_control(
+    engine_and_store, prepared
+) -> None:
+    """The point of the setting: request auto-light without editing code."""
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        num_trials=10,
+        num_candidates=6,
+    )
+    assert control.num_trials == 10
+    assert control.num_candidates == 6
+
+
+@pytest.mark.parametrize(
+    ("num_trials", "num_candidates", "message"),
+    [
+        (0, 3, "num_trials must be at least 1"),
+        (-1, 3, "num_trials must be at least 1"),
+        (2, 0, "num_candidates must be at least 1"),
+    ],
+)
+def test_a_non_positive_search_shape_is_refused(
+    engine_and_store,
+    prepared,
+    num_trials: int,
+    num_candidates: int,
+    message: str,
+) -> None:
+    """Refused outside the durable run boundary, like the other settings."""
+    engine, _store = engine_and_store
+    with pytest.raises(ValueError, match=message):
+        build_miprov2_control(
+            engine=engine,
+            experiment=prepared.experiment,
+            family=C19,
+            num_trials=num_trials,
+            num_candidates=num_candidates,
+        )
+
+
+def test_the_split_names_cover_the_enumeration() -> None:
+    assert set(MIPROV2_SPLITS) == {split.value for split in Miprov2Split}
+    assert DEFAULT_MIPROV2_SPLIT is Miprov2Split.SINGLE_TASK
+
+
+def test_single_task_split_keeps_the_one_task_trainset(
+    engine_and_store, prepared
+) -> None:
+    """Today's behaviour, retained as the default pending a decision.
+
+    Bootstrapping is a cursor walk over the trainset, so a one-task
+    trainset means every demonstration is drawn from one task -- which is
+    what Wave 3 measured as 1-2 bootstrap rows and flagged as substantive.
+    """
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.SINGLE_TASK,
+    )
+    task_hashes = tuple(engine.sampling.task_hashes)
+    assert control.trainset_task_hashes == task_hashes[:1]
+    assert control.valset_task_hashes == task_hashes[1:]
+    assert not set(control.trainset_task_hashes) & set(
+        control.valset_task_hashes
+    )
+
+
+def test_internal_split_is_dspys_own_default(
+    engine_and_store, prepared
+) -> None:
+    """``internal`` means trainset = valset = the whole internal split."""
+    engine, _store = engine_and_store
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.INTERNAL,
+    )
+    task_hashes = tuple(engine.sampling.task_hashes)
+    assert control.trainset_task_hashes == task_hashes
+    assert control.valset_task_hashes == task_hashes
+
+
+def test_the_split_choice_moves_the_bootstrap_surface(
+    engine_and_store, prepared
+) -> None:
+    """The two splits are different experiments, not two spellings of one."""
+    engine, _store = engine_and_store
+    single = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.SINGLE_TASK,
+    )
+    internal = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        split=Miprov2Split.INTERNAL,
+    )
+    assert len(internal.trainset_task_hashes) > len(
+        single.trainset_task_hashes
+    )

@@ -255,3 +255,86 @@ def test_an_arm_naming_an_unseeded_optimizer_is_refused() -> None:
     )
     with pytest.raises(ValueError, match="unknown optimizer"):
         spec_from_manifest(manifest)
+
+
+# --------------------------------------------------------------------------
+# Per-arm MIPROv2 settings
+# --------------------------------------------------------------------------
+
+
+def test_an_arm_carries_no_miprov2_settings_by_default() -> None:
+    """Unset means "keep the runner's default", not "pin it here twice"."""
+    arm = ArmSpec(
+        arm_id="miprov2",
+        optimizer="miprov2",
+        kind=ArmKind.REAL,
+        k_run=1,
+        seeds=(2000,),
+    )
+    assert arm.miprov2_num_trials is None
+    assert arm.miprov2_num_candidates is None
+    assert arm.miprov2_split is None
+
+
+def test_an_arm_can_request_the_protocol_search_shape() -> None:
+    arm = ArmSpec(
+        arm_id="miprov2",
+        optimizer="miprov2",
+        kind=ArmKind.REAL,
+        k_run=1,
+        seeds=(2000,),
+        miprov2_num_trials=10,
+        miprov2_num_candidates=6,
+        miprov2_split="internal",
+    )
+    assert arm.miprov2_num_trials == 10
+    assert arm.miprov2_num_candidates == 6
+    assert arm.miprov2_split == "internal"
+
+
+@pytest.mark.parametrize(
+    ("trials", "candidates", "split"),
+    [(10, None, None), (None, 6, None), (None, None, "internal")],
+)
+def test_miprov2_settings_are_refused_on_another_arms_optimizer(
+    trials: int | None, candidates: int | None, split: str | None
+) -> None:
+    """A setting nothing reads must not look honoured on a COPRO arm."""
+    with pytest.raises(ValueError, match="sets MIPROv2 settings"):
+        ArmSpec(
+            arm_id="copro",
+            optimizer="copro",
+            kind=ArmKind.REAL,
+            k_run=1,
+            seeds=(1000,),
+            miprov2_num_trials=trials,
+            miprov2_num_candidates=candidates,
+            miprov2_split=split,
+        )
+
+
+@pytest.mark.parametrize(
+    ("trials", "candidates", "split", "message"),
+    [
+        (0, None, None, "miprov2_num_trials must be at least 1"),
+        (None, 0, None, "miprov2_num_candidates must be at least 1"),
+        (None, None, "nope", "miprov2_split must be one of"),
+    ],
+)
+def test_an_arm_refuses_an_invalid_miprov2_setting(
+    trials: int | None,
+    candidates: int | None,
+    split: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        ArmSpec(
+            arm_id="miprov2",
+            optimizer="miprov2",
+            kind=ArmKind.REAL,
+            k_run=1,
+            seeds=(2000,),
+            miprov2_num_trials=trials,
+            miprov2_num_candidates=candidates,
+            miprov2_split=split,
+        )

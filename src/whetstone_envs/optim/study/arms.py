@@ -392,6 +392,17 @@ class StudyOptimizerRunner:
                 if arm.demo_mode is not None
                 else {}
             ),
+            # Only forwarded when the arm sets them, so an unset arm keeps
+            # the runner's own default rather than pinning it here twice.
+            **{
+                field: value
+                for field, value in (
+                    ("miprov2_num_trials", arm.miprov2_num_trials),
+                    ("miprov2_num_candidates", arm.miprov2_num_candidates),
+                    ("miprov2_split", arm.miprov2_split),
+                )
+                if value is not None
+            },
             **(
                 {"codex_capacity": self.codex_capacity}
                 if arm.optimizer == "codex" and self.codex_capacity is not None

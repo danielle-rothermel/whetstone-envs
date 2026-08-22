@@ -264,6 +264,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `whetstone-study plan` now prints Wave 3's measured per-run call counts
   beside the control-derived estimates, labelling each row `MEASURED` or
   `ESTIMATE`. Arms Wave 3 did not measure print only their estimate.
+- **MIPROv2's search shape and split are settings, not literals.**
+  `num_trials` and `num_candidates` were hardcoded at 2 and 3 in
+  `optim/miprov2.py` while the protocol's auto-light configuration assumes
+  10 and 6 — so Wave 3's measured 245 task calls are the cost of *this*
+  runner's shape, not the protocol's, and there was no way to ask for the
+  protocol's without editing the module. Both are now `RunSpec` fields with
+  `--miprov2-num-trials` / `--miprov2-num-candidates` CLI flags, validated
+  as positive and refused on any other optimizer, and `ArmSpec` carries
+  them so a study arm can request the protocol's shape. Defaults are
+  unchanged, which keeps the fake-transport end-to-end runs fast.
+- **The MIPROv2 trainset/valset split is selectable.** `build_miprov2_control`
+  sliced `trainset=task_hashes[:1]`, so every bootstrapped demonstration was
+  drawn from a single task at every split size — a substantive design
+  question Wave 3 flagged, not just a budget one. The partition is now the
+  `Miprov2Split` setting behind `--miprov2-split`: `single-task` is today's
+  one-task trainset and `internal` is DSPy's own default of
+  trainset = valset = the whole internal split. `single-task` remains the
+  default pending a decision on whether the one-task trainset is intended,
+  and the choice is documented where it is made rather than implied by a
+  slice literal.
 
 ### Fixed
 

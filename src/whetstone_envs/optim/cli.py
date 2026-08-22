@@ -10,9 +10,13 @@ from whetstone_envs.optim.run import (
     DEFAULT_COPRO_DEPTH,
     DEFAULT_MIPROV2_FULL_EVAL_STEPS,
     DEFAULT_MIPROV2_MINIBATCH,
+    DEFAULT_MIPROV2_NUM_CANDIDATES,
+    DEFAULT_MIPROV2_NUM_TRIALS,
+    DEFAULT_MIPROV2_SPLIT,
     DEFAULT_SPLIT_SIZES,
     DEMO_MODES,
     MIN_COPRO_BREADTH,
+    MIPROV2_SPLITS,
     OPTIMIZERS,
     TRANSPORTS,
     RunSpec,
@@ -197,6 +201,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--miprov2-num-trials",
+        type=_positive_int,
+        default=DEFAULT_MIPROV2_NUM_TRIALS,
+        help=(
+            "MIPROv2 optimization trials. The default is this runner's own "
+            "shape; the protocol's auto-light configuration assumes 10."
+        ),
+    )
+    parser.add_argument(
+        "--miprov2-num-candidates",
+        type=_positive_int,
+        default=DEFAULT_MIPROV2_NUM_CANDIDATES,
+        help=(
+            "MIPROv2 candidates per component. The default is this "
+            "runner's own shape; the protocol's auto-light assumes 6."
+        ),
+    )
+    parser.add_argument(
+        "--miprov2-split",
+        choices=MIPROV2_SPLITS,
+        default=DEFAULT_MIPROV2_SPLIT.value,
+        help=(
+            "How MIPROv2 partitions the internal split. 'single-task' "
+            "bootstraps from a one-task trainset; 'internal' is DSPy's "
+            "default of trainset = valset = the whole internal split."
+        ),
+    )
+    parser.add_argument(
         "--codex-capacity",
         type=_positive_int,
         default=None,
@@ -238,6 +270,9 @@ def main(argv: list[str] | None = None) -> int:
                 miprov2_minibatch_full_eval_steps=(
                     arguments.miprov2_minibatch_full_eval_steps
                 ),
+                miprov2_num_trials=arguments.miprov2_num_trials,
+                miprov2_num_candidates=arguments.miprov2_num_candidates,
+                miprov2_split=arguments.miprov2_split,
                 codex_capacity=arguments.codex_capacity,
             )
         )

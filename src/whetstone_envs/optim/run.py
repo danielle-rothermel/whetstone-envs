@@ -64,8 +64,13 @@ from whetstone_envs.optim.gepa import build_gepa_adapter
 from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_FULL_EVAL_STEPS,
     DEFAULT_MIPROV2_MINIBATCH,
+    DEFAULT_MIPROV2_NUM_CANDIDATES,
+    DEFAULT_MIPROV2_NUM_TRIALS,
+    DEFAULT_MIPROV2_SPLIT,
     DEMO_MODES,
+    MIPROV2_SPLITS,
     Miprov2DemoMode,
+    Miprov2Split,
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
@@ -178,6 +183,19 @@ class RunSpec:
     miprov2_minibatch_size: int | None = None
     #: Trials between full-validation re-evaluations of the incumbent.
     miprov2_minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS
+    #: MIPROv2 optimization trials. The default is this runner's own shape,
+    #: which is below the protocol's auto-light 10; Wave 3's measured call
+    #: counts are the cost of the default, and raising this raises them.
+    miprov2_num_trials: int = DEFAULT_MIPROV2_NUM_TRIALS
+    #: MIPROv2 instruction/fewshot candidates per component. The default is
+    #: below the protocol's auto-light 6, for the same reason.
+    miprov2_num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES
+    #: How MIPROv2 partitions the internal split into trainset and valset.
+    #: ``single-task`` -- the default -- gives bootstrapping a one-task
+    #: trainset; ``internal`` is DSPy's default of trainset = valset = the
+    #: whole internal split. The default is retained pending a decision on
+    #: whether drawing every demonstration from one task is intended.
+    miprov2_split: str = DEFAULT_MIPROV2_SPLIT.value
     #: Extra scripted proposer bodies for a fake-transport run, appended to
     #: the family's own. The family scripts a ceiling draft and the naive
     #: seed; the seed is rejected as a no-op mutation, so a fake round can
@@ -214,11 +232,12 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
         or spec.miprov2_minibatch_size is not None
         or spec.miprov2_minibatch_full_eval_steps
         != DEFAULT_MIPROV2_FULL_EVAL_STEPS
+        or spec.miprov2_num_trials != DEFAULT_MIPROV2_NUM_TRIALS
+        or spec.miprov2_num_candidates != DEFAULT_MIPROV2_NUM_CANDIDATES
+        or spec.miprov2_split != DEFAULT_MIPROV2_SPLIT.value
     )
     if non_default and spec.optimizer != "miprov2":
-        raise ValueError(
-            "miprov2 minibatch settings apply only to --optimizer miprov2"
-        )
+        raise ValueError("miprov2 settings apply only to --optimizer miprov2")
     if (
         spec.miprov2_minibatch_size is not None
         and spec.miprov2_minibatch_size < 1
@@ -227,6 +246,14 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
     if spec.miprov2_minibatch_full_eval_steps < 1:
         raise ValueError(
             "miprov2_minibatch_full_eval_steps must be at least 1"
+        )
+    if spec.miprov2_num_trials < 1:
+        raise ValueError("miprov2_num_trials must be at least 1")
+    if spec.miprov2_num_candidates < 1:
+        raise ValueError("miprov2_num_candidates must be at least 1")
+    if spec.miprov2_split not in MIPROV2_SPLITS:
+        raise ValueError(
+            f"miprov2_split must be one of {list(MIPROV2_SPLITS)}"
         )
 
 
@@ -443,6 +470,9 @@ def _bind_optimizer(  # noqa: PLR0913
         minibatch=spec.miprov2_minibatch,
         minibatch_size=spec.miprov2_minibatch_size,
         minibatch_full_eval_steps=spec.miprov2_minibatch_full_eval_steps,
+        num_trials=spec.miprov2_num_trials,
+        num_candidates=spec.miprov2_num_candidates,
+        split=Miprov2Split(spec.miprov2_split),
     )
     miprov2_adapter = build_miprov2_adapter(
         store=store,
@@ -723,16 +753,21 @@ __all__ = [
     "DEFAULT_COPRO_DEPTH",
     "DEFAULT_MIPROV2_FULL_EVAL_STEPS",
     "DEFAULT_MIPROV2_MINIBATCH",
+    "DEFAULT_MIPROV2_NUM_CANDIDATES",
+    "DEFAULT_MIPROV2_NUM_TRIALS",
+    "DEFAULT_MIPROV2_SPLIT",
     "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_SPLIT_SIZES",
     "DEMO_MODES",
     "GEPA_DEFAULT_SEED",
     "KNOWN_FAMILY_IDS",
     "MIPROV2_DEFAULT_SEED",
+    "MIPROV2_SPLITS",
     "OPTIMIZERS",
     "SEED_DISPOSITION_CONTROL_FIELD",
     "SEED_DISPOSITION_PROVIDER_ONLY",
     "TRANSPORTS",
+    "Miprov2Split",
     "RunSpec",
     "default_output_dir",
     "registered_family_ids",

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from enum import UNIQUE, StrEnum, auto, verify
 from typing import TYPE_CHECKING
 
+from whetstone_envs.optim.miprov2 import MIPROV2_SPLITS
 from whetstone_envs.optim.study.manifest import read_study_manifest
 
 if TYPE_CHECKING:
@@ -208,10 +209,52 @@ class ArmSpec:
     k_run: int
     seeds: tuple[int, ...]
     demo_mode: str | None = None
+    #: MIPROv2 search shape and split, when this arm sets them. ``None``
+    #: keeps the runner's own default, which is what every arm the study
+    #: builds today does; they are here so an arm can request the
+    #: protocol's auto-light shape without the runner hardcoding it.
+    #: Refused on any other optimizer, because a setting that looks
+    #: honoured but is not is how a study comes to misdescribe its own arm.
+    miprov2_num_trials: int | None = None
+    miprov2_num_candidates: int | None = None
+    miprov2_split: str | None = None
 
     def __post_init__(self) -> None:
         if not self.arm_id.strip():
             raise ValueError("arm ids must be nonblank")
+        miprov2_settings = (
+            self.miprov2_num_trials,
+            self.miprov2_num_candidates,
+            self.miprov2_split,
+        )
+        if (
+            any(value is not None for value in miprov2_settings)
+            and self.optimizer != "miprov2"
+        ):
+            raise ValueError(
+                f"arm {self.arm_id!r} sets MIPROv2 settings but runs "
+                f"optimizer {self.optimizer!r}"
+            )
+        if self.miprov2_num_trials is not None and self.miprov2_num_trials < 1:
+            raise ValueError(
+                f"arm {self.arm_id!r} miprov2_num_trials must be at least 1"
+            )
+        if (
+            self.miprov2_num_candidates is not None
+            and self.miprov2_num_candidates < 1
+        ):
+            raise ValueError(
+                f"arm {self.arm_id!r} miprov2_num_candidates must be at "
+                "least 1"
+            )
+        if (
+            self.miprov2_split is not None
+            and self.miprov2_split not in MIPROV2_SPLITS
+        ):
+            raise ValueError(
+                f"arm {self.arm_id!r} miprov2_split must be one of "
+                f"{list(MIPROV2_SPLITS)}"
+            )
         if self.k_run < 1:
             raise ValueError(f"arm {self.arm_id!r} must run at least once")
         if len(self.seeds) != self.k_run:

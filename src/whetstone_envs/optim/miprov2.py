@@ -23,6 +23,7 @@ minibatching on must size it against the run's own valset.
 
 from __future__ import annotations
 
+from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING
 
 from whetstone.core.identity import ImmutableJsonObject, compute_identity_hash
@@ -96,7 +97,62 @@ DEFAULT_MIPROV2_MINIBATCH = False
 #: observable once ``minibatch`` is on.
 DEFAULT_MIPROV2_FULL_EVAL_STEPS = 1
 
+#: The search shape this runner has always produced. Both are **below** the
+#: protocol's auto-light configuration, which assumes ``num_trials=10`` and
+#: ``num_candidates=6``; Wave 3's measured 245 task calls are therefore the
+#: cost of *this* shape, not of the protocol's.
+#:
+#: They stay the defaults so the fake-transport end-to-end tests remain
+#: fast, and are exposed as settings so a study arm can request the
+#: protocol's shape without editing this module.
+DEFAULT_MIPROV2_NUM_TRIALS = 2
+#: Seeds -3/-2 are RESET/LABELS_ONLY; 3 admits seed -1, the first
+#: bootstrap candidate.
+DEFAULT_MIPROV2_NUM_CANDIDATES = 3
+
 DEMO_MODES = tuple(mode.value for mode in Miprov2DemoMode)
+
+
+@verify(UNIQUE)
+class Miprov2Split(StrEnum):
+    """How a run partitions the engine's tasks into trainset and valset.
+
+    The two are genuinely different experiments, not two spellings of one,
+    which is why this is a named setting rather than a slice literal.
+
+    ``SINGLE_TASK`` is what this runner has always done:
+    ``trainset=task_hashes[:1]``, ``valset=task_hashes[1:]``. Bootstrapping
+    is a single cursor walk over the trainset, so a one-task trainset means
+    every bootstrapped demonstration is drawn from **one task** -- which
+    Wave 3 measured as 1-2 bootstrap rows per run and flagged as a
+    substantive design question, not just a budget one.
+
+    ``INTERNAL`` is DSPy's own default: trainset and valset are both the
+    whole internal split, so demonstrations are drawn from every task the
+    run can see.
+
+    ``SINGLE_TASK`` remains the default pending that decision, so this
+    setting changes nothing until a caller asks for the other one.
+    """
+
+    SINGLE_TASK = "single-task"
+    INTERNAL = "internal"
+
+
+#: The split this runner has always produced. Kept as the default while the
+#: one-task-trainset question is open; see :class:`Miprov2Split`.
+DEFAULT_MIPROV2_SPLIT = Miprov2Split.SINGLE_TASK
+
+MIPROV2_SPLITS = tuple(split.value for split in Miprov2Split)
+
+
+def _resolve_split(
+    split: Miprov2Split, task_hashes: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """This split's ``(trainset, valset)`` over ``task_hashes``."""
+    if split is Miprov2Split.INTERNAL:
+        return task_hashes, task_hashes
+    return task_hashes[:1], task_hashes[1:]
 
 
 def miprov2_policy_identity_hash(family: FamilySpec) -> str:
@@ -127,14 +183,13 @@ def build_miprov2_control(  # noqa: PLR0913
     experiment: Experiment,
     family: FamilySpec,
     demo_mode: Miprov2DemoMode = Miprov2DemoMode.FEWSHOT,
-    num_trials: int = 2,
-    # Seeds -3/-2 are RESET/LABELS_ONLY; 3 admits seed -1, the first
-    # bootstrap candidate.
-    num_candidates: int = 3,
+    num_trials: int = DEFAULT_MIPROV2_NUM_TRIALS,
+    num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES,
     seed: int = 9,
     minibatch: bool = DEFAULT_MIPROV2_MINIBATCH,
     minibatch_size: int | None = None,
     minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS,
+    split: Miprov2Split = DEFAULT_MIPROV2_SPLIT,
 ) -> Miprov2Control:
     """Resolve one family's MIPROv2 control against the engine.
 
@@ -142,6 +197,15 @@ def build_miprov2_control(  # noqa: PLR0913
     a non-minibatched run evaluates on every trial. The protocol's
     auto-light configuration turns ``minibatch`` on and sizes the batch
     below that, so the periodic full evaluation becomes observable.
+
+    ``num_trials`` and ``num_candidates`` default to this runner's own
+    shape, which is smaller than the protocol's auto-light 10 and 6. They
+    are parameters rather than literals so a study arm can request the
+    protocol's shape; raising them raises the run's call count, which is
+    why the Stage-1 estimate is a loose upper bound.
+
+    ``split`` selects the trainset/valset partition; see
+    :class:`Miprov2Split` for why the choice is substantive.
     """
     prompt_adapter = PlainPromptAdapter()
     task_hashes = tuple(engine.sampling.task_hashes)
@@ -149,8 +213,12 @@ def build_miprov2_control(  # noqa: PLR0913
         raise ValueError(
             "MIPROv2 needs at least two tasks to split train and val"
         )
+    if num_trials < 1:
+        raise ValueError("num_trials must be at least 1")
+    if num_candidates < 1:
+        raise ValueError("num_candidates must be at least 1")
     bootstrapped, labeled = _demo_maxima(demo_mode)
-    valset = task_hashes[1:]
+    trainset, valset = _resolve_split(split, task_hashes)
     resolved_minibatch_size = (
         len(valset) if minibatch_size is None else minibatch_size
     )
@@ -199,8 +267,8 @@ def build_miprov2_control(  # noqa: PLR0913
     return configure_miprov2(
         base_candidate=candidate_reference(experiment.initial_candidate),
         program_layout=layout,
-        trainset=task_hashes[:1],
-        valset=task_hashes[1:],
+        trainset=trainset,
+        valset=valset,
         max_bootstrapped_demos=bootstrapped,
         max_labeled_demos=labeled,
         auto=None,

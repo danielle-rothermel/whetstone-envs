@@ -23,9 +23,13 @@ from whetstone_envs.optim.cli import build_parser, main
 from whetstone_envs.optim.run import (
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
+    DEFAULT_MIPROV2_NUM_CANDIDATES,
+    DEFAULT_MIPROV2_NUM_TRIALS,
+    DEFAULT_MIPROV2_SPLIT,
     DEFAULT_SPLIT_SIZES,
     GEPA_DEFAULT_SEED,
     MIPROV2_DEFAULT_SEED,
+    MIPROV2_SPLITS,
     OPTIMIZERS,
     SEED_DISPOSITION_CONTROL_FIELD,
     SEED_DISPOSITION_PROVIDER_ONLY,
@@ -534,3 +538,94 @@ def test_optimizers_the_runner_cannot_drive_are_refused(
 def test_every_runner_transport_parses(transport: str) -> None:
     spec = _captured_spec(["--optimizer", "copro", "--transport", transport])
     assert spec.transport == transport
+
+
+# --------------------------------------------------------------------------
+# MIPROv2 search shape and split
+# --------------------------------------------------------------------------
+
+
+def test_the_miprov2_shape_defaults_are_the_runners_own() -> None:
+    """Defaults unchanged, which is what keeps the e2e fixtures fast."""
+    spec = _spec()
+    assert spec.miprov2_num_trials == DEFAULT_MIPROV2_NUM_TRIALS == 2
+    assert spec.miprov2_num_candidates == DEFAULT_MIPROV2_NUM_CANDIDATES == 3
+    assert spec.miprov2_split == DEFAULT_MIPROV2_SPLIT.value == "single-task"
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "field"),
+    [
+        ("--miprov2-num-trials", "10", "miprov2_num_trials"),
+        ("--miprov2-num-candidates", "6", "miprov2_num_candidates"),
+    ],
+)
+def test_the_miprov2_shape_flags_reach_the_spec(
+    flag: str, value: str, field: str
+) -> None:
+    """The protocol's auto-light shape, requestable from the CLI."""
+    spec = _captured_spec(["--optimizer", "miprov2", flag, value])
+    assert getattr(spec, field) == int(value)
+
+
+@pytest.mark.parametrize("split", MIPROV2_SPLITS)
+def test_every_miprov2_split_reaches_the_spec(split: str) -> None:
+    spec = _captured_spec(["--optimizer", "miprov2", "--miprov2-split", split])
+    assert spec.miprov2_split == split
+
+
+def test_an_unknown_miprov2_split_is_refused_at_the_parser() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["--optimizer", "miprov2", "--miprov2-split", "nope"]
+        )
+
+
+@pytest.mark.parametrize(
+    "flag", ["--miprov2-num-trials", "--miprov2-num-candidates"]
+)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_a_non_positive_miprov2_shape_is_refused(
+    flag: str, value: str
+) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--optimizer", "miprov2", flag, value])
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"miprov2_num_trials": 10},
+        {"miprov2_num_candidates": 6},
+        {"miprov2_split": "internal"},
+    ],
+)
+def test_miprov2_settings_are_refused_on_another_optimizer(
+    overrides: dict[str, object],
+) -> None:
+    """A setting that looks honoured but is not misdescribes the arm."""
+    spec = replace(_spec(optimizer="copro"), **overrides)
+    with pytest.raises(ValueError, match="apply only to --optimizer miprov2"):
+        run_optimizer(spec)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"miprov2_num_trials": 0}, "miprov2_num_trials must be at least 1"),
+        (
+            {"miprov2_num_candidates": 0},
+            "miprov2_num_candidates must be at least 1",
+        ),
+        ({"miprov2_split": "nope"}, "miprov2_split must be one of"),
+    ],
+)
+def test_invalid_miprov2_settings_are_refused_at_spec_validation(
+    overrides: dict[str, object], message: str
+) -> None:
+    """Refused before the durable run boundary, like the other settings."""
+    spec = replace(_spec(optimizer="miprov2"), **overrides)
+    with pytest.raises(ValueError, match=message):
+        run_optimizer(spec)

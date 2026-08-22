@@ -259,9 +259,24 @@ class RunEvidence:
 
 
 def _require_dict(value: object, what: str) -> dict[str, object]:
+    """Narrow a decoded store payload to a string-keyed JSON object.
+
+    ``store.get`` is typed as returning ``object``, and an ``isinstance``
+    check against bare ``dict`` leaves the key and value types unknown, so
+    the mapping is rebuilt here with its JSON key type made explicit. A
+    non-string key means the payload was never a JSON object.
+
+    Evidence is read-only once loaded, so returning a shallow copy costs
+    nothing and keeps the narrowing honest rather than asserted.
+    """
     if not isinstance(value, dict):
         raise AuditEvidenceError(f"{what} is not a JSON object")
-    return value
+    narrowed: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise AuditEvidenceError(f"{what} is not a JSON object")
+        narrowed[key] = item
+    return narrowed
 
 
 def _typed_ref(value: object, what: str) -> TypedRef:
@@ -478,7 +493,11 @@ def load_run_evidence(run_dir: Path) -> RunEvidence:
         raw_control = _get_optional(
             store, result.run.record.optimizer_config.record_ref
         )
-        control_record = raw_control if isinstance(raw_control, dict) else None
+        control_record = (
+            _require_dict(raw_control, "optimizer control record")
+            if isinstance(raw_control, dict)
+            else None
+        )
         state_records = _collect_state_records(store, frozen_steps)
 
     return RunEvidence(

@@ -616,6 +616,24 @@ def gepa_metric_call_budget(evidence: RunEvidence) -> AuditFinding:
 # --- 5 · skipped mutations -------------------------------------------------
 
 
+def _as_skip_record(value: object) -> dict[str, object] | None:
+    """A persisted skipped-mutation entry as a string-keyed record.
+
+    ``gepa_skipped_mutations`` yields the decoded list verbatim, so each
+    entry is untyped and a malformed one is a finding rather than a crash.
+    Returns None when the entry is not a JSON object, which the caller
+    reports as "is not a record".
+    """
+    if not isinstance(value, dict):
+        return None
+    record: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            return None
+        record[key] = item
+    return record
+
+
 def gepa_skipped_mutations_recorded(evidence: RunEvidence) -> AuditFinding:
     """Every rejected reflection is durable on the step that produced it.
 
@@ -658,8 +676,9 @@ def gepa_skipped_mutations_recorded(evidence: RunEvidence) -> AuditFinding:
                 f"step would not be durable"
             )
             continue
-        for position, record in enumerate(entry.gepa_skipped_mutations()):
-            if not isinstance(record, dict):
+        for position, raw_record in enumerate(entry.gepa_skipped_mutations()):
+            record = _as_skip_record(raw_record)
+            if record is None:
                 problems.append(
                     f"step {entry.index} skip {position} is not a record"
                 )

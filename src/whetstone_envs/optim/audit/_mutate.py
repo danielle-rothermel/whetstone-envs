@@ -76,6 +76,22 @@ class MutationError(RuntimeError):
     """
 
 
+def _require_object(value: Any, what: str) -> dict[str, Any]:
+    """Narrow a nested value of the parsed document to a JSON object.
+
+    ``result.json`` is parsed as ``dict[str, Any]``, so every nested read
+    comes back untyped and resealing a wrapper through it loses the type.
+    Narrowing through one helper types those reads and gives every
+    "this is not the shape a run artifact has" failure the same message.
+
+    The very same object is returned, never a copy: resealing writes through
+    these handles and the edits must land in ``document``.
+    """
+    if not isinstance(value, dict):
+        raise MutationError(f"{what} is not a JSON object")
+    return value
+
+
 def _resolve(document: Any, path: tuple[str | int, ...]) -> Any:
     cursor = document
     for step in path:
@@ -256,26 +272,24 @@ def reseal_step_chain(document: dict[str, Any]) -> dict[str, Any]:
         raise MutationError("result.json carries no step_results list")
     run_ref = _resealed_run(document)
     prior_ref: dict[str, Any] | None = None
-    for index, wrapper in enumerate(steps):
-        if not isinstance(wrapper, dict):
-            raise MutationError(f"step {index} is not a JSON object")
-        record = wrapper.get("record")
-        if not isinstance(record, dict):
-            raise MutationError(f"step {index} carries no record")
-        request = record.get("request")
-        if not isinstance(request, dict) or not isinstance(
-            request.get("record"), dict
-        ):
-            raise MutationError(f"step {index} carries no request record")
+    for index, raw_wrapper in enumerate(steps):
+        wrapper = _require_object(raw_wrapper, f"step {index}")
+        record = _require_object(wrapper.get("record"), f"step {index} record")
+        request = _require_object(
+            record.get("request"), f"step {index} request record"
+        )
+        request_record = _require_object(
+            request.get("record"), f"step {index} request record"
+        )
         if run_ref is not None:
             # Every request cites the run, so a mutated run record makes
             # each one stale too.
-            request["record"]["run"] = run_ref
+            request_record["run"] = run_ref
         if prior_ref is not None:
-            request["record"]["prior_step_result_ref"] = prior_ref
+            request_record["prior_step_result_ref"] = prior_ref
         if run_ref is not None or prior_ref is not None:
             # The request is itself a self-verifying wrapper.
-            request["record_ref"] = _request_ref(request["record"])
+            request["record_ref"] = _request_ref(request_record)
         try:
             recomputed = step_result_reference(
                 OptimStepResult.model_validate(record)
@@ -284,8 +298,9 @@ def reseal_step_chain(document: dict[str, Any]) -> dict[str, Any]:
             raise MutationError(
                 f"mutated step {index} is not a valid OptimStepResult: {error}"
             ) from error
-        wrapper["record_ref"] = recomputed.record_ref.model_dump(mode="json")
-        prior_ref = wrapper["record_ref"]
+        new_ref: dict[str, Any] = recomputed.record_ref.model_dump(mode="json")
+        wrapper["record_ref"] = new_ref
+        prior_ref = new_ref
     return document
 
 
@@ -297,23 +312,39 @@ def _resealed_run(document: dict[str, Any]) -> dict[str, Any] | None:
     field of the run leaves both stale. Returns None when the ref was
     already exact, so an untouched run is left byte-identical.
     """
-    run = document.get("run")
-    if not isinstance(run, dict) or not isinstance(run.get("record"), dict):
-        raise MutationError("result.json carries no run record")
+    run = _require_object(document.get("run"), "result.json run record")
+    run_record = _require_object(run.get("record"), "result.json run record")
     try:
         recomputed = optimization_run_reference(
-            OptimRun.model_validate(run["record"])
+            OptimRun.model_validate(run_record)
         )
     except ValueError as error:
         raise MutationError(
             f"mutated run is not a valid OptimRun: {error}"
         ) from error
-    resealed = recomputed.model_dump(mode="json")
+    resealed: dict[str, Any] = recomputed.model_dump(mode="json")
     if resealed == run:
         return None
     run.clear()
     run.update(resealed)
     return resealed
+
+
+def _step_request(
+    step_wrapper: Any, index: int
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A step's request wrapper and its inline record, narrowed together.
+
+    Both are needed at once -- the ref is written onto the wrapper and
+    recomputed from the record -- and every caller reports the same failure,
+    so the pair is narrowed in one place.
+    """
+    what = f"step {index} request record"
+    record = _require_object(step_wrapper, what).get("record", {})
+    request = _require_object(
+        _require_object(record, what).get("request"), what
+    )
+    return request, _require_object(request.get("record"), what)
 
 
 def _request_ref(request_record: dict[str, Any]) -> dict[str, Any]:
@@ -345,7 +376,7 @@ def reseal_run_binding(document: dict[str, Any]) -> dict[str, Any]:
         wrapper.get("record"), dict
     ):
         raise MutationError("result.json carries no run record")
-    record = wrapper["record"]
+    record = _require_object(wrapper["record"], "result.json run record")
     try:
         run = OptimRun.model_validate(record)
     except ValueError as error:
@@ -364,13 +395,9 @@ def reseal_run_binding(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(steps, list):
         raise MutationError("result.json carries no step_results list")
     for index, step_wrapper in enumerate(steps):
-        request = step_wrapper.get("record", {}).get("request")
-        if not isinstance(request, dict) or not isinstance(
-            request.get("record"), dict
-        ):
-            raise MutationError(f"step {index} carries no request record")
-        request["record"]["run"] = resealed
-        request["record_ref"] = _request_ref(request["record"])
+        request, request_record = _step_request(step_wrapper, index)
+        request_record["run"] = resealed
+        request["record_ref"] = _request_ref(request_record)
     return reseal_step_chain(document)
 
 
@@ -388,12 +415,8 @@ def reseal_request_refs(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(steps, list):
         raise MutationError("result.json carries no step_results list")
     for index, wrapper in enumerate(steps):
-        request = wrapper.get("record", {}).get("request")
-        if not isinstance(request, dict) or not isinstance(
-            request.get("record"), dict
-        ):
-            raise MutationError(f"step {index} carries no request record")
-        request["record_ref"] = _request_ref(request["record"])
+        request, request_record = _step_request(wrapper, index)
+        request["record_ref"] = _request_ref(request_record)
     return document
 
 
@@ -410,10 +433,11 @@ def reseal_candidate_refs(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(steps, list):
         raise MutationError("result.json carries no step_results list")
     proposals = document.get("proposals") or []
-    for index, wrapper in enumerate(steps):
-        record = wrapper.get("record")
-        if not isinstance(record, dict):
-            raise MutationError(f"step {index} carries no record")
+    for index, raw_wrapper in enumerate(steps):
+        record = _require_object(
+            _require_object(raw_wrapper, f"step {index} record").get("record"),
+            f"step {index} record",
+        )
         candidates = [
             *record.get("proposed_candidates", []),
             *record.get("accepted_candidates", []),
@@ -426,7 +450,10 @@ def reseal_candidate_refs(document: dict[str, Any]) -> dict[str, Any]:
         retained = record.get("retained_candidate_ref")
         if retained is not None:
             candidates.append(retained)
-        for candidate_wrapper in candidates:
+        for position, raw_candidate in enumerate(candidates):
+            candidate_wrapper = _require_object(
+                raw_candidate, f"step {index} candidate {position}"
+            )
             try:
                 reference = candidate_reference(
                     Candidate.model_validate(candidate_wrapper["record"])

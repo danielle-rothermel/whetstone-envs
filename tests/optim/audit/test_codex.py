@@ -449,7 +449,11 @@ def _as_object(record: object) -> dict[str, Any]:
     rather than at each rewrite site.
     """
     assert isinstance(record, dict)
-    return dict(record)
+    narrowed: dict[str, Any] = {}
+    for key, value in record.items():
+        assert isinstance(key, str)
+        narrowed[key] = value
+    return narrowed
 
 
 def _widened_tool_definition(entry: dict) -> dict:

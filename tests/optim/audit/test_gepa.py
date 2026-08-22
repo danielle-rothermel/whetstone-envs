@@ -70,7 +70,9 @@ from whetstone_envs.optim.audit.gepa import (
     PROPOSE_EFFECT,
     SEMANTIC_CANDIDATE_SCHEMA,
     SEMANTIC_CANDIDATE_SCHEMA_VERSION,
+    SKIPPED_MUTATION_EXHAUSTED_FIELD,
     SKIPPED_MUTATION_KEY_NAME,
+    _as_skip_record,
     gepa_terminal_artifact_present,
 )
 from whetstone_envs.optim.audit.registry import audit_run, invariants_for
@@ -403,9 +405,10 @@ def test_the_skipped_run_really_recorded_rejections(
         for record in entry.gepa_skipped_mutations()
     ]
     assert skips
+    narrowed = [_as_skip_record(record) for record in skips]
     assert any(
-        isinstance(record, dict) and record["exhausted"] is True
-        for record in skips
+        record is not None and record[SKIPPED_MUTATION_EXHAUSTED_FIELD] is True
+        for record in narrowed
     )
 
 

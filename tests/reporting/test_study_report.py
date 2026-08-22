@@ -59,16 +59,22 @@ from whetstone_envs.optim.study.manifest import (
     SelectionRecord,
     SplitRecord,
     SplitsRecord,
+    StageId,
+    StageRecord,
     StudyManifest,
+    TransportName,
     pre_registration_design_hash,
     write_study_manifest,
 )
 from whetstone_envs.reporting.study_report import (
     ASSET_NAMES,
     MISSING,
+    NO_PROVIDER_STAGE_DETAIL,
     REPORT_HTML_NAME,
     REPORT_MARKDOWN_NAME,
     STUDY_MANIFEST_COPY,
+    UNLEDGERED_SCORING_NOTE_REPORT,
+    UNLEDGERED_STAGE_DETAIL,
     UNPRICED,
     VALIDATION_CHECKLIST,
     VERDICT_INCOMPLETE,
@@ -195,6 +201,7 @@ def _run(
         audit_ref=_pointer("b"),
         cost_ref=_pointer("c"),
         audit_passed=passed,
+        transport=TransportName.FAKE.value,
         spend=_spend(unpriced=unpriced),
     )
 
@@ -1310,3 +1317,85 @@ def test_an_original_pre_registration_renders_without_an_amendment(
     text = render_markdown(build_study_report(manifest))
     assert design_hash[:12] in text
     assert "amended after Stage 0" not in text
+
+
+# --------------------------------------------------------------------------
+# The stage-history section's spend wording
+# --------------------------------------------------------------------------
+
+
+def _rendered(manifest: StudyManifest, tmp_path: Path, monkeypatch) -> str:
+    packet = tmp_path / "packet"
+    monkeypatch.setattr(
+        "whetstone_envs.reporting.study_report.validate_output_root",
+        lambda path: path.resolve(),
+    )
+    generate_study_report(manifest=manifest, out_dir=packet)
+    return (packet / REPORT_MARKDOWN_NAME).read_text(encoding="utf-8")
+
+
+def test_the_report_says_which_calls_the_ledger_omits(
+    reported_manifest: StudyManifest, tmp_path: Path, monkeypatch
+) -> None:
+    """Official-selection and held-out spend is not ledgered yet.
+
+    Those calls reach the provider through the evaluation engine outside
+    any optimizer run, so no stage total includes them. Full ledgering is
+    Phase E; until then the report states the omission rather than
+    presenting a partial total as the whole bill.
+    """
+    manifest = reported_manifest.model_copy(
+        update={
+            "stages": (
+                StageRecord(
+                    stage=StageId.STAGE0.value,
+                    transport=TransportName.FAKE.value,
+                ),
+            )
+        }
+    )
+    assert UNLEDGERED_SCORING_NOTE_REPORT in _rendered(
+        manifest, tmp_path, monkeypatch
+    )
+
+
+def test_a_paid_stage_with_no_spend_renders_as_unledgered(
+    reported_manifest: StudyManifest, tmp_path: Path, monkeypatch
+) -> None:
+    """Never the fake-transport wording for a stage that reached a provider.
+
+    A paid stage that recorded nothing called a provider and lost track of
+    what it bought. Describing it as "reached no provider" reported a
+    fully billed stage as a free one.
+    """
+    manifest = reported_manifest.model_copy(
+        update={
+            "stages": (
+                StageRecord(
+                    stage=StageId.STAGE0.value,
+                    transport=TransportName.OPENROUTER.value,
+                ),
+            )
+        }
+    )
+    text = _rendered(manifest, tmp_path, monkeypatch)
+    assert UNLEDGERED_STAGE_DETAIL in text
+    assert NO_PROVIDER_STAGE_DETAIL not in text
+
+
+def test_a_fake_stage_renders_as_having_reached_no_provider(
+    reported_manifest: StudyManifest, tmp_path: Path, monkeypatch
+) -> None:
+    manifest = reported_manifest.model_copy(
+        update={
+            "stages": (
+                StageRecord(
+                    stage=StageId.STAGE0.value,
+                    transport=TransportName.FAKE.value,
+                ),
+            )
+        }
+    )
+    text = _rendered(manifest, tmp_path, monkeypatch)
+    assert NO_PROVIDER_STAGE_DETAIL in text
+    assert UNLEDGERED_STAGE_DETAIL not in text

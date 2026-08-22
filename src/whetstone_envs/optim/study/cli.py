@@ -66,6 +66,7 @@ from whetstone_envs.optim.study.manifest import (
     SplitName,
     StageId,
     StageRecord,
+    TransportName,
     check_manifest_pointers,
     format_pointer_report,
     read_study_manifest,
@@ -443,14 +444,40 @@ def _range(low: int, high: int) -> str:
 #: distinguishes it from the estimated budget above it.
 STAGE_SPEND_HEADING = "recorded spend, per stage (MEASURED from evidence):"
 
-#: What a stage carrying no spend records reports. Every fake-transport
-#: stage is one: it reached no provider, so there is no bill to measure.
-#: A zero would claim the stage measured its bill and found it free, which
-#: is a different and untrue statement.
-NO_RECORDED_SPEND = "no priced calls recorded"
+#: What a **fake-transport** stage with no spend records reports. It
+#: reached no provider, so there is no bill to measure, and a zero would
+#: claim the stage measured its bill and found it free -- a different and
+#: untrue statement.
+NO_RECORDED_SPEND = "no provider reached (fake transport)"
+
+#: What a **paid** stage with no spend records reports.
+#:
+#: This is the one case the ledger must not soften. A stage bound to a
+#: billed transport called the provider; if nothing came back to record,
+#: the study is holding an unknown bill, not a zero one and certainly not
+#: a stage that reached no provider. The label is loud on purpose: it is a
+#: defect report, and an operator reading the ledger before authorizing
+#: the next stage has to see that this row cannot be trusted.
+UNLEDGERED_SPEND = (
+    "UNLEDGERED -- ran on a paid transport and recorded no spend; "
+    "this stage's bill is unknown, not zero"
+)
 
 #: What the ledger prints when no stage has run yet.
 NO_STAGES_RUN = "no stage has run yet"
+
+#: Which of a stage's provider calls the ledger does *not* yet cover.
+#:
+#: Official-selection scoring and held-out evaluation happen through the
+#: evaluation engine outside any optimizer run, so no ``RunRecord`` and no
+#: anchor evidence carries them and this ledger cannot see them. Full
+#: ledgering of those calls is Phase E. Until then the omission is stated
+#: on every rendering of the ledger rather than left for a reader to infer
+#: from a total that looks complete.
+UNLEDGERED_SCORING_NOTE = (
+    "note: official-selection scoring and held-out evaluation calls are "
+    "not yet ledgered; every total below excludes them."
+)
 
 
 def _stage_usd(spend: tuple[RunSpendRecord, ...]) -> str:
@@ -467,6 +494,27 @@ def _stage_usd(spend: tuple[RunSpendRecord, ...]) -> str:
     return f"${sum(entry.usd or 0.0 for entry in spend):.6f}"
 
 
+def _no_spend_label(record: StageRecord) -> str:
+    """Why a stage carrying no spend records carries none.
+
+    Three cases share an empty ``spend`` tuple and must never share a
+    label, because they call for three different actions:
+
+    * a **fake-transport** stage reached no provider, so there is no bill;
+    * a **paid** stage with no records ran against a provider and lost
+      track of what it bought, which is a defect an operator must see
+      before authorizing the next stage;
+    * a stage with records prints them, and does not reach here.
+
+    Collapsing the middle case into the first is the failure this function
+    exists to prevent: it would report a fully billed stage as one that
+    never called anybody.
+    """
+    if record.transport == TransportName.FAKE.value:
+        return NO_RECORDED_SPEND
+    return UNLEDGERED_SPEND
+
+
 def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
     """Each recorded stage's transport, rows, calls, and USD.
 
@@ -474,9 +522,16 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
     run and ``plan`` after one print the same shape and differ only in
     whether anything has been measured yet. The transport is in every row
     because the spend and the transport answer one question together: what
-    did this stage buy, and from whom.
+    did this stage buy, and from whom -- and because it is the transport
+    that says whether an empty row means "reached no provider" or
+    "reached one and lost the bill".
+
+    The ledger states what it does not cover. Official-selection and
+    held-out scoring calls are not ledgered yet, so every total is a
+    lower bound and says so, rather than presenting itself as the whole
+    bill.
     """
-    lines = ["", STAGE_SPEND_HEADING]
+    lines = ["", STAGE_SPEND_HEADING, f"  {UNLEDGERED_SCORING_NOTE}"]
     if not stages:
         lines.extend((f"  {NO_STAGES_RUN}", ""))
         return tuple(lines)
@@ -492,7 +547,7 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
         if not record.spend:
             lines.append(
                 f"  {record.stage:<10}{record.transport:<14}"
-                f"  {NO_RECORDED_SPEND}"
+                f"  {_no_spend_label(record)}"
             )
             continue
         calls = sum(entry.calls for entry in record.spend)
@@ -1156,6 +1211,8 @@ __all__ = [
     "OPTIMIZER_BUDGET_HEADING",
     "PROGRAM_NAME",
     "STAGE_SPEND_HEADING",
+    "UNLEDGERED_SCORING_NOTE",
+    "UNLEDGERED_SPEND",
     "ReportGenerator",
     "StageLedgerLoader",
     "StageRunner",

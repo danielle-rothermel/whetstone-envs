@@ -57,6 +57,7 @@ from whetstone_envs.optim.study.manifest import (
     EvidencePointer,
     StageId,
     StudyManifest,
+    TransportName,
 )
 from whetstone_envs.reporting.publication import (
     TRAJECTORY_REPORT_NAME,
@@ -79,10 +80,13 @@ if TYPE_CHECKING:
 __all__ = [
     "ASSET_NAMES",
     "MISSING",
+    "NO_PROVIDER_STAGE_DETAIL",
     "NULL_ARM_PREFIX",
     "REPORT_HTML_NAME",
     "REPORT_MARKDOWN_NAME",
     "STUDY_MANIFEST_COPY",
+    "UNLEDGERED_SCORING_NOTE_REPORT",
+    "UNLEDGERED_STAGE_DETAIL",
     "UNPRICED",
     "VALIDATION_CHECKLIST",
     "VERDICT_INCOMPLETE",
@@ -1385,6 +1389,7 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 "were calibrated on, because every held-out delta is paired "
                 "against those anchors."
             ),
+            (UNLEDGERED_SCORING_NOTE_REPORT),
         ),
         tables=(
             Table(
@@ -1443,15 +1448,47 @@ def _stage_label(stage: str) -> str:
     return f"Stage {stage.removeprefix('stage')}"
 
 
-def _stage_spend_detail(record: StageRecord) -> str:
-    """What one stage spent, or that it recorded no priced calls.
+#: What the report says the per-stage ledger does not yet cover.
+#:
+#: Official-selection scoring and held-out evaluation reach the provider
+#: through the evaluation engine outside any optimizer run, so no run
+#: record and no anchor evidence carries them and no stage total includes
+#: them. Full ledgering of those calls is Phase E; until then the report
+#: states the omission rather than presenting a partial total as the whole
+#: bill.
+UNLEDGERED_SCORING_NOTE_REPORT = (
+    "The per-stage spend below is a lower bound. Official-selection "
+    "scoring and held-out evaluation calls are not yet ledgered: they "
+    "reach the provider through the evaluation engine outside any "
+    "optimizer run, so no stage total includes them."
+)
 
-    A stage with no spend records is not a free stage: it is one whose rows
-    carried no provider telemetry, which is what every fake-transport stage
-    looks like. Saying so beats printing a zero.
+#: What a paid stage that recorded no spend reports. Never the
+#: fake-transport wording: this stage did reach a provider, and its bill is
+#: unknown rather than absent.
+UNLEDGERED_STAGE_DETAIL = (
+    "UNLEDGERED -- ran on a paid transport and recorded no spend; this "
+    "stage's bill is unknown, not zero"
+)
+
+#: What a fake-transport stage with no spend reports.
+NO_PROVIDER_STAGE_DETAIL = "no provider reached (fake transport)"
+
+
+def _stage_spend_detail(record: StageRecord) -> str:
+    """What one stage spent, or why there is nothing to report.
+
+    An empty ``spend`` tuple means one of two opposite things, and the
+    transport is what tells them apart. A fake-transport stage reached no
+    provider, so there is no bill. A **paid** stage that recorded nothing
+    called a provider and lost track of what it bought -- reporting that as
+    "reached no provider" would describe a fully billed stage as a free
+    one, which is the reading this branch exists to prevent.
     """
     if not record.spend:
-        return "no priced calls recorded"
+        if record.transport == TransportName.FAKE.value:
+            return NO_PROVIDER_STAGE_DETAIL
+        return UNLEDGERED_STAGE_DETAIL
     calls = sum(entry.calls for entry in record.spend)
     tokens = sum(
         entry.input_tokens + entry.output_tokens for entry in record.spend

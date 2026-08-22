@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "row_observation",
+    "run_spend_records",
     "stage_spend_records",
 ]
 
@@ -173,3 +174,69 @@ def stage_spend_records(
     if not observations:
         return ()
     return (_spend_record(aggregate_role_cost(observations)),)
+
+
+def run_spend_records(
+    runs: Iterable[RunSpendRecord],
+) -> tuple[RunSpendRecord, ...]:
+    """Every run's per-role spend, folded into one per-role total.
+
+    An arm stage does not evaluate through the engine the way Stage 0 does:
+    it spends through optimizer runs, and each run already re-derived its
+    own per-role bill from its own evidence. The stage total is therefore
+    a **sum of those records**, not a second measurement of the same calls
+    -- re-reading the rows here would risk counting a call twice and would
+    make the stage row and the run rows able to disagree.
+
+    The honesty rules survive the fold because they are re-applied to the
+    total rather than carried from the parts:
+
+    * ``usd`` is ``None`` for a role as soon as *any* contributing run left
+      it ``None``. A sum over the priced runs alone would look
+      authoritative while understating the role's bill, which is the same
+      rule ``RunSpendRecord`` enforces within one run.
+    * The counters add, so ``priced_calls + unpriced_calls == calls``
+      continues to hold and the model's own validator re-checks it.
+
+    Roles are returned in first-seen order, so a stage whose arms ran in a
+    fixed order renders deterministically.
+    """
+    totals: dict[str, list[int]] = {}
+    usd_by_role: dict[str, float | None] = {}
+    order: list[str] = []
+    for entry in runs:
+        if entry.role not in totals:
+            order.append(entry.role)
+            totals[entry.role] = [0, 0, 0, 0, 0, 0, 0]
+            usd_by_role[entry.role] = 0.0
+        running = totals[entry.role]
+        for index, value in enumerate(
+            (
+                entry.calls,
+                entry.cached_calls,
+                entry.input_tokens,
+                entry.output_tokens,
+                entry.priced_calls,
+                entry.unpriced_calls,
+                entry.rows_missing_token_breakdown,
+            )
+        ):
+            running[index] += value
+        known = usd_by_role[entry.role]
+        usd_by_role[entry.role] = (
+            None if known is None or entry.usd is None else known + entry.usd
+        )
+    return tuple(
+        RunSpendRecord(
+            role=role,
+            calls=totals[role][0],
+            cached_calls=totals[role][1],
+            input_tokens=totals[role][2],
+            output_tokens=totals[role][3],
+            priced_calls=totals[role][4],
+            unpriced_calls=totals[role][5],
+            rows_missing_token_breakdown=totals[role][6],
+            usd=usd_by_role[role],
+        )
+        for role in order
+    )

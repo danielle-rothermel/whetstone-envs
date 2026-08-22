@@ -5,16 +5,6 @@ import sys
 import traceback
 from pathlib import Path
 
-# Import order is load-bearing: ``whetstone_envs.optim.run`` must come before
-# ``optim.gepa`` / ``optim.miprov2``. whetstone-ai <= 0.1.5 has a
-# provider <-> eval.drivers import cycle -- ``whetstone.eval.schema`` reaches
-# back into a partially initialized ``whetstone.experiment.binding`` for
-# ``EvalConfigRef`` -- so importing ``optim.gepa`` or ``optim.miprov2`` first
-# raises ImportError. ``optim.run`` imports whetstone's modules in an order
-# that resolves the cycle, so importing it first makes the later imports safe.
-# Upstream is fixing this for 0.1.6; until the pin moves and this is verified
-# gone, do not reorder these imports. ``tests/optim/test_import_order.py``
-# cold-imports both CLIs in fresh interpreters so a reorder fails loudly.
 from whetstone_envs.optim.run import (
     C19_DEMO_MODES,
     C19_OPTIMIZERS,

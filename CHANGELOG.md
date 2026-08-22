@@ -55,7 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Pin the `optim` extra to published `whetstone-ai==0.1.6` and `dr-store`
-  to 0.2.6, which that release requires.
+  to 0.2.6, which that release requires. 0.1.6 drives MIPROv2 through
+  `state.control.mutation_field`, so C19 runs MIPROv2 in every demonstration
+  mode, and it resolves the provider/`eval.drivers` import cycle, so the
+  optimizer CLI imports whetstone-ai's modules in any order.
 - C19 reaches whetstone-ai through its current production entry point:
   `build_runtime` with an explicit adapter registry and effect authority,
   replacing the removed `register_runtime`. Registry membership is part of

@@ -26,16 +26,6 @@ from whetstone_envs.reporting.publication import (
     load_trajectory_report,
 )
 
-#: MIPROv2 cannot run against a C19 experiment until whetstone-ai stops
-#: hardcoding the toy mutation field. ``_materialize_bootstrap_teacher``
-#: reads ``payload["user_prompt_template"]`` instead of
-#: ``state.control.mutation_field``, so every demo mode raises KeyError on
-#: the first bootstrap teacher. Every mode bootstraps, so no mode escapes it.
-MIPROV2_UPSTREAM_BLOCKER = (
-    "whetstone-ai miprov2/runtime.py:_materialize_bootstrap_teacher "
-    "hardcodes the 'user_prompt_template' mutation field"
-)
-
 
 @pytest.mark.parametrize("optimizer", ["copro", "gepa"])
 def test_fake_transport_completes(  # noqa: PLR0915
@@ -240,7 +230,6 @@ def test_run_refuses_in_repo_output_when_cwd_is_elsewhere(
 
 
 @pytest.mark.parametrize("demo_mode", ["fewshot", "zeroshot", "ground_only"])
-@pytest.mark.xfail(reason=MIPROV2_UPSTREAM_BLOCKER, strict=True)
 def test_miprov2_fake_transport_completes(tmp_path, demo_mode: str) -> None:
     """MIPROv2 completes on the fake transport in every demonstration mode.
 

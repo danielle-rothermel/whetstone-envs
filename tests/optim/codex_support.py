@@ -148,9 +148,49 @@ def _whetstone_source_root() -> str:
     return str(Path(whetstone.__file__).resolve().parent.parent)
 
 
+def codex_output_artifact(run_dir: Path) -> Any | None:
+    """The Codex output artifact a completed run recorded, or ``None``.
+
+    Read the way the audit reads it -- through the ``state_delta`` ref the
+    adapter writes, then out of the run's own store -- so a test and the
+    audit agree about what "the artifact" means. ``None`` is itself
+    evidence: a Step that failed before producing a usable artifact
+    records no ref.
+
+    Its ``conversation_evidence`` is whetstone's *process* evidence, not
+    the agent's: the runner overwrites the agent's copy with the emitted
+    prompt (under ``"agent"``), the parsed JSONL events, stderr, and the
+    isolation record. That is what lets a test assert on the transcript
+    the run actually produced.
+    """
+    from whetstone.core.identity import TypedRef
+
+    from whetstone_envs.optim.audit._evidence import load_run_evidence
+    from whetstone_envs.optim.audit.codex import (
+        CODEX_OUTPUT_ARTIFACT_REF_KEY,
+        _codex_artifact_model,
+    )
+
+    evidence = load_run_evidence(run_dir)
+    model = _codex_artifact_model()
+    for step in reversed(evidence.steps):
+        if step.state is None:
+            continue
+        raw = step.state.get(CODEX_OUTPUT_ARTIFACT_REF_KEY)
+        if raw is None:
+            continue
+        ref = TypedRef.model_validate(raw)
+        payload = evidence.stored_record(ref)
+        if payload is None:
+            return None
+        return model.model_validate(payload)
+    return None
+
+
 __all__ = [
     "CODEX_EVAL_TOOL_NAME",
     "CODEX_SPLIT_SIZES",
+    "codex_output_artifact",
     "codex_test_seam",
     "codex_tool_steps",
 ]

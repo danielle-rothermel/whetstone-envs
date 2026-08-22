@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from whetstone.eval.protocol import EvalEngine, EvalRuntimeConfig
     from whetstone.experiment.env import Experiment
     from whetstone.experiment.reward import RewardPolicy
+    from whetstone.optim.codex.runner import CodexPromptContext
 
     from whetstone_envs.optim.families import FamilySpec
 
@@ -85,6 +86,22 @@ if TYPE_CHECKING:
 #: below ``optim.study`` in the dependency direction and the runner must
 #: not import the study to run one arm.
 CODEX_EVALUATE_CALL_CAP = 8
+
+#: The Codex *agent's* own model. It is deliberately not the run's task
+#: model: the two are different products on different routes, and the
+#: task model this study evaluates (``openai/gpt-4.1-nano``, an
+#: OpenRouter route) is not a model the Codex CLI can run at all -- a
+#: ChatGPT subscription refuses it outright with
+#: ``"The 'openai/gpt-4.1-nano' model is not supported when using Codex
+#: with a ChatGPT account"``, before the agent produces a single token.
+#:
+#: Naming the CLI's own current default keeps a default run working while
+#: staying explicit: ``CodexControl.model`` is identity-bearing and
+#: refuses an empty string, so the arm cannot express "whatever the CLI
+#: picks" by omission -- it has to say which model it measured. The §6
+#: run pins its own through ``--codex-model``, and the manifest records
+#: the agent model as uncontrolled either way (OQ1).
+CODEX_DEFAULT_AGENT_MODEL = "gpt-5.6-sol"
 
 #: Where a Codex run's dr-exec job records live, beneath the run's own
 #: output directory. One directory per run, so a completed run's spawn
@@ -295,6 +312,7 @@ def build_codex_adapter(  # noqa: PLR0913
     store_path: Path,
     run_root: Path,
     test_seam: CodexTestSeam | None = None,
+    prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> CodexAdapter:
     """Assemble one family's Codex adapter, session proven first.
 
@@ -312,6 +330,16 @@ def build_codex_adapter(  # noqa: PLR0913
     evaluation server runs in another process and persists its Tool
     Results there, and ``reward_policy`` is the policy that server scores
     with -- the same one the control pins by hash.
+
+    ``prompt_builder`` replaces the instruction the agent receives. It is
+    a *diagnostic* seam, not a production one: no ``RunSpec`` field and no
+    CLI flag reaches it, and the only caller is the real-CLI ladder, whose
+    capacity and no-tool-call rungs cannot observe what they assert under
+    the truthful production prompt -- an agent correctly told it may make
+    one call makes one call, and the durable refusal path is never
+    exercised. A builder inherits the default's obligations: see
+    ``CodexPromptContext``, which carries the ``model_route`` and
+    ``base_ref`` the agent can derive from nothing it can see.
 
     ``runtime_config`` is what that out-of-process server rebuilds its
     engine from, and ``engine`` is the in-process engine it must agree
@@ -382,6 +410,7 @@ def build_codex_adapter(  # noqa: PLR0913
         extra_environment_keys=(
             test_seam.extra_environment_keys if test_seam else frozenset()
         ),
+        prompt_builder=prompt_builder,
     )
     preflight = test_seam.preflight if test_seam else codex_auth_preflight
     # Proven before the adapter exists, so a broken login cannot reach the
@@ -458,6 +487,7 @@ __all__ = [
     "ALLOW_REAL_CODEX_ENV",
     "ALLOW_REAL_CODEX_ENV_VALUE",
     "CODEX_ADAPTER_KEY",
+    "CODEX_DEFAULT_AGENT_MODEL",
     "CODEX_DEFAULT_BINARY",
     "CODEX_EVALUATE_CALL_CAP",
     "CODEX_REASONING_EFFORTS",

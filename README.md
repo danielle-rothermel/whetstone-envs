@@ -231,7 +231,9 @@ admission authority, or subprocess exists, unless one of two things is true:
 
 Anything else raises `RealCodexRefusedError`, and the refused run leaves no
 run directory behind. A session-scoped `conftest.py` fixture asserts the
-environment variable is unset and clears it, so no test can opt in.
+environment variable is unset and clears it, so no ordinary test can opt
+in; the one exception is the real-CLI ladder below, which must also set its
+own separate `WHETSTONE_ENVS_REAL_CODEX=1`.
 
 A study stage authorizes the same spend the same way, through
 `whetstone-study run --allow-real-codex`. The flag reaches the study's
@@ -255,10 +257,13 @@ WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
 A real run therefore requires all of: the opt-in variable, the flag, a live
 authenticated Codex session, macOS (the containment profile is
 `sandbox-exec`), provider spend for the task-model evaluations, and a go
-from Danielle. **No real Codex run has been performed yet** — every claim
-about the arm rests on the scripted stand-in, which speaks real MCP to the
-real evaluation server and so exercises the production admission, lease,
-evaluation, and ledger path. Only the agent's own decisions are scripted.
+from Danielle.
+
+CI's claims about the arm rest on the scripted stand-in, which speaks real
+MCP to the real evaluation server and so exercises the production
+admission, lease, evaluation, and ledger path; only the agent's own
+decisions are scripted. The real CLI is covered separately by the ladder
+below.
 
 ```bash
 WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
@@ -388,6 +393,45 @@ so it is not a number to plan from twice. Run Stage 0, then read
 budget above it — and authorize Stage 1 against what Stage 0 actually
 spent. Remember that the measured total excludes official-selection and
 held-out scoring, so treat it as a floor.
+
+### The real-CLI ladder
+
+`tests/real_codex/` drives the **real** Codex CLI against a live
+subscription session, one rung at a time, through the same
+`run_optimizer` entry point the study uses. It exists because the scripted
+fake CLI structurally cannot cover four things: it never validates the
+agent-facing output schema, never routes through the CLI's tool host, is
+*handed* the tool arguments a real agent has to derive, and never proves
+that the out-of-process MCP server rebuilds this run's experiment from
+`EnvsCodexRuntimeConfig`. A rebuild that landed on a different Eval Config
+would have every tool call refused after admission — the agent would burn
+its whole capacity and the Step would still terminalize.
+
+The task model stays fake on every rung (`--transport fake`), so a ladder
+run spends Codex agent turns and no eval-provider credit.
+
+It is opt-in twice over and never runs in CI: the `real_codex` marker is
+deselected by default through `addopts`, and every rung is skipped unless
+`WHETSTONE_ENVS_REAL_CODEX=1`. Once opted in, an unmet precondition —
+non-macOS host, missing `sandbox-exec`, missing binary, no session, or a
+missing spend opt-in — is a loud failure rather than a skip, because pytest
+exits 0 on a fully skipped session and the runner script would report that
+as "all rungs passed".
+
+```bash
+scripts/check-real-codex.sh              # whole ladder, stop at first break
+scripts/check-real-codex.sh -k rung3     # one rung
+```
+
+The script writes its transcript and a rung table to
+`~/drotherm/data/whetstone-envs/real-codex/<timestamp>/`.
+`.github/workflows/real-codex.yml` runs the same script on a self-hosted
+macOS runner, `workflow_dispatch`-only.
+
+The Codex *agent's* model is not the run's task model: the task model is an
+OpenRouter route the Codex CLI cannot run at all, and a subscription
+session refuses it outright. `--codex-model` names the agent's; unset, it
+is `CODEX_DEFAULT_AGENT_MODEL`.
 
 ## Evaluation and trajectory reports
 

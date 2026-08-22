@@ -71,7 +71,18 @@ DEMO_MODES = ("fewshot", "zeroshot", "ground_only")
 TRACED_OPTIMIZERS = ("copro", "gepa")
 
 
+#: ``miprov2`` and ``gepa`` require an explicit disjoint train/val split of
+#: the internal split and the others refuse one, so the smoke spec supplies
+#: it per optimizer. At the smoke internal 2 the only partition is 1/1.
+TRAIN_VAL_OPTIMIZER_IDS = ("gepa", "miprov2")
+
+
 def _smoke_spec(*, family: str, optimizer: str, output: Path, **overrides):
+    split = (
+        {"train_size": 1, "val_size": 1}
+        if optimizer in TRAIN_VAL_OPTIMIZER_IDS
+        else {}
+    )
     return RunSpec(
         optimizer=optimizer,
         transport="fake",
@@ -80,6 +91,7 @@ def _smoke_spec(*, family: str, optimizer: str, output: Path, **overrides):
         n_per_stratum=POOL_SIZE_BY_FAMILY[family],
         run_id=f"{family}-{optimizer}-swap",
         output_dir=output,
+        **split,
         **overrides,
     )
 

@@ -33,6 +33,18 @@ from whetstone_envs.reporting.publication import (
     load_trajectory_report,
 )
 
+#: ``miprov2`` and ``gepa`` require an explicit disjoint train/val split of
+#: the internal split; the others refuse one. At these fixtures' internal 2
+#: the only valid partition is 1/1.
+TRAIN_VAL_FLAGS = ("--train-size", "1", "--val-size", "1")
+
+
+def _split_flags(optimizer: str) -> list[str]:
+    """The split flags this optimizer requires, or none."""
+    if optimizer in {"gepa", "miprov2"}:
+        return list(TRAIN_VAL_FLAGS)
+    return []
+
 
 @pytest.mark.parametrize("optimizer", ["copro", "gepa"])
 def test_fake_transport_completes(  # noqa: PLR0915
@@ -49,6 +61,7 @@ def test_fake_transport_completes(  # noqa: PLR0915
             "fake",
             "--split-sizes",
             "2,2,0",
+            *_split_flags(optimizer),
             "--run-id",
             f"c19-{optimizer}-e2e",
             "--output",
@@ -276,6 +289,7 @@ def test_miprov2_fake_transport_completes(tmp_path, demo_mode: str) -> None:
             "fake",
             "--split-sizes",
             "2,2,0",
+            *TRAIN_VAL_FLAGS,
             "--run-id",
             f"c19-miprov2-{demo_mode}-e2e",
             "--output",
@@ -309,6 +323,8 @@ def test_runner_rejects_unknown_demo_mode(tmp_path) -> None:
                 transport="fake",
                 output_dir=tmp_path / "bad-demo-mode",
                 demo_mode="handful",
+                train_size=1,
+                val_size=1,
             )
         )
 
@@ -336,6 +352,7 @@ def test_fake_transport_reports_run_spend(tmp_path, optimizer: str) -> None:
                 optimizer,
                 "--transport",
                 "fake",
+                *_split_flags(optimizer),
                 "--run-id",
                 f"c19-{optimizer}-spend",
                 "--output",

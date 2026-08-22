@@ -13,12 +13,12 @@ its call budget. That keeps the pre-spend answer ("what is this about to
 cost?") available before the harness exists and without touching a
 provider.
 
-Injection is by protocol, not by import. The spec loader and the stage
-runner now default to the real implementations -- :func:`load_study_spec`
-over the study's own manifest and :func:`run_stage` over the stage harness
--- while ``generate_report`` stays ``None`` until Wave 6 lands its
-generator. Tests pass their own collaborators, which is how the ordering
-and the wiring are verified separately.
+Injection is by protocol, not by import. All three collaborators default
+to the real implementations -- :func:`load_study_spec` over the study's own
+manifest, :func:`run_stage` over the stage harness, and
+:func:`default_report_generator` over the report package. Tests pass their
+own collaborators, which is how the ordering and the wiring are verified
+separately.
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ from whetstone_envs.optim.study.manifest import (
 )
 from whetstone_envs.optim.study.spec import load_study_spec
 from whetstone_envs.optim.study.stages import run_stage as _run_stage_harness
+from whetstone_envs.reporting.study_report import generate_study_report
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -116,9 +117,10 @@ class StageRunner(Protocol):
 class ReportGenerator(Protocol):
     """Generate the report packet from a manifest, returning its directory.
 
-    Wave 6 owns the implementation. It takes the manifest itself, not the
-    study directory, because the report is defined to read only the
-    manifest and the store.
+    It takes the manifest itself, not the study directory, because the
+    report is defined to read only the manifest and the evidence the
+    manifest names. :func:`default_report_generator` is the implementation
+    this CLI binds.
     """
 
     def __call__(self, *, manifest: StudyManifest, out_dir: Path) -> Path: ...
@@ -282,18 +284,47 @@ def _run_report(
     *,
     study_dir: Path,
     out_dir: Path,
-    generate_report: ReportGenerator | None,
+    generate_report: ReportGenerator,
 ) -> int:
-    if generate_report is None:
-        print(
-            "report needs a report generator; the report package is not "
-            "wired into this CLI yet",
-            file=sys.stderr,
-        )
-        return EXIT_ERROR
+    """Read the manifest and hand it to the generator.
+
+    The study directory is opened once, here, and only the manifest crosses
+    into the generator: that is what keeps "the report reads the manifest
+    and the evidence it names" a property of the wiring rather than a
+    convention the generator is trusted to follow.
+    """
     manifest = read_study_manifest(study_dir)
     print(generate_report(manifest=manifest, out_dir=out_dir))
     return EXIT_OK
+
+
+def _report_generator_for(
+    study_dir: Path, generate_report: ReportGenerator
+) -> ReportGenerator:
+    """Bind the study's own evidence store to ``generate_report``.
+
+    The default generator reads the manifest only. The study directory
+    keeps its run store beside that manifest, and resolving it turns the
+    audit-finding tables from "did not resolve" into real rows, so the CLI
+    supplies it when it is there.
+
+    An injected generator is returned untouched. A test that passes its own
+    collaborator is testing the wiring, and silently handing it a store it
+    did not ask for would change what it is testing.
+    """
+    if generate_report is not default_report_generator:
+        return generate_report
+    store_path = _default_store_path(study_dir)
+    if not store_path.is_file():
+        return generate_report
+
+    def generate(*, manifest: StudyManifest, out_dir: Path) -> Path:
+        with open_sqlite(str(store_path)) as store:
+            return generate_study_report(
+                manifest=manifest, out_dir=out_dir, store=store
+            )
+
+    return generate
 
 
 def _run_leakage_check(*, study_dir: Path) -> int:
@@ -544,6 +575,22 @@ def default_stage_runner(*, study_dir: Path, stage: str) -> StudyManifest:
         )
 
 
+def default_report_generator(
+    *, manifest: StudyManifest, out_dir: Path
+) -> Path:
+    """Write the report packet from the manifest alone.
+
+    This is the CLI's default :class:`ReportGenerator` and it deliberately
+    opens no store: the :class:`ReportGenerator` contract carries a manifest
+    and an output directory, and a generator that went looking for a store
+    the contract did not give it would be reading evidence its caller never
+    named. ``report`` binds the study directory's own store separately, in
+    :func:`_report_generator_for`, which is where the study directory is
+    still in scope.
+    """
+    return generate_study_report(manifest=manifest, out_dir=out_dir)
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -553,17 +600,16 @@ def main(
 ) -> int:
     """Dispatch one study subcommand.
 
-    ``load_spec`` and ``run_stage`` default to the real implementations --
-    the manifest-backed spec loader and the stage harness -- so the CLI is
-    the study's actual entry point rather than a shell around one.
-    ``generate_report`` stays ``None`` until Wave 6 lands its generator, and
-    ``report`` reports that wiring gap instead of importing a module that
-    does not exist. Tests pass their own collaborators, which is how the
+    All three collaborators default to the real implementations -- the
+    manifest-backed spec loader, the stage harness, and the report package's
+    generator -- so the CLI is the study's actual entry point rather than a
+    shell around one. Tests pass their own collaborators, which is how the
     ordering is verified independently of the wiring.
     """
     arguments = build_parser().parse_args(argv)
     load_spec = load_spec or load_study_spec
     run_stage = run_stage or default_stage_runner
+    generate_report = generate_report or default_report_generator
     try:
         if arguments.command == "plan":
             return _run_plan(
@@ -579,7 +625,9 @@ def main(
             return _run_report(
                 study_dir=arguments.study_dir,
                 out_dir=arguments.out,
-                generate_report=generate_report,
+                generate_report=_report_generator_for(
+                    arguments.study_dir, generate_report
+                ),
             )
         if arguments.command == "leakage-check":
             return _run_leakage_check(study_dir=arguments.study_dir)
@@ -613,6 +661,7 @@ __all__ = [
     "StudySpecLike",
     "StudySpecLoader",
     "build_parser",
+    "default_report_generator",
     "default_stage_runner",
     "main",
     "plan_lines",

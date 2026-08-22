@@ -1,10 +1,12 @@
 """The ``whetstone-study`` CLI.
 
 Every subcommand is exercised with injected collaborators, so these tests
-run without Wave 4a's harness and without Wave 6's report generator. The
-``manifest check`` tests are the exception: they resolve pointers against a
-store a real fake-transport optimizer run produced in-test, which is the
-only way to prove the checker reads the store the study actually writes.
+run without the stage harness executing and without the report generator
+writing a packet. Two exceptions prove the defaults are real rather than
+stubs: the ``manifest check`` tests resolve pointers against a store a real
+fake-transport optimizer run produced in-test, and
+``test_report_defaults_to_the_real_generator`` asserts ``report`` binds the
+report package rather than reporting a wiring gap.
 """
 
 from __future__ import annotations
@@ -242,22 +244,66 @@ def test_report_on_a_missing_manifest_fails_cleanly(
     assert capsys.readouterr().err.strip()
 
 
-def test_report_without_a_generator_reports_the_wiring_gap(
-    tmp_path: Path, capsys
+def test_report_defaults_to_the_real_generator(
+    tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    study_dir = tmp_path / "study"
-    write_study_manifest(study_dir, _minimal_manifest())
-    code = main(
-        [
-            "report",
-            "--study-dir",
-            str(study_dir),
-            "--out",
-            str(tmp_path / "packet"),
-        ]
+    """``report`` needs no injected generator: the default is the real one.
+
+    The gap this used to assert is closed, so what is asserted now is that
+    an un-injected ``report`` writes an actual packet. The output-root
+    guard is relaxed for both writers because a test's ``tmp_path`` is
+    legitimately outside a repository on a real run but sits under this
+    checkout here.
+    """
+    from whetstone_envs.reporting.study_report import (
+        REPORT_HTML_NAME,
+        REPORT_MARKDOWN_NAME,
     )
-    assert code == EXIT_ERROR
-    assert "not wired into this CLI yet" in capsys.readouterr().err
+
+    for module in (
+        "whetstone_envs.optim.study.manifest",
+        "whetstone_envs.reporting.study_report",
+    ):
+        monkeypatch.setattr(
+            f"{module}.validate_output_root", lambda path: path.resolve()
+        )
+    study_dir = tmp_path / "study"
+    packet = tmp_path / "packet"
+    write_study_manifest(study_dir, _minimal_manifest())
+
+    code = main(
+        ["report", "--study-dir", str(study_dir), "--out", str(packet)]
+    )
+    assert code == EXIT_OK
+    assert str(packet.resolve()) in capsys.readouterr().out
+    assert (packet / REPORT_HTML_NAME).is_file()
+    assert (packet / REPORT_MARKDOWN_NAME).is_file()
+
+
+def test_the_study_runs_as_a_module_and_as_a_console_script() -> None:
+    """``python -m whetstone_envs.optim.study`` is the same program.
+
+    The study is documented under both entry points, and a module
+    invocation that did not exist -- or that dispatched separately -- would
+    make the documented command a command nobody can run.
+    """
+    import subprocess
+    import sys
+
+    from whetstone_envs.optim.study import __main__ as module_entry
+
+    assert module_entry.main is main
+    # Run it the way the documentation says to, in a child process: that is
+    # the only check that a missing ``__main__`` would actually fail.
+    finished = subprocess.run(
+        [sys.executable, "-m", "whetstone_envs.optim.study", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert finished.returncode == 0, finished.stderr
+    for subcommand in ("plan", "run", "report", "leakage-check", "manifest"):
+        assert subcommand in finished.stdout
 
 
 # --------------------------------------------------------------------------

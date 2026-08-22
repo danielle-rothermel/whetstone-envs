@@ -139,6 +139,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   in a proposal-cardinality failure, which is why no fake run had a
   genuinely multi-draft round to audit. Refused on a real transport, where
   the proposer writes the bodies.
+- The Step 10 study report generator at
+  `whetstone_envs.reporting.study_report`. `generate_study_report(*,
+  manifest, out_dir)` writes a report packet -- `report.md`, `report.html`,
+  a copy of `study.json`, and packet-local `doc.css` and `favicon.svg` --
+  and is the study CLI's default `report` generator, so `whetstone-study
+  report` no longer reports a wiring gap. The generator reads only the
+  manifest and the evidence the manifest names, and recomputes no
+  statistic.
+- `python -m whetstone_envs.optim.study`. The study is documented under
+  both a module invocation and the `whetstone-study` console script, and
+  only the console script existed; the new `__main__` delegates to the same
+  `main`, so a subcommand cannot exist under one entry point and not the
+  other.
+- Evidence provenance is a value type rather than a formatting convention.
+  Every number the report renders is a `Figure` bound to the manifest field
+  it came from and the `(schema, content hash)` pointer the manifest cites
+  for it, and both emitters render a figure the same way. `figures_in`
+  walks the built report, which makes "every rendered number resolves to a
+  manifest pointer" a mechanical test over the report object rather than a
+  regex over its output.
+- The report distinguishes three verdicts, with fidelity gating efficacy:
+  an arm whose audit failed is *not validated* and its held-out number is
+  descriptive only, whatever its interval says. The h1 keeps that
+  distinction too -- a fidelity failure never reads as a measured null
+  result. Absent facts are named rather than invented: an unpriced role
+  renders as `unpriced (n/total)` and never as zero, wall time is reported
+  unrecorded because no manifest field or `cost.json` carries a duration,
+  and an audit document that does not resolve shows the recorded verdict
+  and says the finding table was not resolved.
+- The report's HTML follows the `html-doc-polish` kit and renders with no
+  network access: the stylesheet and favicon live inside the packet, and
+  the document fetches no font, script, or highlighter. The kit's Google
+  Fonts `@import` is dropped for that reason, falling back to the system
+  faces the kit already names.
 
 ### Notes
 

@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- C19 optimizer runs record effect leases in a SQLite authority instead of an
+  in-memory one. The authority shares the run directory's `runtime.sqlite`
+  with the object store, mirroring whetstone-ai's platform CLI; the two
+  components own disjoint tables. Leases now outlive the process, so a re-run
+  against a completed run directory replays its recorded effects rather than
+  re-executing them. The runtime is closed on every exit path, releasing the
+  eval engine and the authority's connection.
+
 ### Added
 
 - The C19 optimizer CLI and runner accept `--optimizer gepa` and

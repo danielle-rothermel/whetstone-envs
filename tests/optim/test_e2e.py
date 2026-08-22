@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import Counter
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -337,3 +339,98 @@ def test_fake_transport_reports_run_spend(tmp_path, optimizer: str) -> None:
         # A fake transport reports no price, so no total is presented.
         if role.unpriced_calls:
             assert role.usd is None
+
+
+#: Tables the effect lease authority owns inside the run's ``runtime.sqlite``.
+#: The object store owns ``objects``/``bindings`` in the same file; the two
+#: components never collide, so one database carries both.
+LEASE_TABLE = "dr_store_lease_authority"
+LEASE_METADATA_TABLE = "dr_store_lease_authority_metadata"
+
+
+def _lease_rows(database: Path) -> list[tuple[object, ...]]:
+    with closing(sqlite3.connect(database)) as connection:
+        return connection.execute(
+            f"SELECT * FROM {LEASE_TABLE} ORDER BY semantic_key"  # noqa: S608
+        ).fetchall()
+
+
+def _table_names(database: Path) -> set[str]:
+    with closing(sqlite3.connect(database)) as connection:
+        return {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+
+
+def test_fake_run_persists_effect_leases_beside_the_store(tmp_path) -> None:
+    """The run's effect leases outlive the process that created them.
+
+    A memory authority would drop every terminal at process exit; the sqlite
+    authority writes them into the run directory's own ``runtime.sqlite``.
+    """
+    output = tmp_path / "lease-durability"
+    assert (
+        main(
+            [
+                "--optimizer",
+                "copro",
+                "--transport",
+                "fake",
+                "--split-sizes",
+                "2,2,0",
+                "--run-id",
+                "c19-lease-durability",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    database = output / "runtime.sqlite"
+    assert database.is_file()
+    # Both components share the file without colliding.
+    assert {
+        LEASE_TABLE,
+        LEASE_METADATA_TABLE,
+        "objects",
+        "bindings",
+    } <= _table_names(database)
+    assert _lease_rows(database), "the run recorded no effect leases"
+
+
+def test_rerun_against_the_same_output_replays_recorded_effects(
+    tmp_path,
+) -> None:
+    """A second run over a completed directory replays instead of re-running.
+
+    Every lease row -- including ``attempt_id`` and ``fence`` -- is unchanged,
+    which a re-execution could not produce: acquiring an effect afresh mints a
+    new attempt and bumps the fence. The replay itself is whetstone-ai's
+    guarantee; what this pins is that the runner hands it a durable authority
+    so the guarantee survives a process boundary.
+    """
+    output = tmp_path / "lease-replay"
+    argv = [
+        "--optimizer",
+        "copro",
+        "--transport",
+        "fake",
+        "--split-sizes",
+        "2,2,0",
+        "--run-id",
+        "c19-lease-replay",
+        "--output",
+        str(output),
+    ]
+    assert main(argv) == 0
+    database = output / "runtime.sqlite"
+    before = _lease_rows(database)
+    assert before
+    first_result = (output / "result.json").read_text(encoding="utf-8")
+
+    assert main(argv) == 0
+    assert _lease_rows(database) == before
+    assert (output / "result.json").read_text(encoding="utf-8") == first_result

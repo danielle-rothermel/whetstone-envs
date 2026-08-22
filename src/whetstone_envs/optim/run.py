@@ -424,46 +424,61 @@ def run_c19_optimizer(spec: C19RunSpec) -> Path:
             prompt_adapter=prompt_adapter,
             proposer_transport=proposer_transport,
         )
+        # Effect leases are durable, not per-process: they live in the run's
+        # own ``runtime.sqlite`` beside the object store, mirroring
+        # whetstone-ai's platform CLI, which hands ``EffectLeaseAuthority
+        # .sqlite`` the same path it opened the store from. The lease
+        # authority owns ``dr_store_lease_authority*`` while the object store
+        # owns ``objects``/``bindings``, so one file carries both without a
+        # name collision. A memory authority would discard every terminal at
+        # process exit, so a re-run against a completed run directory would
+        # re-execute effects that already happened.
         runtime = build_runtime(
             store=store,
             engine=engine,
             adapter_registry=MappingAdapterRegistry(
                 {bound.adapter_key: bound.adapter}
             ),
-            effect_authority=EffectLeaseAuthority.memory(),
+            effect_authority=EffectLeaseAuthority.sqlite(sqlite_path),
         )
-        launch = _prepare_launch(
-            runtime=runtime,
-            bound=bound,
-            run_id=resolved_run_id,
-            experiment=experiment,
-            copro_control=copro_control,
-            engine=engine,
-        )
-        request = copro_run_request(
-            launch,
-            controller_identity_hash=runtime.controller.runtime_hash,
-        )
-        result_ref = runtime.controller.drive(request)
-        if result_ref.schema_name != OPTIM_RESULT_SCHEMA:
-            raise ValueError("optimizer run did not produce an OptimResult")
-        result = OptimResult.model_validate(
-            runtime.store.get(result_ref.reference)
-        )
-        (resolved_output / "result.json").write_text(
-            result.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        trajectory = project_trajectory_report(
-            store=cast("ObjectStore", store),
-            prepared=prepared,
-            result_ref=result_ref,
-            result=result,
-            transport=spec.transport,
-            model=spec.model,
-            split_sizes=spec.split_sizes,
-        )
-        publish_trajectory_report(resolved_output, trajectory)
+        # ``RegisteredRuntime.close`` releases the eval engine and the
+        # authority's sqlite connection on every exit path, including the
+        # failures ``durable_run_boundary`` re-raises.
+        with runtime:
+            launch = _prepare_launch(
+                runtime=runtime,
+                bound=bound,
+                run_id=resolved_run_id,
+                experiment=experiment,
+                copro_control=copro_control,
+                engine=engine,
+            )
+            request = copro_run_request(
+                launch,
+                controller_identity_hash=runtime.controller.runtime_hash,
+            )
+            result_ref = runtime.controller.drive(request)
+            if result_ref.schema_name != OPTIM_RESULT_SCHEMA:
+                raise ValueError(
+                    "optimizer run did not produce an OptimResult"
+                )
+            result = OptimResult.model_validate(
+                runtime.store.get(result_ref.reference)
+            )
+            (resolved_output / "result.json").write_text(
+                result.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            trajectory = project_trajectory_report(
+                store=cast("ObjectStore", store),
+                prepared=prepared,
+                result_ref=result_ref,
+                result=result,
+                transport=spec.transport,
+                model=spec.model,
+                split_sizes=spec.split_sizes,
+            )
+            publish_trajectory_report(resolved_output, trajectory)
     return resolved_output
 
 

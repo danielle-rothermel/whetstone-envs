@@ -38,6 +38,7 @@ from whetstone_envs.optim.study.cli import (
     main,
 )
 from whetstone_envs.optim.study.manifest import (
+    PROVENANCE_AMENDED,
     SELECTION_RULE_ARGMAX_OFFICIAL,
     AdapterSwapRecord,
     ArmRecord,
@@ -52,12 +53,14 @@ from whetstone_envs.optim.study.manifest import (
     LeakageCheckRecord,
     ModelsRecord,
     PopulationRecord,
+    PreRegistrationRecord,
     RunRecord,
     RunSpendRecord,
     SelectionRecord,
     SplitRecord,
     SplitsRecord,
     StudyManifest,
+    pre_registration_design_hash,
     write_study_manifest,
 )
 from whetstone_envs.reporting.study_report import (
@@ -1118,3 +1121,122 @@ def test_every_non_evidence_pattern_matches_something_it_allows() -> None:
         sample = samples[pattern]
         assert re.search(pattern, sample), pattern
         assert not DIGIT.search(strip_non_evidence(sample)), pattern
+
+
+# --------------------------------------------------------------------------
+# An amended pre-registration is visible, not buried
+# --------------------------------------------------------------------------
+
+
+def _amended(manifest: StudyManifest) -> StudyManifest:
+    """``manifest`` with an amended pre-registration block attached."""
+    design = manifest.design
+    assert design is not None
+    prior = pre_registration_design_hash(
+        k_repeat=design.k_repeat,
+        k_run_by_arm=design.k_run_by_arm,
+        ci_level=design.ci_level,
+        resamples=design.resamples,
+        bootstrap_seed=design.bootstrap_seed,
+        correction=design.correction,
+        m=design.m,
+        completeness_backstop=design.completeness_backstop,
+    )
+    # The amendment differs from the design it replaced, which is what
+    # gives the two hashes different values to render.
+    amended_k_repeat = design.k_repeat + 1
+    current = pre_registration_design_hash(
+        k_repeat=amended_k_repeat,
+        k_run_by_arm=design.k_run_by_arm,
+        ci_level=design.ci_level,
+        resamples=design.resamples,
+        bootstrap_seed=design.bootstrap_seed,
+        correction=design.correction,
+        m=design.m,
+        completeness_backstop=design.completeness_backstop,
+    )
+    return manifest.model_copy(
+        update={
+            "pre_registration": PreRegistrationRecord(
+                design_hash=current,
+                k_repeat=amended_k_repeat,
+                k_run_by_arm=design.k_run_by_arm,
+                ci_level=design.ci_level,
+                resamples=design.resamples,
+                bootstrap_seed=design.bootstrap_seed,
+                correction=design.correction,
+                m=design.m,
+                completeness_backstop=design.completeness_backstop,
+                provenance=PROVENANCE_AMENDED,
+                amended_from=prior,
+            )
+        }
+    )
+
+
+def test_an_amended_pre_registration_is_rendered(
+    reported_manifest: StudyManifest,
+) -> None:
+    """**A design that changed after Stage 0 must say so in the report.**
+
+    An amendment is the difference between "this result was predicted" and
+    "this design was chosen knowing something about the data". A reader who
+    cannot see it from the report cannot judge the claim, so the hash, the
+    provenance, and the hash it replaced all render.
+    """
+    manifest = _amended(reported_manifest)
+    block = manifest.pre_registration
+    assert block is not None
+    text = render_markdown(build_study_report(manifest))
+    assert block.design_hash[:12] in text
+    assert "amended" in text
+    assert (block.amended_from or "")[:12] in text
+
+
+def test_an_amended_pre_registration_warns(
+    reported_manifest: StudyManifest,
+) -> None:
+    """The warning block is where a reader looks for what to distrust."""
+    amended_report = build_study_report(_amended(reported_manifest))
+    original_report = build_study_report(reported_manifest)
+    amended_warnings = [
+        note for note in amended_report.warnings if "amended" in note
+    ]
+    assert amended_warnings, "an amended design warns"
+    assert not [note for note in original_report.warnings if "amended" in note]
+
+
+def test_an_original_pre_registration_renders_without_an_amendment(
+    reported_manifest: StudyManifest,
+) -> None:
+    """The guard against a report that calls every design amended."""
+    design = reported_manifest.design
+    assert design is not None
+    design_hash = pre_registration_design_hash(
+        k_repeat=design.k_repeat,
+        k_run_by_arm=design.k_run_by_arm,
+        ci_level=design.ci_level,
+        resamples=design.resamples,
+        bootstrap_seed=design.bootstrap_seed,
+        correction=design.correction,
+        m=design.m,
+        completeness_backstop=design.completeness_backstop,
+    )
+    manifest = reported_manifest.model_copy(
+        update={
+            "pre_registration": PreRegistrationRecord(
+                design_hash=design_hash,
+                k_repeat=design.k_repeat,
+                k_run_by_arm=design.k_run_by_arm,
+                ci_level=design.ci_level,
+                resamples=design.resamples,
+                bootstrap_seed=design.bootstrap_seed,
+                correction=design.correction,
+                m=design.m,
+                completeness_backstop=design.completeness_backstop,
+            )
+        }
+    )
+    text = render_markdown(build_study_report(manifest))
+    assert design_hash[:12] in text
+    assert "amended after Stage 0" not in text

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from whetstone_envs.optim.study.cli import NOT_CHECKED, _format_leakage
 from whetstone_envs.optim.study.leakage import (
     HeldOutObservation,
     LeakageCheckError,
@@ -207,9 +208,28 @@ def test_l4_catches_a_candidate_measured_with_different_repeats() -> None:
 
 
 def test_l4_fails_when_nothing_was_measured() -> None:
-    """An empty held-out set is a broken study, not a vacuously clean one."""
+    """An empty held-out set is a broken study, not a vacuously clean one.
+
+    It is reported the way L1 reports its own empty case: **not checked**
+    rather than checked-and-failed. Both are refusals -- neither may be
+    read as a pass -- but "the rule found a violation" and "the rule had no
+    evidence to look at" are different facts, and a reader acts on them
+    differently.
+    """
     finding = check_l4_identical_held_out_procedure(())
     assert not finding.passed
+    assert not finding.checked
+    assert "nothing to check" in finding.detail
+
+
+def test_l4_renders_as_not_checked_rather_than_failed() -> None:
+    """The literal a reader sees for an unevaluable rule."""
+    report = LeakageReport(
+        findings=(check_l4_identical_held_out_procedure(()),)
+    )
+    line = next(iter(_format_leakage(report)))
+    assert line.startswith(NOT_CHECKED)
+    assert "FAILED" not in line
 
 
 def test_l5_catches_a_task_shared_between_two_splits() -> None:

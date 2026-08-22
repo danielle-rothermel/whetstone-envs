@@ -236,6 +236,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   stage recorded is re-read from its own artifacts so Stage 2's arg-max
   covers the arm's whole `K_RUN`; selecting over a subset is refused loudly
   rather than quietly turning a `K_RUN = 5` arg-max into a `K_RUN = 3` one.
+  Reporting resumes too: an arm whose selection and completed held-out claim
+  are both durable is rebuilt from them rather than re-reported, so a crash
+  partway through a stage no longer leaves every later resume raising
+  "already selected" with the study's paid runs stranded behind it. An arm
+  that selected but never claimed continues from its selection, and one
+  whose evaluation was in flight is refused with the recovery named rather
+  than silently re-billed. Held-out claims now carry the per-task vector the
+  rebuild needs.
+- **The Stage-1 budget gate measures planned rows.** Its numerator read an
+  attribute no evidence type defines, so every evaluation counted as one and
+  a COPRO pilot measured 2 against 48 real rows — a 24x undercount in the
+  gate built to catch fan-out. It now dereferences
+  `EvalEvidence.row_accounting.planned` through the same measurement the F16
+  fan-out check uses, deduplicated by content hash so GEPA's replayed prefix
+  cannot inflate the count with the step number and false-abort a long run.
+- The study report surfaces an amended pre-registration. The design hash,
+  its provenance, and the hash an amendment replaced all render in the
+  design section, and an amended design raises a warning — a design changed
+  after Stage 0 is not the one first registered, and a reader must not have
+  to infer that from the manifest.
 - **`leakage-check` really checks L1.** It extracts each run's completed
   intent resolutions from the run stores the manifest names, so the rule
   that an optimizer saw the internal split and nothing else is observed

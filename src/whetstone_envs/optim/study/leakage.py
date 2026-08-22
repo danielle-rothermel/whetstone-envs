@@ -306,10 +306,18 @@ def check_l4_identical_held_out_procedure(
     """
     seen = tuple(observations)
     if not seen:
+        # Vacuously true, which is not a check -- the same distinction L1
+        # draws. It still fails closed: a caller holding no held-out
+        # evidence has not verified that one procedure was shared, and must
+        # not be told it was.
         return LeakageFinding(
             rule=LeakageRule.L4_IDENTICAL_HELD_OUT_PROCEDURE,
             passed=False,
-            detail="no held-out evaluations were recorded",
+            detail=(
+                "no held-out evaluations were recorded, so this rule had "
+                "nothing to check"
+            ),
+            checked=False,
         )
     configs = sorted({observation.eval_config_hash for observation in seen})
     repeats = sorted({observation.repeats for observation in seen})

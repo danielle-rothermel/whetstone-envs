@@ -607,6 +607,17 @@ GEPA_MEASURED_TASK_CALLS_AT_PIN = -(
 #: unit as the thing it is compared against. Null-B is the one arm whose
 #: run-side cost is zero, which is why its estimate is the harness cost
 #: instead of a search it does not run.
+#:
+#: **The two estimates coincide at the protocol's own splits, by accident.**
+#: At ``(88, 132, 220)`` with ``K_REPEAT = 3`` this harness formula gives
+#: ``3 x (132 + 220) = 1,056`` and COPRO's search shape -- which
+#: ``null-random`` shares -- gives ``2 x 2 x 88 x 3 = 1,056`` as well. The
+#: two derivations have nothing in common: one counts official and held-out
+#: passes over the *reporting* splits, the other counts search steps over
+#: the *internal* split. Reading the equality as confirmation that null-B
+#: is priced like COPRO is exactly the regression this constant replaced,
+#: so any test discriminating the two formulas must pick split sizes where
+#: they genuinely differ.
 NULL_IDENTITY_OFFICIAL_PASSES = 1
 NULL_IDENTITY_HELD_OUT_PASSES = 1
 

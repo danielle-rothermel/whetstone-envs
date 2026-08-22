@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING
 from pydantic import JsonValue
 
 from whetstone_envs.optim.study.manifest import (
+    PROVENANCE_AMENDED,
     STUDY_MANIFEST_NAME,
     EvidencePointer,
     StageId,
@@ -1076,6 +1077,63 @@ def _design_section(manifest: StudyManifest) -> Section:
                 ),
             )
         )
+    pre_registration = manifest.pre_registration
+    if pre_registration is not None:
+        rows.append(
+            Row(
+                cells=(
+                    Cell(text="pre-registration hash"),
+                    Cell(
+                        figure=_manifest_figure(
+                            pre_registration.design_hash[:12],
+                            "pre_registration.design_hash",
+                        )
+                    ),
+                    Cell(text="over the design fields fixed before any spend"),
+                )
+            )
+        )
+        # An amendment is the one thing about a pre-registration a reader
+        # must not have to infer: a design that changed after Stage 0 is a
+        # different design, and the hash it replaced is what makes that
+        # checkable rather than asserted.
+        amended_from = pre_registration.amended_from
+        rows.append(
+            Row(
+                cells=(
+                    Cell(text="pre-registration provenance"),
+                    Cell(
+                        figure=_manifest_figure(
+                            pre_registration.provenance,
+                            "pre_registration.provenance",
+                        )
+                    ),
+                    Cell(
+                        text=(
+                            "amended after Stage 0; the design below is not "
+                            "the one first registered"
+                            if amended_from is not None
+                            else "the design registered before any spend"
+                        )
+                    ),
+                )
+            )
+        )
+        if amended_from is not None:
+            rows.append(
+                Row(
+                    cells=(
+                        Cell(text="amended from"),
+                        Cell(
+                            figure=_manifest_figure(
+                                amended_from[:12],
+                                "pre_registration.amended_from",
+                            )
+                        ),
+                        Cell(text="the pre-registration this one replaced"),
+                    )
+                )
+            )
     models = manifest.models
     model_rows = (
         Row(
@@ -2123,6 +2181,18 @@ def _warnings(manifest: StudyManifest) -> tuple[str, ...]:
         notes.append(
             "No held-out evaluation is recorded, so this report describes a "
             "design and its runs, not a result."
+        )
+    pre_registration = manifest.pre_registration
+    if (
+        pre_registration is not None
+        and pre_registration.provenance == PROVENANCE_AMENDED
+    ):
+        notes.append(
+            "The pre-registration was amended after Stage 0: this design "
+            f"({pre_registration.design_hash[:12]}) replaced the one "
+            f"registered at {(pre_registration.amended_from or '')[:12]}. "
+            "Results below are pre-registered against the amended design, "
+            "not the original."
         )
     if manifest.leakage_check is None:
         notes.append("The leakage rules were not run over this manifest.")

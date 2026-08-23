@@ -742,6 +742,8 @@ def _transport_change_amendment(
         # yet, so there is nothing to record as dropped. An amendment
         # naming no casualties would be noise in the report.
         return None
+    dropped = set(dropped_stages)
+    dropped_run_ids = {run.run_id for run in dropped_runs}
     return AmendmentRecord(
         at=datetime.now(UTC).isoformat(),
         amended_stage=StageId.STAGE0.value,
@@ -760,6 +762,17 @@ def _transport_change_amendment(
         dropped_held_out_claims=len(manifest.held_out_claims),
         dropped_held_out_rows=len(manifest.held_out),
         dropped_call_count_gate=manifest.call_count_gate is not None,
+        # Measured on the transport being left behind, and keyed by names
+        # the replacement stage recomputes: counted here so the record
+        # says what the study lost, and dropped below so nothing reads it.
+        dropped_official_scores=sum(
+            1
+            for entry in manifest.official_scores
+            if entry.run_id in dropped_run_ids or entry.stage in dropped
+        ),
+        dropped_report_spend=sum(
+            1 for entry in manifest.report_spend if entry.stage in dropped
+        ),
     )
 
 
@@ -774,6 +787,19 @@ def _without_amended_evidence(
     everything measured -- the arm stages' records, their runs, the
     selections over those runs, the held-out claims and rows those
     selections produced, and the pilot's call-count verdict.
+
+    **What those runs and stages bought goes with them.** Run ids are
+    deterministic, so the replacement stage recomputes the very names this
+    drops; an ``official_scores`` entry left behind would be read back by
+    :meth:`~whetstone_envs.optim.study.selection.ManifestSelectionLog.official_score_for`
+    and reused, presenting a score measured on the previous transport as
+    this study's selection evidence -- and never re-buying it on the
+    transport the study now runs on. ``report_spend`` is the same shape of
+    error in money: the stage's reporting row is folded from those durable
+    per-evaluation records rather than from the row, so entries surviving
+    their stage are folded by the *next* invocation of it, billing a paid
+    stage for evaluations a fake-transport invocation bought. Both are
+    counted on the amendment before they go.
 
     **A verdict computed over dropped evidence goes with it.**
     ``leakage_check`` is L6's mechanical pass over the very run artifacts
@@ -797,12 +823,24 @@ def _without_amended_evidence(
     written.
     """
     dropped = set(amendment.dropped_stages)
+    dropped_runs = set(amendment.dropped_run_ids)
     return manifest.model_copy(
         update={
             "amendments": (*manifest.amendments, amendment),
             "stages": tuple(
                 entry
                 for entry in manifest.stages
+                if entry.stage not in dropped
+            ),
+            "official_scores": tuple(
+                entry
+                for entry in manifest.official_scores
+                if entry.run_id not in dropped_runs
+                and entry.stage not in dropped
+            ),
+            "report_spend": tuple(
+                entry
+                for entry in manifest.report_spend
                 if entry.stage not in dropped
             ),
             "arms": tuple(
@@ -1206,7 +1244,9 @@ def run_arm_stage(
 
     # One ledger per stage: the pilot's selection and the full design's are
     # each made once, over different run sets, and neither can be made twice.
-    log = ManifestSelectionLog(study_dir, stage=stage.value)
+    log = ManifestSelectionLog(
+        study_dir, stage=stage.value, transport=environment.transport
+    )
     # Every reporting evaluation from here on writes its own spend before
     # the pass returns, so a crash mid-pass leaves the bill for what was
     # already bought on disk rather than in a process that is gone.
@@ -1295,6 +1335,7 @@ def _persist_report_spend_to(
                             purpose=record.purpose,
                             candidate_name=record.candidate_name,
                             stage=stage.value,
+                            transport=environment.transport,
                             spend=record.spend,
                         ),
                     )
@@ -1326,6 +1367,13 @@ def _record_report_spend(
     evaluation an earlier invocation paid for is still counted even though
     this process never issued it.
 
+    **Keyed on the transport as well as the stage.** An evaluation bought
+    on one transport is not part of what a stage running on another spent,
+    so a surviving entry from an invalidated invocation -- a fake-transport
+    row, costing nothing anyone owes -- can never reach a paid stage's
+    bill. :func:`_without_amended_evidence` drops those entries; this is
+    what holds if one ever reaches the manifest by another route.
+
     A fake-transport stage is skipped: its rows are real rows that would
     total to a bill nobody owes, which is the judgement
     :func:`_stage_record` keeps at the call site.
@@ -1337,6 +1385,7 @@ def _record_report_spend(
         entry
         for record in manifest.report_spend
         if record.stage == stage.value
+        and record.transport == environment.transport
         for entry in record.spend
     )
     if not folded:

@@ -1540,6 +1540,11 @@ class ReportSpendEntry(_StrictModel):
     purpose: StrictStr
     candidate_name: StrictStr
     stage: StrictStr
+    #: The transport the evaluation was bought on. Recorded because the
+    #: stage's reporting row is folded from these entries, and a fold that
+    #: keyed on the stage alone would bill a paid stage for a
+    #: fake-transport invocation's evaluations -- a total nobody owes.
+    transport: StrictStr
     spend: tuple[RunSpendRecord, ...] = ()
 
     @model_validator(mode="after")
@@ -1556,6 +1561,11 @@ class ReportSpendEntry(_StrictModel):
             raise ValueError(
                 f"a report spend entry names one of {list(STAGE_IDS)}, "
                 f"got {self.stage!r}"
+            )
+        if self.transport not in TRANSPORT_NAMES:
+            raise ValueError(
+                f"a report spend entry names one of {list(TRANSPORT_NAMES)}, "
+                f"got {self.transport!r}"
             )
         roles = [entry.role for entry in self.spend]
         if len(set(roles)) != len(roles):
@@ -1589,6 +1599,11 @@ class OfficialScoreEntry(_StrictModel):
     run_id: StrictStr
     arm_id: StrictStr
     stage: StrictStr
+    #: The transport the score was measured on. Run ids are deterministic,
+    #: so a cross-transport re-calibration recomputes the same names; the
+    #: read-back checks this so one transport's measurement can never be
+    #: reused as another's selection evidence.
+    transport: StrictStr
     score: StrictFloat
     eval_config_hash: StrictStr
     #: Rows achieved over rows requested, carried because a mean without
@@ -1616,6 +1631,11 @@ class OfficialScoreEntry(_StrictModel):
             )
         if self.stage == StageId.STAGE0.value:
             raise ValueError("stage0 selects nothing; it scores no runs")
+        if self.transport not in TRANSPORT_NAMES:
+            raise ValueError(
+                f"an official score names one of {list(TRANSPORT_NAMES)}, "
+                f"got {self.transport!r}"
+            )
         return self
 
 
@@ -1674,6 +1694,16 @@ class AmendmentRecord(_StrictModel):
     dropped_held_out_rows: StrictInt
     #: Whether the pilot's call-count verdict went with them.
     dropped_call_count_gate: StrictBool
+    #: The official scores dropped with their runs. Recorded rather than
+    #: inferred from ``dropped_run_ids``: a run is dropped whether or not
+    #: it had been scored yet, so how many *measurements* the study lost
+    #: is a separate fact from how many runs it lost.
+    dropped_official_scores: StrictInt = 0
+    #: The reporting purchases dropped with their stage rows. Recorded for
+    #: the same reason and, unlike the rest, it is money: an operator
+    #: reconciling the study's bill needs to see what the amendment
+    #: removed from it.
+    dropped_report_spend: StrictInt = 0
 
     @model_validator(mode="after")
     def _validate_amendment(self) -> AmendmentRecord:
@@ -1716,6 +1746,8 @@ class AmendmentRecord(_StrictModel):
             self.dropped_selections,
             self.dropped_held_out_claims,
             self.dropped_held_out_rows,
+            self.dropped_official_scores,
+            self.dropped_report_spend,
         )
         if any(value < 0 for value in counts):
             raise ValueError("an amendment's drop counts are non-negative")

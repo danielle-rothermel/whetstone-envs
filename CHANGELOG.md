@@ -103,6 +103,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whatever just ran.
 
 ### Fixed
+- **A cross-transport amendment takes the measurements its dropped evidence
+  bought.** `stage0 --replace-design` onto another transport dropped the
+  arm stages, their runs, the selections, and the held-out claims, but left
+  `official_scores` and `report_spend` behind. Run ids are deterministic,
+  so the replacement stage recomputed the very names that were dropped and
+  `official_score_for` read back a score measured on the transport the
+  study had just left — presenting it as this study's selection evidence
+  and never re-buying it on the transport now in use. `report_spend` was
+  the same error in money: the stage's reporting row is folded from the
+  durable per-evaluation records rather than from the row, so entries
+  surviving their stage were folded by the next invocation of it, billing a
+  paid stage for the fake-transport evaluations an invalidated invocation
+  bought. Both are now dropped in the same amendment and counted on it, as
+  `dropped_official_scores` and `dropped_report_spend`. Belt and braces on
+  each: an `OfficialScoreEntry` and a `ReportSpendEntry` each record the
+  transport they were bought on, the score read-back requires it to match
+  the stage's, and the reporting fold keys on `(stage, transport)` — so
+  neither a stale measurement nor a stale bill can be reused whatever put
+  it in the manifest.
 - **The reporting pass is durable, so a resume neither loses its spend nor
   bills it twice.** Official-selection scoring, the held-out evaluations,
   and the anchors each reach the provider before the stage's row is
@@ -359,6 +378,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   model appears — an evaluation runs no proposer, and an all-zero proposer
   row would claim it measured one and found it free — and an evaluation that
   evidenced no provider call publishes neither block rather than a zero.
+  The read path is strict on the current version, so `eval_report/v1`
+  reports are not loadable by this release; existing ones remain on disk as
+  historical artifacts rather than being migrated or read.
 
 ### Fixed
 

@@ -657,10 +657,15 @@ class ManifestSelectionLog:
     """
 
     def __init__(
-        self, study_dir: Path, *, stage: str = DEFAULT_SELECTION_STAGE
+        self,
+        study_dir: Path,
+        *,
+        stage: str = DEFAULT_SELECTION_STAGE,
+        transport: str,
     ) -> None:
         self._study_dir = study_dir
         self._stage = stage
+        self._transport = transport
 
     @property
     def study_dir(self) -> Path:
@@ -671,6 +676,17 @@ class ManifestSelectionLog:
     def stage(self) -> str:
         """The stage whose selections and claims this ledger owns."""
         return self._stage
+
+    @property
+    def transport(self) -> str:
+        """The transport this stage's measurements are bought on.
+
+        Carried because a score is evidence about a run *on a transport*,
+        and run ids are deterministic: without it the read-back cannot
+        tell this stage's own measurement from one a re-calibrated study
+        made somewhere else under the same name.
+        """
+        return self._transport
 
     def _read(self) -> StudyManifest:
         return read_study_manifest(self._study_dir)
@@ -838,9 +854,21 @@ class ManifestSelectionLog:
         already-reported arm was re-scored in full purely to rebuild a
         report the manifest could answer from. Reading the score back is
         what makes a resume free.
+
+        **The transport is part of the match.** Run ids are deterministic,
+        so a study re-calibrated onto another transport recomputes the
+        same names; a score measured on the transport it left would
+        otherwise be read back here and presented as this stage's
+        selection evidence. The amendment drops those entries outright --
+        this is what holds if one ever reaches the manifest by another
+        route.
         """
         for entry in self._read().official_scores:
-            if entry.run_id == run_id and entry.stage == self._stage:
+            if (
+                entry.run_id == run_id
+                and entry.stage == self._stage
+                and entry.transport == self._transport
+            ):
                 return CandidateScore(
                     run_id=entry.run_id,
                     score=entry.score,
@@ -860,6 +888,12 @@ class ManifestSelectionLog:
         it would churn the manifest without changing it. A *disagreeing*
         re-record is refused, because two different scores for one run
         would leave the arg-max unable to say which one it selected on.
+
+        A score this stage cannot read back because it was measured on
+        another transport is refused rather than written beside: the
+        manifest scores a run once per stage, so the two cannot coexist,
+        and the stale entry is an amendment that did not take its evidence
+        with it.
         """
         manifest = self._read()
         existing = self.official_score_for(score.run_id)
@@ -871,6 +905,22 @@ class ManifestSelectionLog:
                     "once per stage"
                 )
             return
+        stale = next(
+            (
+                entry
+                for entry in manifest.official_scores
+                if entry.run_id == score.run_id and entry.stage == self._stage
+            ),
+            None,
+        )
+        if stale is not None:
+            raise SelectionError(
+                f"run {score.run_id!r} already recorded an official score "
+                f"at {self._stage} measured on transport "
+                f"{stale.transport!r}, and this stage is running on "
+                f"{self._transport!r}; a run is scored once per stage, so "
+                "the stale measurement is removed before it is re-bought"
+            )
         self._write(
             manifest.model_copy(
                 update={
@@ -880,6 +930,7 @@ class ManifestSelectionLog:
                             run_id=score.run_id,
                             arm_id=arm_id,
                             stage=self._stage,
+                            transport=self._transport,
                             score=score.score,
                             eval_config_hash=score.eval_config_hash,
                             completeness=score.completeness,

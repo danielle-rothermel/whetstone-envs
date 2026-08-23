@@ -50,10 +50,12 @@ from whetstone_envs.optim.study.manifest import (
     ManifestExistsError,
     ManifestKey,
     ModelsRecord,
+    OfficialScoreEntry,
     PopulationRecord,
     PreRegistrationRecord,
     PreRegistrationViolationError,
     ProviderCallRecord,
+    ReportSpendEntry,
     RunRecord,
     RunSpendRecord,
     SelectionRecord,
@@ -211,6 +213,8 @@ def _full_manifest() -> StudyManifest:
                     dropped_held_out_claims=2,
                     dropped_held_out_rows=1,
                     dropped_call_count_gate=True,
+                    dropped_official_scores=1,
+                    dropped_report_spend=1,
                 ),
             ),
             "gepa_sizing": GepaSizingRecord(
@@ -235,6 +239,41 @@ def _full_manifest() -> StudyManifest:
                     control_identity_hash=_hash("d"),
                     seed_note="provider-seed-control-only",
                     runs=(_run("copro-1", result="5", audit="6", cost="e"),),
+                ),
+            ),
+            "report_spend": (
+                ReportSpendEntry(
+                    evidence_schema=EVIDENCE_SCHEMA,
+                    evidence_content_hash=_hash("f"),
+                    purpose="official",
+                    candidate_name="copro-1",
+                    stage="stage1",
+                    transport="openrouter",
+                    spend=(
+                        RunSpendRecord(
+                            role="task_model",
+                            calls=4,
+                            cached_calls=0,
+                            input_tokens=100,
+                            output_tokens=20,
+                            priced_calls=4,
+                            unpriced_calls=0,
+                            rows_missing_token_breakdown=0,
+                            usd=0.25,
+                        ),
+                    ),
+                ),
+            ),
+            "official_scores": (
+                OfficialScoreEntry(
+                    run_id="copro-1",
+                    arm_id="copro",
+                    stage="stage1",
+                    transport="openrouter",
+                    score=0.42,
+                    eval_config_hash="official-config",
+                    completeness=1.0,
+                    per_task=(0.42,),
                 ),
             ),
             "selection": (
@@ -434,6 +473,8 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "dropped_held_out_claims",
         "dropped_held_out_rows",
         "dropped_call_count_gate",
+        "dropped_official_scores",
+        "dropped_report_spend",
     ]
     assert list(payload["call_count_gate"]) == [
         "stage",
@@ -474,6 +515,25 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "unpriced_calls",
         "rows_missing_token_breakdown",
         "usd",
+    ]
+    assert list(payload["report_spend"][0]) == [
+        "evidence_schema",
+        "evidence_content_hash",
+        "purpose",
+        "candidate_name",
+        "stage",
+        "transport",
+        "spend",
+    ]
+    assert list(payload["official_scores"][0]) == [
+        "run_id",
+        "arm_id",
+        "stage",
+        "transport",
+        "score",
+        "eval_config_hash",
+        "completeness",
+        "per_task",
     ]
     assert list(payload["selection"][0]) == [
         "arm_id",

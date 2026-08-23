@@ -20,6 +20,7 @@ from whetstone_envs.c19 import generate_pool
 from whetstone_envs.optim.experiment import prepare_c19_experiment
 from whetstone_envs.optim.rows import task_rows_from_instances
 from whetstone_envs.optim.study.manifest import (
+    ArmKind,
     ArmRecord,
     ModelsRecord,
     PopulationRecord,
@@ -90,6 +91,7 @@ def toy_arms() -> tuple[ArmRecord, ...]:
         ArmRecord(
             arm_id="copro",
             optimizer="copro",
+            kind=ArmKind.REAL,
             demo_mode=None,
             train_size=None,
             val_size=None,
@@ -100,6 +102,7 @@ def toy_arms() -> tuple[ArmRecord, ...]:
         ArmRecord(
             arm_id="null-identity",
             optimizer="null-identity",
+            kind=ArmKind.NULL,
             demo_mode=None,
             train_size=None,
             val_size=None,

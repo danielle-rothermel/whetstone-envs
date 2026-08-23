@@ -449,7 +449,13 @@ def _arms(
         return ArmDesign(
             arm_id="miprov2" if efficacy else f"miprov2-{demo_mode}",
             optimizer="miprov2",
-            kind=ArmKind.REAL,
+            # The two fidelity modes are audit evidence, not hypotheses:
+            # they run once, carry no held-out claim, and stay out of the
+            # Holm family, which is pre-registered at exactly four. Marked
+            # by kind rather than by demo mode so the analysis and the
+            # report read the arm's role off the record instead of each
+            # re-deriving it from a string.
+            kind=ArmKind.REAL if efficacy else ArmKind.FIDELITY,
             demo_mode=demo_mode,
             train_size=train_size,
             val_size=val_size,

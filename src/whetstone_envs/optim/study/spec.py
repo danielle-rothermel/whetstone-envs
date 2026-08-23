@@ -15,7 +15,7 @@ rather than half-way through a paid stage.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import UNIQUE, StrEnum, auto, verify
+from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING
 
 from whetstone_envs.optim.split import (
@@ -25,6 +25,7 @@ from whetstone_envs.optim.split import (
     TRAIN_VAL_OPTIMIZERS,
 )
 from whetstone_envs.optim.study.manifest import (
+    ArmKind,
     PreRegistrationViolationError,
     read_study_manifest,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "CODEX_ARM_ID",
     "CODEX_EVALUATE_CALL_CAP",
     "CORRECTION_RULE",
+    "FIDELITY_ARM_IDS",
     "HOLM_FAMILY_SIZE",
     "K_CAL_CAP",
     "K_CAL_INITIAL",
@@ -120,19 +122,6 @@ class StageId(StrEnum):
     STAGE2 = "stage2"
 
 
-@verify(UNIQUE)
-class ArmKind(StrEnum):
-    """What an arm is evidence *for*.
-
-    The distinction is load-bearing for the statistics: only ``REAL`` arms are
-    hypotheses and enter the Holm family, and only ``NULL`` arms can trigger
-    the study-wide downgrade.
-    """
-
-    REAL = auto()
-    NULL = auto()
-
-
 #: Disjoint seed ranges, keyed by arm. Disjointness is what lets a run's
 #: seed identify its arm in a flat artifact directory, and null-B takes a
 #: single seed because it runs once.
@@ -186,6 +175,12 @@ REAL_OPTIMIZER_ARM_IDS: tuple[str, ...] = (
 
 #: The two controls, in the order the report presents them.
 NULL_ARM_IDS: tuple[str, ...] = ("null-random", "null-identity")
+
+#: The fidelity arms: MIPROv2's two non-efficacy demo modes. They run and
+#: are audited, and they carry no held-out claim -- see :class:`ArmKind`.
+#: Named here so the analysis and the report agree on the membership by
+#: reading one tuple rather than each re-deriving it from a demo mode.
+FIDELITY_ARM_IDS: tuple[str, ...] = ("miprov2-zeroshot", "miprov2-ground_only")
 
 
 def k_run_for(arm_id: str, *, stage: StageId) -> int:

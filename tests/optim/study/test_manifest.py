@@ -35,6 +35,7 @@ from whetstone_envs.optim.study.manifest import (
     TRANSPORT_NAMES,
     AdapterSwapRecord,
     AmendmentRecord,
+    ArmKind,
     ArmRecord,
     BalanceRecord,
     C18Record,
@@ -233,6 +234,7 @@ def _full_manifest() -> StudyManifest:
                 ArmRecord(
                     arm_id="copro",
                     optimizer="copro",
+                    kind=ArmKind.REAL,
                     demo_mode=None,
                     train_size=None,
                     val_size=None,
@@ -486,6 +488,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
     assert list(payload["arms"][0]) == [
         "arm_id",
         "optimizer",
+        "kind",
         "demo_mode",
         "train_size",
         "val_size",
@@ -977,9 +980,14 @@ def _pre_registration(
     search: dict[str, dict[str, int]] = {
         arm_id: {} for arm_id in _PINNED_K_RUN_BY_ARM
     }
+    # Both arms in this fixture are efficacy hypotheses.
+    kinds: dict[str, str] = dict.fromkeys(
+        _PINNED_K_RUN_BY_ARM, ArmKind.REAL.value
+    )
     return PreRegistrationRecord(
         k_repeat=k_repeat,
         k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
+        kind_by_arm=kinds,
         split_by_arm=splits,
         minibatch_by_arm=minibatch,
         search_by_arm=search,
@@ -992,6 +1000,7 @@ def _pre_registration(
         design_hash=pre_registration_design_hash(
             k_repeat=k_repeat,
             k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
+            kind_by_arm=kinds,
             split_by_arm=splits,
             minibatch_by_arm=minibatch,
             search_by_arm=search,
@@ -1023,15 +1032,17 @@ def test_a_pre_registration_hash_covers_its_own_fields() -> None:
 def test_the_hashed_payload_keys_are_pinned() -> None:
     """The hashed document is stored identity, so its keys are literals.
 
-    ``split_by_arm`` and ``minibatch_by_arm`` are in the list and an
-    authorization to spend is not: the partition an arm was measured at
-    and the batch each trial was scored on are design, and whether the
-    operator was allowed to bill a Codex session for this invocation is
-    not.
+    ``split_by_arm``, ``minibatch_by_arm``, and ``kind_by_arm`` are in the
+    list and an authorization to spend is not: the partition an arm was
+    measured at, the batch each trial was scored on, and the role that
+    decides whether the arm makes a claim at all are design, and whether
+    the operator was allowed to bill a Codex session for this invocation
+    is not.
     """
     assert list(_pre_registration().pinned_fields()) == [
         "k_repeat",
         "k_run_by_arm",
+        "kind_by_arm",
         "split_by_arm",
         "minibatch_by_arm",
         "search_by_arm",

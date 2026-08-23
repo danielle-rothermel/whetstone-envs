@@ -290,6 +290,7 @@ def test_an_arm_naming_an_unseeded_optimizer_is_refused() -> None:
             ArmRecord(
                 arm_id="mystery",
                 optimizer="not-an-optimizer",
+                kind=ArmKind.REAL,
                 demo_mode=None,
                 train_size=None,
                 val_size=None,
@@ -439,6 +440,7 @@ def _pinned_study(tmp_path: Path) -> Path:
     miprov2 = ArmRecord(
         arm_id="miprov2",
         optimizer="miprov2",
+        kind=ArmKind.REAL,
         demo_mode=None,
         train_size=TOY_TRAIN_SIZE,
         val_size=TOY_VAL_SIZE,
@@ -680,6 +682,7 @@ def test_the_batch_size_enters_the_pre_registered_payload() -> None:
     common = {
         "k_repeat": 3,
         "k_run_by_arm": {"miprov2": 5},
+        "kind_by_arm": {"miprov2": ArmKind.REAL.value},
         "split_by_arm": {"miprov2": (44, 44)},
         "search_by_arm": {"miprov2": {"num_trials": 10}},
         "ci_level": CI_LEVEL,
@@ -1027,6 +1030,12 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
                 "miprov2": 5,
                 "null-identity": 1,
             },
+            kind_by_arm={
+                "copro": "real",
+                "gepa": "real",
+                "miprov2": "real",
+                "null-identity": "null",
+            },
             split_by_arm={
                 "copro": None,
                 "gepa": (2, 2),
@@ -1052,5 +1061,5 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
             m=HOLM_FAMILY_SIZE,
             completeness_backstop=0.9,
         )
-        == "fc1888a8d7f6b7304fe6bb249e1866e7d23dadf40ab833d03817c5c89f690e10"
+        == "d4f0e4de10158b0eb9c24df2b230608c7f26064f2d05767e983074cdf1a7c199"
     )

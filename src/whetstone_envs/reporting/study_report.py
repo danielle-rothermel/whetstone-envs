@@ -55,6 +55,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVENANCE_AMENDED,
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
+    ArmKind,
     EvidencePointer,
     StageId,
     StudyManifest,
@@ -772,6 +773,13 @@ def _verdict_section(manifest: StudyManifest) -> Section:
     leakage_failed = study_leakage_failed(manifest)
     rows: list[Row] = []
     for index, arm in enumerate(manifest.arms):
+        if arm.kind is ArmKind.FIDELITY:
+            # A fidelity arm answers a question about the implementation,
+            # not about held-out accuracy. It has no verdict to print, and
+            # printing one would report a fifth efficacy result -- from a
+            # single run, outside the Holm family -- in a table whose
+            # design pre-registers four. It appears in its own section.
+            continue
         row = _arm_held_out(manifest, arm)
         verdict = _arm_verdict(
             arm=arm,
@@ -830,6 +838,76 @@ def _verdict_section(manifest: StudyManifest) -> Section:
                 caption=(
                     "One row per arm. Nulls are controls, so their Holm "
                     "column is empty by design rather than by omission."
+                ),
+            ),
+        ),
+    )
+
+
+def _fidelity_section(manifest: StudyManifest) -> Section | None:
+    """The arms that check the implementation rather than the effect.
+
+    MIPROv2's ``zeroshot`` and ``ground_only`` modes run once each as
+    evidence for the ``MIPRO_ZEROSHOT_GROUNDING`` and
+    ``MIPRO_GROUND_ONLY_DEVIATION`` audit invariants. They are listed here,
+    with their audit result and **no verdict column**, because there is no
+    efficacy question for them to answer: one run was never sized to
+    support a held-out claim, and the protocol pre-registers ``fewshot`` as
+    the mode carrying the MIPROv2 claim.
+
+    Returns ``None`` when the design declared no fidelity arm, so a study
+    without one prints no empty section.
+    """
+    fidelity = tuple(
+        arm for arm in manifest.arms if arm.kind is ArmKind.FIDELITY
+    )
+    if not fidelity:
+        return None
+    rows = tuple(
+        Row(
+            cells=(
+                Cell(text=arm.arm_id),
+                Cell(text=arm.demo_mode or "--"),
+                Cell(text=f"{len(arm.runs)}"),
+                Cell(
+                    text=(
+                        "pass"
+                        if arm.runs
+                        and all(run.audit_passed for run in arm.runs)
+                        else "FAIL"
+                    ),
+                    status=(
+                        "ok"
+                        if arm.runs
+                        and all(run.audit_passed for run in arm.runs)
+                        else "bad"
+                    ),
+                ),
+            )
+        )
+        for arm in fidelity
+    )
+    return Section(
+        heading="Fidelity checks (no efficacy claim)",
+        tag="fidelity",
+        paragraphs=(
+            (
+                "These arms are evidence about the implementation, not "
+                "about held-out accuracy. They run once each, they are "
+                "audited like every other arm, and they carry no delta, no "
+                "interval, and no verdict. They are not in the Holm family, "
+                "which is pre-registered at exactly the four real "
+                "optimizers."
+            ),
+        ),
+        tables=(
+            Table(
+                headers=("arm", "demo mode", "runs", "fidelity"),
+                rows=rows,
+                caption=(
+                    "No verdict column by design: a fidelity arm answers "
+                    "an audit question, so there is no efficacy result to "
+                    "report."
                 ),
             ),
         ),
@@ -2271,8 +2349,10 @@ def build_study_report(
         ),
         panels=per_arm,
     )
+    fidelity_section = _fidelity_section(manifest)
     sections = (
         _verdict_section(manifest),
+        *((fidelity_section,) if fidelity_section is not None else ()),
         _design_section(manifest),
         _stage_history_section(manifest),
         _leakage_section(manifest),

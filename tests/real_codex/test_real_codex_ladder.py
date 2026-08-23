@@ -895,6 +895,7 @@ def test_rung9_the_study_path_completes_with_a_real_codex_arm(
     from whetstone_envs.optim.study.cli import EXIT_OK
     from whetstone_envs.optim.study.cli import main as study_main
     from whetstone_envs.optim.study.manifest import (
+        ArmKind,
         ArmRecord,
         read_study_manifest,
         write_study_manifest,
@@ -905,6 +906,7 @@ def test_rung9_the_study_path_completes_with_a_real_codex_arm(
         ArmRecord(
             arm_id="codex",
             optimizer="codex",
+            kind=ArmKind.REAL,
             demo_mode=None,
             train_size=None,
             val_size=None,
@@ -915,6 +917,7 @@ def test_rung9_the_study_path_completes_with_a_real_codex_arm(
         ArmRecord(
             arm_id="null-identity",
             optimizer="null-identity",
+            kind=ArmKind.NULL,
             demo_mode=None,
             train_size=None,
             val_size=None,

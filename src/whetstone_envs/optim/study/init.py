@@ -150,6 +150,7 @@ def _arm_records(protocol: StudyProtocol) -> tuple[ArmRecord, ...]:
         ArmRecord(
             arm_id=arm.arm_id,
             optimizer=arm.optimizer,
+            kind=arm.kind,
             demo_mode=arm.demo_mode,
             train_size=arm.train_size,
             val_size=arm.val_size,

@@ -41,6 +41,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVENANCE_AMENDED,
     SELECTION_RULE_ARGMAX_OFFICIAL,
     AdapterSwapRecord,
+    ArmKind,
     ArmRecord,
     C18Record,
     DesignRecord,
@@ -282,6 +283,7 @@ def reported_manifest(stage0_manifest: StudyManifest) -> StudyManifest:
         ArmRecord(
             arm_id="copro",
             optimizer="copro",
+            kind=ArmKind.REAL,
             demo_mode=None,
             train_size=None,
             val_size=None,
@@ -295,6 +297,7 @@ def reported_manifest(stage0_manifest: StudyManifest) -> StudyManifest:
         ArmRecord(
             arm_id="gepa",
             optimizer="gepa",
+            kind=ArmKind.REAL,
             demo_mode=None,
             train_size=44,
             val_size=44,
@@ -305,6 +308,7 @@ def reported_manifest(stage0_manifest: StudyManifest) -> StudyManifest:
         ArmRecord(
             arm_id="null-random",
             optimizer="null-random",
+            kind=ArmKind.NULL,
             demo_mode=None,
             train_size=None,
             val_size=None,
@@ -1207,9 +1211,11 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
     search_by_arm: dict[str, dict[str, int]] = {
         arm_id: {} for arm_id in split_by_arm
     }
+    kind_by_arm = {arm.arm_id: arm.kind.value for arm in manifest.arms}
     prior = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        kind_by_arm=kind_by_arm,
         split_by_arm=split_by_arm,
         minibatch_by_arm=minibatch_by_arm,
         search_by_arm=search_by_arm,
@@ -1226,6 +1232,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
     current = pre_registration_design_hash(
         k_repeat=amended_k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        kind_by_arm=kind_by_arm,
         split_by_arm=split_by_arm,
         minibatch_by_arm=minibatch_by_arm,
         search_by_arm=search_by_arm,
@@ -1242,6 +1249,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
                 design_hash=current,
                 k_repeat=amended_k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
+                kind_by_arm=kind_by_arm,
                 split_by_arm=split_by_arm,
                 minibatch_by_arm=minibatch_by_arm,
                 search_by_arm=search_by_arm,
@@ -1301,9 +1309,13 @@ def test_an_original_pre_registration_renders_without_an_amendment(
     search_by_arm: dict[str, dict[str, int]] = {
         arm_id: {} for arm_id in split_by_arm
     }
+    kind_by_arm = {
+        arm.arm_id: arm.kind.value for arm in reported_manifest.arms
+    }
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
+        kind_by_arm=kind_by_arm,
         split_by_arm=split_by_arm,
         minibatch_by_arm=minibatch_by_arm,
         search_by_arm=search_by_arm,
@@ -1320,6 +1332,7 @@ def test_an_original_pre_registration_renders_without_an_amendment(
                 design_hash=design_hash,
                 k_repeat=design.k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
+                kind_by_arm=kind_by_arm,
                 split_by_arm=split_by_arm,
                 minibatch_by_arm=minibatch_by_arm,
                 search_by_arm=search_by_arm,
@@ -1419,3 +1432,95 @@ def test_a_fake_stage_renders_as_having_reached_no_provider(
     text = _rendered(manifest, tmp_path, monkeypatch)
     assert NO_PROVIDER_STAGE_DETAIL in text
     assert UNLEDGERED_STAGE_DETAIL not in text
+
+
+# --------------------------------------------------------------------------
+# Fidelity arms carry no efficacy verdict
+
+
+@pytest.fixture
+def manifest_with_fidelity_arm(
+    reported_manifest: StudyManifest,
+) -> StudyManifest:
+    """``reported_manifest`` plus MIPROv2's ``zeroshot`` fidelity arm.
+
+    The arm passes its audits and is measured on held-out, which is exactly
+    the shape that used to earn an efficacy verdict: its purpose is to
+    evidence an audit invariant, and it is not one of the four hypotheses.
+    """
+    fidelity = ArmRecord(
+        arm_id="miprov2-zeroshot",
+        optimizer="miprov2",
+        kind=ArmKind.FIDELITY,
+        demo_mode="zeroshot",
+        train_size=44,
+        val_size=44,
+        minibatch=True,
+        minibatch_size=35,
+        miprov2_num_trials=10,
+        miprov2_num_candidates=3,
+        control_identity_hash="a" * 64,
+        seed_note="control-seed-field",
+        runs=(_run("miprov2-zeroshot-2100", seed=2100, passed=True),),
+    )
+    return reported_manifest.model_copy(
+        update={
+            "arms": (*reported_manifest.arms, fidelity),
+            "held_out_claims": (
+                *reported_manifest.held_out_claims,
+                _claim("miprov2-zeroshot", 0.6182),
+            ),
+            "held_out": (
+                *reported_manifest.held_out,
+                _held_out_row(
+                    "miprov2-zeroshot",
+                    mean=0.6182,
+                    ci=(0.0930, 0.3410),
+                    delta=0.2182,
+                    p_bootstrap=0.0002,
+                    p_holm=None,
+                ),
+            ),
+        }
+    )
+
+
+def test_a_fidelity_arm_gets_no_efficacy_verdict(
+    manifest_with_fidelity_arm: StudyManifest,
+) -> None:
+    """A fidelity arm is absent from the verdict table entirely.
+
+    Its interval excludes zero and its audits pass, so under a rule that
+    reads only the audit and the interval it would be reported as
+    **validated** -- an efficacy claim for an arm the protocol registered as
+    audit evidence, at one run, outside the Holm family. The claim would be
+    uncorrected and unearned, and the report would carry five efficacy
+    results where the design pre-registered four.
+    """
+    report = build_study_report(manifest_with_fidelity_arm)
+    verdict_section = next(
+        section for section in report.sections if section.tag == "verdict"
+    )
+    arm_ids = {
+        row.cells[0].rendered() for row in verdict_section.tables[0].rows
+    }
+    assert "miprov2-zeroshot" not in arm_ids
+
+
+def test_a_fidelity_arm_is_listed_as_a_fidelity_check(
+    manifest_with_fidelity_arm: StudyManifest,
+) -> None:
+    """It still appears -- with its audit result and no verdict.
+
+    Skipping the efficacy claim must not hide the arm: running it *is* its
+    purpose, and a reader has to be able to see that it ran and that its
+    audit passed.
+    """
+    report = build_study_report(manifest_with_fidelity_arm)
+    section = next(
+        section for section in report.sections if section.tag == "fidelity"
+    )
+    table = section.tables[0]
+    assert "verdict" not in table.headers
+    rendered = {row.cells[0].rendered() for row in table.rows}
+    assert "miprov2-zeroshot" in rendered

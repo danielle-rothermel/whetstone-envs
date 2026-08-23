@@ -38,9 +38,13 @@ from whetstone_envs.optim.study.protocols import (
 )
 from whetstone_envs.optim.study.spec import (
     CODEX_EVALUATE_CALL_CAP,
+    FIDELITY_ARM_IDS,
+    HOLM_FAMILY_SIZE,
     PROTOCOL_SPLIT_SIZES,
     PROTOCOL_TRAIN_SIZE,
     PROTOCOL_VAL_SIZE,
+    REAL_OPTIMIZER_ARM_IDS,
+    ArmKind,
     StageId,
 )
 
@@ -371,3 +375,29 @@ def test_no_two_arms_share_a_seed() -> None:
                 f"{seen.get(seed)}"
             )
             seen[seed] = spec.arm_id
+
+
+def test_the_holm_family_is_exactly_the_four_real_optimizers() -> None:
+    """The correction family is a structural fact, not a coincidence.
+
+    ``HOLM_FAMILY_SIZE`` is pre-registered at four, and the arms carrying
+    ``ArmKind.REAL`` are what the analysis corrects together. Adding a fifth
+    efficacy arm -- or promoting a fidelity arm into the family -- would
+    make the pre-registered family size a lie, so the two are pinned against
+    each other here rather than each asserted alone.
+    """
+    real = [arm for arm in STEP10_C19.arms if arm.kind is ArmKind.REAL]
+    assert len(real) == HOLM_FAMILY_SIZE
+    assert [arm.arm_id for arm in real] == list(REAL_OPTIMIZER_ARM_IDS)
+
+
+def test_miprov2s_non_efficacy_modes_are_fidelity_arms() -> None:
+    """The two extra MIPROv2 modes carry no efficacy claim.
+
+    They pass their audits and are measured, which is exactly the shape
+    that earned an unearned ``validated`` verdict before the role existed.
+    """
+    by_id = {arm.arm_id: arm for arm in STEP10_C19.arms}
+    for arm_id in FIDELITY_ARM_IDS:
+        assert by_id[arm_id].kind is ArmKind.FIDELITY
+    assert by_id["miprov2"].kind is ArmKind.REAL

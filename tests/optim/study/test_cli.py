@@ -43,6 +43,7 @@ from whetstone_envs.optim.study.cli import (
 )
 from whetstone_envs.optim.study.manifest import (
     STUDY_MANIFEST_NAME,
+    ArmKind,
     ArmRecord,
     EvidencePointer,
     RunRecord,
@@ -488,6 +489,7 @@ def _manifest_citing(pointers: tuple[EvidencePointer, ...]) -> StudyManifest:
                 ArmRecord(
                     arm_id="copro",
                     optimizer="copro",
+                    kind=ArmKind.REAL,
                     demo_mode=None,
                     train_size=None,
                     val_size=None,

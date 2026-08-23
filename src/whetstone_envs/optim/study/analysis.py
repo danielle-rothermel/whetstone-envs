@@ -50,6 +50,7 @@ from whetstone_envs.optim.study.selection import (
 from whetstone_envs.optim.study.spec import (
     NULL_ARM_IDS,
     REAL_OPTIMIZER_ARM_IDS,
+    ArmKind,
 )
 
 if TYPE_CHECKING:
@@ -158,6 +159,19 @@ def write_held_out_analysis(  # noqa: PLR0913
             "anchor; measure it before analysing"
         )
     measurements = _measurements_by_name(arms=arms, references=references)
+    # Fidelity arms are analysed for nothing: they carry no efficacy claim,
+    # so they get no delta, no interval, and no held-out row. They still
+    # ran and were audited -- that is their purpose, and the report lists
+    # them under its own fidelity section. Computing a delta here and then
+    # declining to print it would leave the number one refactor away from
+    # being claimed, and would put a fifth statistic in a manifest whose
+    # design pre-registers four hypotheses.
+    fidelity = _fidelity_arm_ids(manifest)
+    measurements = {
+        name: measurement
+        for name, measurement in measurements.items()
+        if name not in fidelity
+    }
     deltas = {
         name: _delta_for(
             arm_id=name,
@@ -276,6 +290,20 @@ def write_held_out_analysis(  # noqa: PLR0913
             manifest=manifest, statistics=uncorrected
         ),
         nesting_checked=_nesting_holds(manifest),
+    )
+
+
+def _fidelity_arm_ids(manifest: StudyManifest) -> frozenset[str]:
+    """The arms this manifest registered as fidelity checks.
+
+    Read off the manifest's own arm records rather than matched against a
+    name list, so an arm's role travels with the pre-registration that
+    declared it: the manifest is what a reader checks, and a report that
+    decided roles from a hardcoded tuple could disagree with the design it
+    claims to describe.
+    """
+    return frozenset(
+        arm.arm_id for arm in manifest.arms if arm.kind is ArmKind.FIDELITY
     )
 
 

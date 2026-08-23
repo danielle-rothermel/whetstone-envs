@@ -977,9 +977,13 @@ def _pre_registration_record(
     split_by_arm = _split_by_arm(spec)
     minibatch_by_arm = _minibatch_by_arm(spec)
     search_by_arm = _search_by_arm(spec)
+    # The arm's role, pinned with the rest: it decides which arms enter the
+    # Holm family and which produce a held-out verdict at all.
+    kind_by_arm = {arm.arm_id: arm.kind.value for arm in spec.arms}
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        kind_by_arm=kind_by_arm,
         split_by_arm=split_by_arm,
         minibatch_by_arm=minibatch_by_arm,
         search_by_arm=search_by_arm,
@@ -998,6 +1002,7 @@ def _pre_registration_record(
     return PreRegistrationRecord(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        kind_by_arm=kind_by_arm,
         split_by_arm=split_by_arm,
         minibatch_by_arm=minibatch_by_arm,
         search_by_arm=search_by_arm,
@@ -1886,6 +1891,7 @@ def _arm_record(
     return ArmRecord(
         arm_id=arm.arm_id,
         optimizer=arm.optimizer,
+        kind=arm.kind,
         demo_mode=arm.demo_mode,
         train_size=arm.train_size,
         val_size=arm.val_size,

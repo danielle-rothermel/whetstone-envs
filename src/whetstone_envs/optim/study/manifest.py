@@ -25,7 +25,7 @@ golden test rather than the report.
 from __future__ import annotations
 
 import json
-from enum import UNIQUE, StrEnum, verify
+from enum import UNIQUE, StrEnum, auto, verify
 from typing import TYPE_CHECKING, Protocol
 
 from dr_store import (
@@ -141,6 +141,12 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: ``ArmRecord`` and hashed into the pre-registration's ``search_by_arm``,
 #: and ``spec_from_manifest`` refuses a record that disagrees with the
 #: pinned design rather than running the shape the record happens to hold.
+#: v10 also records each arm's ``kind`` -- what the arm is evidence *for*.
+#: Without it the report had only the audit result and the interval to go
+#: on, so MIPROv2's two fidelity arms, which pass their audits and are
+#: measured on held-out, were labelled efficacy results: five claims where
+#: the design pre-registers four, from single runs outside the Holm family.
+#: The role is part of the pre-registered design, so it is hashed.
 STUDY_MANIFEST_SCHEMA_VERSION = 10
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
@@ -219,6 +225,37 @@ class SplitName(StrEnum):
     INTERNAL = "internal"
     OFFICIAL = "official"
     HELD_OUT = "held_out"
+
+
+@verify(UNIQUE)
+class ArmKind(StrEnum):
+    """What an arm is evidence *for*.
+
+    The distinction is load-bearing for the statistics, and it decides what
+    the report is permitted to say about an arm:
+
+    * ``REAL`` -- an efficacy hypothesis. These and only these enter the Holm
+      family, and the family size is pre-registered at exactly four.
+    * ``FIDELITY`` -- an audit check. The arm runs and is audited, because
+      running it is its whole purpose, but it carries **no held-out claim
+      and no verdict**. MIPROv2's ``zeroshot`` and ``ground_only`` modes are
+      these: they evidence the ``MIPRO_ZEROSHOT_GROUNDING`` and
+      ``MIPRO_GROUND_ONLY_DEVIATION`` invariants at one run each. Analysing
+      them as hypotheses would report five efficacy results where the design
+      registered four, uncorrected, from arms whose single run was never
+      sized to support a claim.
+    * ``NULL`` -- a control. Analysed uncorrected beside the family, and the
+      only kind that can trigger the study-wide downgrade.
+
+    ``FIDELITY`` is a separate kind rather than a flag on ``REAL`` because
+    the difference is not a degree of confidence: a fidelity arm is evidence
+    about the *implementation*, and the question it answers has no held-out
+    delta in it.
+    """
+
+    REAL = auto()
+    FIDELITY = auto()
+    NULL = auto()
 
 
 @verify(UNIQUE)
@@ -645,6 +682,13 @@ class PreRegistrationRecord(_StrictModel):
     #: and GEPA measure search efficacy against a declared partition, and a
     #: partition chosen after a result is the same post-hoc adjustment the
     #: rest of this block exists to forbid.
+    #: Each arm's pre-registered role, as ``{arm_id: kind}``.
+    #:
+    #: Hashed because the role decides what the study may claim: which arms
+    #: enter the Holm family, and which produce a held-out verdict at all.
+    #: An arm promoted from ``fidelity`` to ``real`` after its interval was
+    #: visible would be exactly the post-hoc adjustment this block forbids.
+    kind_by_arm: dict[StrictStr, StrictStr]
     split_by_arm: dict[StrictStr, tuple[StrictInt, StrictInt] | None]
     #: Each arm's pre-registered MIPROv2 minibatch size, as
     #: ``{arm_id: size}``, with ``None`` for an arm that does not
@@ -724,6 +768,7 @@ class PreRegistrationRecord(_StrictModel):
         expected = pre_registration_design_hash(
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
+            kind_by_arm=self.kind_by_arm,
             split_by_arm=self.split_by_arm,
             minibatch_by_arm=self.minibatch_by_arm,
             search_by_arm=self.search_by_arm,
@@ -746,6 +791,7 @@ class PreRegistrationRecord(_StrictModel):
         return _pre_registration_payload(
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
+            kind_by_arm=self.kind_by_arm,
             split_by_arm=self.split_by_arm,
             minibatch_by_arm=self.minibatch_by_arm,
             search_by_arm=self.search_by_arm,
@@ -848,6 +894,7 @@ def _pre_registration_payload(  # noqa: PLR0913
     *,
     k_repeat: int,
     k_run_by_arm: dict[str, int],
+    kind_by_arm: Mapping[str, str],
     split_by_arm: Mapping[str, tuple[int, int] | None],
     minibatch_by_arm: Mapping[str, int | None],
     search_by_arm: Mapping[str, Mapping[str, int]],
@@ -876,6 +923,7 @@ def _pre_registration_payload(  # noqa: PLR0913
     return {
         "k_repeat": k_repeat,
         "k_run_by_arm": dict(sorted(k_run_by_arm.items())),
+        "kind_by_arm": dict(sorted(kind_by_arm.items())),
         "split_by_arm": {
             arm_id: (None if split is None else [split[0], split[1]])
             for arm_id, split in sorted(split_by_arm.items())
@@ -898,6 +946,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
     *,
     k_repeat: int,
     k_run_by_arm: dict[str, int],
+    kind_by_arm: Mapping[str, str],
     split_by_arm: Mapping[str, tuple[int, int] | None],
     minibatch_by_arm: Mapping[str, int | None],
     search_by_arm: Mapping[str, Mapping[str, int]],
@@ -913,6 +962,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
         _pre_registration_payload(
             k_repeat=k_repeat,
             k_run_by_arm=k_run_by_arm,
+            kind_by_arm=kind_by_arm,
             split_by_arm=split_by_arm,
             minibatch_by_arm=minibatch_by_arm,
             search_by_arm=search_by_arm,
@@ -1193,6 +1243,13 @@ class ArmRecord(_StrictModel):
 
     arm_id: StrictStr
     optimizer: StrictStr
+    #: What this arm is evidence for: an efficacy hypothesis, a fidelity
+    #: check, or a control. Recorded rather than re-derived from the arm id
+    #: because it decides what the report may claim about the arm -- a
+    #: fidelity arm carries no held-out verdict and enters no correction
+    #: family -- and a reader of the manifest should not have to know which
+    #: demo modes happen to be fidelity modes to check that.
+    kind: ArmKind
     demo_mode: StrictStr | None
     #: The arm's train/val partition of the internal split, or ``None`` on
     #: an arm whose optimizer has no train/val concept. Recorded because it
@@ -2524,6 +2581,7 @@ __all__ = [
     "TRANSPORT_NAMES",
     "AdapterSwapRecord",
     "AmendmentRecord",
+    "ArmKind",
     "ArmRecord",
     "BalanceRecord",
     "C18Record",

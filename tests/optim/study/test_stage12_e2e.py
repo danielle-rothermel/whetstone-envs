@@ -34,12 +34,13 @@ from whetstone_envs.optim.study.cli import (
 )
 from whetstone_envs.optim.study.manifest import (
     STUDY_STORE_NAME,
+    ArmKind,
     ArmRecord,
     check_manifest_pointers,
     read_study_manifest,
     write_study_manifest,
 )
-from whetstone_envs.optim.study.spec import StageId
+from whetstone_envs.optim.study.spec import NULL_ARM_IDS, StageId
 from whetstone_envs.reporting.study_report import (
     REPORT_HTML_NAME,
     REPORT_MARKDOWN_NAME,
@@ -68,6 +69,7 @@ def _arms() -> tuple[ArmRecord, ...]:
         ArmRecord(
             arm_id=arm_id,
             optimizer=arm_id,
+            kind=(ArmKind.NULL if arm_id in NULL_ARM_IDS else ArmKind.REAL),
             demo_mode=None,
             train_size=None,
             val_size=None,

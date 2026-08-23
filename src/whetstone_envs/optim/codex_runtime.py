@@ -46,14 +46,19 @@ from typing import TYPE_CHECKING, Literal
 
 from dr_providers import ProviderKind
 from pydantic import BaseModel, ConfigDict, PositiveFloat, StrictInt, StrictStr
+from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.eval.runtime_engine import RuntimeEvalEngine
 
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    bind_openrouter_transport,
     fake_gold_by_prompt,
     fake_transport_factory,
+    hardened_execution_policy,
     openrouter_seeded_call_config,
-    openrouter_transport_factory,
+    widened_execution_policy,
 )
 
 if TYPE_CHECKING:
@@ -89,6 +94,19 @@ class EnvsCodexRuntimeConfig(BaseModel):
     num_seeds: StrictInt
     transport: CodexRuntimeTransport
     model: StrictStr
+
+    #: How many task evaluations the server runs against the provider at
+    #: once.
+    #:
+    #: Carried across the process boundary rather than defaulted on the
+    #: far side, because the server has no other way to learn it: it
+    #: rebuilds its engine from this config and nothing else, so an
+    #: unset field means the Codex arm silently evaluates at whetstone's
+    #: default width while every other arm runs at the operator's. Two
+    #: arms measured at different widths is not a correctness problem,
+    #: but it is a wall-clock one, and it is invisible without this
+    #: field.
+    provider_concurrency: StrictInt = DEFAULT_PROVIDER_CONCURRENCY
 
     # The three fields ``EvalRuntimeConfig`` requires structurally. They
     # are delegated straight to the reference config, so a Codex run gets
@@ -129,7 +147,23 @@ class EnvsCodexRuntimeConfig(BaseModel):
 
     @property
     def execution_policy(self) -> ProviderExecutionPolicy:
-        return self._reference.execution_policy
+        """The reference policy, widened and -- when paid -- hardened.
+
+        The same two transforms the study path applies, in the same
+        order, because this process evaluates the same tasks against the
+        same provider. Without them the hosted-MCP evaluator ran at
+        whetstone's 30 s chat-completion timeout with no waiting retry,
+        which is precisely the pair of defects that aborted the live
+        Stage 0 -- and it ran that way *in another process*, where the
+        study's own hardening could not reach it.
+        """
+        policy = widened_execution_policy(
+            self._reference.execution_policy,
+            concurrency=self.provider_concurrency,
+        )
+        if self.transport == "openrouter":
+            return hardened_execution_policy(policy)
+        return policy
 
     @property
     def mutation_field(self) -> str:
@@ -164,8 +198,13 @@ class EnvsCodexRuntimeConfig(BaseModel):
             ),
         )
         experiment = prepared.experiment
+        execution_policy = self.execution_policy
         if self.transport == "openrouter":
-            transport_factory = openrouter_transport_factory
+            # The retrying wrapper, not the bare client: a 429 in this
+            # process is the same 429, and the study's own wrapper is on
+            # the other side of a process boundary. Bound once here so
+            # every tool call the agent makes shares one connection pool.
+            _, transport_factory = bind_openrouter_transport(execution_policy)
         else:
             transport_factory = fake_transport_factory(
                 gold_by_prompt=fake_gold_by_prompt(
@@ -174,11 +213,27 @@ class EnvsCodexRuntimeConfig(BaseModel):
                     ceiling_template=family.probes.ceiling_template,
                 )
             )
-        return self._reference.build_engine(
-            store,
-            experiment=experiment,
+        # Assembled here rather than through ``_reference.build_engine``,
+        # which accepts neither a policy nor a concurrency and would
+        # therefore discard both -- rebuilding the engine at whetstone's
+        # default width over the unwidened, unhardened policy. This is
+        # the same in-process pair that helper builds for
+        # ``driver_mode="in_process"``, which is this config's mode.
+        driver = GraphRolloutEvalDriver(
             eval_runner=family.eval_runner(),
+            mutation_field=family.mutation_field,
+            render_contract=family.render_contract(),
             transport_factory=transport_factory,
+        )
+        return RuntimeEvalEngine(
+            store=store,
+            experiment=experiment,
+            sampling=experiment.eval_configs.split_for(
+                self._reference.split_role
+            ),
+            execution_policy=execution_policy,
+            driver=driver,
+            concurrency=self.provider_concurrency,
         )
 
 

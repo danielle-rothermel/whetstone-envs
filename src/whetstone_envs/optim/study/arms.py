@@ -35,6 +35,7 @@ through the identical procedure -- that is the whole point of a control.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
@@ -49,6 +50,7 @@ from whetstone.optim.contracts import OptimResult
 from whetstone_envs.optim.audit._evidence import load_run_evidence
 from whetstone_envs.optim.audit.registry import audit_evidence
 from whetstone_envs.optim.audit.schema import AUDIT_REPORT_SCHEMA
+from whetstone_envs.optim.experiment import MIN_TASK_COMPLETENESS
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.nulls import (
     NULL_IDENTITY_OPTIMIZER,
@@ -230,6 +232,12 @@ class RoleScorer:
                 purpose=purpose,
                 candidate_name=candidate_name,
             )
+        # Priced first, then judged: the calls were billed whether or not
+        # the evidence is fit to report, and a ledger that omitted a
+        # refused evaluation would under-count real spend.
+        _require_task_completeness(
+            evidence, purpose=f"{purpose}:{candidate_name}"
+        )
         return evidence
 
     def eval_config_hash(self) -> str:
@@ -306,6 +314,135 @@ def _mean_of(evidence: EvalEvidence) -> float:
     if not values:
         raise StageError("an evaluation produced no per-task values")
     return sum(values) / len(values)
+
+
+def _require_task_completeness(evidence: EvalEvidence, *, purpose: str) -> None:
+    """Refuse an evaluation that lost whole tasks, not merely rows.
+
+    **The row tolerance cannot see this.** ``missing_data="skip"`` with a
+    10% row bound is a floor against losing an evaluation to a handful of
+    scattered 429s, and it works for that. But it counts rows, and a task
+    whose every repeat was lost is dropped from the *task mean's
+    denominator* rather than counted as a zero: whetstone's
+    ``unweighted_task_mean`` classifies it ``ZERO_DENOMINATOR``, and the
+    outer mean then divides by the tasks that produced a value.
+
+    At the study's own shape those two bounds disagree badly. 76 tasks at
+    4 repeats is 304 rows; one task lost entirely is 1.3% of them, so the
+    row tolerance passes and the evaluation reports ``status=ok`` with a
+    mean over 75 tasks. The error is not noise -- the tasks that lose
+    every repeat are the slow, long-generation ones, which are the tasks
+    that would have pulled the mean down -- so the reported number is
+    biased upward by exactly the tasks whose absence caused it.
+
+    Two conditions, because two different losses produce it:
+
+    * *Any* task with zero present rows refuses immediately, whatever the
+      fraction. A mean that silently changed which population it is over
+      is not a smaller measurement of the same thing, and a study that
+      compares arms cannot compare one arm's 76 tasks against another's
+      75.
+    * Present tasks below :data:`MIN_TASK_COMPLETENESS` of planned tasks
+      refuses as well, which catches the case where the tasks are present
+      in the plan but reconciliation dropped them before they were ever
+      counted.
+
+    Implemented here rather than in the aggregation config because
+    whetstone's ``AggregationConfig`` has no per-task completeness
+    variable to set: its knobs are ``reduction``, ``missing_data``,
+    ``zero_denominator``, and ``max_skip_fraction``, all of which act on
+    the flat row vector. So this is an envs-side validator applied to the
+    evidence before the evaluation is accepted -- at the one seam every
+    reporting evaluation already passes through.
+    """
+    planned_tasks = len(evidence.task_hashes)
+    if planned_tasks == 0:
+        raise StageError(f"{purpose}: an evaluation planned no tasks at all")
+
+    lost = _fully_lost_task_count(evidence)
+    if lost:
+        raise StageError(
+            f"{purpose}: {lost} of {planned_tasks} tasks lost every "
+            f"repeat, so the reported aggregate "
+            f"({evidence.aggregate_value!r}, status "
+            f"{evidence.aggregate_status!r}) is a mean over "
+            f"{planned_tasks - lost} tasks presented as though it covered "
+            f"{planned_tasks}. The row tolerance does not catch this: a "
+            "fully-lost task is dropped from the task mean's denominator "
+            "rather than counted, and its rows are a small enough "
+            "fraction of the matrix to stay inside the row bound."
+        )
+
+    achieved = (planned_tasks - lost) / planned_tasks
+    if achieved < MIN_TASK_COMPLETENESS:
+        raise StageError(
+            f"{purpose}: only {planned_tasks - lost} of {planned_tasks} "
+            f"planned tasks were measured ({achieved:.3f}), below the "
+            f"{MIN_TASK_COMPLETENESS:.2f} task-completeness floor"
+        )
+
+
+def _fully_lost_task_count(evidence: EvalEvidence) -> int:
+    """How many tasks produced no present row at all.
+
+    Derived from the two means the evidence already carries rather than
+    from ``per_task_counts``, which cannot express the condition:
+    whetstone's ``per_task_count`` returns
+    ``len(completed_rows(num_seeds))`` and ``completed_rows`` *pads* a
+    short task with missing rows, so the vector is uniformly
+    ``num_seeds`` whether a task lost every repeat or none of them.
+
+    The two means disagree exactly when a task is fully lost, and that
+    disagreement is the signal:
+
+    * ``per_task_values`` scores a fully-lost task ``0.0`` -- it divides
+      the present total by the padded repeat count -- so its mean counts
+      the task.
+    * ``aggregate_value`` comes from ``unweighted_task_mean``, where the
+      same task aggregates to ``ZERO_DENOMINATOR`` and is dropped from
+      the denominator under ``missing_data="skip"``.
+
+    So ``n_lost`` satisfies ``aggregate = per_task_total / (n - n_lost)``
+    while ``per_task_mean = per_task_total / n``, and the count follows
+    from the ratio. Solving for it rather than trusting either mean keeps
+    this correct when whetstone's ``per_task_count`` moves to counting
+    present rows (the pinned release's P1-3 fix): the identity is between
+    the means, which that change does not alter.
+    """
+    planned = len(evidence.per_task_values)
+    aggregate = evidence.aggregate_value
+    if aggregate is None or planned == 0:
+        # A refused aggregate is already a refusal; there is no reported
+        # number for this check to protect.
+        return 0
+
+    total = math.fsum(evidence.per_task_values)
+    if aggregate == 0.0:
+        # Every contributing task scored zero, so the ratio is undefined.
+        # A lost task cannot be distinguished from a task that scored
+        # zero, and both leave the mean at zero -- there is no upward
+        # bias to catch.
+        return 0
+
+    contributing = round(total / aggregate)
+    if not 0 < contributing <= planned:
+        raise StageError(
+            "task-completeness check could not reconcile the reported "
+            f"aggregate {aggregate!r} against {planned} per-task values "
+            f"(implied {contributing} contributing tasks)"
+        )
+    # Guard the inference before trusting it: the identity must hold to
+    # floating-point tolerance, or the two means were not computed from
+    # the same rows and this check has no basis to refuse or accept on.
+    if not math.isclose(
+        aggregate, total / contributing, rel_tol=1e-9, abs_tol=1e-12
+    ):
+        raise StageError(
+            "task-completeness check could not reconcile the reported "
+            f"aggregate {aggregate!r} with the per-task mean over "
+            f"{contributing} of {planned} tasks"
+        )
+    return planned - contributing
 
 
 def _completeness_of(evidence: EvalEvidence) -> float:

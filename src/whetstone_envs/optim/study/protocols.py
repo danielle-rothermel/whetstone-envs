@@ -114,9 +114,14 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: day by item 17 -- L1 restated as task-set containment -- so its earlier
 #: digest ``1fa2102b...`` is historical for the same reason, as is
 #: ``2e98198b...``, which item 18 superseded later the same day when §3.9
-#: gained the row-level retry and missing-row rules.
+#: gained the row-level retry and missing-row rules. ``086dc1ba...`` is
+#: historical in turn: item 18 was amended once more on 2026-08-23 to give
+#: the retry budget a single owner (5 attempts total per logical call, spent
+#: in the transport wrapper, with whetstone's driver pinned to one attempt so
+#: the two loops cannot multiply) and to add §3.9's per-task completeness
+#: floor, which refuses an evaluation that lost every repeat of any task.
 PROTOCOL_DOC_SHA256 = (
-    "086dc1ba7867d9dc817e208e15dce0eba35b4e409484feb54dcc4b2f6b9a4903"
+    "06e51d15b93fc9092df9eedaa40459a25d30cd7cd08cbdc17bf9b4a2954af53e"
 )
 
 

@@ -604,3 +604,147 @@ def test_null_b_still_runs_no_optimizer(tmp_path: Path) -> None:
         == result.record.audit_ref
         == result.record.cost_ref
     )
+
+
+# --------------------------------------------------------------------------
+# A fully-lost task voids the evaluation rather than biasing its mean
+# --------------------------------------------------------------------------
+
+
+class _Evidence:
+    """The four evidence fields the completeness check reads.
+
+    A stub rather than a real ``EvalEvidence`` because the check is pure
+    arithmetic over the two means, and constructing real evidence would
+    require a store, a graph, and a persisted aggregate to exercise a
+    function that touches none of them.
+    """
+
+    def __init__(
+        self,
+        *,
+        per_task_values: tuple[float, ...],
+        aggregate_value: float | None,
+        aggregate_status: str = "ok",
+    ) -> None:
+        self.per_task_values = per_task_values
+        self.aggregate_value = aggregate_value
+        self.aggregate_status = aggregate_status
+        self.task_hashes = tuple(
+            f"h{index:064x}" for index in range(len(per_task_values))
+        )
+        self.per_task_counts = tuple(4 for _ in per_task_values)
+
+
+def _evidence_with_lost_tasks(
+    *, tasks: int, lost: int, score: float = 1.0
+) -> _Evidence:
+    """Evidence as whetstone really builds it when ``lost`` tasks vanish.
+
+    Both means are derived exactly as the two upstream paths derive them:
+    ``per_task_values`` scores a fully-lost task ``0.0`` (its present
+    total over the padded repeat count), while the aggregate drops it and
+    averages over the tasks that produced a value.
+    """
+    values = tuple(
+        0.0 if index >= tasks - lost else score for index in range(tasks)
+    )
+    contributing = tasks - lost
+    aggregate = (score * contributing) / contributing if contributing else None
+    return _Evidence(per_task_values=values, aggregate_value=aggregate)
+
+
+def test_a_fully_lost_task_refuses_the_evaluation() -> None:
+    """One task losing every repeat voids the number, whatever the fraction.
+
+    **Fails-before: accepted, reporting 1.0 where the truth is 0.9868.**
+    At the study's own shape -- 76 tasks, 4 repeats -- one fully-lost task
+    is 4 of 304 rows, or 1.3%, which sits well inside the 10%
+    ``max_skip_fraction``. So the row tolerance passes it, whetstone's
+    ``unweighted_task_mean`` drops the task from the denominator, and the
+    evaluation reports ``status=ok`` with a mean over 75 tasks presented
+    as though it covered 76.
+
+    The bias is upward and systematic rather than noise: a task that
+    loses *every* repeat is a slow, long-generation one, which is
+    precisely the task that would have scored low.
+    """
+    from whetstone_envs.optim.study.arms import _require_task_completeness
+
+    evidence = _evidence_with_lost_tasks(tasks=76, lost=1)
+    # The aggregate really does read as a clean 1.0 while a task is gone.
+    assert evidence.aggregate_value == 1.0
+    assert sum(evidence.per_task_values) / 76 == pytest.approx(0.98684, abs=1e-5)
+
+    with pytest.raises(StageError, match="lost every"):
+        _require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_a_partially_lost_task_is_accepted() -> None:
+    """Losing some repeats of a task is the case the row tolerance is for.
+
+    Nothing here is refused: every task still contributed a value, so the
+    mean is over the population it claims, and the shortfall shows up as
+    reduced completeness the way the protocol pre-registered.
+    """
+    from whetstone_envs.optim.study.arms import _require_task_completeness
+
+    # Four tasks, four repeats each; one task lost one of its four. Its
+    # per-task value drops to 0.75 and it still contributes.
+    evidence = _Evidence(
+        per_task_values=(1.0, 1.0, 1.0, 0.75),
+        aggregate_value=(1.0 + 1.0 + 1.0 + 0.75) / 4,
+    )
+    _require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_losing_a_tenth_of_the_tasks_trips_the_floor() -> None:
+    """The task floor is the same 90% the row bound complements."""
+    from whetstone_envs.optim.study.arms import _require_task_completeness
+
+    # Refused by the zero-present rule first, which is stricter; the floor
+    # exists for the case where tasks vanish before they are counted.
+    evidence = _evidence_with_lost_tasks(tasks=76, lost=8)
+    with pytest.raises(StageError, match="lost every"):
+        _require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_a_complete_evaluation_is_untouched() -> None:
+    """The check is a floor, not a tax on the normal path."""
+    from whetstone_envs.optim.study.arms import _require_task_completeness
+
+    evidence = _evidence_with_lost_tasks(tasks=76, lost=0, score=0.62)
+    _require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_an_all_zero_evaluation_is_not_falsely_refused() -> None:
+    """A genuinely zero-scoring evaluation has no upward bias to catch.
+
+    With every contributing task at zero the ratio the check infers from
+    is undefined, and a lost task is indistinguishable from a task that
+    scored zero -- but both leave the mean at zero, so nothing is being
+    hidden.
+    """
+    from whetstone_envs.optim.study.arms import _require_task_completeness
+
+    evidence = _Evidence(
+        per_task_values=(0.0, 0.0, 0.0, 0.0), aggregate_value=0.0
+    )
+    _require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_irreconcilable_means_refuse_rather_than_guess() -> None:
+    """If the two means disagree, the check has no basis to accept.
+
+    The inference is only sound while both means are computed from the
+    same rows. An aggregate that cannot be reconciled with the per-task
+    vector is evidence this check cannot interpret, and interpreting it
+    anyway would be the failure mode it exists to prevent.
+    """
+    from whetstone_envs.optim.study.arms import _require_task_completeness
+
+    evidence = _Evidence(
+        per_task_values=(1.0, 1.0, 1.0, 1.0), aggregate_value=0.31
+    )
+    with pytest.raises(StageError, match="could not reconcile"):
+        _require_task_completeness(evidence, purpose="official:cand")

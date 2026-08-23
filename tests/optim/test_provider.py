@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("dr_providers")
 
-from dr_providers import RequestControl
+from dr_providers import ProviderInvocationEvidence, RequestControl
 
 from whetstone_envs.c19 import PROBES, generate_pool
 from whetstone_envs.optim.experiment import (
@@ -313,7 +313,7 @@ def test_the_hardened_policy_covers_a_reasoning_sized_call() -> None:
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 
     from whetstone_envs.optim.provider import (
-        TASK_CALL_MAX_ATTEMPTS,
+        DRIVER_MAX_ATTEMPTS,
         TASK_CALL_TIMEOUT_SECONDS,
         hardened_execution_policy,
     )
@@ -331,7 +331,10 @@ def test_the_hardened_policy_covers_a_reasoning_sized_call() -> None:
     assert hardened.transport_policy.idle_timeout_seconds == (
         TASK_CALL_TIMEOUT_SECONDS
     )
-    assert hardened.max_attempts == TASK_CALL_MAX_ATTEMPTS
+    # The driver does not retry: the budget is the wrapper's, and holding
+    # it in both places multiplied them. See
+    # ``test_the_two_retry_loops_do_not_multiply``.
+    assert hardened.max_attempts == DRIVER_MAX_ATTEMPTS
     # Eligibility is whetstone's and is deliberately left alone.
     assert hardened.retry_eligibility == base.retry_eligibility
 
@@ -349,3 +352,159 @@ def test_the_bound_openrouter_transport_retries() -> None:
     transport, factory = bind_openrouter_transport(policy)
     assert isinstance(transport, RetryingTransport)
     assert factory(policy) is transport
+
+
+# --------------------------------------------------------------------------
+# Retries have exactly one owner
+# --------------------------------------------------------------------------
+
+
+def _live_request(policy):
+    """One real ``ProviderCallRequest`` the driver will accept.
+
+    Built rather than stubbed because the driver checks the evidence's
+    request identity and policy identity against the request it invoked,
+    and those checks are part of what this test exercises: a composite
+    that faked them could not tell a real double-invocation from a
+    bookkeeping error.
+    """
+    from dr_providers import ProviderCallRequest
+    from dr_providers.modeling.transcript import (
+        MessageRole,
+        PromptMessage,
+        Transcript,
+    )
+
+    return ProviderCallRequest(
+        config=openrouter_seeded_call_config(model="openai/gpt-4.1-nano"),
+        transcript=Transcript(
+            messages=(
+                PromptMessage(role=MessageRole.USER, content="hi"),
+            )
+        ),
+    )
+
+
+def _rate_limited_transport(policy, *, failures: int):
+    """A transport failing 429 ``failures`` times, then succeeding.
+
+    Records every invocation, which is the quantity under test: the count
+    the provider would have billed, not the count the ledger persists.
+    """
+    from dr_providers import RecoverabilityClass
+    from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
+    from dr_providers.outcomes.models import (
+        ProviderTransportFailure,
+        ProviderTransportResponse,
+    )
+
+    invocations: list[object] = []
+
+    def transport(request):
+        invocations.append(request)
+        if len(invocations) <= failures:
+            outcome = ProviderTransportFailure(
+                recoverability=RecoverabilityClass.RATE_LIMITED,
+                code="rate_limited",
+                message="429 too many requests",
+                status_code=429,
+            )
+        else:
+            outcome = ProviderTransportResponse(text="ok", stop_reason="stop")
+        return ProviderInvocationEvidence.build(
+            request=request,
+            policy=policy.transport_policy,
+            http_request=ProviderHttpRequestEvidence(
+                method="POST",
+                url="http://whetstone.fake/llm",
+                headers={},
+                body={},
+                body_bytes=0,
+            ),
+            outcome=outcome,
+        )
+
+    return transport, invocations
+
+
+@pytest.mark.parametrize("failures", [0, 1, 4, 7])
+def test_the_two_retry_loops_do_not_multiply(failures: int) -> None:
+    """The wrapper and the driver together attempt a call at most five times.
+
+    **Fails-before: 25.** ``RetryingTransport`` retried five times
+    internally and then *returned* the transient failure, which
+    ``run_provider_call`` read as one failed attempt and retried under
+    its own ``max_attempts=5`` -- so a row against a rate limit that
+    never cleared made 5x5 = 25 billed invocations while persisting only
+    five ``ProviderCallAttempt`` records. The ledger under-counted billed
+    calls by exactly the wrapper's factor, and the row sat through the
+    wrapper's whole backoff schedule five times over.
+
+    Asserted through the real ``run_provider_call`` and the real hardened
+    policy rather than against the wrapper alone, because the defect was
+    not in either loop -- each was correct by itself -- but in their
+    composition, which only a test spanning both can see.
+    """
+    pytest.importorskip("whetstone.eval.reference_runtime")
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.provider.driver import run_provider_call
+
+    from whetstone_envs.optim.provider import (
+        TASK_CALL_MAX_ATTEMPTS,
+        RetryingTransport,
+        hardened_execution_policy,
+    )
+
+    policy = hardened_execution_policy(
+        ReferenceEvalRuntimeConfig(
+            transport_api_key_env="OPENROUTER_API_KEY",
+        ).execution_policy
+    )
+    inner, invocations = _rate_limited_transport(policy, failures=failures)
+    request = _live_request(policy)
+
+    result = run_provider_call(
+        request=request,
+        policy=policy,
+        transport=RetryingTransport(inner, sleep=lambda _: None),
+        logical_call_id="composite",
+    )
+
+    expected = min(failures + 1, TASK_CALL_MAX_ATTEMPTS)
+    assert len(invocations) == expected
+
+    # The persisted attempts must agree with what was really spent. The
+    # driver records one attempt per driver iteration, so this only holds
+    # because the driver is pinned to a single pass-through attempt.
+    assert len(result.attempts) == 1
+    if failures < TASK_CALL_MAX_ATTEMPTS:
+        assert result.provider_generation is not None
+    else:
+        assert result.semantic_failure is not None
+
+
+def test_the_driver_does_not_loop_on_the_hardened_policy() -> None:
+    """The retry budget is the wrapper's, and the policy says so.
+
+    Fails-before: ``max_attempts`` was ``TASK_CALL_MAX_ATTEMPTS`` (5),
+    which is the wrapper's budget -- charging it to the driver as well is
+    what multiplied the two loops.
+    """
+    pytest.importorskip("whetstone.eval.reference_runtime")
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    from whetstone_envs.optim.provider import (
+        DRIVER_MAX_ATTEMPTS,
+        hardened_execution_policy,
+    )
+
+    base = ReferenceEvalRuntimeConfig(
+        transport_api_key_env="OPENROUTER_API_KEY",
+    ).execution_policy
+    hardened = hardened_execution_policy(base)
+
+    assert DRIVER_MAX_ATTEMPTS == 1
+    assert hardened.max_attempts == DRIVER_MAX_ATTEMPTS
+    # The driver's own backoff is dead code at one attempt, which is the
+    # point: it is the backoff that never waited.
+    assert hardened.delay_before(1) == 0.0

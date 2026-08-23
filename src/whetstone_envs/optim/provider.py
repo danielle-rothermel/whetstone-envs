@@ -42,7 +42,40 @@ TASK_CALL_TIMEOUT_SECONDS = 300.0
 #: outlast a burst. Every attempt after the first waits -- see
 #: :class:`RetryingTransport` -- so this is bounded in time as well as in
 #: count.
+#:
+#: This is the *whole* budget for one logical call, spent inside
+#: :class:`RetryingTransport`. The driver's own loop is disabled -- see
+#: :data:`DRIVER_MAX_ATTEMPTS` -- so five means five, not five per driver
+#: attempt.
 TASK_CALL_MAX_ATTEMPTS = 5
+
+#: How many times whetstone's driver may attempt one call: exactly once.
+#:
+#: **Retries have exactly one owner.** ``whetstone.provider.driver`` loops
+#: over ``policy.max_attempts`` and re-invokes the transport on a
+#: retryable failure; :class:`RetryingTransport` *also* loops. Left at
+#: five apiece the two compose multiplicatively rather than additively: a
+#: row against a rate limit that never clears makes 5x5 = 25 billed
+#: invocations, sleeping the wrapper's full schedule five times over
+#: (~4 minutes of backoff per driver attempt, and up to ~40 minutes of
+#: wall clock for a single row once the provider's own ``Retry-After``
+#: hints are honoured).
+#:
+#: It also corrupts the record. The driver appends one
+#: ``ProviderCallAttempt`` per *driver* iteration, so a row that really
+#: cost 25 invocations persists five attempts: the ledger under-counts
+#: billed calls by exactly the wrapper's factor, which is the number an
+#: operator would use to reconcile spend.
+#:
+#: The wrapper keeps the budget rather than the driver because the
+#: wrapper is the layer that actually waits. The driver's own backoff is
+#: applied through an injected ``sleep`` that the eval path never
+#: supplies (``GraphRolloutEvalDriver`` builds its ``LlmCallContext``
+#: without one), so driver-owned retries fire within microseconds and are
+#: no retry at all against a live rate limit. Setting this to one makes
+#: the driver a pass-through and leaves the single waiting loop in
+#: charge.
+DRIVER_MAX_ATTEMPTS = 1
 
 #: The backoff schedule between attempts: 2 s, 4 s, 8 s, 16 s, capped.
 #:
@@ -141,13 +174,17 @@ class RetryingTransport:
     upstream but is not reachable from anything this package binds -- the
     driver takes no ``sleep`` argument to forward -- so the wait is
     applied at the transport, which is the seam this package *does* own.
-    The retry *count* stays with the execution policy, which is where it
-    is recorded; this wrapper only makes the waiting real.
 
-    The consequence is that the attempt whetstone's loop sees is already
-    a waited attempt, so both loops compose rather than multiply: this
-    wrapper sleeps *before returning* a transient failure, and the driver
-    then immediately re-invokes.
+    **This wrapper is therefore the sole owner of the retry budget.**
+    Because it owns the waiting it must also own the counting: two
+    loops over the same failure multiply rather than compose, since this
+    wrapper exhausts its attempts and then *returns* the transient
+    failure, which the driver reads as one failed attempt and retries in
+    full. The policy the driver runs under is pinned to
+    :data:`DRIVER_MAX_ATTEMPTS` (one) by
+    :func:`hardened_execution_policy` so that outer loop never turns over
+    -- see that constant for what the multiplication costs in spend, wall
+    clock, and ledger accuracy.
     """
 
     def __init__(
@@ -336,14 +373,22 @@ def hardened_execution_policy(
       :data:`TASK_CALL_TIMEOUT_SECONDS`, because ``gpt-5-nano`` spends
       thousands of reasoning tokens per call and a 30 s bound turns an
       ordinary slow call into a timeout that is billed and then retried.
-    * ``max_attempts`` rises to :data:`TASK_CALL_MAX_ATTEMPTS`, so a rate
-      limit has room to clear. The waiting that makes those attempts
-      worth having is :class:`RetryingTransport`'s.
+    * ``max_attempts`` *falls* to :data:`DRIVER_MAX_ATTEMPTS` -- one --
+      because the retry budget belongs to :class:`RetryingTransport`,
+      which is the layer that actually waits between attempts. The five
+      attempts a rate limit needs to clear are spent there, once, rather
+      than five times over by an outer loop that would multiply both the
+      spend and the wall clock while recording neither. See
+      :data:`DRIVER_MAX_ATTEMPTS`.
 
     The retry *eligibility* is left exactly as whetstone sets it: rate
     limits, transport errors, and timeouts are already retryable, and
     provider rejections and malformed responses already are not, which is
     the right split -- re-sending a refused request buys the same refusal.
+    It still matters with a single driver attempt, because the wrapper
+    reads the same classification off the transport's own
+    ``RecoverabilityClass`` and the two must agree about what is worth
+    re-sending.
 
     Like :func:`widened_execution_policy` this changes the policy's
     ``identity_hash`` and not the pre-registration design hash. Both are
@@ -352,7 +397,7 @@ def hardened_execution_policy(
     """
     return policy.model_copy(
         update={
-            "max_attempts": TASK_CALL_MAX_ATTEMPTS,
+            "max_attempts": DRIVER_MAX_ATTEMPTS,
             "transport_policy": policy.transport_policy.model_copy(
                 update={
                     "timeout_seconds": TASK_CALL_TIMEOUT_SECONDS,
@@ -463,6 +508,7 @@ def fake_transport_factory(*, gold_by_prompt: Mapping[str, str]):
 
 __all__ = [
     "DEFAULT_PROVIDER_CONCURRENCY",
+    "DRIVER_MAX_ATTEMPTS",
     "MAX_HONOURED_RETRY_AFTER_SECONDS",
     "MAX_UNFORCED_PROVIDER_CONCURRENCY",
     "PROVIDER_CONCURRENCY_FLAG",

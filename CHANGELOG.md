@@ -24,6 +24,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `--force-provider-concurrency` is passed -- OpenRouter publishes no
   per-account concurrency limit for paid models, so that cap is this
   package's own prudence rather than a quoted provider limit.
+- **The width and the hardening reach every live engine, not just the
+  study's.** Two other surfaces build their own paid engines and were
+  left at whetstone's defaults, which meant the concurrency and
+  timeout/retry work stopped at the study path:
+  - `whetstone-eval run --transport openrouter` (the standalone report
+    CLI) built its engine through
+    `ReferenceEvalRuntimeConfig.build_engine`, which accepts neither a
+    policy nor a concurrency, so it kept spending against the reasoning
+    models at the 30 s chat-completion timeout with retries that never
+    waited. It now takes `--provider-concurrency` and
+    `--force-provider-concurrency` -- declared from the same constants as
+    the study CLI -- and binds the widened, hardened policy.
+  - The Codex arm's hosted-MCP evaluator rebuilds its engine in a
+    *separate process* from `EnvsCodexRuntimeConfig` and nothing else, so
+    the study's own hardening could not reach it: it ran at the default
+    width, a 30 s timeout, and no waiting retry at all. The config now
+    carries `provider_concurrency` as a recorded serialized field
+    (forwarded from the `RunSpec`, and pinned by the cross-process field
+    golden), applies both transforms to the policy it rebuilds, and binds
+    the retrying transport rather than the bare client.
 
 - **Each run records the repeat count its search actually ran at, and the
   study refuses one that disagrees with `K_REPEAT`.** The per-optimizer
@@ -73,8 +93,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     never supplies, so all three attempts fired within microseconds.
     Paid transports are now wrapped in a `RetryingTransport` that waits:
     5 attempts, 2-32 s exponential backoff with jitter, honouring the
-    provider's `Retry-After` (bounded at 120 s). Transient 5xx and
-    timeouts retry on the same terms; permanent rejections still do not.
+    provider's `Retry-After` (bounded at 120 s, and only in its
+    delta-seconds form -- the HTTP-date form is ignored by design, since
+    resolving it needs two clocks to agree exactly when that is least
+    safe). Transient 5xx and timeouts retry on the same terms; permanent
+    rejections still do not.
+  - *And then they multiplied.* `RetryingTransport` loops internally and
+    then **returns** an exhausted transient failure, which whetstone's
+    `run_provider_call` reads as one failed attempt and retries under its
+    own `max_attempts` -- so five apiece composed multiplicatively rather
+    than additively: 5 x 5 = 25 billed invocations for a single row
+    against a rate limit that never clears, sleeping the full backoff
+    schedule five times over (up to ~40 minutes of wall clock for one
+    row). It also corrupted the record, because the driver appends one
+    attempt per *driver* iteration: a row that cost 25 invocations
+    persisted 5, so the ledger under-counted billed calls by exactly the
+    wrapper's factor. Retries now have exactly one owner. The wrapper
+    keeps the budget -- it is the layer that actually waits -- and the
+    driver's policy is pinned to `max_attempts=1`, making it a
+    pass-through. The manifest records the *effective* count (5) rather
+    than the driver's, so the number an operator reconciles spend against
+    is the number of calls really made.
   - *One missing row poisoned the aggregate.* Aggregation ran with
     `missing_data="propagate"`, so a single absent row set the mean to
     `None`, which made the reward term missing, which its `FAIL`
@@ -87,6 +126,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     permission to average a biased subset. The bound is the complement of
     the 90% completeness backstop §3.9 already pre-registered, so there
     is one threshold rather than two.
+  - *But a row bound cannot see a lost task.* `skip` counts rows, and a
+    task that loses **every** repeat is dropped from the task mean's
+    *denominator* rather than counted as a zero -- whetstone's
+    `unweighted_task_mean` gives it `ZERO_DENOMINATOR` and the outer mean
+    divides by the tasks that produced a value. At the study's own shape
+    the two bounds disagree badly: 76 tasks x 4 repeats is 304 rows, one
+    fully-lost task is 1.3% of them, so the 10% row tolerance passes it
+    and the evaluation reports `status=ok` with a mean over 75 tasks
+    presented as though it covered 76 (measured: 1.0 reported where the
+    truth is 0.9868). The bias is upward and systematic rather than
+    noise, because a task that loses every repeat is a slow,
+    long-generation one -- the task that would have scored low. An
+    envs-side validator now refuses the evaluation before it is accepted
+    if any task has zero present rows, or if fewer than 90% of planned
+    tasks were measured. It lives on the envs side because whetstone's
+    `AggregationConfig` has no per-task completeness variable to set:
+    its knobs all act on the flat row vector.
 
   This changes the reward-policy and eval-config hashes. That is
   acceptable only because nothing is pinned yet: the live Stage 0 failed
@@ -94,6 +150,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   no stages. Recorded as item 18 of the protocol document's Revision 2
   (2026-08-23), with the digest golden and `PROTOCOL_DOC_SHA256`
   recomputed.
+- **Stage 1/2 calibration consistency is fixed upstream, not here.**
+  whetstone-ai is making `per_task_count`/`per_task_score` count *present*
+  rows rather than the padded repeat count; this package's pin will move
+  to the release carrying that change rather than working around it
+  locally. The task-completeness validator above is written against the
+  two means the evidence already reports, so it stays correct across that
+  change.
 - **Paid task calls are given a reasoning-sized timeout.** The 30 s
   default is a chat-completion bound; the live Stage 0 measured a median
   of 4,466 completion tokens and a maximum of 12,335 per call, which

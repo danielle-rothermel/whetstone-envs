@@ -156,3 +156,89 @@ def test_eval_cli_reports_an_absent_held_out_split_as_an_error(
     assert status == 2
     assert "no held_out split" in captured.out
     assert not (tmp_path / "absent").exists()
+
+
+def test_the_eval_cli_binds_the_hardened_widened_policy(tmp_path) -> None:
+    """The standalone live engine gets the same policy a stage does.
+
+    **Fails-before: 30 s timeout, 5 driver attempts, 10 connections.**
+    ``whetstone-eval run --transport openrouter`` built its engine
+    through ``ReferenceEvalRuntimeConfig.build_engine``, which takes
+    neither a policy nor a concurrency -- so the concurrency and
+    hardening work reached the study path and stopped there, and this
+    CLI kept spending against the reasoning models at whetstone's
+    chat-completion timeout with retries that never waited.
+
+    Captured at ``bind_openrouter_transport``, which is the one place the
+    paid client is constructed, so the assertion is on the policy that
+    really reaches the wire.
+    """
+    from whetstone_envs.optim.provider import (
+        DRIVER_MAX_ATTEMPTS,
+        TASK_CALL_TIMEOUT_SECONDS,
+    )
+
+    seen = []
+
+    def capture(policy):
+        seen.append(policy)
+        raise RuntimeError("stop after binding")
+
+    with patch(
+        "whetstone_envs.reporting.execution.bind_openrouter_transport",
+        side_effect=capture,
+    ):
+        reporting_main(
+            [
+                "run",
+                "--transport",
+                "openrouter",
+                "--split-sizes",
+                "1,1,0",
+                "--provider-concurrency",
+                "24",
+                "--output",
+                str(tmp_path / "eval-policy"),
+                "--no-color",
+            ]
+        )
+
+    assert len(seen) == 1
+    policy = seen[0]
+    assert policy.transport_policy.timeout_seconds == TASK_CALL_TIMEOUT_SECONDS
+    assert policy.max_attempts == DRIVER_MAX_ATTEMPTS
+    assert policy.transport_policy.max_connections >= 24
+
+
+def test_the_eval_cli_refuses_a_concurrency_above_the_cap(
+    tmp_path, capsys
+) -> None:
+    """The same sanity cap the study CLI applies, from the same constants.
+
+    Refused before anything is built, so an extra digit cannot open
+    hundreds of billed connections; the CLI reports it as an error rather
+    than raising, which is how every other refusal on this surface reads.
+    """
+    from whetstone_envs.optim.provider import (
+        MAX_UNFORCED_PROVIDER_CONCURRENCY,
+    )
+
+    status = reporting_main(
+        [
+            "run",
+            "--transport",
+            "fake",
+            "--split-sizes",
+            "1,1,0",
+            "--provider-concurrency",
+            str(MAX_UNFORCED_PROVIDER_CONCURRENCY + 1),
+            "--output",
+            str(tmp_path / "eval-cap"),
+            "--no-color",
+        ]
+    )
+
+    assert status == 2
+    assert "sanity cap" in capsys.readouterr().out
+    # Refused ahead of the run directory, not after it was created.
+    assert not (tmp_path / "eval-cap").exists()

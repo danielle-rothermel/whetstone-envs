@@ -56,7 +56,7 @@ revision 1 said something different.
 | 15 | null-A | bypassed the runner → **routed through the ordinary runner with COPRO's shape** | note 25b |
 | 16 | §6 Codex evidence | unbounded → **one real Codex-direct run**, artifacts historical evidence only | note 20 |
 | 17 | L1's mechanical form | "the internal Eval Config ref" → **the evaluated task set is contained in the internal split**, checked on all three evaluation surfaces | this revision (2026-08-23), §3.2 |
-| 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**: present rows are aggregated and the shortfall shows up as reduced completeness, backstopped at the same 90% §3.9 already pre-registers. Paid transports additionally retry transient failures (429/5xx/timeout, 5 attempts, 2–32 s exponential backoff with jitter, `Retry-After` honoured) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. | this revision (2026-08-23), §3.9 and O7 |
+| 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**, paired with a **per-task completeness floor**: an evaluation is refused (`missing_data`) if any task lost every repeat, or if fewer than 90% of planned tasks were measured. The row tolerance alone cannot see a fully-lost task — at 76 tasks × 4 repeats one lost task is 1.3% of rows, inside the bound, yet it is dropped from the task mean's denominator and biases the reported mean upward. Paid transports additionally retry transient failures (429/5xx/timeout, **5 attempts total per logical call**, 2–32 s exponential backoff with jitter, `Retry-After` **delta-seconds** honoured and bounded at 120 s; the HTTP-date form is ignored by design, since resolving it against two clocks is least reliable exactly when it matters) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. The 5 attempts are spent inside the transport wrapper, which is the sole owner of the retry budget; whetstone's driver is pinned to a single attempt so the two loops cannot multiply. | this revision (2026-08-23), §3.9 and O7 |
 
 **On item 8.** Revision 1 derived per-mode trial counts from DSPy's
 `_recommended_num_trials(component_count=1, searches_demos, n)` at `n = 6`
@@ -641,10 +641,18 @@ candidate.
   A run that fails on an algorithm error is a finding, not a retry.
 - **Row-level transient failures** are handled *below* the run-level rule
   above, so an isolated provider hiccup never escalates into a re-run. On a
-  paid transport each task call is attempted up to **5 times**, with
+  paid transport each task call is attempted up to **5 times in total**, with
   exponential backoff of **2 s → 32 s** plus jitter, honouring the provider's
-  `Retry-After` where it gives one; 429s, transient 5xx, and timeouts are
-  retried, and permanent rejections are not. The per-call timeout is **300 s**,
+  `Retry-After` where it gives one as a **delta-seconds** hint, bounded at
+  120 s; the HTTP-date form of that header is deliberately ignored, because
+  resolving it requires agreement between the provider's clock and ours and a
+  disagreement is worst precisely when the header matters. 429s, transient
+  5xx, and timeouts are retried, and permanent rejections are not. The budget
+  has exactly one owner: the retrying transport wrapper, which is the layer
+  that actually waits between attempts. whetstone's own call driver is pinned
+  to a single attempt, because two nested retry loops over the same failure
+  multiply rather than compose — 5 × 5 = 25 billed invocations for one row,
+  while the persisted attempt record would show only 5. The per-call timeout is **300 s**,
   set from the measured completion-token distribution (median ≈4.5k, max
   ≈12.3k) rather than the 30 s default, which a reasoning-token call routinely
   outruns.
@@ -658,6 +666,17 @@ candidate.
   biased subset. The 10% bound is the complement of the 90% completeness
   backstop this section already pre-registers, so there is one threshold
   rather than two.
+- **A task that loses *every* repeat voids the evaluation**, whatever fraction
+  of rows it represents. The row tolerance above counts rows, and a fully-lost
+  task is dropped from the task mean's *denominator* rather than counted as a
+  zero — so at 76 tasks × 4 repeats one lost task is 4 of 304 rows (1.3%,
+  comfortably inside the 10% bound) and the evaluation would report a mean over
+  75 tasks as though it covered 76. The resulting bias is upward and
+  systematic, not noise: a task that loses every repeat is a slow,
+  long-generation one, which is the task that would have scored low. The
+  evaluation is therefore refused if any task has zero present rows, and
+  refused if fewer than **90%** of planned tasks were measured — the same
+  backstop this section already states, applied to tasks as well as rows.
 - **Never resume a partial run.** Recorded memory: clean reruns over stale
   partials — never resume or repair pre-stabilization partial experiment runs.
 - **No mid-run design changes.** Per `1756`'s execution rules, the only

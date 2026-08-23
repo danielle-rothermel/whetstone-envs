@@ -8,7 +8,9 @@ from uuid import uuid4
 from dr_providers import ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.eval import EvalRequest
+from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.experiment.candidate import CandidateRef, candidate_reference
 
 from whetstone_envs.c19 import PROBES, generate_pool
@@ -19,10 +21,13 @@ from whetstone_envs.optim.experiment import (
     prepare_c19_experiment,
 )
 from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
     bind_openrouter_transport,
     fake_gold_by_prompt,
     fake_transport_factory,
+    hardened_execution_policy,
     openrouter_seeded_call_config,
+    widened_execution_policy,
 )
 from whetstone_envs.optim.run import DEFAULT_OUTPUT_ROOT
 from whetstone_envs.optim.run_cost import RunCostDocument, write_run_cost
@@ -69,6 +74,13 @@ class C19EvalSpec:
     output_dir: Path | None = None
     run_id: str | None = None
     model: str = "openai/gpt-4.1-nano"
+    #: How many task evaluations run against the provider at once.
+    #:
+    #: The same operator setting the study path takes, for the same
+    #: reason: this CLI reaches the same provider with the same
+    #: reasoning-model latency, and a standalone evaluation of a few
+    #: hundred rows is exactly as bound by width as a stage is.
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,10 +181,20 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                 else ProviderKind.OPENAI
             ),
         )
+        # The same two transforms, in the same order, the study path
+        # applies -- widen the connection pool to the requested width,
+        # then harden the paid route's timeout and retry ownership. This
+        # CLI talks to the same provider at the same token sizes, so a
+        # policy that differed here would mean the standalone tool ran at
+        # whetstone's 30 s chat-completion bound with retries that never
+        # waited, which is the failure that aborted the live Stage 0.
+        execution_policy = widened_execution_policy(
+            runtime_config.execution_policy,
+            concurrency=spec.provider_concurrency,
+        )
         if spec.transport == "openrouter":
-            _, transport_factory = bind_openrouter_transport(
-                runtime_config.execution_policy
-            )
+            execution_policy = hardened_execution_policy(execution_policy)
+            _, transport_factory = bind_openrouter_transport(execution_policy)
         else:
             transport_factory = fake_transport_factory(
                 gold_by_prompt=fake_gold_by_prompt(
@@ -182,13 +204,27 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                 )
             )
         with open_sqlite(str(output / "runtime.sqlite")) as store:
-            engine = runtime_config.build_engine(
-                cast("ObjectStore", store),
-                experiment=prepared.experiment,
+            # Assembled here rather than through ``build_engine``, which
+            # takes neither a concurrency nor a policy and so would yield
+            # whetstone's default width over the *unwidened, unhardened*
+            # policy -- silently discarding both transforms above. This is
+            # the same in-process pair that helper builds for
+            # ``driver_mode="in_process"``, which is this config's mode.
+            driver = GraphRolloutEvalDriver(
                 eval_runner=ExactMatchEvalProcedureRunner(),
                 mutation_field=C19_MUTATION_FIELD,
                 render_contract=c19_render_contract(),
                 transport_factory=transport_factory,
+            )
+            engine = RuntimeEvalEngine(
+                store=cast("ObjectStore", store),
+                experiment=prepared.experiment,
+                sampling=prepared.experiment.eval_configs.split_for(
+                    runtime_config.split_role
+                ),
+                execution_policy=execution_policy,
+                driver=driver,
+                concurrency=spec.provider_concurrency,
             )
             results = tuple(
                 engine.evaluate(

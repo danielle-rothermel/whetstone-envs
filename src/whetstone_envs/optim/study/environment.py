@@ -44,10 +44,13 @@ from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
+    DRIVER_MAX_ATTEMPTS,
     RETRY_BASE_SECONDS,
     RETRY_JITTER_FRACTION,
     RETRY_MAX_SECONDS,
     RETRY_MULTIPLIER,
+    TASK_CALL_MAX_ATTEMPTS,
+    TASK_CALL_TIMEOUT_SECONDS,
     bind_openrouter_transport,
     fake_gold_by_prompt,
     fake_transport_factory,
@@ -284,8 +287,42 @@ def _provider_call_record(
         # constants it was built from: the paid route is hardened and the
         # fake route is not, and the record must say which one ran.
         timeout_seconds=repr(policy.transport_policy.timeout_seconds),
-        max_attempts=str(policy.max_attempts),
+        max_attempts=str(_effective_max_attempts(policy)),
         retry_backoff=_retry_backoff_text(policy),
+    )
+
+
+def _effective_max_attempts(policy: ProviderExecutionPolicy) -> int:
+    """How many times one logical call is really attempted.
+
+    Not ``policy.max_attempts`` alone. On the paid route the retry budget
+    deliberately does not live on the policy: the driver is pinned to a
+    single attempt and :class:`~whetstone_envs.optim.provider.
+    RetryingTransport` -- the layer that actually waits -- spends
+    :data:`~whetstone_envs.optim.provider.TASK_CALL_MAX_ATTEMPTS` inside
+    one driver attempt. Recording the driver's number would report a
+    hardened route as making one attempt when it makes five, which is
+    exactly the count an operator reconciles spend against.
+
+    The two are multiplied rather than picked between because that is
+    what the two loops do to each other; the pinning to one is what
+    keeps the product equal to the wrapper's budget rather than 25x.
+    """
+    if policy.max_attempts == DRIVER_MAX_ATTEMPTS and _is_hardened(policy):
+        return TASK_CALL_MAX_ATTEMPTS
+    return policy.max_attempts
+
+
+def _is_hardened(policy: ProviderExecutionPolicy) -> bool:
+    """Whether this policy is the paid route's hardened one.
+
+    Keyed off the reasoning-sized timeout, which is the other half of
+    :func:`~whetstone_envs.optim.provider.hardened_execution_policy` and
+    the only thing distinguishing a hardened policy from a fake-route one
+    that happens to allow a single attempt.
+    """
+    return (
+        policy.transport_policy.timeout_seconds == TASK_CALL_TIMEOUT_SECONDS
     )
 
 
@@ -296,8 +333,14 @@ def _retry_backoff_text(policy: ProviderExecutionPolicy) -> str:
     three parameters, because what a reader wants to know is how long a
     rate-limited row could have been held -- and because the sequence is
     what makes the retry budget and the timeout comparable at a glance.
+
+    Driven by :func:`_effective_max_attempts` rather than by
+    ``policy.max_attempts``, so the hardened route -- whose attempts are
+    spent inside the transport wrapper, not the driver -- reports the
+    schedule it will really wait rather than "none".
     """
-    if policy.max_attempts <= 1:
+    attempts = _effective_max_attempts(policy)
+    if attempts <= 1:
         return "none (single attempt)"
     schedule = ", ".join(
         repr(
@@ -306,12 +349,12 @@ def _retry_backoff_text(policy: ProviderExecutionPolicy) -> str:
                 RETRY_MAX_SECONDS,
             )
         )
-        for attempt in range(1, policy.max_attempts)
+        for attempt in range(1, attempts)
     )
     return (
         f"exponential {schedule} s "
         f"(+/-{int(RETRY_JITTER_FRACTION * 100)}% jitter, "
-        "Retry-After honoured)"
+        "Retry-After delta honoured; HTTP-date ignored)"
     )
 
 

@@ -735,6 +735,11 @@ def build_codex_runtime_config(
         num_seeds=spec.num_seeds,
         transport=cast("CodexRuntimeTransport", spec.transport),
         model=spec.model,
+        # Forwarded rather than defaulted: the server rebuilds from this
+        # config alone, so an unforwarded width would leave the Codex arm
+        # evaluating at whetstone's default while every other arm ran at
+        # the operator's.
+        provider_concurrency=spec.provider_concurrency,
     )
 
 

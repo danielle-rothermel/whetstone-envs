@@ -206,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   which held only while every arm was named after one. `k_run_for` gave the
   two MIPROv2 fidelity arms `K_RUN = 5` instead of the protocol's 1,
   buying eight runs the design never registered; `arm_seeds` handed all
-  three MIPROv2 arms seeds 1000-1004 of the same range, so three arms the
+  three MIPROv2 arms seeds 2000-2004 of the same range, so three arms the
   report presents as independent shared an RNG stream; and `plan` passed
   the arm id to `estimate_optimizer_calls`, so both fidelity arms printed
   "no estimate" and dropped out of the budget entirely. The seed and

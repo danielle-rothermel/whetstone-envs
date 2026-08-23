@@ -32,11 +32,11 @@ from whetstone_envs.c18 import DEFAULT_CONFIG, PROBES
 from whetstone_envs.c18 import generate_pool as _c18_generate_pool
 from whetstone_envs.c18.config import GenerationConfig
 from whetstone_envs.c18.generation import default_split_sizes
-from whetstone_envs.c18.oracle import score_gold
 from whetstone_envs.optim.experiment import (
     ExperimentContract,
     prepare_experiment,
 )
+from whetstone_envs.scoring.families import family_score
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -179,9 +179,17 @@ class C18VerdictEvalProcedureRunner:
     C18's ceiling probe asks for reasoning ending in a lone verdict line, so
     an exact-match runner over the whole reply would score every reasoned
     answer zero and make the ceiling anchor indistinguishable from noise.
-    :func:`whetstone_envs.c18.score_gold` performs the extraction and the
-    comparison, which keeps one owner for how a C18 reply is scored.
+    The rule itself is not restated here: it comes from
+    :func:`whetstone_envs.scoring.families.family_score`, whose ``c18``
+    entry performs the extraction and the comparison via
+    :func:`whetstone_envs.c18.score_gold`. A report's own score check
+    calls that same function, which keeps one owner for how a C18 reply is
+    scored and stops a recorded score drifting from its re-derivation.
     """
+
+    #: The family whose rule this runner applies, resolved through the
+    #: shared scorer registry rather than reimplemented.
+    family_id = "c18"
 
     def run_eval_node(
         self,
@@ -200,4 +208,7 @@ class C18VerdictEvalProcedureRunner:
         )
         raw_gold = getattr(task, "gold", "")
         gold = raw_gold if isinstance(raw_gold, str) else ""
-        return float(score_gold(text, gold)), {"text": text}, {}
+        score = family_score(
+            family=self.family_id, output_text=text, gold=gold
+        )
+        return score, {"text": text}, {}

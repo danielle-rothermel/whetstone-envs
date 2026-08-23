@@ -16,8 +16,10 @@ from pydantic import (
 )
 
 from whetstone_envs.probes import normalize
+from whetstone_envs.scoring.families import family_score
 
 # Persisted literals are owned here and pinned directly by golden tests.
+
 EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v1"
 TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
 #: The only whetstone-ai cost-report schema version this package projects.
@@ -40,6 +42,34 @@ SPLIT_ROLE_BY_REPORT_ROLE: dict[EvalRoleName, str] = {
     "official": "official",
     "held_out": "held_out",
 }
+
+
+def _family_score(*, family: str, output_text: str, gold: str) -> float:
+    """What ``family``'s own scorer yields for one observation.
+
+    The report's scores are not the schema's to invent -- they are the
+    run's -- so validating them means re-deriving them the way the run
+    did. :mod:`whetstone_envs.scoring.families` is the single owner of
+    "how a generation becomes a score", and both the eval runners and this
+    check route through it rather than restating any family's rule.
+
+    That registry holds only the pure per-family rule and imports no part
+    of the optimizer stack, so validating a scored report works on a base
+    install. Routing this check through the optimizer's family registry
+    instead pulled in whetstone-ai, which the ``optim`` extra installs only
+    on Python 3.13+, and made reading any scored report fail where it was
+    merely being read.
+
+    Hard-coding normalized exact match, which is what this check used to
+    do, is a c19 rule wearing a family-agnostic name: c18 scores the
+    *terminal verdict* it extracts from a reasoned reply
+    (:func:`whetstone_envs.c18.score_gold`), so a correct c18 answer
+    ending in ``True`` scored 1.0 while the schema recomputed 0.0 and
+    refused the whole report. That failure had nothing to do with the
+    row and everything to do with the check, and it took down
+    publication for the entire run.
+    """
+    return family_score(family=family, output_text=output_text, gold=gold)
 
 
 class _StrictModel(BaseModel):
@@ -403,13 +433,15 @@ class EvalReport(_StrictModel):
             if row.state is ObservationState.SCORED:
                 if row.output_text is None:
                     raise ValueError("scored observations require output text")
-                expected_score = float(
-                    normalize(row.output_text) == normalize(task.gold)
+                expected_score = _family_score(
+                    family=self.run.family,
+                    output_text=row.output_text,
+                    gold=task.gold,
                 )
                 if row.score != expected_score:
                     raise ValueError(
-                        "observation score disagrees with normalized exact "
-                        "match"
+                        "observation score disagrees with the "
+                        f"{self.run.family} scorer"
                     )
         for result in self.results:
             if not isinstance(result, EvalSuccess):

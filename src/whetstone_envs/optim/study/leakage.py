@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
     from pathlib import Path
 
+    from whetstone_envs.optim.audit._evidence import RunEvidence, StepEvidence
+
 __all__ = [
     "HeldOutObservation",
     "LeakageCheckError",
@@ -133,9 +135,12 @@ class LeakageReport:
 class OptimizerEvalObservation:
     """One evaluation an optimizer run caused, as L1 reads it.
 
-    ``eval_role`` is the role recorded on the persisted ``EvalEvidence`` and
-    ``resolved_eval_config_hash`` is the Eval Config the intent resolved
-    against. L1 needs both: matching the config alone would pass an
+    ``eval_role`` is the role recorded on the persisted ``EvalEvidence``
+    and ``resolved_eval_config_hash`` is the ``config_hash`` of the Eval
+    Config that evaluation resolved against -- read from the resolution
+    on the intent path, and from the cited evidence on the tool path.
+
+    L1 needs both: matching the config alone would pass an
     evaluation that reached the right config under the wrong role, and
     matching the role alone would pass one that reached a second internal
     config the run never declared.
@@ -192,9 +197,10 @@ def check_l1_optimizer_internal_only(
     """
     seen = tuple(observations)
     if not seen:
-        # Vacuously true, which is not a check. L1's evidence is each run's
-        # own intent resolutions, so a caller holding none has not verified
-        # the rule and must not be told it passed.
+        # Vacuously true, which is not a check. L1's evidence is each
+        # run's own evaluations -- intent resolutions, and for a
+        # TOOL_USING run its tool evidence -- so a caller holding none
+        # has not verified the rule and must not be told it passed.
         return LeakageFinding(
             rule=LeakageRule.L1_OPTIMIZER_INTERNAL_ONLY,
             passed=False,
@@ -482,10 +488,22 @@ def optimizer_observations_from_run(
     A rejected or failed intent is skipped, because whetstone deliberately
     writes no eval evidence for one; demanding evidence there would make an
     honest refusal look like a leak.
+
+    **A tool-mediated evaluation is evidence too.** A ``TOOL_USING`` run --
+    Codex is the only one -- resolves no intent and mints no search
+    evidence *by design*: its paid evaluations are cited from
+    ``tool_evidence`` instead. Reading only the intent path therefore
+    yields nothing for such a run, and L1 reports itself unchecked rather
+    than passed, which fails ``leakage-check`` and blocks the whole study
+    from reporting. That is not a conservative default here -- it is a
+    rule with evidence in front of it declining to look. So both paths
+    are read, and each is resolved the same way: the same reasoning as
+    ``reported_numbers_resolve`` in ``optim/audit/registry.py``.
     """
     evidence = load_run_evidence(run_dir)
     observations: list[OptimizerEvalObservation] = []
     for step in evidence.steps:
+        observations.extend(_tool_observations(evidence, step))
         for index, resolution in enumerate(step.resolved_intents):
             if resolution.outcome is not IntentOutcome.COMPLETED:
                 continue
@@ -508,6 +526,48 @@ def optimizer_observations_from_run(
                     eval_role=str(found.eval_role.value),
                     resolved_eval_config_hash=str(
                         resolution.resolved_eval_config.config_hash
+                    ),
+                )
+            )
+    return tuple(observations)
+
+
+def _tool_observations(
+    evidence: RunEvidence, step: StepEvidence
+) -> tuple[OptimizerEvalObservation, ...]:
+    """L1's evidence from one step's tool-mediated evaluations.
+
+    Both fields come from the persisted ``EvalEvidence`` the Tool Result
+    cites: the role, exactly as on the intent path, and the Eval Config's
+    ``config_hash``.
+
+    The config is read from the evidence rather than from the Tool
+    Config, even though a call is admitted only against the config its
+    Tool Config is bound to. The Tool Config carries a ``TypedRef`` -- a
+    *content* hash over the stored record -- while the manifest and L1
+    both speak in ``EvalConfigRef.config_hash``, the config's own
+    identity. They are two different hashes of the same config, so
+    comparing one against the other reports every honest evaluation as
+    having left the internal split.
+
+    A refused call is absent from ``tool_evidence`` and a rejected one
+    cites no evidence ref, so neither contributes: the same treatment a
+    rejected intent gets, and for the same reason.
+    """
+    observations: list[OptimizerEvalObservation] = []
+    for index, entry in enumerate(step.tool_evidence):
+        for reference in entry.result.record.evaluation_evidence_refs:
+            found = evidence.eval_evidence(reference)
+            if found is None:
+                continue
+            observations.append(
+                OptimizerEvalObservation(
+                    run_id=evidence.run_id,
+                    step_index=step.index,
+                    resolution_index=index,
+                    eval_role=str(found.eval_role.value),
+                    resolved_eval_config_hash=str(
+                        found.eval_config_ref.config_hash
                     ),
                 )
             )

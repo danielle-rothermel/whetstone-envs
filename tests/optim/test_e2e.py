@@ -20,6 +20,7 @@ from whetstone.optim.contracts import OptimResult
 
 from tests.optim.codex_support import (
     CODEX_SPLIT_SIZES,
+    codex_output_artifact,
     codex_test_seam,
     codex_tool_steps,
 )
@@ -701,9 +702,17 @@ def test_codex_runs_the_second_family_unchanged(tmp_path) -> None:
     out-of-process MCP server rebuilds -- is read from the family
     registry, so c18 runs through the identical path with no code change
     and audits the same way.
+
+    The *projected report* is asserted here alongside the audit, because
+    the two check different things and a passing audit does not imply a
+    publishable report. The report's embedded ``EvalReport`` re-derives
+    every observation's score to validate it, and doing that with a
+    family-agnostic rule is what once made a c18 Codex run unpublishable
+    while its audit still passed.
     """
     from whetstone_envs.c18 import PROBES as C18_PROBES
     from whetstone_envs.optim.audit.registry import audit_run
+    from whetstone_envs.reporting.publication import load_trajectory_report
 
     output = _codex_run(
         tmp_path=tmp_path,
@@ -725,6 +734,26 @@ def test_codex_runs_the_second_family_unchanged(tmp_path) -> None:
         for finding in report.findings
         if finding.status.value == "fail"
     ]
+
+    # Reading it back re-validates it: publication writes the document,
+    # and the loader re-runs every schema invariant over the persisted
+    # bytes, so a report that only validated in memory does not pass.
+    trajectory = load_trajectory_report(output)
+    embedded = [
+        resolution.eval_report
+        for resolution in trajectory.resolutions
+        if resolution.eval_report is not None
+    ]
+    assert embedded, (
+        "the c18 Codex run published no embedded evaluation report, so "
+        "nothing exercised the schema's per-family score check"
+    )
+    assert all(eval_report.run.family == "c18" for eval_report in embedded), [
+        eval_report.run.family for eval_report in embedded
+    ]
+    assert any(eval_report.observations for eval_report in embedded), (
+        "no embedded report carried a scored observation"
+    )
 
 
 @requires_codex_sandbox
@@ -767,3 +796,260 @@ def test_codex_cli_end_to_end(tmp_path) -> None:
     assert spec.optimizer == "codex"
     assert spec.codex_capacity == 4
     assert spec.codex_binary == CODEX_DEFAULT_BINARY
+
+
+# --------------------------------------------------------------------------
+# The prompt-builder diagnostic seam
+# --------------------------------------------------------------------------
+
+
+@requires_codex_sandbox
+def test_codex_prompt_builder_replaces_the_agents_instruction(
+    tmp_path,
+) -> None:
+    """The ladder's steering seam actually reaches the spawned CLI.
+
+    The real-CLI ladder's capacity and no-tool-call rungs cannot observe
+    what they assert under the truthful production prompt: an agent
+    correctly told it may make one call makes one call, and the durable
+    refusal path is never exercised. So they replace the prompt -- and a
+    seam that silently did not reach the process would make those rungs
+    pass while observing an obedient agent instead of the behavior under
+    test.
+
+    The fake CLI echoes the prompt it received back through
+    ``conversation_evidence``, so this asserts on what the runner actually
+    emitted rather than on the builder having been called.
+    """
+    from whetstone.testing.fake_codex_cli import FAKE_CODEX_PROMPT_EVIDENCE_KEY
+
+    from whetstone_envs.optim.audit.registry import audit_run
+
+    marker = "LADDER-STEERING-MARKER"
+    seen: list[str] = []
+
+    def prompt_builder(context) -> str:
+        # A builder inherits the default's obligations: model_route and
+        # base_ref are the two values the agent can derive from nothing
+        # it can see, so a builder that dropped them would have every
+        # call refused after admission.
+        seen.append(context.model_route)
+        return (
+            f"{marker}\n"
+            f"Use only the external {context.tool_name} MCP tool.\n"
+            "The model_route argument is a fixed string and must be "
+            f"exactly {context.model_route!r}.\n"
+            "The base_ref argument must be copied verbatim as "
+            f"{context.base_ref}.\n"
+            "Copy lease_token_hash verbatim as "
+            f"{context.lease_token_hash!r}.\n"
+        )
+
+    output = run_optimizer(
+        RunSpec(
+            optimizer="codex",
+            transport="fake",
+            family="c19",
+            split_sizes=CODEX_SPLIT_SIZES,
+            output_dir=tmp_path / "prompt-seam",
+            run_id="c19-codex-prompt-seam",
+            codex_capacity=CODEX_EVALUATE_CALL_CAP,
+        ),
+        codex_test_seam=codex_test_seam(
+            steps=codex_tool_steps(
+                templates=(PROBES.ceiling_template,),
+                selected="c1",
+                scratch=tmp_path,
+            ),
+            binary_dir=tmp_path / "codex-bin",
+        ),
+        codex_prompt_builder=prompt_builder,
+    )
+
+    assert seen, "the prompt builder was never invoked"
+    result = OptimResult.model_validate_json(
+        (output / "result.json").read_text(encoding="utf-8")
+    )
+    assert result.terminal_failure is None, result.terminal_failure
+    step = result.step_results[-1].record
+    # The steered run still completed on the production path.
+    assert len(step.tool_evidence) == 1
+    # The prompt the runner actually emitted, echoed back by the fake CLI
+    # and carried into the artifact's process evidence under "agent".
+    artifact = codex_output_artifact(output)
+    assert artifact is not None, "the run recorded no Codex output artifact"
+    agent_evidence = artifact.conversation_evidence["agent"]
+    emitted = agent_evidence[FAKE_CODEX_PROMPT_EVIDENCE_KEY]
+    assert marker in emitted, (
+        "the replaced prompt did not reach the spawned CLI; the ladder's "
+        "steering rungs would silently observe the production prompt"
+    )
+    # A steered run is still a well-formed run: the seam changes what the
+    # agent is told, not what the arm is held to.
+    report = audit_run(output)
+    assert report.passed, [
+        (finding.invariant_id, finding.detail)
+        for finding in report.findings
+        if finding.status.value == "fail"
+    ]
+
+
+def test_the_prompt_builder_applies_only_to_the_codex_optimizer(
+    tmp_path,
+) -> None:
+    """A steering seam on another arm is a mistake, not a no-op.
+
+    Mirrors ``codex_test_seam``'s own guard: an argument that silently did
+    nothing would let a caller believe it had changed a COPRO run's
+    instruction.
+    """
+    with pytest.raises(ValueError, match="only to --optimizer codex"):
+        run_optimizer(
+            RunSpec(
+                optimizer="copro",
+                transport="fake",
+                family="c19",
+                split_sizes=CODEX_SPLIT_SIZES,
+                output_dir=tmp_path / "wrong-arm",
+                run_id="c19-copro-prompt-seam",
+            ),
+            codex_prompt_builder=lambda _context: "unused",
+        )
+
+
+@requires_codex_sandbox
+def test_codex_a_call_rejected_after_admission_still_publishes(
+    tmp_path,
+) -> None:
+    """A paid-but-unevaluated call must not take down the whole run.
+
+    Found by the real-CLI ladder. The evaluator admits a call and *then*
+    validates it, so an agent that submits a template the family's render
+    contract does not accept -- here a field c19 does not expose -- gets
+    ``tool_evaluation_rejected`` after admission: capacity is debited and
+    no ``EvalEvidence`` is ever minted.
+
+    The projection called that ``failed``, which the trajectory schema
+    defines as "an evaluation ran and ended badly" and therefore requires
+    an eval result for. The row could not validate, publication raised,
+    and ``durable_run_boundary`` turned one wasted tool call into a lost
+    run -- no ``result.json``, no report, nothing to audit. A real §6 run
+    would lose everything the agent had already bought.
+
+    The fake CLI is *handed* its tool arguments, so no scripted transcript
+    reaches this state by accident; this one constructs it deliberately.
+    """
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e-rejected",
+        # ``{prompt}`` is not a c19 field: the render contract exposes
+        # grid/command/question. Admitted, then rejected.
+        templates=("Answer {prompt} briefly.",),
+        selected=None,
+    )
+
+    # The run published at all -- this is the regression.
+    result = OptimResult.model_validate_json(
+        (output / "result.json").read_text(encoding="utf-8")
+    )
+    step = result.step_results[-1].record
+    # The call was paid for: it debited capacity despite evaluating
+    # nothing, which is exactly why it must appear in the report.
+    assert len(step.tool_evidence) == 1
+    assert step.budget_delta.consumed["tool_calls"] == 1
+    evidence = step.tool_evidence[0]
+    assert evidence.result.record.terminal_failure is not None
+    assert evidence.result.record.evaluation_evidence_refs == ()
+
+    trajectory = load_trajectory_report(output)
+    assert len(trajectory.resolutions) == 1
+    row = trajectory.resolutions[0]
+    # ``rejected``, not ``failed``: no evaluation happened, so the row
+    # carries no eval result -- the same distinction the intent path
+    # draws between the two outcomes.
+    assert row.outcome == "rejected"
+    assert row.eval_result_ref is None
+    assert row.eval_report is None
+    assert row.reward is None
+    assert row.terminal_failure is None
+    # The *reason* survives. The structured failure is evidence the
+    # schema forbids on a rejected row, but the message is not, and it is
+    # the only account of why a paid-for call scored nothing that reaches
+    # the projected trajectory. Dropping it left the row saying a call was
+    # rejected and giving the reader no way to find out what went wrong.
+    assert row.message
+    assert row.message == evidence.result.record.terminal_failure.message
+
+
+@requires_codex_sandbox
+def test_codex_run_supplies_l1_leakage_evidence(tmp_path) -> None:
+    """A Codex run must be visible to the study's L1 leakage rule.
+
+    Found by the real-CLI ladder's study rung. L1 asks "did the optimizer
+    see anything but the internal split?", and it read its evidence from
+    each run's ``resolved_intents``. Codex is ``TOOL_USING``: it resolves
+    no intent and mints no search evidence *by design*, so that read
+    returned nothing for a Codex run.
+
+    L1 then reports itself **unchecked** rather than passed -- correctly,
+    since a vacuous pass is not a check -- which fails ``leakage-check``
+    and blocks the whole study from reporting. A study whose only real
+    optimizer arm is Codex could therefore never publish, even though the
+    evidence L1 wants was sitting in ``tool_evidence`` the whole time.
+
+    The two fields come from different records on this path: the role
+    from the ``EvalEvidence`` the Tool Result cites, and the Eval Config
+    from the Tool Config the call was admitted against.
+    """
+    from whetstone_envs.optim.study.leakage import (
+        INTERNAL_ROLE,
+        check_l1_optimizer_internal_only,
+        optimizer_observations_from_run,
+    )
+
+    output = _codex_run(
+        tmp_path=tmp_path,
+        run_id="c19-codex-e2e-l1",
+        templates=(PROBES.naive_template, PROBES.ceiling_template),
+        selected="c2",
+    )
+
+    observations = optimizer_observations_from_run(output)
+    assert observations, (
+        "a Codex run supplied no L1 evidence, so L1 reports itself "
+        "unchecked and the study cannot report"
+    )
+    # One observation per admitted, scored evaluation.
+    assert len(observations) == 2
+    assert {row.eval_role for row in observations} == {INTERNAL_ROLE}
+
+    # And the rule itself passes against the config identity the *study
+    # manifest* records, rather than merely finding rows.
+    #
+    # Which hash that is matters, and getting it wrong fails in the
+    # direction that looks like a leak. The manifest records
+    # ``EvalConfigRef.config_hash`` -- the config's own identity -- while
+    # the Tool Config carries a ``TypedRef`` content hash over the stored
+    # record. They are two hashes of the same config, so reading the
+    # convenient one reports every honest evaluation as having left the
+    # internal split. This asserts against the identity a real study
+    # compares to.
+    from whetstone_envs.optim.audit._evidence import load_run_evidence
+
+    evidence = load_run_evidence(output)
+    first = next(
+        found
+        for step in evidence.steps
+        for entry in step.tool_evidence
+        for reference in entry.result.record.evaluation_evidence_refs
+        if (found := evidence.eval_evidence(reference)) is not None
+    )
+    internal_config = str(first.eval_config_ref.config_hash)
+    assert all(
+        row.resolved_eval_config_hash == internal_config
+        for row in observations
+    )
+    finding = check_l1_optimizer_internal_only(
+        observations, internal_eval_config_hash=internal_config
+    )
+    assert finding.passed, finding.detail

@@ -73,6 +73,7 @@ from whetstone_envs.optim.codex import (
     build_codex_control,
     codex_run_root,
     refuse_unauthorized_real_codex,
+    resolve_codex_agent_model,
 )
 from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
 from whetstone_envs.optim.experiment import provider_call_config_ref
@@ -120,11 +121,14 @@ from whetstone_envs.reporting.publication import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dr_store import ObjectStore
     from whetstone.coordination.harness_run_controller import OptimRunLaunch
     from whetstone.eval.protocol import EvalEngine
     from whetstone.experiment.env import Experiment
     from whetstone.optim.codex.adapter import CodexAdapter
+    from whetstone.optim.codex.runner import CodexPromptContext
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.proposal.proposer import ProposerTransport
 
@@ -271,9 +275,13 @@ class RunSpec:
     #: resolved on the run PATH; a test overrides it to the scripted fake.
     #: Rejected on other optimizers for the same reason as the cap.
     codex_binary: str = CODEX_DEFAULT_BINARY
-    #: Codex's own model, and how hard it reasons. ``None`` reuses the
-    #: run's ``model``, which is the task model -- a Codex run that names
-    #: no agent model is asking for the same route it evaluates with.
+    #: Codex's own model, and how hard it reasons. ``None`` means the
+    #: arm's own default agent model -- *not* the run's ``model``, which
+    #: is the task model. The two are different products on different
+    #: routes: the task model is an OpenRouter route the Codex CLI cannot
+    #: run at all, and a subscription session refuses it before the agent
+    #: emits a token. See
+    #: :data:`~whetstone_envs.optim.codex.CODEX_DEFAULT_AGENT_MODEL`.
     codex_model: str | None = None
     codex_reasoning_effort: str = CodexReasoningEffort.MEDIUM.value
     #: The Codex agent's wall budget in seconds. ``None`` keeps
@@ -606,6 +614,7 @@ def _bind_optimizer(  # noqa: PLR0913
     output_dir: Path,
     sqlite_path: Path,
     codex_test_seam: CodexTestSeam | None = None,
+    codex_prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> _BoundOptimizer:
     """Build exactly the adapter this run drives.
 
@@ -617,7 +626,7 @@ def _bind_optimizer(  # noqa: PLR0913
             engine=engine,
             experiment=experiment,
             family=validated.family,
-            model=spec.codex_model or spec.model,
+            model=resolve_codex_agent_model(spec.codex_model),
             max_tool_calls=spec.codex_capacity,
             codex_binary=spec.codex_binary,
             reasoning_effort=CodexReasoningEffort(spec.codex_reasoning_effort),
@@ -639,6 +648,7 @@ def _bind_optimizer(  # noqa: PLR0913
                 store_path=sqlite_path,
                 run_root=codex_run_root(output_dir),
                 test_seam=codex_test_seam,
+                prompt_builder=codex_prompt_builder,
             ),
             codex_control=codex_control,
         )
@@ -908,8 +918,11 @@ def _prepare_launch(  # noqa: PLR0913
     )
 
 
-def run_optimizer(
-    spec: RunSpec, *, codex_test_seam: CodexTestSeam | None = None
+def run_optimizer(  # noqa: PLR0915
+    spec: RunSpec,
+    *,
+    codex_test_seam: CodexTestSeam | None = None,
+    codex_prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> Path:
     """Run one optimizer over one family's split, writing artifacts off-repo.
 
@@ -924,6 +937,15 @@ def run_optimizer(
     Codex CLI. It is keyword-only, absent from :class:`RunSpec`, and has
     no CLI flag, so no production path or serialized spec can select one --
     see :class:`~whetstone_envs.optim.codex.CodexTestSeam`.
+
+    ``codex_prompt_builder`` is the same shape of seam for the agent's
+    instruction, and exists for the real-CLI ladder: its capacity and
+    no-tool-call rungs cannot observe what they assert under the truthful
+    production prompt, because an agent correctly told its real allowance
+    obeys it and the durable refusal path is never reached. Like the
+    seam it is keyword-only, absent from :class:`RunSpec`, and has no CLI
+    flag, so a study arm or a serialized spec cannot change what the
+    agent is told.
 
     A Codex run that supplies neither a seam nor the deliberate real-Codex
     opt-in is refused before any effect happens: the preflight spawns the
@@ -940,6 +962,10 @@ def run_optimizer(
     """
     if codex_test_seam is not None and spec.optimizer != "codex":
         raise ValueError("codex_test_seam applies only to --optimizer codex")
+    if codex_prompt_builder is not None and spec.optimizer != "codex":
+        raise ValueError(
+            "codex_prompt_builder applies only to --optimizer codex"
+        )
     validated = _validate_spec(spec)
     if spec.optimizer == "codex":
         refuse_unauthorized_real_codex(
@@ -1054,6 +1080,7 @@ def run_optimizer(
             output_dir=resolved_output,
             sqlite_path=sqlite_path,
             codex_test_seam=codex_test_seam,
+            codex_prompt_builder=codex_prompt_builder,
         )
         runtime = _build_run_runtime(
             store=store,

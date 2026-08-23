@@ -96,6 +96,20 @@ both, and zero otherwise."""
 exported_symbols = ["whetstone_envs.scoring.exact_match"]
 
 [[terms]]
+name = "family scorer registry"
+definition = """
+The single owner of how one task family's generation becomes a score, keyed by \
+the family name a persisted report carries, holding only the pure scoring rule \
+so that both an evaluation run and a report consumer apply the identical rule \
+without either needing the optimizer stack."""
+exported_symbols = [
+    "whetstone_envs.scoring.FAMILY_SCORERS",
+    "whetstone_envs.scoring.FamilyScorer",
+    "whetstone_envs.scoring.family_score",
+    "whetstone_envs.scoring.scorable_family_ids",
+]
+
+[[terms]]
 name = "pool manifest"
 definition = """
 A persisted description of a generated task pool recording its generator \

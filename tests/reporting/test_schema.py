@@ -5,6 +5,7 @@ import json
 import pytest
 from pydantic import JsonValue, ValidationError
 
+from whetstone_envs.probes import normalize
 from whetstone_envs.reporting.schema import (
     EVAL_REPORT_SCHEMA,
     SPLIT_ROLE_BY_REPORT_ROLE,
@@ -67,7 +68,7 @@ def test_eval_report_rejects_nonbinary_c19_score(fake_eval_output) -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("score", 1.0, "normalized exact match"),
+        ("score", 1.0, "disagrees with the c19 scorer"),
         ("normalized_output", "tampered", "prediction normalization"),
     ],
 )
@@ -77,6 +78,63 @@ def test_eval_report_reconciles_c19_output_and_gold(
     payload = fake_eval_output.report.model_dump(mode="json")
     payload["observations"][0][field] = value
     with pytest.raises(ValidationError, match=message):
+        EvalReport.model_validate_json(json.dumps(payload))
+
+
+def test_eval_report_scores_each_family_by_its_own_scorer(
+    fake_eval_output,
+) -> None:
+    """A c18 verdict reply is scored the way c18 scores it.
+
+    C18's ceiling probe asks for reasoning ending in a lone verdict
+    line, and :func:`whetstone_envs.c18.score_gold` extracts that
+    verdict before comparing. The schema re-derives a reported score to
+    check it, so re-deriving it as raw normalized exact match -- a c19
+    rule -- made a *correct* c18 answer look like a lie: the row said
+    1.0, the schema recomputed 0.0, and the whole report was refused.
+
+    Fails-before: with the check hard-coded to normalized exact match
+    this raises ``observation score disagrees``, and the c18 arm could
+    not publish a report at all.
+
+    The same payload with the c19 family is the control: c19 has no
+    verdict extraction, so there the reasoned reply genuinely does not
+    match gold and 1.0 is genuinely wrong.
+    """
+    payload = fake_eval_output.report.model_dump(mode="json")
+    reasoned = "The rules entail the query.\nTrue"
+    payload["run"]["family"] = "c18"
+    # C18 gold is the bare verdict; the reply reasons its way to it.
+    for task in payload["tasks"]:
+        task["gold"] = "True"
+    for row in payload["observations"]:
+        row["output_text"] = reasoned
+        row["normalized_output"] = normalize(reasoned)
+        row["score"] = 1.0
+    # Every row now scores 1.0, so each result's own tally has to say so.
+    for result in payload["results"]:
+        if result["kind"] != "success":
+            continue
+        rows = [
+            row
+            for row in payload["observations"]
+            if row["candidate_name"] == result["candidate_name"]
+        ]
+        result["numerator"] = len(rows)
+        result["denominator"] = len(rows)
+        result["score"] = 1.0
+        for stratum in result["strata"]:
+            stratum["numerator"] = stratum["denominator"]
+            stratum["score"] = 1.0
+
+    report = EvalReport.model_validate_json(json.dumps(payload))
+
+    assert report.run.family == "c18"
+    assert all(row.score == 1.0 for row in report.observations)
+
+    # Control: c19 does not extract a verdict, so the same rows are wrong.
+    payload["run"]["family"] = "c19"
+    with pytest.raises(ValidationError, match="disagrees with the c19 scorer"):
         EvalReport.model_validate_json(json.dumps(payload))
 
 

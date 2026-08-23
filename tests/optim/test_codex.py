@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -159,6 +162,88 @@ def test_a_control_off_the_internal_split_is_refused(c19_world) -> None:
             family=family,
             model="agent",
         )
+
+
+def test_the_agent_model_defaults_to_a_codex_model_not_the_task_model(
+    c19_world,
+) -> None:
+    """The Codex agent's model is not the route it evaluates with.
+
+    This was a launch blocker found by the real-CLI ladder: the arm
+    defaulted ``codex_model`` to ``RunSpec.model``, the *task* model. That
+    is an OpenRouter route (``openai/gpt-4.1-nano``), and the Codex CLI
+    on a ChatGPT subscription refuses it outright --
+    ``"The 'openai/gpt-4.1-nano' model is not supported when using Codex
+    with a ChatGPT account"`` -- before the agent produces a single
+    token. Every real run would have been a zero-evaluation run.
+
+    The fake CLI cannot catch this: it ignores ``--model`` entirely, so
+    any string at all "works". So the regression is pinned on the two
+    properties that actually matter -- the default is the named agent
+    model, and it is not the task model.
+    """
+    from whetstone_envs.optim.codex import (
+        CODEX_DEFAULT_AGENT_MODEL,
+        resolve_codex_agent_model,
+    )
+    from whetstone_envs.optim.run import RunSpec
+
+    spec = RunSpec(optimizer="codex", transport="fake", family="c19")
+    assert spec.codex_model is None
+    # Through the shared resolver the runner and the study preflight both
+    # use, so this pins the value both of them will actually send.
+    resolved = resolve_codex_agent_model(spec.codex_model)
+    assert resolved == CODEX_DEFAULT_AGENT_MODEL
+    assert resolved != spec.model, (
+        "the Codex agent model resolved to the task model, which a "
+        "subscription session cannot run"
+    )
+    # It must also be a model the control will accept: non-empty, since
+    # ``CodexControl.model`` is identity-bearing and refuses a blank.
+    family, experiment, engine, _store = c19_world
+    control = build_codex_control(
+        engine=engine,
+        experiment=experiment,
+        family=family,
+        model=resolved,
+    )
+    assert control.model == CODEX_DEFAULT_AGENT_MODEL
+
+
+def test_an_explicit_agent_model_overrides_the_default() -> None:
+    """The §6 run pins its own agent model through ``--codex-model``."""
+    from whetstone_envs.optim.codex import resolve_codex_agent_model
+    from whetstone_envs.optim.run import RunSpec
+
+    spec = RunSpec(
+        optimizer="codex",
+        transport="fake",
+        family="c19",
+        codex_model="gpt-5.4",
+    )
+    assert resolve_codex_agent_model(spec.codex_model) == "gpt-5.4"
+
+
+def test_the_default_agent_model_is_the_pinned_literal() -> None:
+    """The agent model is a golden literal, not whatever the code says.
+
+    The fake CLI ignores ``--model`` entirely, so no run in this suite can
+    tell a correct agent model from a wrong one -- every assertion that
+    compares the constant against itself passes whatever it holds. A
+    subscription session is the only thing that rejects a bad value, and
+    it does so after the run has started spending.
+
+    So the value is pinned here as a literal. Changing the agent model is
+    then a deliberate edit to this expectation, which is what a fact the
+    tests cannot otherwise falsify requires.
+    """
+    from whetstone_envs.optim.codex import (
+        CODEX_DEFAULT_AGENT_MODEL,
+        resolve_codex_agent_model,
+    )
+
+    assert CODEX_DEFAULT_AGENT_MODEL == "gpt-5.6-sol"
+    assert resolve_codex_agent_model(None) == "gpt-5.6-sol"
 
 
 def test_the_reasoning_efforts_are_the_enum_projection() -> None:
@@ -627,6 +712,167 @@ def test_the_env_var_name_matches_the_suites_own() -> None:
     assert ALLOW_REAL_CODEX_ENV_VALUE == "1"
 
 
+def test_the_ladder_env_name_matches_the_conftest_exception() -> None:
+    """The root conftest's documented exception names the real opt-in.
+
+    ``tests/conftest.py`` does not decide the exception -- the ladder
+    claims it -- but it spells :data:`REAL_CODEX_LADDER_ENV` in the
+    message an ordinary session raises when the spend variable is
+    exported, telling the operator which variable the ladder also needs.
+    A drift between that spelling and the ladder's own would send a
+    reader after a variable nobody reads.
+    """
+    from tests.conftest import REAL_CODEX_LADDER_ENV
+    from tests.real_codex.conftest import REAL_CODEX_ENV
+
+    assert REAL_CODEX_LADDER_ENV == REAL_CODEX_ENV
+    assert REAL_CODEX_LADDER_ENV == "WHETSTONE_ENVS_REAL_CODEX"
+    # The two opt-ins must stay distinct: one variable serving as both
+    # "run the ladder" and "you may spend" would make the exception
+    # unconditional.
+    assert REAL_CODEX_LADDER_ENV != ALLOW_REAL_CODEX_ENV
+
+
+def test_the_ladder_and_not_the_root_decides_the_tripwire_exception(
+    monkeypatch,
+) -> None:
+    """The claim requires a collected rung, not just the variable.
+
+    The root conftest defers its one exception to the ladder's own
+    collection hook. That indirection exists so the decision can depend
+    on something the root cannot see -- whether the session actually
+    collected a rung -- and this drives the hook directly to state that
+    dependency as a fact rather than a comment.
+
+    An exported ladder variable with no rung in the session is exactly
+    the stray-export case: the hook must leave the stash alone, so the
+    root fixture arms the tripwire as it would for any other session.
+    """
+    from tests.conftest import REAL_CODEX_LADDER_SESSION
+    from tests.real_codex.conftest import (
+        REAL_CODEX_ENV,
+        pytest_collection_modifyitems,
+    )
+
+    monkeypatch.setenv(REAL_CODEX_ENV, "1")
+    config = cast("pytest.Config", SimpleNamespace(stash=pytest.Stash()))
+
+    # Opted in, but the session collected no rung: no claim.
+    pytest_collection_modifyitems(config, [])
+    assert REAL_CODEX_LADDER_SESSION not in config.stash
+
+    # Opted in with a rung collected: the ladder claims the session.
+    rung = cast(
+        "pytest.Item",
+        SimpleNamespace(
+            fspath=str(
+                Path(__file__).resolve().parents[1]
+                / "real_codex"
+                / "test_real_codex_ladder.py"
+            )
+        ),
+    )
+    pytest_collection_modifyitems(config, [rung])
+    assert config.stash[REAL_CODEX_LADDER_SESSION] is True
+
+
+def test_the_ladder_claims_nothing_without_its_own_opt_in(
+    monkeypatch,
+) -> None:
+    """No opt-in means no claim, and the rung is skipped instead.
+
+    The default path for every CI session that collects the ladder
+    directory: the rungs are skipped and the tripwire stays armed.
+    """
+    from tests.conftest import REAL_CODEX_LADDER_SESSION
+    from tests.real_codex.conftest import (
+        REAL_CODEX_ENV,
+        pytest_collection_modifyitems,
+    )
+
+    monkeypatch.delenv(REAL_CODEX_ENV, raising=False)
+    config = cast("pytest.Config", SimpleNamespace(stash=pytest.Stash()))
+    markers: list[object] = []
+    rung = cast(
+        "pytest.Item",
+        SimpleNamespace(
+            fspath=str(
+                Path(__file__).resolve().parents[1]
+                / "real_codex"
+                / "test_real_codex_ladder.py"
+            ),
+            add_marker=markers.append,
+        ),
+    )
+
+    pytest_collection_modifyitems(config, [rung])
+
+    assert REAL_CODEX_LADDER_SESSION not in config.stash
+    assert len(markers) == 1
+
+
+def test_an_ordinary_session_is_armed_even_under_the_ladder_export() -> None:
+    """A stray ``WHETSTONE_ENVS_REAL_CODEX`` must not disarm the suite.
+
+    The exception's narrowness is the whole reason it is safe, so it is
+    checked by running a real pytest session rather than by reading the
+    code: this one exports the ladder variable, selects a test that is
+    not a rung, and must still find the tripwire armed by the time the
+    test body runs.
+
+    A subprocess because the tripwire is process state that this very
+    session has already set: asserting it in-process would pass whether
+    or not the fixture is the thing that armed it. Run against the real
+    ``tests/`` tree, so the conftest under test is the one that ships.
+
+    Fails-before: with the exception decided from the environment in the
+    root conftest, this session would come up disarmed and the probe
+    would fail.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    # Inside the real ``tests/`` tree, because that is the only place the
+    # root conftest under test is loaded from. Removed in the finally
+    # below, so a failed run leaves nothing behind.
+    probe = repo_root / "tests" / "test_tripwire_probe_tmp.py"
+    probe.write_text(
+        "import os\n"
+        "\n"
+        "def test_the_tripwire_is_armed():\n"
+        "    assert os.environ.get('WHETSTONE_ENVS_FORBID_REAL_CODEX')\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["WHETSTONE_ENVS_REAL_CODEX"] = "1"
+    environment.pop(ALLOW_REAL_CODEX_ENV, None)
+    environment.pop(FORBID_REAL_CODEX_ENV, None)
+
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                str(probe),
+                "-p",
+                "no:cacheprovider",
+                "-q",
+            ],
+            cwd=repo_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
+        )
+    finally:
+        probe.unlink(missing_ok=True)
+
+    assert completed.returncode == 0, (
+        "an ordinary session under an exported ladder variable came up "
+        f"with the tripwire disarmed:\n{completed.stdout}\n{completed.stderr}"
+    )
+
+
 def test_a_codex_run_without_a_seam_or_the_opt_in_is_refused(
     tmp_path, monkeypatch
 ) -> None:
@@ -745,8 +991,6 @@ def test_the_suite_arms_the_tripwire_for_its_whole_session() -> None:
     runs; if the fixture stopped setting it, those tests would keep
     passing for the wrong reason.
     """
-    import os
-
     assert os.environ.get(FORBID_REAL_CODEX_ENV)
 
 

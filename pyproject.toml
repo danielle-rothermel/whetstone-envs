@@ -92,11 +92,15 @@ artifacts = [
 ]
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib"]
+# The real-Codex ladder is deselected by default: every one of its rungs
+# drives the real Codex CLI against a live subscription session, so it is
+# opt-in twice over (the marker here, and WHETSTONE_ENVS_REAL_CODEX=1).
+addopts = ["--import-mode=importlib", "-m", "not real_codex"]
 testpaths = ["tests"]
 markers = [
     "integration: opt-in checks that run in CI or with --run-integration",
     "real_transport: opt-in rungs that spend real money on the OpenRouter transport",
+    "real_codex: drives the real Codex CLI against a live session (manual)",
 ]
 
 [tool.pyright]
@@ -194,7 +198,12 @@ include = [
     "src/whetstone_envs/optim/**",
     "src/whetstone_envs/reporting/**",
     "tests/optim/**",
+    "tests/real_codex/**",
     "tests/reporting/**",
+    # Only the anti-drift test, which reaches for the optimizer's own
+    # eval-node runners on purpose to prove they agree with the
+    # whetstone-free scorer registry.
+    "tests/scoring/test_families.py",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

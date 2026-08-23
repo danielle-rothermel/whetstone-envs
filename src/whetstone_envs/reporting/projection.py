@@ -669,6 +669,20 @@ def _tool_evidence_sources(
     terminalized with a failure does contribute one, carrying that
     failure, because the run paid for it.
 
+    **A paid call can terminalize without ever being evaluated.** The
+    evaluator admits a call, then validates it, so a real agent that
+    submits a template the family's render contract does not accept --
+    an unavailable field, say -- gets ``tool_evaluation_rejected`` *after*
+    admission: capacity is debited, and no ``EvalEvidence`` is ever
+    minted. That is ``rejected``, not ``failed``: the two differ in the
+    report exactly as they do on the intent path, where ``failed`` means
+    an evaluation ran and ended badly while ``rejected`` means none
+    happened. Projecting it as ``failed`` produced a row claiming a
+    failure evaluation it had no ref for, and the schema refused it --
+    which took down publication for the whole run, turning one wasted
+    call into a lost run. The fake CLI is handed valid arguments, so it
+    can never reach this state.
+
     The reward cited is the ``EvalEvidence``'s own, not the Tool
     Result's. The two are different records: the Tool Result's Reward
     cites the evidence and carries the call's ``provenance_ordinal``,
@@ -715,24 +729,41 @@ def _tool_evidence_sources(
                 },
             )
         )
-        failed = record.terminal_failure is not None
         eval_result_ref = (
             record.evaluation_evidence_refs[0]
             if record.evaluation_evidence_refs
             else None
         )
+        if record.terminal_failure is None:
+            outcome = "completed"
+        elif eval_result_ref is None:
+            # Paid for, never evaluated: rejected after admission.
+            outcome = "rejected"
+        else:
+            outcome = "failed"
         sources.append(
             (
                 ordinal,
                 _TrajectoryResolutionSource(
                     candidate=candidate,
                     request_id=f"tool:{call.call_id}",
-                    outcome="failed" if failed else "completed",
+                    outcome=outcome,
                     eval_result_ref=eval_result_ref,
                     reward_ref=_evidence_reward_ref(
                         store=store, ref=eval_result_ref
                     ),
                     classification=None,
+                    # A rejected row carries no durable eval result, so
+                    # every *evidence* field the schema forbids on it
+                    # stays absent -- the refs, the reward, the hydrated
+                    # report, and the structured failure below.
+                    #
+                    # The message is not evidence and the schema permits
+                    # it on a rejected row, so it is preserved: it is the
+                    # only place the reason a post-admission call was
+                    # rejected survives in the projected trajectory.
+                    # Dropping it left the row saying a call was rejected
+                    # with no readable account of why.
                     message=(
                         None
                         if record.terminal_failure is None
@@ -741,6 +772,7 @@ def _tool_evidence_sources(
                     terminal_failure=(
                         None
                         if record.terminal_failure is None
+                        or outcome == "rejected"
                         else cast(
                             "dict[str, JsonValue]",
                             record.terminal_failure.model_dump(mode="json"),

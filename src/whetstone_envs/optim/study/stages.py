@@ -976,6 +976,7 @@ def _refuse_unauthorized_codex_arm(
         CodexTestSeam,
         RealCodexRefusedError,
         preflight_codex_session,
+        resolve_codex_agent_model,
     )
 
     codex_arms = tuple(
@@ -1010,7 +1011,20 @@ def _refuse_unauthorized_codex_arm(
     try:
         preflight_codex_session(
             scratch_root=study_dir / STAGE_PREFLIGHT_ROOT_NAME,
-            model=spec.task_model,
+            # The agent model, resolved through the same helper the
+            # runner uses, so the probe clears the route the arm will
+            # actually open. A study arm does not override the agent
+            # model, so this is the arm's default -- but it is resolved
+            # rather than assumed, which is what keeps the two in step if
+            # an arm ever gains an override.
+            #
+            # Probing ``spec.task_model`` here tested an OpenRouter route
+            # the Codex CLI cannot run at all, so the guard cleared a
+            # session no arm would ever open and the real failure waited
+            # for the Codex arm's turn -- after COPRO, MIPROv2, and GEPA
+            # had been paid for, which is precisely what this preflight
+            # exists to prevent.
+            model=resolve_codex_agent_model(None),
             allow_real_codex=environment.real_codex_authorized,
             test_seam=seam,
         )

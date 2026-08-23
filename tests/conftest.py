@@ -26,10 +26,26 @@ ALLOW_REAL_CODEX_ENV = "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
 #: constant by ``tests/optim/test_codex.py``.
 FORBID_REAL_CODEX_ENV = "WHETSTONE_ENVS_FORBID_REAL_CODEX"
 
+#: The real-CLI ladder's own opt-in, spelled here for the same reason.
+#: Pinned equal to ``tests/real_codex/conftest.py``'s by
+#: ``tests/optim/test_codex.py``.
+REAL_CODEX_LADDER_ENV = "WHETSTONE_ENVS_REAL_CODEX"
+
+#: The ``config`` stash key through which the ladder -- and only the
+#: ladder -- claims its session. Set by ``tests/real_codex/conftest.py``
+#: during collection, read by :func:`_no_real_codex_opt_in` afterwards.
+#:
+#: A stash key rather than an import: this conftest loads for every suite,
+#: including installs without the optional ``optim`` extra, and
+#: ``tests/real_codex/conftest.py`` imports the optimizer stack. Owning
+#: the key here and letting the ladder write to it keeps the dependency
+#: pointing the one direction that always resolves.
+REAL_CODEX_LADDER_SESSION = pytest.StashKey[bool]()
+
 
 @pytest.fixture(scope="session", autouse=True)
-def _no_real_codex_opt_in() -> None:
-    """No test may spawn the real, billed Codex CLI.
+def _no_real_codex_opt_in(request: pytest.FixtureRequest) -> None:
+    """No ordinary test may spawn the real, billed Codex CLI.
 
     Two mechanisms, because clearing the opt-in is not enough on its own.
 
@@ -52,14 +68,38 @@ def _no_real_codex_opt_in() -> None:
     Session-scoped and autouse rather than per-test: both variables are
     process state, and a per-test fixture would leave the gaps between
     tests unarmed.
+
+    **The one exception is the real-CLI ladder**, whose whole purpose is
+    to drive the paid CLI. This fixture does not decide that exception;
+    it defers to ``tests/real_codex/conftest.py``, which claims the
+    session through :data:`REAL_CODEX_LADDER_SESSION` only when the
+    ladder's own opt-in (:data:`REAL_CODEX_LADDER_ENV`) is set *and* the
+    session actually collected ladder items -- which the ``real_codex``
+    marker deselects by default. The claim is made during collection,
+    which pytest runs before any session fixture, so by the time this
+    reads the stash the ladder has already had its say.
+
+    Deferring rather than reading the variable here is what keeps the
+    exception narrow. An exported ``WHETSTONE_ENVS_REAL_CODEX`` alone
+    proves nothing about what the session is going to run; the ladder's
+    own hook can additionally require that a ladder item was collected,
+    and it is the file that owns the ladder. Every ordinary session --
+    including one launched from a shell carrying a stray export -- takes
+    the branch below and arms the tripwire exactly as before, and the
+    forbid gate in ``whetstone_envs.optim.codex`` remains the single
+    point of refusal either way.
     """
+    if request.config.stash.get(REAL_CODEX_LADDER_SESSION, False):
+        return
     present = os.environ.pop(ALLOW_REAL_CODEX_ENV, None)
     os.environ[FORBID_REAL_CODEX_ENV] = "1"
     if present is not None:
         message = (
             f"{ALLOW_REAL_CODEX_ENV}={present!r} is set in this process. "
             "The suite must never be able to opt in to the real, billed "
-            "Codex CLI; unset it before running the tests."
+            "Codex CLI; unset it before running the tests. (The real-CLI "
+            f"ladder is the one exception, and it sets "
+            f"{REAL_CODEX_LADDER_ENV}=1 as well.)"
         )
         raise RuntimeError(message)
 

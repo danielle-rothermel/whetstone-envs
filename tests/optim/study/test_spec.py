@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from whetstone_envs.optim.codex import CODEX_DEFAULT_AGENT_MODEL
 from whetstone_envs.optim.study.spec import (
     CODEX_EVALUATE_CALL_CAP,
     HOLM_FAMILY_SIZE,
@@ -26,6 +27,7 @@ from whetstone_envs.optim.study.spec import (
     default_arms,
     k_run_for,
     next_k_cal,
+    require_pinned_codex_agent_model,
     spec_from_manifest,
 )
 
@@ -38,6 +40,7 @@ def _spec(
     k_cal: int = K_CAL_INITIAL,
     held_out: SplitSpec | None = None,
     arms: tuple[ArmSpec, ...] | None = None,
+    codex_agent_model: str | None = CODEX_DEFAULT_AGENT_MODEL,
 ) -> StudySpec:
     """The study's real design, with one field optionally mutated."""
     return StudySpec(
@@ -51,6 +54,7 @@ def _spec(
         task_model="openai/gpt-5-nano",
         proposer_model="openai/gpt-5.4-nano",
         k_cal=k_cal,
+        codex_agent_model=codex_agent_model,
         arms=default_arms(stage=StageId.STAGE2) if arms is None else arms,
     )
 
@@ -522,3 +526,77 @@ def test_a_manifest_agreeing_with_its_pinned_split_still_loads(
 
     manifest = read_study_manifest(_pinned_study(tmp_path))
     assert spec_from_manifest(manifest).arms
+
+
+# --------------------------------------------------------------------------
+# The Codex agent model is design, not a runner default
+# --------------------------------------------------------------------------
+
+
+def test_a_codex_arm_requires_a_pre_registered_agent_model() -> None:
+    """The agent model is the Codex arm's proposer, so the design names it.
+
+    Fails-before: ``StudySpec`` had no ``codex_agent_model`` at all. The
+    stage guard resolved the agent through the *runner's*
+    ``CODEX_DEFAULT_AGENT_MODEL``, so whatever that constant said became
+    the study's proposer -- an unregistered treatment measured against
+    registered anchors, and ``manifest.models.codex_agent_model`` had no
+    production writer to disagree with.
+    """
+    with pytest.raises(ValueError, match="pre-registers its"):
+        _spec(codex_agent_model=None)
+
+
+def test_a_study_without_a_codex_arm_pins_no_agent_model() -> None:
+    """A pin nothing honours is a design field describing another study."""
+    without_codex = tuple(
+        arm
+        for arm in default_arms(stage=StageId.STAGE2)
+        if arm.optimizer != "codex"
+    )
+    _spec(arms=without_codex, codex_agent_model=None)
+    with pytest.raises(ValueError, match="declares no Codex arm"):
+        _spec(arms=without_codex, codex_agent_model="gpt-5.6-sol")
+
+
+def test_the_resolved_agent_must_equal_the_pinned_one() -> None:
+    """The runner's resolution is checked against the design, not assumed."""
+    from whetstone_envs.optim.study.manifest import (
+        PreRegistrationViolationError,
+    )
+
+    spec = _spec(codex_agent_model=CODEX_DEFAULT_AGENT_MODEL)
+    require_pinned_codex_agent_model(spec, resolved=CODEX_DEFAULT_AGENT_MODEL)
+    with pytest.raises(PreRegistrationViolationError) as error:
+        require_pinned_codex_agent_model(spec, resolved="gpt-4o-mini")
+    message = str(error.value)
+    assert "gpt-4o-mini" in message
+    assert CODEX_DEFAULT_AGENT_MODEL in message
+    assert "models.codex_agent_model" in message
+
+
+def test_a_study_with_no_codex_arm_is_left_alone_by_the_check() -> None:
+    """No arm, no pin, nothing to refuse -- whatever the runner resolves."""
+    without_codex = tuple(
+        arm
+        for arm in default_arms(stage=StageId.STAGE2)
+        if arm.optimizer != "codex"
+    )
+    require_pinned_codex_agent_model(
+        _spec(arms=without_codex, codex_agent_model=None),
+        resolved="anything-at-all",
+    )
+
+
+def test_the_runner_default_is_a_runner_default_not_the_study_default() -> (
+    None
+):
+    """The two are separate facts, and the golden pins the literal.
+
+    The runner's constant is what a single unregistered run gets. A study
+    reaches the same string only by *naming* it, which is what makes the
+    manifest's ``models`` block the design record it claims to be.
+    """
+    assert CODEX_DEFAULT_AGENT_MODEL == "gpt-5.6-sol"
+    with pytest.raises(ValueError, match="pre-registers its"):
+        _spec(codex_agent_model=None)

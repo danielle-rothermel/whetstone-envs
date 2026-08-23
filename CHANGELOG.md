@@ -283,6 +283,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **`--miprov2-minibatch` requires `--miprov2-minibatch-size`.** Left
+  unset the batch resolved to the whole validation split, so minibatching
+  was on in name only — and the run's `mipro_minibatch_sizing` invariant
+  then FAILed the audit of a run that had already spent. The combination is
+  refused at pure spec validation, in a message naming both flags, so the
+  same finding is free.
+- **The Codex agent model is pre-registered design, not a runner default.**
+  `manifest.models.codex_agent_model` had no production writer and nothing
+  read it: the stage guard resolved the agent through the *runner's*
+  `CODEX_DEFAULT_AGENT_MODEL`, so whatever that constant said silently
+  became the study's proposer. A study declaring the Codex arm now names
+  its agent in the hand-authored `models` block, `StudySpec` carries it,
+  and `require_pinned_codex_agent_model` refuses a stage whose resolved
+  control disagrees with a `PreRegistrationViolationError` — the same class
+  of refusal an unregistered split gets, because running an unregistered
+  proposer is the same error. `CODEX_DEFAULT_AGENT_MODEL` keeps its job:
+  the default for a single run nobody pre-registered. A study that declares
+  no Codex arm pins nothing, and a pin without an arm is refused too.
+
+### Added
+
+- **A Stage-1 MIPROv2 arm cannot silently take the shape that crashed.**
+  `num_candidates < 3` with minibatching is refused at spec validation,
+  pointing at whetstone-ai #137, **unless** the installed whetstone-ai is
+  at least 0.1.9 — the release whose `select_promotion` degrades to DSPy's
+  own behaviour instead of raising `No valid program found in
+  param_score_dict` inside the durable run boundary. The gate is a floor,
+  not the pin: this repo pins 0.1.10, which is above it, so the refusal only
+  re-arms on a downgrade. An absent or unrankable version reads as unfixed
+  and keeps the refusal, because the uncertain case should cost a validation
+  error rather than a run that dies mid-flight.
+
+### Changed
+
 - **Pins published whetstone-ai 0.1.10.** Three upstream fixes matter here.
   [#138] (0.1.9) records a seed-identical selection as `seed_retained`
   rather than a `codex_selection_contract` violation, so the real-Codex

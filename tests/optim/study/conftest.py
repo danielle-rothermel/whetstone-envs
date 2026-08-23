@@ -111,9 +111,19 @@ def toy_arms() -> tuple[ArmRecord, ...]:
 
 
 def toy_manifest(
-    *, arms: tuple[ArmRecord, ...] | None = None
+    *,
+    arms: tuple[ArmRecord, ...] | None = None,
+    codex_agent_model: str = "uncontrolled",
 ) -> StudyManifest:
-    """A pre-Stage-0 manifest: design, selection, and held-out unset."""
+    """A pre-Stage-0 manifest: design, selection, and held-out unset.
+
+    ``codex_agent_model`` defaults to a placeholder because the toy arms
+    declare no Codex arm and nothing reads it. A fixture that *does*
+    declare one must pin the agent the runner resolves, exactly as a real
+    study's hand-authored manifest does -- the pin is design, so a toy
+    that left it a placeholder would be a study running an unregistered
+    proposer.
+    """
     return StudyManifest(
         study_id="step10-toy",
         created_at="2026-08-22T12:00:00+00:00",
@@ -135,7 +145,7 @@ def toy_manifest(
             temperature="unset",
             provider="fake",
             seed_control="none",
-            codex_agent_model="uncontrolled",
+            codex_agent_model=codex_agent_model,
         ),
         arms=toy_arms() if arms is None else arms,
     )

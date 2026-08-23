@@ -456,7 +456,19 @@ def _codex_study(tmp_path: Path) -> Path:
         seed_note="control-seed-field",
         runs=(),
     )
-    write_study_manifest(study_dir, toy_manifest(arms=(*toy_arms(), codex)))
+    from whetstone_envs.optim.codex import (
+        CODEX_DEFAULT_AGENT_MODEL,
+    )
+
+    # A study declaring the Codex arm pre-registers the agent it will run,
+    # and the stage guard refuses a resolved control that disagrees.
+    write_study_manifest(
+        study_dir,
+        toy_manifest(
+            arms=(*toy_arms(), codex),
+            codex_agent_model=CODEX_DEFAULT_AGENT_MODEL,
+        ),
+    )
     with bound_stage_environment(study_dir) as environment:
         run_stage0_into_manifest(study_dir=study_dir, environment=environment)
     return study_dir

@@ -88,6 +88,7 @@ from whetstone_envs.optim.study.spec import (
     StageId,
     arm_seeds,
     require_pinned_arms,
+    require_pinned_codex_agent_model,
     spec_from_manifest,
 )
 from whetstone_envs.optim.study.spend import (
@@ -1008,6 +1009,12 @@ def _refuse_unauthorized_codex_arm(
             "codex_test_seam must be a CodexTestSeam; got "
             f"{type(seam).__name__}"
         )
+    agent_model = resolve_codex_agent_model(None)
+    # Before the probe, because a session opened on the wrong agent is a
+    # billed session the design never registered. The pin is design and the
+    # resolution is the runner's, so comparing them here is what keeps the
+    # arm's proposer the one the manifest names.
+    require_pinned_codex_agent_model(spec, resolved=agent_model)
     try:
         preflight_codex_session(
             scratch_root=study_dir / STAGE_PREFLIGHT_ROOT_NAME,
@@ -1024,7 +1031,7 @@ def _refuse_unauthorized_codex_arm(
             # for the Codex arm's turn -- after COPRO, MIPROv2, and GEPA
             # had been paid for, which is precisely what this preflight
             # exists to prevent.
-            model=resolve_codex_agent_model(None),
+            model=agent_model,
             allow_real_codex=environment.real_codex_authorized,
             test_seam=seam,
         )

@@ -714,7 +714,7 @@ def test_the_report_names_the_threats_the_assignment_requires(
 ) -> None:
     markdown = render_markdown(build_study_report(reported_manifest))
     for phrase in (
-        "agent model is uncontrolled",
+        "agent model is pinned but unpriced",
         "whole-split evaluations",
         "under-cover at small task counts",
         "does not reach a small true",

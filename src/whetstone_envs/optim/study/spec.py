@@ -64,6 +64,7 @@ __all__ = [
     "load_study_spec",
     "next_k_cal",
     "require_pinned_arms",
+    "require_pinned_codex_agent_model",
     "spec_from_manifest",
 ]
 
@@ -387,6 +388,21 @@ class StudySpec:
     held_out: SplitSpec
     task_model: str
     proposer_model: str
+    #: The Codex agent's own model, pre-registered rather than defaulted.
+    #:
+    #: This is **design**: the agent model decides what the Codex arm's
+    #: proposer *is*, so a study that reported one agent and ran another
+    #: would be comparing a different treatment against its own anchors.
+    #: The manifest's hand-authored ``models`` block names it, this field
+    #: carries it, and :func:`require_pinned_codex_agent_model` refuses a
+    #: stage whose resolved control disagrees.
+    #:
+    #: ``None`` on a study that declares no Codex arm -- there is no agent
+    #: to pin -- and required on one that does.
+    #: :data:`~whetstone_envs.optim.codex.CODEX_DEFAULT_AGENT_MODEL` stays
+    #: what it always was: the *runner's* default for a single run nobody
+    #: pre-registered, never the study's.
+    codex_agent_model: str | None = None
     k_cal: int = K_CAL_INITIAL
     k_repeat: int = 3
     bootstrap_seed: int = 0
@@ -418,6 +434,26 @@ class StudySpec:
         arm_ids = tuple(arm.arm_id for arm in self.arms)
         if len(set(arm_ids)) != len(arm_ids):
             raise ValueError("study arms must be unique by arm_id")
+        declares_codex = any(
+            arm.optimizer == CODEX_ARM_ID for arm in self.arms
+        )
+        if declares_codex and not (self.codex_agent_model or "").strip():
+            # A Codex arm whose agent model the design never named would
+            # take the runner's default, and the study would then report a
+            # proposer it never pre-registered.
+            raise ValueError(
+                "a study declaring the Codex arm pre-registers its "
+                "codex_agent_model; the runner's default is a run default, "
+                "not a design"
+            )
+        if not declares_codex and self.codex_agent_model is not None:
+            # A pinned agent for an arm that does not run is a design field
+            # nothing honours, which is how a manifest comes to describe a
+            # study it did not perform.
+            raise ValueError(
+                "this study declares no Codex arm, so it pre-registers no "
+                "codex_agent_model"
+            )
 
     @property
     def split_sizes(self) -> tuple[int, int, int]:
@@ -541,6 +577,15 @@ def spec_from_manifest(
         held_out=_split_spec("held_out", manifest.splits.held_out),
         task_model=manifest.models.task_model,
         proposer_model=manifest.models.proposer_model,
+        # Read off the hand-authored ``models`` block, which is where the
+        # study pre-registers it. Carried only when a Codex arm exists,
+        # because the spec refuses a pin nothing honours -- and every
+        # manifest records the field, Codex arm or not.
+        codex_agent_model=(
+            manifest.models.codex_agent_model
+            if any(arm.optimizer == CODEX_ARM_ID for arm in manifest.arms)
+            else None
+        ),
         k_cal=K_CAL_INITIAL if design is None else design.k_cal,
         k_repeat=3 if design is None else design.k_repeat,
         bootstrap_seed=0 if design is None else design.bootstrap_seed,
@@ -623,6 +668,42 @@ def require_pinned_arms(manifest: StudyManifest) -> None:
             "They were declared after the design was pinned, so running "
             "them would spend on a design this study never registered; "
             "re-pin with stage0 --replace-design to record the amendment"
+        )
+
+
+def require_pinned_codex_agent_model(
+    spec: StudySpec, *, resolved: str
+) -> None:
+    """Refuse a Codex arm whose resolved agent differs from the design.
+
+    The agent model is what the Codex arm's *proposer* is, so it is
+    pre-registered like the splits and the run matrix rather than taken
+    from whatever the runner happens to default to. The runner's
+    :data:`~whetstone_envs.optim.codex.CODEX_DEFAULT_AGENT_MODEL` remains a
+    run default -- the right answer for a single run nobody registered --
+    and this check is what stops it from silently becoming the study's.
+
+    ``resolved`` is what the arm's control will actually carry, resolved
+    through the runner's own helper rather than assumed, so the two cannot
+    drift apart if an arm ever gains an override.
+
+    Refused as a
+    :class:`~whetstone_envs.optim.study.manifest.PreRegistrationViolationError`
+    rather than a generic value error: running a proposer the design never
+    named is the same class of error as running an unregistered split.
+
+    A study with no Codex arm pins nothing and is left alone.
+    """
+    pinned = spec.codex_agent_model
+    if pinned is None:
+        return
+    if resolved != pinned:
+        raise PreRegistrationViolationError(
+            f"the Codex arm would run agent model {resolved!r}, but this "
+            f"study pre-registered {pinned!r} in models.codex_agent_model. "
+            "The agent model is the arm's proposer, so running another one "
+            "measures a treatment this study never registered; re-pin the "
+            "manifest, or run the agent the design names"
         )
 
 

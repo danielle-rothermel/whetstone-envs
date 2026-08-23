@@ -167,8 +167,9 @@ VALIDATION_CHECKLIST: tuple[str, ...] = (
         "overfitting to the internal split's phrasing?"
     ),
     (
-        "Is the Codex arm's uncontrolled agent model a fair comparison against"
-        " the arms whose proposer this study pinned?"
+        "Is the Codex arm's pre-registered agent model a fair comparison "
+        "against the arms whose proposer this study pinned, given that its "
+        "own calls are never priced?"
     ),
     (
         "Does the null-A result look like selection-on-noise -- a positive "
@@ -2057,15 +2058,16 @@ def _threats_section(manifest: StudyManifest) -> Section:
     held_out_size = manifest.splits.held_out.size
     threats = (
         (
-            "The Codex arm's agent model is uncontrolled",
+            "The Codex arm's agent model is pinned but unpriced",
             Cell(
                 figure=_manifest_figure(
-                    f"Recorded as {manifest.models.codex_agent_model}. Its "
-                    "own model calls run off this study's key entirely, so "
-                    "whetstone observes no usage evidence for them and the "
-                    "manifest carries no cost role for them. The arm's "
-                    "OpenRouter evaluation calls price normally; the "
-                    "agent's do not appear at all.",
+                    f"Pre-registered as {manifest.models.codex_agent_model}, "
+                    "and the arm refuses to run an agent that disagrees. "
+                    "Its own model calls still run off this study's key "
+                    "entirely, so whetstone observes no usage evidence for "
+                    "them and the manifest carries no cost role for them. "
+                    "The arm's OpenRouter evaluation calls price normally; "
+                    "the agent's do not appear at all.",
                     "models.codex_agent_model",
                 )
             ),

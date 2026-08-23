@@ -29,6 +29,8 @@ from whetstone_envs.optim.run import (
     DEFAULT_SPLIT_SIZES,
     GEPA_DEFAULT_SEED,
     MIPROV2_DEFAULT_SEED,
+    MIPROV2_MINIBATCH_MIN_CANDIDATES,
+    MIPROV2_SPENT_COMBINATION_FIX_VERSION,
     OPTIMIZERS,
     SEED_DISPOSITION_CONTROL_FIELD,
     SEED_DISPOSITION_PROVIDER_ONLY,
@@ -642,6 +644,160 @@ def test_the_miprov2_shape_flags_reach_the_spec(
     """The protocol's auto-light shape, requestable from the CLI."""
     spec = _captured_spec(["--optimizer", "miprov2", flag, value])
     assert getattr(spec, field) == int(value)
+
+
+def test_minibatching_requires_an_explicit_batch_size() -> None:
+    """``--miprov2-minibatch`` alone is a batch of the whole valset.
+
+    Fails-before: the size defaulted to ``len(valset)``, so the run was
+    configured with minibatching *on* and a batch covering every task --
+    minibatching in name only. The run then spent, and its
+    ``mipro_minibatch_sizing`` invariant FAILed the audit afterwards (D3's
+    defect (e)). Refusing at pure spec validation makes the same finding
+    free.
+
+    The message names both flags, because the recovery is supplying the
+    second one rather than dropping the first.
+    """
+    spec = _spec(optimizer="miprov2", miprov2_minibatch=True)
+    with pytest.raises(ValueError) as error:
+        run_optimizer(spec)
+    message = str(error.value)
+    assert "--miprov2-minibatch" in message
+    assert "--miprov2-minibatch-size" in message
+
+
+def test_minibatching_with_an_explicit_size_passes_validation() -> None:
+    """The refusal is of the *combination*, not of minibatching."""
+    from whetstone_envs.optim.run import _validate_miprov2_settings
+
+    _validate_miprov2_settings(
+        _spec(
+            optimizer="miprov2",
+            miprov2_minibatch=True,
+            miprov2_minibatch_size=1,
+        )
+    )
+
+
+def test_the_cli_refuses_minibatch_without_a_size() -> None:
+    """The same refusal, reached the way an operator reaches it."""
+    with pytest.raises(ValueError) as error:
+        main(
+            [
+                "--optimizer",
+                "miprov2",
+                "--miprov2-minibatch",
+                "--train-size",
+                "1",
+                "--val-size",
+                "1",
+            ]
+        )
+    assert "--miprov2-minibatch-size" in str(error.value)
+
+
+# --------------------------------------------------------------------------
+# The MIPROv2 spent-combination shape trap (whetstone-ai #137)
+# --------------------------------------------------------------------------
+
+
+def _two_candidate_minibatch_spec() -> RunSpec:
+    return _spec(
+        optimizer="miprov2",
+        miprov2_minibatch=True,
+        miprov2_minibatch_size=1,
+        miprov2_num_candidates=2,
+    )
+
+
+def test_two_candidates_with_minibatch_are_refused_on_an_unfixed_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The D3 shape trap, refused at validation on a pre-0.1.9 install.
+
+    Fails-before: nothing refused this shape, so a Stage-1 arm configured
+    with two candidates and a minibatch reached
+    ``select_promotion``, exhausted its ranked list, and raised
+    ``ValueError: No valid program found in param_score_dict`` *inside* the
+    durable run boundary -- surfacing as a ``DurableRunError`` after the
+    run had already spent.
+
+    The version is patched rather than the environment downgraded: the
+    refusal is a claim about the installed release, and pinning it to a
+    known-unfixed string is what makes both sides of the gate testable
+    against one installed package.
+    """
+    monkeypatch.setattr(
+        "whetstone_envs.optim.run.installed_whetstone_ai_version",
+        lambda: "0.1.8",
+    )
+    with pytest.raises(ValueError) as error:
+        run_optimizer(_two_candidate_minibatch_spec())
+    message = str(error.value)
+    assert "whetstone-ai" in message
+    assert "137" in message
+    assert str(MIPROV2_MINIBATCH_MIN_CANDIDATES) in message
+
+
+@pytest.mark.parametrize("reported", ["0.1.9", "0.1.10", "0.2.0"])
+def test_two_candidates_with_minibatch_pass_on_the_fixed_release(
+    monkeypatch: pytest.MonkeyPatch, reported: str
+) -> None:
+    """At the fix release and above, the refusal lifts.
+
+    0.1.10 is the version this repo pins and 0.1.9 is the floor the gate
+    compares against, so both are exercised -- a comparison that ranked
+    ``"0.1.10" < "0.1.9"`` lexically would pass the floor case and fail
+    the pinned one, which is exactly the bug worth catching here.
+    """
+    from whetstone_envs.optim.run import _validate_miprov2_settings
+
+    monkeypatch.setattr(
+        "whetstone_envs.optim.run.installed_whetstone_ai_version",
+        lambda: reported,
+    )
+    _validate_miprov2_settings(_two_candidate_minibatch_spec())
+
+
+def test_an_unreadable_whetstone_ai_version_keeps_the_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uncertain reads as unfixed: the safe side of the gate.
+
+    A base install carries no whetstone-ai at all, and a version this
+    parser cannot rank says nothing about whether the fallback shipped.
+    Lifting the refusal on either would trade a free validation error for
+    a run that dies mid-flight.
+    """
+    from whetstone_envs.optim.run import _validate_miprov2_settings
+
+    for reported in (None, "not-a-version"):
+        monkeypatch.setattr(
+            "whetstone_envs.optim.run.installed_whetstone_ai_version",
+            lambda reported=reported: reported,
+        )
+        with pytest.raises(ValueError, match="whetstone-ai"):
+            _validate_miprov2_settings(_two_candidate_minibatch_spec())
+
+
+def test_the_installed_release_carries_the_spent_combination_fallback() -> (
+    None
+):
+    """The pin and the gate agree: this repo installs a fixed release.
+
+    Pinned rather than asserted through the gate alone, because the gate
+    reads the installed version and would agree with itself on any pin.
+    """
+    from whetstone_envs.optim.run import (
+        _miprov2_spent_combination_fixed,
+        installed_whetstone_ai_version,
+    )
+
+    installed = installed_whetstone_ai_version()
+    assert installed is not None
+    assert MIPROV2_SPENT_COMBINATION_FIX_VERSION == (0, 1, 9)
+    assert _miprov2_spent_combination_fixed()
 
 
 @pytest.mark.parametrize("optimizer", ["miprov2", "gepa"])

@@ -92,7 +92,9 @@ class _ShapedControl:
     minibatch_size = 35
     num_trials = 10
     num_candidates = 3
-    num_seeds = 3
+
+    def __init__(self, num_seeds: int = 3) -> None:
+        self.num_seeds = num_seeds
 
 
 def _halves(engine) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -208,11 +210,37 @@ def test_the_budget_scales_with_the_shape_the_control_pins() -> None:
     # walk -- each billed once per repeat.
     planned_rows = (10 * 35 + 11 * 44 + 44 * 3) * 3
     assert budget.task_rows > planned_rows
-    # A bootstrap plan walks at most the trainset, once per repeat.
+    # A bootstrap plan walks at most the trainset, once per candidate
+    # plan. This ceiling is in *attempts*, not rows: upstream debits
+    # ``bootstrap_generations`` by one per attempt regardless of repeats.
     assert budget.bootstrap_generations > 44 * 3
     # And the ceiling is a bound, not a price: it stays clear of the
     # schedule rather than tracking it.
     assert budget.task_rows > 2 * planned_rows
+
+
+@pytest.mark.parametrize("num_seeds", [1, 3, 5])
+def test_the_budget_ceilings_scale_in_their_own_units(num_seeds: int) -> None:
+    """The two bootstrap ceilings are in different units.
+
+    A bootstrap attempt debits ``bootstrap_generations`` by one and
+    ``task_rows`` by the repeat count (``adapter.py``: ``{"bootstrap_
+    generations": 1, "task_rows": num_seeds}``), and upstream's
+    ``effect_counts`` compares the former against a *count of effects*.
+    So the attempt ceiling must bound ``trainset x plans`` and must NOT
+    be inflated by ``num_seeds``, while the row ceiling must scale with
+    it. Reading ``bootstrap_generations`` as a row budget makes it look
+    exhausted at ``num_seeds = 5`` (132 attempts x 5 = 660 > 528) when no
+    such run can exhaust it -- and inflating it to match would blind the
+    guard to runaway fan-out by a factor of the repeat count.
+    """
+    budget = miprov2_budget(_ShapedControl(num_seeds))
+    max_attempts = 44 * 3
+    # In attempts: bounds the walk, and is repeat-independent.
+    assert budget.bootstrap_generations == 4 * max_attempts
+    # In rows: every planned row billed once per repeat, with headroom.
+    planned_rows = (10 * 35 + 11 * 44 + max_attempts) * num_seeds
+    assert budget.task_rows == 4 * planned_rows
 
 
 def test_the_budget_without_a_control_keeps_the_small_run_ceilings() -> None:

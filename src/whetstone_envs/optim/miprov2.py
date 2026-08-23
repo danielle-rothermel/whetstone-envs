@@ -359,8 +359,8 @@ def miprov2_budget(
     always used. They are far below the Step 10 design: at 10 trials on a
     minibatch of 35 at ``K_REPEAT = 3`` the trial schedule alone plans
     1,050 rows against a 256-row ceiling, and a bootstrap walk over a
-    44-task trainset bills a repeat per attempt, so both the row ceiling
-    and the bootstrap ceiling are exhausted long before the schedule is.
+    44-task trainset makes up to 132 attempts against a 32-attempt
+    ceiling, so both are exhausted long before the schedule is.
     That is what a fixed ceiling costs once the search shape is a design
     parameter rather than this module's own default.
 
@@ -382,8 +382,16 @@ def miprov2_budget(
     batch = (
         min(control.minibatch_size, valset) if control.minibatch else valset
     )
-    # A bootstrap attempt bills one row per repeat, and a plan walks at
-    # most the whole trainset, so the walk is bounded by trainset x plans.
+    # A bootstrap attempt debits ``bootstrap_generations`` by one and
+    # ``task_rows`` by the repeat count, so the two ceilings are in
+    # different units and only one of them scales with ``num_seeds``.
+    # ``bootstrap_generations`` counts effects -- upstream's
+    # ``effect_counts`` sums ``effect.kind == kind``, and the audit's
+    # bootstrap-through-engine invariant is a bijection between billed
+    # effects and engine intents -- so its ceiling is in attempts, and a
+    # plan walks at most the whole trainset: the walk is bounded by
+    # trainset x plans regardless of how many repeats each attempt pays
+    # for. The repeat count enters through ``rows`` below instead.
     # ``num_candidates`` bounds the plan count without restating upstream's
     # ``range(-3, num_candidates - 3)`` arithmetic here.
     # ``num_candidates`` is optional upstream: ``auto`` mode resolves it

@@ -10,7 +10,7 @@ passes.
 ``cost.json`` reports and the unit the Stage-1 gate receives. Keeping one
 unit is not a formatting preference: GEPA's budget is denominated in
 *metric calls*, and quoting it directly made the gate compare two different
-quantities and reject a healthy run. See ``GEPA_TASK_CALL_CEILING``.
+quantities and reject a healthy run. See ``gepa_task_call_ceiling``.
 
 This module is the one named place those numbers live. Each constant carries
 its derivation in its docstring, because every one of them was wrong at least
@@ -60,7 +60,6 @@ __all__ = [
     "GEPA_PIN_REASON",
     "GEPA_REFLECTION_MINIBATCH_TASKS",
     "GEPA_RESOLVED_MAX_METRIC_CALLS",
-    "GEPA_TASK_CALL_CEILING",
     "MEASURED_FANOUT_RATIO",
     "MEASURED_GEPA_DISTINCT_EVALUATIONS",
     "MEASURED_GEPA_RESULT_JSON_BYTES",
@@ -78,21 +77,34 @@ __all__ = [
     "MEASURED_MIPROV2_MINIBATCH_TASKS",
     "MEASURED_MIPROV2_TRAINSET_TASKS",
     "MEASURED_MIPROV2_ZEROSHOT_TASK_CALLS",
+    "MEASUREMENT_NUM_SEEDS",
     "MEASUREMENT_N_PER_STRATUM",
     "MEASUREMENT_POOL_SEED_START",
     "MEASUREMENT_SPLIT_SIZES",
     "MIPROV2_BOOTSTRAPPING_PLANS",
     "MIPROV2_BOOTSTRAP_ROWS_BEST_CASE",
     "MIPROV2_BOOTSTRAP_ROWS_WORST_CASE",
+    "MIPROV2_ESTIMATE_K_REPEAT",
     "MIPROV2_FEWSHOT_TASK_CALL_CEILING",
     "MIPROV2_FEWSHOT_TASK_CALL_FLOOR",
-    "MIPROV2_FULL_EVAL_CALLS",
+    "MIPROV2_FULL_EVAL_CALLS_MAX",
+    "MIPROV2_FULL_EVAL_CALLS_MIN",
+    "MIPROV2_FULL_EVAL_PASSES_ISSUED",
+    "MIPROV2_FULL_EVAL_PASSES_MAX",
+    "MIPROV2_FULL_EVAL_PASSES_MIN",
+    "MIPROV2_FULL_EVAL_STEPS",
     "MIPROV2_MINIBATCH_CALLS",
+    "MIPROV2_MINIBATCH_SIZE",
+    "MIPROV2_NUM_TRIALS",
+    "MIPROV2_VALSET_TASKS",
     "NULL_IDENTITY_HELD_OUT_PASSES",
     "NULL_IDENTITY_OFFICIAL_PASSES",
     "STAGE1_CALL_COUNT_TOLERANCE",
     "OptimizerCallEstimate",
     "estimate_optimizer_calls",
+    "gepa_task_call_ceiling",
+    "miprov2_full_eval_rows",
+    "miprov2_minibatch_rows",
     "null_identity_report_rows",
 ]
 
@@ -139,23 +151,98 @@ MIPROV2_BOOTSTRAPPING_PLANS = 7
 MIPROV2_BOOTSTRAP_ROWS_BEST_CASE = 28
 MIPROV2_BOOTSTRAP_ROWS_WORST_CASE = 616
 
-#: MIPROv2's non-bootstrap evaluation volume at the study's control
-#: defaults: full-valset passes of the incumbent, and the minibatch trials.
-#: Both are row counts over the 88-task internal split.
-MIPROV2_FULL_EVAL_CALLS = 1_050
-MIPROV2_MINIBATCH_CALLS = 792
+# --------------------------------------------------------------------------
+# MIPROv2 -- the F11 correction to the non-bootstrap volume
+# --------------------------------------------------------------------------
+#
+# The previous model priced the two non-bootstrap components as flat
+# constants, 1,050 "full-eval" and 792 "minibatch". Both labels were
+# attached to the wrong quantity -- 1,050 is ``10 x 35 x 3``, the
+# *minibatch* volume, and 792 is ``6 x 44 x 3``, six *full-valset*
+# passes -- and the 6 was the substantive error: the schedule does not
+# issue six.
+#
+# Reconciled against the 2b run records, every observed fewshot count
+# decomposes exactly as ``bootstrap + minibatch + full-valset``, and only
+# the last term varies.
 
-#: The ``fewshot`` per-run task-call range: the two fixed components plus the
-#: bootstrap bound at each end. The **ceiling** is what the Stage-1 gate's
-#: "within 1.5x" comparison divides by, per F10.
+#: MIPROv2's trial count and minibatch shape at the study's registered
+#: control (revision 2 pins ``num_trials`` at 10 for all three demo modes;
+#: ``minibatch_full_eval_steps`` is 1, and the train/val partition gives a
+#: 44-task valset with a 35-task minibatch).
+MIPROV2_NUM_TRIALS = 10
+MIPROV2_MINIBATCH_SIZE = 35
+MIPROV2_VALSET_TASKS = 44
+MIPROV2_FULL_EVAL_STEPS = 1
+
+#: Full-valset passes the schedule *issues* per run.
+#:
+#: ``Schedule.adjusted_num_trials`` is
+#: ``num_trials + num_trials // full_eval_steps + 1 + extra_at_end`` = 21,
+#: and ``promotion_due`` fires when the display trial number is a multiple
+#: of ``full_eval_steps + 1`` or is ``adjusted_num_trials - 1``: ten
+#: promotions, at display trials 2, 4, ..., 20. The baseline is evaluated on
+#: the full valset once more, for **11 issued passes**.
+MIPROV2_FULL_EVAL_PASSES_ISSUED = (
+    MIPROV2_NUM_TRIALS // MIPROV2_FULL_EVAL_STEPS + 1
+)
+
+#: Full-valset passes that survive into the gate's numerator.
+#:
+#: The gate counts ``EvalEvidence.row_accounting.planned`` **once per
+#: distinct evidence record**, and an evaluation is content-addressed over
+#: the candidate and the task batch. A promotion that re-evaluates an
+#: unchanged incumbent on the same 44 tasks therefore resolves to the
+#: record the previous one already wrote and is counted once, not twice.
+#:
+#: So the issued 11 is the ceiling and the floor is 1 -- every promotion
+#: collapsing onto the baseline's record. The 2b run records land inside
+#: this: 9 and 10 distinct passes across the five fewshot seeds, and 4 for
+#: both ``zeroshot`` and ``ground_only``, whose candidate sets repeat more.
+#: The bimodality the fewshot arms show is this deduplication, not the
+#: bootstrap walk.
+MIPROV2_FULL_EVAL_PASSES_MIN = 1
+MIPROV2_FULL_EVAL_PASSES_MAX = MIPROV2_FULL_EVAL_PASSES_ISSUED
+
+
+def miprov2_full_eval_rows(passes: int, k_repeat: int) -> int:
+    """Rows ``passes`` full-valset passes cost at ``k_repeat`` repeats."""
+    return passes * MIPROV2_VALSET_TASKS * k_repeat
+
+
+def miprov2_minibatch_rows(k_repeat: int) -> int:
+    """Rows the minibatch trials cost at ``k_repeat`` repeats.
+
+    One minibatch evaluation per trial, each over ``minibatch_size``
+    tasks. These never deduplicate: the sampled batch differs per trial.
+    """
+    return MIPROV2_NUM_TRIALS * MIPROV2_MINIBATCH_SIZE * k_repeat
+
+
+#: The design's repeat count, which the constants below are pinned at.
+MIPROV2_ESTIMATE_K_REPEAT = 3
+
+#: MIPROv2's non-bootstrap evaluation volume at the study's control
+#: defaults, in rows over the internal split's 44-task valset.
+MIPROV2_MINIBATCH_CALLS = miprov2_minibatch_rows(MIPROV2_ESTIMATE_K_REPEAT)
+MIPROV2_FULL_EVAL_CALLS_MIN = miprov2_full_eval_rows(
+    MIPROV2_FULL_EVAL_PASSES_MIN, MIPROV2_ESTIMATE_K_REPEAT
+)
+MIPROV2_FULL_EVAL_CALLS_MAX = miprov2_full_eval_rows(
+    MIPROV2_FULL_EVAL_PASSES_MAX, MIPROV2_ESTIMATE_K_REPEAT
+)
+
+#: The ``fewshot`` per-run task-call range: minibatch, plus the full-valset
+#: and bootstrap bounds at each end. The **ceiling** is what the Stage-1
+#: gate's "within 1.5x" comparison divides by, per F10.
 MIPROV2_FEWSHOT_TASK_CALL_FLOOR = (
-    MIPROV2_FULL_EVAL_CALLS
-    + MIPROV2_MINIBATCH_CALLS
+    MIPROV2_MINIBATCH_CALLS
+    + MIPROV2_FULL_EVAL_CALLS_MIN
     + MIPROV2_BOOTSTRAP_ROWS_BEST_CASE
 )
 MIPROV2_FEWSHOT_TASK_CALL_CEILING = (
-    MIPROV2_FULL_EVAL_CALLS
-    + MIPROV2_MINIBATCH_CALLS
+    MIPROV2_MINIBATCH_CALLS
+    + MIPROV2_FULL_EVAL_CALLS_MAX
     + MIPROV2_BOOTSTRAP_ROWS_WORST_CASE
 )
 
@@ -172,7 +259,7 @@ MIPROV2_FEWSHOT_TASK_CALL_CEILING = (
 #: **This is a metric-call count, not a task-call count.** It is retained
 #: for provenance -- it is what ``gepa_auto_budget`` returns -- but it is
 #: *not* what the Stage-1 gate compares against; see
-#: :data:`GEPA_TASK_CALL_CEILING` for the gated quantity and the unit
+#: :func:`gepa_task_call_ceiling` for the gated quantity and the unit
 #: derivation.
 GEPA_RESOLVED_MAX_METRIC_CALLS = 732
 
@@ -297,22 +384,26 @@ def estimate_optimizer_calls(  # noqa: PLR0913
             low=MIPROV2_FEWSHOT_TASK_CALL_FLOOR,
             high=MIPROV2_FEWSHOT_TASK_CALL_CEILING,
             basis=(
-                f"{MIPROV2_FULL_EVAL_CALLS} full-eval + "
                 f"{MIPROV2_MINIBATCH_CALLS} minibatch + "
+                f"{MIPROV2_FULL_EVAL_CALLS_MIN}-"
+                f"{MIPROV2_FULL_EVAL_CALLS_MAX} full-valset "
+                f"({MIPROV2_FULL_EVAL_PASSES_MIN}-"
+                f"{MIPROV2_FULL_EVAL_PASSES_MAX} passes, F11) + "
                 f"{MIPROV2_BOOTSTRAP_ROWS_BEST_CASE}-"
                 f"{MIPROV2_BOOTSTRAP_ROWS_WORST_CASE} bootstrap rows (F10)"
             ),
         )
     if optimizer == "gepa":
+        ceiling = gepa_task_call_ceiling(k_repeat)
         return OptimizerCallEstimate(
             optimizer=optimizer,
-            low=GEPA_TASK_CALL_CEILING,
-            high=GEPA_TASK_CALL_CEILING,
+            low=ceiling,
+            high=ceiling,
             basis=(
                 f"pinned budget of {GEPA_MAX_METRIC_CALLS_PINNED} metric "
-                f"calls bounds task rows at {GEPA_TASK_CALL_CEILING} (D3); "
-                f"measured 732-call run scaled to the pin is "
-                f"{GEPA_MEASURED_TASK_CALLS_AT_PIN} rows"
+                f"calls x {k_repeat} repeats bounds task rows at "
+                f"{ceiling} (D3); measured 732-call run scaled to the pin "
+                f"is {GEPA_MEASURED_TASK_CALLS_AT_PIN * k_repeat} rows"
             ),
         )
     if optimizer == "codex":
@@ -356,6 +447,15 @@ def estimate_optimizer_calls(  # noqa: PLR0913
 
 #: The splits every Wave 3 measurement below was taken at.
 MEASUREMENT_SPLIT_SIZES = (88, 132, 220)
+
+#: The repeat count every Wave 3 measurement below was taken at.
+#:
+#: Named rather than left in the reproduce commands above, because every
+#: measured row count scales with it and the design does not run at it. A
+#: reader comparing a measured figure against the study's own budget has to
+#: multiply by ``K_REPEAT / MEASUREMENT_NUM_SEEDS`` first, and a constant
+#: that says so is harder to forget than a flag in a comment.
+MEASUREMENT_NUM_SEEDS = 1
 
 #: The c19 pool those splits were drawn from: 22 strata x 32 = 704 tasks.
 MEASUREMENT_N_PER_STRATUM = 32
@@ -584,31 +684,62 @@ GEPA_PIN_REASON = (
 #:
 #: Two consequences, and the second is the one the gate needs:
 #:
-#: 1. Distinct task rows can never exceed the metric-call budget, because
-#:    every row costs at least one metric call. The budget is therefore a
-#:    sound *upper bound* on rows in the gate's own unit.
+#: 1. Distinct task rows can never exceed the metric-call budget **times
+#:    the repeat count**, because every row costs at least one metric call
+#:    *per repeat*. Scaled that way the budget is a sound upper bound on
+#:    rows in the gate's own unit; unscaled it is not.
 #: 2. The bound is loose by exactly the replay factor -- 732 / 265 = 2.76x
 #:    on the measured run -- and a loose upper bound cannot false-abort,
 #:    which is the property the Stage-1 gate is built on.
+#:
+#: **The measurement above was taken at one repeat.** whetstone-ai 0.1.11
+#: made a repeated evaluation bill ``K_REPEAT`` times as many provider rows
+#: while leaving its metric-call count unchanged -- a GEPA metric call is
+#: one candidate-task evaluation at any repeat count. So the row side of
+#: every identity above scales with ``K_REPEAT`` and the metric-call side
+#: does not, and the two are no longer the same number. That is why
+#: :func:`gepa_task_call_ceiling` is a function of the repeat count rather
+#: than the pinned budget itself.
 GEPA_MEASURED_FULL_VALSET_PASSES = 2
 GEPA_MEASURED_REFLECTION_MINIBATCHES = 89
 GEPA_REFLECTION_MINIBATCH_TASKS = 1
 
-#: GEPA's per-run task-row ceiling at the **pinned** budget, in the gate's
-#: unit. This is what ``estimate_optimizer_calls`` returns for GEPA.
-#:
-#: The source is ``GEPA_MAX_METRIC_CALLS_PINNED`` -- the Wave 3 D3 decision
-#: -- and not the 732 the auto budget resolves to, because 200 is what
-#: Stage 1 and Stage 2 actually run. Per consequence 1 above, the budget
-#: bounds the rows, so the ceiling is the pinned budget itself: a run that
-#: is charged 200 metric calls cannot have executed more than 200 distinct
-#: task rows.
-#:
-#: Scaling the measurement to the pin as a cross-check: the measured run
-#: executed 265 rows for 732 charged calls, so the same replay factor at
-#: 200 predicts ``265 * 200 / 732 = 72.4`` rows -- comfortably inside this
-#: ceiling, as an upper bound should be.
-GEPA_TASK_CALL_CEILING = GEPA_MAX_METRIC_CALLS_PINNED
+
+def gepa_task_call_ceiling(k_repeat: int) -> int:
+    """GEPA's per-run task-**row** ceiling at the pinned metric-call budget.
+
+    This is what ``estimate_optimizer_calls`` returns for GEPA, and the two
+    sides are in deliberately different units: the pin
+    (``GEPA_MAX_METRIC_CALLS_PINNED``) is in **metric calls**, while this
+    ceiling -- like every estimate in this module and like the
+    ``observed_task_calls`` the Stage-1 gate compares it against -- is in
+    **task-model rows**. Quoting the pin directly as if it were a row count
+    is the unit error that made a real GEPA run trip the 1.5x gate, and
+    ``K_REPEAT`` is now the second half of the conversion.
+
+    The source is the pinned 200 rather than the 732 the auto budget
+    resolves to, because 200 is what Stage 1 and Stage 2 actually run. Per
+    consequence 1 above, a run charged 200 metric calls cannot have executed
+    more than ``200 * K_REPEAT`` distinct rows: a metric call is one
+    candidate-task evaluation whatever the repeat count, and each repeat of
+    it bills its own row.
+
+    At the design's ``K_REPEAT = 3`` that is **600 rows**, and the
+    distinction is not cosmetic. The unscaled 200 would have given the
+    Stage-1 gate a limit of ``200 x 1.5 = 300`` rows against a run entitled
+    to execute up to 600 -- a gate that aborts the healthy run it exists to
+    protect.
+
+    Scaling the measurement to the pin as a cross-check: the measured run
+    executed 265 rows for 732 charged calls at one repeat, so the same
+    replay factor at 200 predicts ``265 * 200 / 732 = 73`` rows per repeat,
+    or 219 at three -- comfortably inside this ceiling, as an upper bound
+    should be.
+    """
+    if k_repeat < 1:
+        raise ValueError("k_repeat must be at least 1")
+    return GEPA_MAX_METRIC_CALLS_PINNED * k_repeat
+
 
 #: The measured run's rows scaled to the pinned budget, kept as the
 #: cross-check the ceiling is sanity-checked against rather than as the

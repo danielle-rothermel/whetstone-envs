@@ -740,15 +740,15 @@ def test_two_candidates_with_minibatch_are_refused_on_an_unfixed_release(
     assert str(MIPROV2_MINIBATCH_MIN_CANDIDATES) in message
 
 
-@pytest.mark.parametrize("reported", ["0.1.9", "0.1.10", "0.2.0"])
+@pytest.mark.parametrize("reported", ["0.1.9", "0.1.11", "0.2.0"])
 def test_two_candidates_with_minibatch_pass_on_the_fixed_release(
     monkeypatch: pytest.MonkeyPatch, reported: str
 ) -> None:
     """At the fix release and above, the refusal lifts.
 
-    0.1.10 is the version this repo pins and 0.1.9 is the floor the gate
+    0.1.11 is the version this repo pins and 0.1.9 is the floor the gate
     compares against, so both are exercised -- a comparison that ranked
-    ``"0.1.10" < "0.1.9"`` lexically would pass the floor case and fail
+    ``"0.1.11" < "0.1.9"`` lexically would pass the floor case and fail
     the pinned one, which is exactly the bug worth catching here.
     """
     from whetstone_envs.optim.run import _validate_miprov2_settings

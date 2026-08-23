@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.10`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.12`.
 
 ## Installation
 
@@ -56,7 +56,7 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
-Codex against a task family. The extra pins published `whetstone-ai==0.1.10`
+Codex against a task family. The extra pins published `whetstone-ai==0.1.12`
 from PyPI:
 
 ```bash
@@ -392,13 +392,31 @@ prefixed with the projection so its numbers cannot be read as the study's.
 
 #### Storage the study needs
 
-Budget roughly **4.6 KB of `runtime.sqlite` per evaluated row**, dominated
-by `eval_outputs` and `eval_component_traces`. At the eight-arm design's
-row count that is **≈0.4-0.5 GB** for the study's own store, before the
-per-run directories the arms leave beside it. This is an operator note,
-not a gate: the number that has actually bitten is GEPA's, whose
-unpinned `auto` budget produced a 1.73 GB store from a single run --
-which is why `gepa_max_metric_calls` is pinned at 200.
+Budget roughly **20 KB of `runtime.sqlite` per evaluated row**, dominated
+by `eval_outputs` and `eval_component_traces`. The figure is measured
+rather than derived: a COPRO run at the pinned 6x3 shape plans
+`3 x 6 x 88 x 3 = 4,752` rows and leaves a **90 MB** run directory, i.e.
+19.4 KB/row. A MIPROv2 run leaves **209 MB**.
+
+At those rates the **per-run directories dominate the study's own store**,
+which is the opposite of what an earlier 4.6 KB/row estimate implied. The
+full eight-arm design leaves **26 run directories** across Stage 1 and
+Stage 2 -- five each for `copro`, `miprov2`, `gepa`, and `null-random`,
+three for `codex`, and one each for the two MIPROv2 fidelity modes and
+`null-identity` -- which totals **≈2.5 GB**, before the study's own
+`runtime.sqlite` beside them. Provision single-digit GB, not sub-GB.
+
+Expect the following **fake-transport wall time per run**, as operator
+guidance for rehearsals: COPRO **~25 s**, MIPROv2 **~10 min**. MIPROv2
+dominates any full-design rehearsal -- it evaluates an interleaved search
+of 10 trials x minibatch 35 x `K_REPEAT`, plus periodic full-valset
+passes, where COPRO's larger row count is a handful of batched rounds. A
+`--without-codex` Stage 1 is therefore roughly an hour, almost all of it
+MIPROv2, and Stage 2 is comparable.
+
+This is an operator note, not a gate: the number that has actually bitten
+is GEPA's, whose unpinned `auto` budget produced a 1.73 GB store from a
+single run -- which is why `gepa_max_metric_calls` is pinned at 200.
 
 ### Study transports and the per-stage ledger
 
@@ -567,7 +585,7 @@ No rung live-skips. An agent that decides the seed template is best may say
 so either by returning no selection or by *selecting* a call whose template
 equals the seed; whetstone-ai 0.1.9 ([#138]) records both as
 `seed_retained`, so agent taste no longer decides whether a rung is
-observed. The pinned 0.1.10 also runs the agent against a per-run scratch
+observed. whetstone-ai 0.1.10 also runs the agent against a per-run scratch
 `HOME` and quotes the CLI's own error items when a session fails ([#140]),
 so a failure names its cause rather than the first symptom.
 

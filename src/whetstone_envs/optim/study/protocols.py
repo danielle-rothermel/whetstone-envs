@@ -110,9 +110,11 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: is historical -- it is what a manifest initialised before the 2026-08-23
 #: decisions recorded, and the text it names states a design this code does
 #: not run. The revision block at the head of the document lists every
-#: change and the plan note that decided it.
+#: change and the plan note that decided it. Revision 2 was amended the same
+#: day by item 17 -- L1 restated as task-set containment -- so its earlier
+#: digest ``1fa2102b...`` is historical for the same reason.
 PROTOCOL_DOC_SHA256 = (
-    "1fa2102bc16bbe9cbd35a140e53615bbc1830314db5a61de404e815608adbbe0"
+    "2e98198b8bdcc9721993f7dfce66c7e059901b5195814e5213df3fa75698c813"
 )
 
 

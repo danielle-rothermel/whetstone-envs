@@ -1771,7 +1771,7 @@ wheels = [
 
 [[package]]
 name = "whetstone-ai"
-version = "0.1.10"
+version = "0.1.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-exec" },
@@ -1787,14 +1787,14 @@ dependencies = [
     { name = "typer" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a2/99/89bdf6aff46ba57be41bbc95f1c45f44a79ed5a5c667b9cccf7c6a2d901c/whetstone_ai-0.1.10.tar.gz", hash = "sha256:04726218cd01ffd619170393879e758f738bbeea7a5e946369be1c2a8b461619", size = 422733, upload-time = "2026-08-23T01:35:24.406Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/3a/6b42872680617d9d7256ba2da67c731827073c6564a8ab45d268290b6e7f/whetstone_ai-0.1.12.tar.gz", hash = "sha256:391bbf63fb1fee1906bb7c3d8642288ce768b354f0a3c9ac60747900e37946e0", size = 429207, upload-time = "2026-08-23T09:27:02.381Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a7/41/fec19ce3ccb1fdd5819a988e84c0f0cd3d441b7a4bfa3f7e416d295fd1ca/whetstone_ai-0.1.10-py3-none-any.whl", hash = "sha256:4ddc81df458d05ca70e70d018cdf4fd23faf5853575f506ca2a953d76f46007d", size = 531656, upload-time = "2026-08-23T01:35:22.817Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/9d/eca8b95fc455781af7b2298e95821ce63c4bdc7829ccb9fe3154bd4a24ca/whetstone_ai-0.1.12-py3-none-any.whl", hash = "sha256:1bb235eff973fac2306eedb56b55bfc368ee3cbeb9449515e575ff9f7f8ab25f", size = 538421, upload-time = "2026-08-23T09:27:00.95Z" },
 ]
 
 [[package]]
 name = "whetstone-envs"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "absl-py" },
@@ -1850,7 +1850,7 @@ requires-dist = [
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "rich", marker = "extra == 'optim'", specifier = "==15.0.0" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.10" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.12" },
 ]
 provides-extras = ["c18", "optim"]
 

@@ -46,6 +46,7 @@ from whetstone_envs.optim.study.gates import (
     GEPA_MEASURED_TASK_CALLS_AT_PIN,
     MEASURED_GEPA_TASK_CALLS,
     MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
+    MEASUREMENT_NUM_SEEDS,
     estimate_optimizer_calls,
 )
 from whetstone_envs.optim.study.init import init_study
@@ -380,12 +381,16 @@ MEASURED_TASK_CALLS_BY_ARM = {
 #: provenance differs from it. GEPA's number is the measurement *scaled* to
 #: the pinned budget rather than a figure read straight off a run, and a
 #: label that did not say so would overstate what was measured.
-MEASURED_BASIS_DEFAULT = "measured on fake transport at these splits (Wave 3)"
+MEASURED_BASIS_DEFAULT = (
+    f"measured on fake transport at these splits at "
+    f"{MEASUREMENT_NUM_SEEDS} repeat(s), scaled to K_REPEAT (Wave 3)"
+)
 MEASURED_BASIS_BY_ARM = {
     "gepa": (
         f"measured at max_metric_calls=732 "
-        f"({MEASURED_GEPA_TASK_CALLS} rows) on fake transport at these "
-        f"splits, scaled to the pinned {GEPA_MAX_METRIC_CALLS_PINNED} "
+        f"({MEASURED_GEPA_TASK_CALLS} rows at {MEASUREMENT_NUM_SEEDS} "
+        f"repeat(s)) on fake transport at these splits, scaled to the "
+        f"pinned {GEPA_MAX_METRIC_CALLS_PINNED} and to K_REPEAT "
         f"(Wave 3, D3)"
     ),
 }
@@ -451,6 +456,12 @@ def _optimizer_budget_lines(
         lines.append(f"{'':<24}basis: {estimate.basis}")
         measured = MEASURED_TASK_CALLS_BY_ARM.get(arm_id)
         if measured is not None:
+            # Every Wave 3 measurement was taken at one repeat, and a row
+            # count scales with the repeat count: whetstone-ai 0.1.11 bills
+            # K_REPEAT rows per evaluation. Printing the raw figure beside
+            # an estimate the study runs at K_REPEAT would understate the
+            # measured arm by exactly that factor.
+            measured = measured * k_repeat // MEASUREMENT_NUM_SEEDS
             lines.append(
                 f"{'':<24}{'':>8}{measured:>20}{measured * k_run:>22}"
                 f"  {MEASURED_LABEL}"
@@ -804,14 +815,15 @@ def _run_leakage_check(*, study_dir: Path) -> int:
     the report will print.
 
     L1 is the exception, and it is read from the runs themselves. It is a
-    rule over each optimizer run's own intent resolutions, which live in
-    the run stores rather than in the manifest, so this command opens every
-    run directory the manifest names and extracts the role and Eval Config
-    each completed resolution ran under. A study whose runs are gone -- or
-    which has run none -- yields no observations and L1 is reported
-    unchecked. **An unchecked rule fails the command**, exactly as a
-    violated one does: from the reader's side, a study whose L1 nobody
-    checked and one whose L1 failed make the same claim.
+    rule over each optimizer run's own evaluations, which live in the run
+    stores rather than in the manifest, so this command opens every run
+    directory the manifest names and extracts the role and the evaluated
+    task hashes from all three evaluation surfaces -- resolved intents,
+    ``search_evidence``, and ``tool_evidence``. A study whose runs are
+    gone -- or which has run none -- yields no observations and L1 is
+    reported unchecked. **An unchecked rule fails the command**, exactly
+    as a violated one does: from the reader's side, a study whose L1
+    nobody checked and one whose L1 failed make the same claim.
 
     **The verdict is recorded, not only printed.** The report gates its
     headline and every arm verdict on ``manifest.leakage_check``, treating
@@ -916,6 +928,11 @@ def _leakage_report(
     return study_leakage_check(
         optimizer_observations=observations,
         internal_eval_config_hash=splits.internal.eval_config_hash,
+        internal_task_hashes=splits.internal.task_hashes,
+        excluded_eval_config_hashes=(
+            splits.official.eval_config_hash,
+            splits.held_out.eval_config_hash,
+        ),
         selected_arm_ids=_selected_arm_ids(manifest),
         expected_arm_ids=[arm.arm_id for arm in manifest.arms],
         held_out_candidate_names=_held_out_claim_names(manifest),

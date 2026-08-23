@@ -117,6 +117,16 @@ OPTIMIZER_ARM_IDS: frozenset[str] = frozenset(
     {"copro", "miprov2", "gepa", "codex", NULL_RANDOM_OPTIMIZER}
 )
 
+#: The optimizers whose fake-transport rounds are filled from the family's
+#: *scripted* proposal bodies, and which therefore need enough distinct
+#: drafts to fill the breadth the design pins.
+#:
+#: ``null-random`` shares COPRO's search shape but not this constraint: it
+#: binds its own ``NullRandomTransport``, which generates a fresh draft per
+#: slot, so it fills any breadth without scripting. Listing it here would
+#: hand it bodies nothing reads.
+_PROPOSER_ROUND_OPTIMIZERS: frozenset[str] = frozenset({"copro"})
+
 #: Where a study keeps the run directories its arms produce. One directory
 #: per run beneath it, so a resumed stage can find what it already paid for.
 RUNS_DIRECTORY_NAME = "runs"
@@ -540,6 +550,23 @@ class StudyOptimizerRunner:
             # not keeps the runner's own default rather than pinning the
             # same false here twice.
             **({"miprov2_minibatch": True} if arm.miprov2_minibatch else {}),
+            # A fake COPRO round wider than the family's two scripted
+            # bodies cannot be filled, and the protocol pins breadth 6, so
+            # a fake-transport rehearsal of the registered shape dies with
+            # ``copro_proposal_cardinality`` before it evaluates anything.
+            # The drafts are rehearsal scaffolding and are refused on a
+            # real transport, where the proposer writes its own bodies.
+            **(
+                {
+                    "extra_proposal_bodies": family_spec(
+                        self.family_id
+                    ).rehearsal_proposal_bodies(arm.copro_breadth)
+                }
+                if self.transport == "fake"
+                and arm.optimizer in _PROPOSER_ROUND_OPTIMIZERS
+                and arm.copro_breadth is not None
+                else {}
+            ),
             # Only forwarded when the arm sets them, so an unset arm keeps
             # the runner's own default rather than pinning it here twice.
             #

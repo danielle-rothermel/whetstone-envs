@@ -1049,7 +1049,13 @@ def test_codex_run_supplies_l1_leakage_evidence(tmp_path) -> None:
         row.resolved_eval_config_hash == internal_config
         for row in observations
     )
+    # Containment is checked against the internal split the evidence
+    # itself names, which is what a manifest records for a run whose
+    # evaluations cover the whole split.
     finding = check_l1_optimizer_internal_only(
-        observations, internal_eval_config_hash=internal_config
+        observations,
+        internal_eval_config_hash=internal_config,
+        internal_task_hashes=first.task_hashes,
+        excluded_eval_config_hashes=(),
     )
     assert finding.passed, finding.detail

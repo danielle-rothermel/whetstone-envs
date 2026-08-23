@@ -1897,6 +1897,17 @@ def _arm_record(
         val_size=arm.val_size,
         minibatch=arm.miprov2_minibatch,
         minibatch_size=arm.miprov2_minibatch_size,
+        # The pinned search shape is design and must survive the rebuild,
+        # for the same reason the minibatch does. ``init`` writes these
+        # four (schema v10); this function *replaces* the record after
+        # every stage, so omitting them dropped them to None the moment
+        # Stage 1 finished -- and ``_recorded_search`` then projected the
+        # arms to {} while the pinned block still said 6x3 and 3/10, so
+        # Stage 2 refused the study it had just spent an hour running.
+        copro_breadth=arm.copro_breadth,
+        copro_depth=arm.copro_depth,
+        miprov2_num_trials=arm.miprov2_num_trials,
+        miprov2_num_candidates=arm.miprov2_num_candidates,
         control_identity_hash=control_identity_hash,
         seed_note=_seed_note(arm),
         runs=runs,
@@ -1963,6 +1974,15 @@ def call_count_within_estimate(  # noqa: PLR0913
     (see :mod:`~whetstone_envs.optim.study.gates`). A GEPA estimate stated
     in metric calls would not be comparable to it, and a real GEPA run
     would trip the tolerance on the unit mismatch alone.
+
+    GEPA is where the two units are easiest to confuse, because **its
+    pinned budget is denominated in metric calls while its estimate here
+    is in rows**. The conversion is ``K_REPEAT``: a metric call is one
+    candidate-task evaluation at any repeat count, and each repeat of it
+    bills its own row, so ``gepa_task_call_ceiling`` multiplies the pin by
+    the design's repeat count. Passing ``k_repeat`` is therefore not
+    optional decoration for the GEPA arm -- at ``K_REPEAT = 3`` the
+    unscaled pin would gate a 600-row entitlement at 300 rows.
 
     Codex is exempt by construction: its estimate carries ``gated=False``
     because its agent chooses how much of its cap to spend, and applying a

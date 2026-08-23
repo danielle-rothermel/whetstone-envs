@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-23
+
 ### Added
 
 - **The Step 10 c19 study is authored from a committed protocol.**
@@ -150,6 +152,199 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `num_trials` on the control so auto-mode never runs.
 
 ### Fixed
+- L1 refuses an optimizer evaluation that names no tasks instead of passing
+  it as trivially contained in the internal split.
+
+- **L1 is checked as task-set containment, not as one exact Eval Config
+  hash.** The registered rule is that an optimizer saw the internal split
+  and nothing else, but the implementation demanded that every optimizer
+  evaluation resolve the study's *full* internal Eval Config. MIPROv2
+  minibatches the internal split and GEPA scores single tasks and Pareto
+  subsets, so each such evaluation mints its own derived config over a
+  subset -- which the exact-hash predicate reported as a leak. Against the
+  full-design dry run that was 499 false offenders and a failing study.
+  L1 now requires each evaluation's task hashes to be contained in the
+  internal split, under the internal role, against a config that is
+  neither the official nor the held-out one; a derived config cannot
+  smuggle in a foreign task, because the task hashes are content-addressed
+  and checked directly. How many evaluations used the full internal config
+  versus a derived subset is recorded as an observation beside the
+  verdict rather than as a failure.
+- **L1 reads all three evaluation surfaces, so GEPA can no longer pass it
+  vacuously.** The evidence walk read only intent resolutions and
+  `tool_evidence`. GEPA resolves no intent and records every evaluation as
+  `search_evidence`, so a GEPA run contributed nothing -- yet with other
+  arms supplying rows, L1 reported itself *checked* having never opened
+  the run whose rule it was asserting. `search_evidence` is now read
+  alongside the other two, and each observation carries the surface it
+  came from so an offender location is unambiguous. On the same dry run
+  L1's evidence goes from 679 evaluations to 879, the difference being
+  GEPA's 200.
+- **The MIPROv2 call estimate models the full-valset passes the schedule
+  actually issues.** The band was 1,870-2,458 rows per run, and the
+  observed fewshot counts were bimodal at 2,370/2,502 across five
+  independent seeds -- deterministically over the ceiling. The two
+  non-bootstrap constants had their labels attached to the wrong
+  quantities (1,050 is the minibatch volume, `10 x 35 x 3`; 792 was six
+  full-valset passes, `6 x 44 x 3`), and the six was the substantive
+  error: at the registered control `adjusted_num_trials` is 21 and
+  `promotion_due` fires on every even display trial, so **eleven** passes
+  are issued -- ten promotions plus the baseline. The gate counts planned
+  rows once per distinct evidence record, so a promotion re-evaluating an
+  unchanged incumbent collapses onto the earlier record; the surviving
+  count ranges from 1 to 11. The band is now **1,210-3,118**, every
+  observed value decomposes exactly as `bootstrap + minibatch +
+  full-valset`, and a golden pins the decomposition.
+- **Pins published whetstone-ai 0.1.12, which unblocks the GEPA arm at the
+  protocol's pinned reflection minibatch.** Upstream GEPA's
+  `EpochShuffledBatchSampler` pads a shuffled epoch with *duplicate* ids
+  whenever `len(trainset) % reflection_minibatch_size != 0`, and the
+  protocol pins trainset 44 and minibatch 3 (`44 % 3 = 2`), so every
+  reflection minibatch spanning the padding carried one task twice and
+  `GepaEvaluationEffectRequest` refused it — `GEPA evaluation positions
+  must be unique` — inside the durable run boundary. It was a divisibility
+  bug, not a repeats bug: it reproduced at `num_seeds = 1`. 0.1.12 keeps
+  the pinned upstream algorithm and reconciles it at the request boundary
+  instead: duplicated positions collapse to their distinct instances for
+  one evaluation request, and the rows expand back to the upstream batch
+  shape, so a repeated instance still carries double weight in the
+  `sum(eval_curr.scores)` comparison upstream uses to accept a mutation.
+  [#145]
+
+  **The accounting deliberately splits in two, and the Stage-1 gate depends
+  on which side it reads.** Logical metric calls stay upstream's — it
+  charges the padded batch length, duplicates included — so the pinned
+  `max_metric_calls` budget means what it means upstream. Provider rows are
+  billed once per *distinct* instance, because a repeated instance under a
+  fixed candidate is the same evaluation. So a 200-metric-call GEPA run
+  bills marginally *fewer* than 600 rows at `K_REPEAT = 3`, not exactly
+  600. `gepa_task_call_ceiling(k_repeat)` is therefore an upper bound and
+  is correct as written: it converts the metric-call pin to rows at
+  `200 * K_REPEAT`, the run comes in under it, and the Stage-1 gate's
+  1.5x tolerance still applies on top. A ceiling derived to equal 600
+  exactly would abort the healthy runs it exists to protect.
+
+[#145]: https://github.com/danielle-rothermel/whetstone-ai/pull/145
+
+- **Pins published whetstone-ai 0.1.11, which lets MIPROv2 and GEPA run at
+  the study's pre-registered repeat count.** Both optimizers refused a
+  multi-repeat evaluation plan outright on 0.1.10 — MIPROv2 with `engine
+  sampling repeats (3) do not match the requested num_seeds (1)` and GEPA
+  with `GEPA evaluation engine must use a single-repeat plan` — so five of
+  the study's eight arms could not run at all under a protocol whose
+  `K_REPEAT` covers in-search evaluations. In-search evaluations now run at
+  the eval config's repeat count and the score each search consumes is
+  unchanged in kind: the existing per-task mean over repeats. [#142]
+
+  Three recorded contracts move with it, and each is a schema bump an audit
+  reads: `Miprov2Control` gains `num_seeds` and hashes it into the control's
+  identity (control schema **v8**), the persisted MIPROv2 study contract
+  records `validation_num_seeds` (study schema **v7**, per-intent context
+  **v3**), and `GepaDetailedResult` gains `validation_num_seeds`
+  (`whetstone.gepa_detailed_result/v2`). The platform step executor also
+  carries the launch's extra pools into the opening Step, without which no
+  MIPROv2 run reaches step 0 on the platform path. [#143]
+
+[#142]: https://github.com/danielle-rothermel/whetstone-ai/pull/142
+[#143]: https://github.com/danielle-rothermel/whetstone-ai/pull/143
+
+- **The audit holds MIPROv2 and GEPA to the repeat count they recorded.**
+  Both now state the repeats every in-search evaluation resolved to, and
+  that number is what a manifest diff reads, so it is the number that has
+  to be checked rather than trusted. `MIPRO_REPEATS_AS_RECORDED` and
+  `GEPA_REPEATS_AS_RECORDED` compare each evaluation's own
+  `EvalEvidence.num_seeds` against the recorded count.
+
+  The gap is real on both sides.
+  `Miprov2Study._validate_evaluation_binding` already rejects a transcript
+  whose `validation_num_seeds` disagrees with its own recorded binding
+  *requests*, but it walks no `eval_result_ref`, so what the engine
+  actually billed is unchecked — the MIPROv2 negative fixture violates
+  exactly that layer. GEPA has no such cross-validator at all, and its
+  budget cannot substitute for one: a metric call is one candidate-task
+  evaluation at any repeat count, so a run that searched at one repeat
+  under a design registering three is indistinguishable in
+  `total_metric_calls`. Each invariant ships a negative fixture that FAILs
+  it alone.
+
+- **GEPA's row estimate converts its metric-call pin at `K_REPEAT`.** The
+  Stage-1 gate compares task-model rows, and GEPA's budget is pinned in
+  *metric calls*; the conversion used to be the identity, on the argument
+  that every row costs at least one metric call. whetstone-ai 0.1.11 broke
+  that: a metric call is one candidate-task evaluation at any repeat count,
+  and each repeat bills its own row. `GEPA_TASK_CALL_CEILING` is now
+  `gepa_task_call_ceiling(k_repeat)` and returns `200 x K_REPEAT` — **600
+  rows** at the design's `K_REPEAT = 3`.
+
+  Left unscaled the gate would have judged a run entitled to 600 rows
+  against a limit of `200 x 1.5 = 300` and aborted the healthy GEPA run it
+  exists to catch fan-out in. The gate's own docstring now states that
+  GEPA's pin is in metric calls while its estimate is in rows, since that
+  is the pair most easily confused. The plan's MEASURED rows are scaled the
+  same way — every Wave 3 measurement was taken at one repeat, now pinned
+  as `MEASUREMENT_NUM_SEEDS` rather than left in a reproduce command — so
+  MIPROv2 prints 735 rather than 245 and GEPA 219 rather than 73, and the
+  study-wide total moves from 63,326-78,002 to **65,326-80,002**.
+
+- **The storage note is re-derived from measurement.** The README budgeted
+  4.6 KB of `runtime.sqlite` per evaluated row and ≈0.4-0.5 GB for the
+  study. Measured at the pinned search shapes it is **~20 KB/row**: a COPRO
+  run plans 4,752 rows and leaves a 90 MB run directory, and a MIPROv2 run
+  leaves 209 MB. The eight-arm design leaves **26 run directories** across
+  Stage 1 and Stage 2, totalling **≈2.5 GB** before the study's own store —
+  so the per-run directories dominate it rather than the reverse. The note
+  now also gives fake-transport wall time per run as rehearsal guidance:
+  COPRO ~25 s, MIPROv2 ~10 min.
+
+- **The MIPROv2 effect ceilings are derived from the control's search
+  shape.** `miprov2_budget` returned four fixed numbers -- 32 bootstrap
+  generations, 32 proposal calls, 32 evaluations, 256 task rows -- chosen
+  when the search shape was this module's own small default. The Step 10
+  design is far above them: 10 trials on a minibatch of 35 at
+  `K_REPEAT = 3` plans roughly 2,900 rows against a 256-row ceiling, and
+  under 0.1.11 every bootstrap attempt bills one row per repeat against a
+  ceiling of 32. Both were exhausted mid-run, *inside* the durable run
+  boundary, before the trial schedule was, and the MIPROv2 arms died with
+  "MIPROv2 bootstrap_generations budget exhausted".
+
+  The ceiling now scales with the trainset, valset, batch, trial count,
+  candidate count, and repeat count the control pins, times a headroom
+  factor. It stays a deliberately loose upper bound: the guard exists to
+  catch runaway fan-out, and a ceiling tuned close to the expected cost
+  converts an ordinary run into a spurious mid-run failure. A call with no
+  control keeps the small-run ceilings unchanged.
+
+- **A MIPROv2 control takes its repeat count from the engine it is bound
+  to.** `Miprov2Control.num_seeds` is new in whetstone-ai 0.1.11 and
+  defaults to 1, and `build_miprov2_control` did not set it, so a control
+  asked for one repeat per in-search evaluation while the engine beneath it
+  was bound at `K_REPEAT`. `engine_binding.resolve` refuses exactly that
+  disagreement -- "engine sampling repeats (3) do not match the requested
+  num_seeds (1)" -- so every MIPROv2 arm of the Step 10 design still died
+  inside the durable run boundary on 0.1.11, at the same message 0.1.10
+  produced for a different reason. The count is now read off
+  `engine.sampling.num_seeds` rather than taken as a parameter: the bound
+  engine's seed plan is the authority the resolver checks against, so there
+  is no second place for the two to disagree.
+
+- **A fake-transport COPRO arm can fill the breadth the protocol pins.**
+  A family scripts exactly two proposal bodies -- the ceiling draft and the
+  naive seed -- and the seed fills a slot COPRO never requests, so an
+  unaided fake round lands one draft. Pinning the arms to the registered
+  6x3 shape therefore made every fake COPRO run die inside the durable run
+  boundary with `copro_proposal_cardinality` ("expected 6, actual 2"),
+  before it evaluated anything: Stage 1 of a `--without-codex` rehearsal
+  aborted on its first arm. The previous rehearsal missed this because the
+  arms had not yet been forwarded their shape and ran COPRO at the
+  runner's 2x1 default.
+
+  `FamilySpec.rehearsal_proposal_bodies` derives `breadth - 1` further
+  distinct drafts from the family's own ceiling template, and the study
+  runner hands them to a fake COPRO arm. They are refused on a paid
+  transport, where the proposer writes its own bodies, and `null-random`
+  is deliberately excluded: it binds its own generative transport and
+  would never read them.
+
 - **Fidelity arms no longer produce efficacy verdicts.** MIPROv2's
   `zeroshot` and `ground_only` modes run once each as evidence for two
   audit invariants. They pass their audits and are measured on held-out,

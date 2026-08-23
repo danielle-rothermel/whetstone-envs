@@ -55,6 +55,7 @@ revision 1 said something different.
 | 14 | Cost model | 630 tokens/call, "small tens of dollars" → **measured ≈4.5k completion tokens/call, ≈$0.00168/call**; stage totals from the regenerated plan | note 24 |
 | 15 | null-A | bypassed the runner → **routed through the ordinary runner with COPRO's shape** | note 25b |
 | 16 | §6 Codex evidence | unbounded → **one real Codex-direct run**, artifacts historical evidence only | note 20 |
+| 17 | L1's mechanical form | "the internal Eval Config ref" → **the evaluated task set is contained in the internal split**, checked on all three evaluation surfaces | this revision (2026-08-23), §3.2 |
 
 **On item 8.** Revision 1 derived per-mode trial counts from DSPy's
 `_recommended_num_trials(component_count=1, searches_demos, n)` at `n = 6`
@@ -326,11 +327,24 @@ analysis.
 ### 3.2 Leakage rules (pre-registered, mechanically checked)
 
 L1. **The optimizer never sees official or held-out.** Every optimizer control
-    binds `eval_role = INTERNAL` and the internal Eval Config ref. `CoproControl`
-    and `Miprov2Control` already refuse anything else
+    binds `eval_role = INTERNAL`, and every evaluation it causes must evaluate a
+    **task set contained in the internal split**, under the internal role,
+    against a config that is neither the official nor the held-out one.
+    `CoproControl` and `Miprov2Control` already refuse a non-internal role
     (`if self.eval_role is not EvalRole.INTERNAL: raise`). The audits assert it
     independently over evidence (`COPRO_INTERNAL_ONLY`, `MIPRO_*`,
     `CODEX_INTERNAL_ONLY`, GEPA equivalent).
+
+    Containment, not equality of Eval Config identity: MIPROv2 minibatches the
+    internal split and GEPA scores single tasks and Pareto subsets, so each such
+    evaluation mints its own *derived* Eval Config over a subset of the internal
+    split. That is the registered design, not a leak. The mechanical check reads
+    all three evaluation surfaces — resolved intents, `search_evidence`, and
+    `tool_evidence` — because which one an optimizer uses is its own
+    implementation detail; a run yielding evidence on none of them leaves L1
+    **unchecked**, which fails the study rather than passing it vacuously. How
+    many evaluations used the full internal config versus a derived subset is
+    recorded as an observation beside the verdict.
 
 L2. **Selection happens on official, exactly once per optimizer.** For each
     optimizer, the K run outputs are scored on official; the arg-max run's

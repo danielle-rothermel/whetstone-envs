@@ -48,7 +48,11 @@ from whetstone_envs.optim.study.selection import (
     SelectionError,
     SelectionRecord,
 )
-from whetstone_envs.optim.study.spec import StageId, spec_from_manifest
+from whetstone_envs.optim.study.spec import (
+    ArmSpec,
+    StageId,
+    spec_from_manifest,
+)
 from whetstone_envs.optim.study.spend import (
     ReportSpendLedger,
     ReportSpendRecord,
@@ -60,6 +64,7 @@ from whetstone_envs.optim.study.stages import (
     ArmRunResult,
     StageEnvironment,
     StageError,
+    _arm_record,
     _persist_report_spend_to,
     _record_report_spend,
     _transport_change_amendment,
@@ -80,7 +85,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from whetstone_envs.optim.codex import CodexTestSeam
-    from whetstone_envs.optim.study.spec import ArmSpec
 
 
 # --------------------------------------------------------------------------
@@ -1946,3 +1950,75 @@ def test_the_reporting_fold_ignores_another_transports_purchase(
     assert row.report_spend == (), (
         "a fake-transport purchase was folded into a paid stage's bill"
     )
+
+
+def test_the_stage_rebuild_keeps_the_pinned_search_shape() -> None:
+    """The shape ``init`` pinned must survive the post-stage rebuild.
+
+    ``_arm_record`` *replaces* an arm's record once a stage finishes, so a
+    field it does not restate is dropped even though ``init`` wrote it.
+    All four search-shape fields were omitted, so the moment Stage 1
+    completed, ``copro_breadth``/``copro_depth`` and MIPROv2's
+    ``num_trials``/``num_candidates`` fell to ``None`` on every arm.
+
+    ``_recorded_search`` then projected those arms to ``{}`` while the
+    pinned block still said ``{'breadth': 6, 'depth': 3}`` and
+    ``{'num_candidates': 3, 'num_trials': 10}``, and Stage 2 refused the
+    study with ``PreRegistrationViolationError`` -- after Stage 1 had
+    already spent an hour running every arm at the correct shape. The
+    records were wrong, not the runs.
+
+    Fails-before: both assertions read ``None``.
+    """
+    arm = ArmSpec(
+        arm_id="miprov2",
+        optimizer="miprov2",
+        kind=ArmKind.REAL,
+        k_run=1,
+        seeds=(2000,),
+        miprov2_num_trials=10,
+        miprov2_num_candidates=3,
+        train_size=44,
+        val_size=44,
+    )
+    copro = ArmSpec(
+        arm_id="copro",
+        optimizer="copro",
+        kind=ArmKind.REAL,
+        k_run=1,
+        seeds=(1000,),
+        copro_breadth=6,
+        copro_depth=3,
+    )
+    for spec, expected in (
+        (arm, {"num_trials": 10, "num_candidates": 3}),
+        (copro, {"breadth": 6, "depth": 3}),
+    ):
+        prior = ArmRecord(
+            arm_id=spec.arm_id,
+            optimizer=spec.optimizer,
+            kind=spec.kind,
+            demo_mode=None,
+            train_size=spec.train_size,
+            val_size=spec.val_size,
+            control_identity_hash="d" * 64,
+            seed_note="provider-seed-control-only",
+            runs=(
+                RunRecord(
+                    run_id=f"{spec.arm_id}-{spec.seeds[0]}",
+                    seed=spec.seeds[0],
+                    artifact_dir="/tmp/runs/x",  # noqa: S108
+                    result_ref=_pointer("1"),
+                    audit_ref=_pointer("2"),
+                    cost_ref=_pointer("3"),
+                    audit_passed=True,
+                    transport=TransportName.FAKE.value,
+                    spend=(),
+                ),
+            ),
+        )
+        record = _arm_record(spec, runs=prior.runs, sample=(), prior=prior)
+        assert record.miprov2_num_trials == expected.get("num_trials")
+        assert record.miprov2_num_candidates == expected.get("num_candidates")
+        assert record.copro_breadth == expected.get("breadth")
+        assert record.copro_depth == expected.get("depth")

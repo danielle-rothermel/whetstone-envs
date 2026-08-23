@@ -38,7 +38,7 @@ fast.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from whetstone.core.identity import ImmutableJsonObject, compute_identity_hash
 from whetstone.core.roles import EvalRole
@@ -264,6 +264,14 @@ def build_miprov2_control(  # noqa: PLR0913
         minibatch_full_eval_steps=minibatch_full_eval_steps,
         demo_mode=demo_mode,
         defaults=defaults,
+        # Read off the engine rather than taken as a parameter: the bound
+        # engine's seed plan is the authority on how many repeats an
+        # evaluation pays for, and ``engine_binding.resolve`` refuses a
+        # request whose count disagrees with it. ``Miprov2Control.num_seeds``
+        # defaults to 1 upstream, so a control built without this ran every
+        # in-search evaluation at one repeat under an engine bound at
+        # ``K_REPEAT`` -- which is the disagreement that guard reports.
+        num_seeds=engine.sampling.num_seeds,
     )
 
 
@@ -302,17 +310,108 @@ def build_miprov2_adapter(
     )
 
 
-def miprov2_budget() -> Miprov2EffectBudget:
-    """A ceiling generous enough that a small run ends on its schedule.
+#: Multiplier applied to every derived MIPROv2 ceiling.
+#:
+#: The derivations below are already upper bounds -- a bootstrap plan
+#: usually stops at ``max_bootstrapped_demos`` accepted demos rather than
+#: walking the whole trainset -- so the headroom is not there to cover an
+#: underestimate. It is there because this guard's job is to catch runaway
+#: fan-out, and a ceiling close to the expected cost turns an ordinary run
+#: into a spurious mid-run failure inside the durable run boundary.
+_BUDGET_HEADROOM = 4
 
-    These are budgets, not expectations: the run should terminate because its
-    trial schedule is exhausted, so budget exhaustion is a real signal.
+
+class Miprov2SearchShape(Protocol):
+    """The control fields a derived MIPROv2 ceiling reads.
+
+    Stated structurally because the ceiling depends on the search *shape*,
+    not on a control's identity: a caller sizing a budget supplies these
+    seven values, and a stand-in in a test states exactly what the ceiling
+    is a function of. ``Miprov2Control`` satisfies it.
     """
+
+    @property
+    def trainset_task_hashes(self) -> tuple[str, ...]: ...
+    @property
+    def valset_task_hashes(self) -> tuple[str, ...]: ...
+    @property
+    def minibatch(self) -> bool: ...
+    @property
+    def minibatch_size(self) -> int: ...
+    @property
+    def num_trials(self) -> int: ...
+    @property
+    def num_candidates(self) -> int | None: ...
+    @property
+    def num_seeds(self) -> int: ...
+
+
+def miprov2_budget(
+    control: Miprov2SearchShape | None = None,
+) -> Miprov2EffectBudget:
+    """A ceiling generous enough that a run ends on its schedule.
+
+    These are budgets, not expectations: a run should terminate because its
+    trial schedule is exhausted, so budget exhaustion is a real signal --
+    which only holds while the ceiling is above what the schedule costs.
+
+    Without a ``control`` these are the small-run ceilings this module has
+    always used. They are far below the Step 10 design: at 10 trials on a
+    minibatch of 35 at ``K_REPEAT = 3`` the trial schedule alone plans
+    1,050 rows against a 256-row ceiling, and a bootstrap walk over a
+    44-task trainset makes up to 132 attempts against a 32-attempt
+    ceiling, so both are exhausted long before the schedule is.
+    That is what a fixed ceiling costs once the search shape is a design
+    parameter rather than this module's own default.
+
+    Given a ``control`` the ceiling is derived from the shape that control
+    actually pins, with generous headroom. It stays an upper bound and is
+    deliberately loose: a tight ceiling tuned to one measurement would
+    convert an ordinary run into a spurious mid-run failure, and this
+    guard exists to catch runaway fan-out rather than to price a run.
+    """
+    if control is None:
+        return Miprov2EffectBudget(
+            bootstrap_generations=32,
+            proposal_calls=32,
+            evaluations=32,
+            task_rows=256,
+        )
+    trainset = len(control.trainset_task_hashes)
+    valset = len(control.valset_task_hashes)
+    batch = (
+        min(control.minibatch_size, valset) if control.minibatch else valset
+    )
+    # A bootstrap attempt debits ``bootstrap_generations`` by one and
+    # ``task_rows`` by the repeat count, so the two ceilings are in
+    # different units and only one of them scales with ``num_seeds``.
+    # ``bootstrap_generations`` counts effects -- upstream's
+    # ``effect_counts`` sums ``effect.kind == kind``, and the audit's
+    # bootstrap-through-engine invariant is a bijection between billed
+    # effects and engine intents -- so its ceiling is in attempts, and a
+    # plan walks at most the whole trainset: the walk is bounded by
+    # trainset x plans regardless of how many repeats each attempt pays
+    # for. The repeat count enters through ``rows`` below instead.
+    # ``num_candidates`` bounds the plan count without restating upstream's
+    # ``range(-3, num_candidates - 3)`` arithmetic here.
+    # ``num_candidates`` is optional upstream: ``auto`` mode resolves it
+    # rather than the control carrying it. This runner always pins it, and
+    # an unpinned control falls back to the runner's own default rather
+    # than sizing a ceiling off nothing.
+    candidates = control.num_candidates or DEFAULT_MIPROV2_NUM_CANDIDATES
+    bootstrap_attempts = trainset * max(candidates, 1)
+    # Every trial evaluates its batch, and the incumbent is re-evaluated on
+    # the whole valset on the full-eval cadence; the baseline adds one.
+    trial_rows = control.num_trials * batch
+    full_eval_rows = (control.num_trials + 1) * valset
+    rows = (trial_rows + full_eval_rows + bootstrap_attempts) * max(
+        control.num_seeds, 1
+    )
     return Miprov2EffectBudget(
-        bootstrap_generations=32,
-        proposal_calls=32,
-        evaluations=32,
-        task_rows=256,
+        bootstrap_generations=_BUDGET_HEADROOM * bootstrap_attempts,
+        proposal_calls=_BUDGET_HEADROOM * max(control.num_trials, candidates),
+        evaluations=_BUDGET_HEADROOM * (control.num_trials + candidates + 1),
+        task_rows=_BUDGET_HEADROOM * rows,
     )
 
 
@@ -428,7 +527,7 @@ def build_miprov2_state(  # noqa: PLR0913
         component_field_order={
             component_id: tuple(sorted(family.prompt_fields))
         },
-        budget=budget or miprov2_budget(),
+        budget=budget or miprov2_budget(control),
     )
 
 

@@ -30,6 +30,7 @@ from whetstone_envs.optim.miprov2 import (
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
+    miprov2_budget,
     miprov2_run_ref,
 )
 from whetstone_envs.optim.provider import (
@@ -77,6 +78,25 @@ def engine_and_store(tmp_path, prepared):
         yield engine, store
 
 
+class _ShapedControl:
+    """Only the control fields :func:`miprov2_budget` reads.
+
+    Building a real ``Miprov2Control`` needs 43 required fields and a bound
+    engine; the derivation reads seven of them, so a stand-in states
+    exactly what the ceiling depends on and nothing else.
+    """
+
+    trainset_task_hashes = tuple(str(i) for i in range(44))
+    valset_task_hashes = tuple(str(i) for i in range(44, 88))
+    minibatch = True
+    minibatch_size = 35
+    num_trials = 10
+    num_candidates = 3
+
+    def __init__(self, num_seeds: int = 3) -> None:
+        self.num_seeds = num_seeds
+
+
 def _halves(engine) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The one valid partition of this fixture's two-task internal split.
 
@@ -116,6 +136,118 @@ def test_control_binds_the_c19_mutation_surface(
     assert val
     assert not train & val
     assert train | val == set(engine.sampling.task_hashes)
+
+
+@pytest.fixture
+def repeated_engine_and_store(tmp_path):
+    """An engine bound at three repeats per task, like the study's design."""
+    prepared = prepare_c19_experiment(
+        generate_pool(n_per_stratum=2, seed_start=765_432),
+        split_sizes=(2, 2, 0),
+        num_seeds=3,
+    )
+    runtime_config = ReferenceEvalRuntimeConfig(
+        transport_api_key_env="WHETSTONE_TOY_API_KEY",
+    )
+    with open_sqlite(str(tmp_path / "repeated.sqlite")) as store:
+        engine = runtime_config.build_engine(
+            cast("ObjectStore", store),
+            experiment=prepared.experiment,
+            eval_runner=ExactMatchEvalProcedureRunner(),
+            mutation_field=C19_MUTATION_FIELD,
+            render_contract=c19_render_contract(),
+            transport_factory=fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    prepared.experiment,
+                    render_contract=C19.render_contract(),
+                    ceiling_template=C19.probes.ceiling_template,
+                )
+            ),
+        )
+        yield engine, store, prepared
+
+
+def test_the_control_takes_its_repeat_count_from_the_engine(
+    repeated_engine_and_store,
+) -> None:
+    """The bound engine's seed plan is the authority on repeats.
+
+    ``Miprov2Control.num_seeds`` defaults to 1 upstream, so a control built
+    without reading the engine ran every in-search evaluation at one repeat
+    while the engine was bound at ``K_REPEAT``. ``engine_binding.resolve``
+    refuses that disagreement outright -- "engine sampling repeats (3) do
+    not match the requested num_seeds (1)" -- which killed every MIPROv2
+    arm of a ``K_REPEAT = 3`` study inside the durable run boundary.
+    """
+    engine, _store, prepared = repeated_engine_and_store
+    assert engine.sampling.num_seeds == 3
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
+    )
+    assert control.num_seeds == 3
+
+
+def test_the_budget_scales_with_the_shape_the_control_pins() -> None:
+    """A fixed ceiling cannot bound a shape the design chooses.
+
+    The ceiling exists to catch runaway fan-out, so it is a signal only
+    while it sits above what the trial schedule costs. At the Step 10
+    design -- a 44/44 partition, minibatch 35, 10 trials, ``K_REPEAT = 3``
+    -- the schedule plans roughly 2,900 rows against the old fixed 256-row
+    ceiling, and every bootstrap attempt bills one row per repeat against
+    the old fixed 32. Both were exhausted mid-run, inside the durable run
+    boundary, before the schedule was: the MIPROv2 arms of a
+    ``--without-codex`` rehearsal died with "MIPROv2 bootstrap_generations
+    budget exhausted".
+    """
+    budget = miprov2_budget(_ShapedControl())
+    # What the design's own schedule plans, in rows: the trials' batches,
+    # the baseline and periodic full-valset passes, and the bootstrap
+    # walk -- each billed once per repeat.
+    planned_rows = (10 * 35 + 11 * 44 + 44 * 3) * 3
+    assert budget.task_rows > planned_rows
+    # A bootstrap plan walks at most the trainset, once per candidate
+    # plan. This ceiling is in *attempts*, not rows: upstream debits
+    # ``bootstrap_generations`` by one per attempt regardless of repeats.
+    assert budget.bootstrap_generations > 44 * 3
+    # And the ceiling is a bound, not a price: it stays clear of the
+    # schedule rather than tracking it.
+    assert budget.task_rows > 2 * planned_rows
+
+
+@pytest.mark.parametrize("num_seeds", [1, 3, 5])
+def test_the_budget_ceilings_scale_in_their_own_units(num_seeds: int) -> None:
+    """The two bootstrap ceilings are in different units.
+
+    A bootstrap attempt debits ``bootstrap_generations`` by one and
+    ``task_rows`` by the repeat count (``adapter.py``: ``{"bootstrap_
+    generations": 1, "task_rows": num_seeds}``), and upstream's
+    ``effect_counts`` compares the former against a *count of effects*.
+    So the attempt ceiling must bound ``trainset x plans`` and must NOT
+    be inflated by ``num_seeds``, while the row ceiling must scale with
+    it. Reading ``bootstrap_generations`` as a row budget makes it look
+    exhausted at ``num_seeds = 5`` (132 attempts x 5 = 660 > 528) when no
+    such run can exhaust it -- and inflating it to match would blind the
+    guard to runaway fan-out by a factor of the repeat count.
+    """
+    budget = miprov2_budget(_ShapedControl(num_seeds))
+    max_attempts = 44 * 3
+    # In attempts: bounds the walk, and is repeat-independent.
+    assert budget.bootstrap_generations == 4 * max_attempts
+    # In rows: every planned row billed once per repeat, with headroom.
+    planned_rows = (10 * 35 + 11 * 44 + max_attempts) * num_seeds
+    assert budget.task_rows == 4 * planned_rows
+
+
+def test_the_budget_without_a_control_keeps_the_small_run_ceilings() -> None:
+    """The runner's own small shape is unaffected by the derivation."""
+    budget = miprov2_budget()
+    assert budget.task_rows == 256
+    assert budget.bootstrap_generations == 32
 
 
 def test_zeroshot_carries_zero_demo_maxima(engine_and_store, prepared) -> None:

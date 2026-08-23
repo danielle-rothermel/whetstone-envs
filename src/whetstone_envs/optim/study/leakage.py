@@ -263,6 +263,12 @@ def check_l1_optimizer_internal_only(
                 f"{observation.location} resolved a non-internal Eval Config"
             )
             continue
+        if not observation.task_hashes:
+            # An evaluation that names no task cannot be contained in the
+            # internal split; treating it as contained would be L1 passing
+            # vacuously in miniature.
+            offenders.append(f"{observation.location} evaluated no tasks")
+            continue
         escaped = frozenset(observation.task_hashes) - internal
         if escaped:
             offenders.append(

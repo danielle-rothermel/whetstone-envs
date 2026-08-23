@@ -451,3 +451,27 @@ def test_held_out_growth_requires_the_smaller_split_to_be_nested() -> None:
     finding = check_held_out_nesting(smaller=smaller, larger=resampled)
     assert not finding.passed
     assert len(finding.offenders) == 220
+
+
+def test_l1_refuses_an_evaluation_that_names_no_tasks() -> None:
+    """An empty task set is not contained; it is unobserved.
+
+    ``frozenset() - internal`` is empty, so without an explicit check an
+    evaluation naming no tasks would pass L1 vacuously.
+    """
+    finding = _check_l1(
+        (
+            *_clean_optimizer_observations(),
+            OptimizerEvalObservation(
+                run_id="copro-1000",
+                step_index=9,
+                resolution_index=0,
+                eval_role="internal",
+                resolved_eval_config_hash=INTERNAL_CONFIG,
+                task_hashes=(),
+            ),
+        )
+    )
+    assert not finding.passed
+    assert finding.checked
+    assert "evaluated no tasks" in finding.offenders[0]

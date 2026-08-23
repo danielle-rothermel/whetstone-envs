@@ -152,6 +152,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `num_trials` on the control so auto-mode never runs.
 
 ### Fixed
+- L1 refuses an optimizer evaluation that names no tasks instead of passing
+  it as trivially contained in the internal split.
 
 - **L1 is checked as task-set containment, not as one exact Eval Config
   hash.** The registered rule is that an optimizer saw the internal split

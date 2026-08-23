@@ -30,6 +30,7 @@ from whetstone_envs.optim.miprov2 import (
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
+    miprov2_budget,
     miprov2_run_ref,
 )
 from whetstone_envs.optim.provider import (
@@ -75,6 +76,23 @@ def engine_and_store(tmp_path, prepared):
             ),
         )
         yield engine, store
+
+
+class _ShapedControl:
+    """Only the control fields :func:`miprov2_budget` reads.
+
+    Building a real ``Miprov2Control`` needs 43 required fields and a bound
+    engine; the derivation reads seven of them, so a stand-in states
+    exactly what the ceiling depends on and nothing else.
+    """
+
+    trainset_task_hashes = tuple(str(i) for i in range(44))
+    valset_task_hashes = tuple(str(i) for i in range(44, 88))
+    minibatch = True
+    minibatch_size = 35
+    num_trials = 10
+    num_candidates = 3
+    num_seeds = 3
 
 
 def _halves(engine) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -169,6 +187,39 @@ def test_the_control_takes_its_repeat_count_from_the_engine(
         valset_task_hashes=_halves(engine)[1],
     )
     assert control.num_seeds == 3
+
+
+def test_the_budget_scales_with_the_shape_the_control_pins() -> None:
+    """A fixed ceiling cannot bound a shape the design chooses.
+
+    The ceiling exists to catch runaway fan-out, so it is a signal only
+    while it sits above what the trial schedule costs. At the Step 10
+    design -- a 44/44 partition, minibatch 35, 10 trials, ``K_REPEAT = 3``
+    -- the schedule plans roughly 2,900 rows against the old fixed 256-row
+    ceiling, and every bootstrap attempt bills one row per repeat against
+    the old fixed 32. Both were exhausted mid-run, inside the durable run
+    boundary, before the schedule was: the MIPROv2 arms of a
+    ``--without-codex`` rehearsal died with "MIPROv2 bootstrap_generations
+    budget exhausted".
+    """
+    budget = miprov2_budget(_ShapedControl())
+    # What the design's own schedule plans, in rows: the trials' batches,
+    # the baseline and periodic full-valset passes, and the bootstrap
+    # walk -- each billed once per repeat.
+    planned_rows = (10 * 35 + 11 * 44 + 44 * 3) * 3
+    assert budget.task_rows > planned_rows
+    # A bootstrap plan walks at most the trainset, once per repeat.
+    assert budget.bootstrap_generations > 44 * 3
+    # And the ceiling is a bound, not a price: it stays clear of the
+    # schedule rather than tracking it.
+    assert budget.task_rows > 2 * planned_rows
+
+
+def test_the_budget_without_a_control_keeps_the_small_run_ceilings() -> None:
+    """The runner's own small shape is unaffected by the derivation."""
+    budget = miprov2_budget()
+    assert budget.task_rows == 256
+    assert budget.bootstrap_generations == 32
 
 
 def test_zeroshot_carries_zero_demo_maxima(engine_and_store, prepared) -> None:

@@ -192,6 +192,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `total_metric_calls`. Each invariant ships a negative fixture that FAILs
   it alone.
 
+- **The MIPROv2 effect ceilings are derived from the control's search
+  shape.** `miprov2_budget` returned four fixed numbers -- 32 bootstrap
+  generations, 32 proposal calls, 32 evaluations, 256 task rows -- chosen
+  when the search shape was this module's own small default. The Step 10
+  design is far above them: 10 trials on a minibatch of 35 at
+  `K_REPEAT = 3` plans roughly 2,900 rows against a 256-row ceiling, and
+  under 0.1.11 every bootstrap attempt bills one row per repeat against a
+  ceiling of 32. Both were exhausted mid-run, *inside* the durable run
+  boundary, before the trial schedule was, and the MIPROv2 arms died with
+  "MIPROv2 bootstrap_generations budget exhausted".
+
+  The ceiling now scales with the trainset, valset, batch, trial count,
+  candidate count, and repeat count the control pins, times a headroom
+  factor. It stays a deliberately loose upper bound: the guard exists to
+  catch runaway fan-out, and a ceiling tuned close to the expected cost
+  converts an ordinary run into a spurious mid-run failure. A call with no
+  control keeps the small-run ceilings unchanged.
+
 - **A MIPROv2 control takes its repeat count from the engine it is bound
   to.** `Miprov2Control.num_seeds` is new in whetstone-ai 0.1.11 and
   defaults to 1, and `build_miprov2_control` did not set it, so a control

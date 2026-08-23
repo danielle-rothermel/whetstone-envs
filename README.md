@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.8`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.10`.
 
 ## Installation
 
@@ -56,7 +56,7 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
-Codex against a task family. The extra pins published `whetstone-ai==0.1.8`
+Codex against a task family. The extra pins published `whetstone-ai==0.1.10`
 from PyPI:
 
 ```bash
@@ -421,15 +421,16 @@ reached the table with a PASSED verdict and the table holds as many rungs as
 the ladder collects, and otherwise reports `ladder not fully observed` and
 exits 1.
 
-A rung can still live-skip for one known reason: an agent that decides the
-seed template is best may say so by *selecting* a call whose template equals
-the seed, which whetstone-ai 0.1.8 refuses as a selection-contract
-violation. That is the agent's taste rather than a harness defect, so the
-rung skips instead of failing. whetstone-ai 0.1.9 ([#138]) treats a
-seed-identical selection as `seed_retained`, so the skip disappears once the
-envs pin moves to 0.1.9/0.1.10.
+No rung live-skips. An agent that decides the seed template is best may say
+so either by returning no selection or by *selecting* a call whose template
+equals the seed; whetstone-ai 0.1.9 ([#138]) records both as
+`seed_retained`, so agent taste no longer decides whether a rung is
+observed. The pinned 0.1.10 also runs the agent against a per-run scratch
+`HOME` and quotes the CLI's own error items when a session fails ([#140]),
+so a failure names its cause rather than the first symptom.
 
 [#138]: https://github.com/danielle-rothermel/whetstone-ai/pull/138
+[#140]: https://github.com/danielle-rothermel/whetstone-ai/pull/140
 
 ```bash
 scripts/check-real-codex.sh              # whole ladder, stop at first break

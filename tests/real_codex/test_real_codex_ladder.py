@@ -41,7 +41,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 from whetstone.optim.codex.adapter import (
-    CODEX_SELECTION_CONTRACT_CODE,
     CODEX_WALL_BUDGET_EXCEEDED_CODE,
 )
 from whetstone.optim.contracts import OptimResult
@@ -114,79 +113,6 @@ _TEMPLATE_C = (
 def _result(output: Path) -> OptimResult:
     return OptimResult.model_validate_json(
         (output / "result.json").read_text(encoding="utf-8")
-    )
-
-
-def _skip_if_agent_chose_the_seed(result: OptimResult) -> None:
-    """Bail out of a rung the agent ended by preferring the seed.
-
-    This is the open risk this ladder found and did **not** fix (see the
-    findings note). An agent that concludes the seed is the best template
-    has two ways to say so: ``selected_call_id=null``, which yields a
-    clean ``seed_retained``, and *selecting* a call whose template happens
-    to equal the seed, which whetstone-ai refuses as a selection-contract
-    violation. The production prompt documents the first and says nothing
-    about the second, so a well-behaved agent picks either.
-
-    Rungs that assert "the arm completes and scores" are therefore
-    testing the agent's taste as much as the harness. Reporting that as a
-    rung failure would blame the wrong thing -- rung 6 would claim the
-    *pinned model* misbehaved, when the same outcome occurs on the
-    default model. So the rung stops here with a message that names the
-    real cause.
-
-    This is deliberately a skip and not a pass: the rung genuinely did
-    not observe what it exists to observe, and a green ladder must not
-    imply it did.
-
-    The match is deliberately narrow. ``CODEX_SELECTION_CONTRACT_CODE``
-    covers two unrelated outcomes, and only one of them is this risk:
-
-    * the mutation-diff refusal below -- the agent selected a call whose
-      template equals its base -- which is the seed-preference this skip
-      exists for; and
-    * a bookkeeping failure where the selected call binds no Step Request
-      candidate as its base (``base is None``), which is a real defect in
-      the adapter or the rung and must never be skipped past.
-
-    Matching the code alone would have swallowed the second as though it
-    were the first, turning an adapter bug into a quiet skip on a green
-    ladder. So an empty accepted-candidate set, an absent retained
-    candidate, and the mutation-diff error text are all required.
-
-    Upstream fix: whetstone-ai 0.1.9 (#138) treats a seed-identical
-    selection as ``seed_retained`` rather than a contract violation. Once
-    the envs pin moves to 0.1.9/0.1.10 this skip becomes unreachable and
-    should be deleted along with its helper.
-    """
-    failure = result.terminal_failure
-    if failure is None or failure.code != CODEX_SELECTION_CONTRACT_CODE:
-        return
-    accepted = tuple(
-        candidate
-        for step in result.step_results
-        for candidate in step.record.accepted_candidates
-    )
-    retained = tuple(
-        step.record.retained_candidate_ref
-        for step in result.step_results
-        if step.record.retained_candidate_ref is not None
-    )
-    details = str(failure.details)
-    if accepted or retained or "must differ from its base" not in details:
-        # Not the seed-preference outcome: a selection-contract failure
-        # that reached here with evaluated work behind it, or with the
-        # bookkeeping message, is a genuine defect and must fail the rung
-        # rather than be skipped past.
-        return
-    pytest.skip(
-        "the agent selected a candidate identical to the seed, which "
-        "whetstone-ai refuses as a selection-contract violation "
-        f"({failure.details}). This is the unfixed risk in the findings "
-        "note, not a defect in this rung: the production prompt offers "
-        "no safe way for an agent to say 'the seed won' by selection, "
-        "and the same outcome occurs on the CLI's default model. Re-run "
-        "the rung, or fix the prompt/adapter upstream."
     )
 
 
@@ -415,7 +341,6 @@ def test_rung2_one_real_step_rebuilds_the_experiment_and_completes(
     )
 
     result = _result(output)
-    _skip_if_agent_chose_the_seed(result)
     assert result.terminal_failure is None, (
         f"the real Codex Step failed: {result.terminal_failure}"
     )
@@ -772,9 +697,9 @@ def test_rung6_the_pinned_model_and_effort_behave_the_same(
     )
 
     result = _result(output)
-    # Unsteered, so the agent may prefer the seed -- and does so on
-    # the default model too. Blaming the pinned model would be wrong.
-    _skip_if_agent_chose_the_seed(result)
+    # Unsteered, so the agent may prefer the seed. Under 0.1.9 that is a
+    # ``seed_retained`` completion rather than a contract violation, so
+    # the rung observes the pinned model either way.
     assert result.terminal_failure is None, (
         f"the pinned model/effort failed where the default succeeded "
         f"(model={model!r}, effort={effort!r}): {result.terminal_failure}"
@@ -836,7 +761,6 @@ def test_rung7_the_preregistered_cap_holds_on_the_real_split_size(
     )
 
     result = _result(output)
-    _skip_if_agent_chose_the_seed(result)
     assert result.terminal_failure is None, (
         f"the full-size Step failed to terminalize: {result.terminal_failure}"
     )
@@ -898,7 +822,6 @@ def test_rung8_the_c18_family_runs_unchanged(ladder_output) -> None:
     )
 
     result = _result(output)
-    _skip_if_agent_chose_the_seed(result)
     assert result.terminal_failure is None, result.terminal_failure
     step = result.step_results[-1].record
     assert step.status.value == "complete"

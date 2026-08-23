@@ -160,8 +160,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reported as the known, accepted risk. It now additionally requires no
   accepted candidates, no retained candidate, and the mutation-diff message.
   whetstone-ai 0.1.9 (#138) treats a seed-identical selection as
-  `seed_retained`, so this skip becomes unnecessary once the envs pin moves
-  to 0.1.9/0.1.10.
+  `seed_retained`, so this skip became unnecessary when the envs pin moved
+  to 0.1.10, and it is deleted below.
 
 - **The ladder's tripwire exception is scoped to ladder-only sessions.** A
   mixed `-m ""` session that collected rungs alongside ordinary tests
@@ -280,6 +280,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   run count, or place in the correction family. Stage 0 stays permissive
   there, because adding an arm and re-pinning is exactly how
   `stage0 --replace-design` records an amendment.
+
+### Changed
+
+- **Pins published whetstone-ai 0.1.10.** Three upstream fixes matter here.
+  [#138] (0.1.9) records a seed-identical selection as `seed_retained`
+  rather than a `codex_selection_contract` violation, so the real-Codex
+  ladder's seed-preference live-skip is gone: an agent that decides the seed
+  wins no longer decides whether a rung is observed. [#137] (0.1.9) gives
+  MIPROv2 a spent-combination fallback, so `num_candidates=2` with
+  minibatching no longer raises `No valid program found in
+  param_score_dict` inside the durable run boundary. [#140] (0.1.10)
+  redirects the Codex agent's `HOME` to a per-run scratch directory and
+  quotes the CLI's own stdout error items in failure messages — the envs
+  rung-9 "skills" failure had hidden a 401 behind a message that named
+  neither.
+
+[#137]: https://github.com/danielle-rothermel/whetstone-ai/pull/137
+[#138]: https://github.com/danielle-rothermel/whetstone-ai/pull/138
+[#140]: https://github.com/danielle-rothermel/whetstone-ai/pull/140
 
 ### Security
 

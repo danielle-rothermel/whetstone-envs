@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The release workflow's validate jobs allow 30 minutes: the 3.13 and 3.14 legs
+  take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
+  before it could publish (v0.2.3 is tagged but not on PyPI).
+
 ## [0.2.3] - 2026-08-23
 
 ### Added

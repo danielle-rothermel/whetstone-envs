@@ -118,6 +118,30 @@ class RoleCalibration:
         return self.calibration.power.ceiling_mean
 
 
+def _measured_per_task(
+    evidence: EvalEvidence, *, anchor: str
+) -> tuple[float, ...]:
+    """One anchor's per-task vector, with every task measured.
+
+    Since ``EvalEvidence`` v6 a fully-lost task reports ``None`` rather
+    than ``0.0``. Calibration cannot accept one: an anchor is the
+    reference the whole stage is scaled against, and a missing task would
+    propagate into the power calculation as a type error rather than as
+    the measurement problem it is.
+
+    The completeness floor refuses a lost task before an evaluation is
+    accepted, so this states that ordering rather than handling a case
+    that should occur.
+    """
+    values = evidence.per_task_values
+    if any(value is None for value in values):
+        raise ValueError(
+            f"the {anchor} anchor reached calibration with an unmeasured "
+            "task, which the completeness floor should have refused first"
+        )
+    return tuple(value for value in values if value is not None)
+
+
 def _require_success_evidence(
     evidence: object, *, role: EvalRole, anchor: str
 ) -> EvalEvidence:
@@ -168,8 +192,10 @@ def calibrate_role(  # noqa: PLR0913
     return RoleCalibration(
         role=role,
         calibration=calibration,
-        naive_per_task=naive_evidence.per_task_values,
-        ceiling_per_task=ceiling_evidence.per_task_values,
+        naive_per_task=_measured_per_task(naive_evidence, anchor="naive"),
+        ceiling_per_task=_measured_per_task(
+            ceiling_evidence, anchor="ceiling"
+        ),
         eval_config_hash=calibration.eval_config_ref.config_hash,
         task_hashes=naive_evidence.task_hashes,
         evidence=(naive_evidence, ceiling_evidence),

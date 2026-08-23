@@ -269,7 +269,7 @@ class RoleScorer:
         return CandidateScore(
             run_id=candidate.run_id,
             score=_mean_of(evidence),
-            per_task=evidence.per_task_values,
+            per_task=_measured_per_task(evidence),
             eval_config_hash=str(evidence.eval_config_ref.config_hash),
             completeness=_completeness_of(evidence),
         )
@@ -290,7 +290,7 @@ class RoleScorer:
         )
         return HeldOutMeasurement(
             candidate_name=candidate_name,
-            per_task=evidence.per_task_values,
+            per_task=_measured_per_task(evidence),
             mean=_mean_of(evidence),
             eval_config_hash=str(evidence.eval_config_ref.config_hash),
             repeats=evidence.num_seeds,
@@ -308,6 +308,34 @@ def _purpose_metadata(purpose: str) -> dict[str, str]:
     return {"purpose": purpose}
 
 
+def _measured_per_task(evidence: EvalEvidence) -> tuple[float, ...]:
+    """This evidence's per-task vector, with every task measured.
+
+    Since ``EvalEvidence`` v6 a task that lost every repeat reports
+    ``None`` rather than ``0.0``, so ``per_task_values`` is
+    ``tuple[float | None, ...]`` while every consumer downstream --
+    calibration anchors, the selection score, the held-out measurement --
+    requires real numbers and would otherwise fail on a ``None`` deep
+    inside an arithmetic it cannot explain.
+
+    Reaching this with a ``None`` present is a bug rather than a data
+    condition: :func:`~whetstone_envs.optim.completeness.
+    require_task_completeness` runs first on every path that produces one
+    of these vectors and refuses the evaluation outright. The check here
+    is therefore an assertion of that ordering, kept because the ordering
+    is what makes the narrowing sound -- if a future caller ever produced
+    a vector without passing the floor, this says so in those terms
+    instead of raising a ``TypeError`` several frames away.
+    """
+    values = evidence.per_task_values
+    if any(value is None for value in values):
+        raise StageError(
+            "a per-task vector reached reporting with an unmeasured task, "
+            "which the completeness floor should have refused first"
+        )
+    return tuple(value for value in values if value is not None)
+
+
 def _mean_of(evidence: EvalEvidence) -> float:
     """The evidence's aggregate, or its per-task mean when absent.
 
@@ -318,7 +346,7 @@ def _mean_of(evidence: EvalEvidence) -> float:
     """
     if evidence.aggregate_value is not None:
         return float(evidence.aggregate_value)
-    values = evidence.per_task_values
+    values = _measured_per_task(evidence)
     if not values:
         raise StageError("an evaluation produced no per-task values")
     return sum(values) / len(values)

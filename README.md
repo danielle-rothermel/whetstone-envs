@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.12`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.13`.
 
 ## Installation
 
@@ -56,7 +56,7 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
-Codex against a task family. The extra pins published `whetstone-ai==0.1.12`
+Codex against a task family. The extra pins published `whetstone-ai==0.1.13`
 from PyPI:
 
 ```bash

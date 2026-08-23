@@ -61,10 +61,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   which record no such scalar and inherit the bound engine's sampling
   whole. `None` on null-identity, which runs no optimizer.
 
+- **Pins published whetstone-ai 0.1.13.** `EvalEvidence` reaches schema
+  version 6, in which a task that lost every repeat reports `None` for its
+  per-task value rather than `0.0`. The per-task completeness floor already
+  read presence off the reported vectors rather than inferring it from
+  arithmetic, so it reads the new spelling unchanged; the reporting and
+  calibration paths now narrow the vector explicitly, which is sound
+  because the floor refuses a lost task before either can see one. The
+  committed Codex audit fixtures are regenerated at v6: they store real
+  evidence records, so a fixture written under v5 fails
+  `reported_numbers_resolve` against the new validator.
+- **Transport retries are visible as attempts.** `StageRecord` gains
+  `provider_attempts` and `provider_transient_outcomes`: a call that
+  survived two 429s before succeeding is one `calls` and three attempts,
+  reported side by side. `calls` is unchanged and still counts persisted
+  rows, which is what the study is billed a completion for. This is the
+  one manifest number that cannot be projected from the store, since a
+  retried attempt persists no row -- the retrying transport counts its own
+  invocations and the stage reads them back at the end. A fake-transport
+  stage reports nothing rather than a measured zero.
+
 ### Fixed
 - The release workflow's validate jobs allow 30 minutes: the 3.13 and 3.14 legs
   take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
   before it could publish (v0.2.3 is tagged but not on PyPI).
+- **`whetstone-eval` applies the per-task completeness floor.** The floor
+  lived only in the study's `RoleScorer`, so the standalone command --
+  which publishes the held-out number a claim is finally made from --
+  projected and published exactly the biased mean the floor exists to
+  refuse. Both paths now apply one shared owner in
+  `whetstone_envs.optim.completeness`. Evaluations *inside* a search stay
+  exempt: under 0.1.13 a lost task reports `None` per-task and the
+  optimizer's reward policy governs what a candidate is worth mid-search,
+  so refusing there would make the floor a stopping rule rather than a
+  reporting one.
+- **The 90% task-completeness floor can actually fire.** It compared
+  `(planned - lost) / planned` against 0.90, but the stricter zero-present
+  rule above it already refused whenever `lost` was nonzero -- so the
+  fraction was always exactly 1.0 at that comparison and the bound could
+  never bind on any input. It now counts tasks measuring fewer than
+  `k_repeat` present rows as incomplete, which is the population the
+  zero-present rule does not cover. That rule remains unconditional.
+- **The base install no longer imports the optimizer stack.**
+  `whetstone-eval` is a base-install console script, but
+  `reporting.cli` imported its concurrency bounds from `optim.provider`,
+  whose module scope reaches `dr-providers` and whetstone. Any install
+  without the `optim` extra failed the entry point at import. The bounds
+  move to a dependency-free `optim.concurrency`, and a regression test
+  imports every base-install module with the optional distributions
+  blocked.
 
 - **The arm stage refuses on both sides of the dispatch.** Before any arm
   runs it refuses a stage whose bound engine would not sample at the

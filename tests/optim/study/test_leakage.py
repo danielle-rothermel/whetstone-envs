@@ -12,6 +12,7 @@ from whetstone_envs.optim.study.leakage import (
     LeakageReport,
     LeakageRule,
     OptimizerEvalObservation,
+    SearchRepeatObservation,
     SplitIdentity,
     check_held_out_nesting,
     check_l1_optimizer_internal_only,
@@ -19,6 +20,7 @@ from whetstone_envs.optim.study.leakage import (
     check_l3_held_out_once_per_candidate,
     check_l4_identical_held_out_procedure,
     check_l5_splits_disjoint,
+    check_l7_search_repeats_as_designed,
     held_out_observations_from_counts,
     study_leakage_check,
 )
@@ -63,6 +65,20 @@ def _clean_held_out_observations() -> tuple[HeldOutObservation, ...]:
     )
 
 
+#: The design's pre-registered per-task repeat count, as L7 reads it.
+K_REPEAT = 3
+
+
+def _clean_search_repeats() -> tuple[SearchRepeatObservation, ...]:
+    """One run per arm, each having searched at the registered K_REPEAT."""
+    return tuple(
+        SearchRepeatObservation(
+            run_id=f"{arm_id}-1000", search_num_seeds=K_REPEAT
+        )
+        for arm_id in ARM_IDS
+    )
+
+
 def _clean_splits() -> tuple[SplitIdentity, ...]:
     return (
         SplitIdentity("internal", INTERNAL_TASKS),
@@ -78,6 +94,8 @@ def _run_check(  # noqa: PLR0913
     held_out_observations: tuple[HeldOutObservation, ...] | None = None,
     held_out_candidate_names: list[str] | None = None,
     splits: tuple[SplitIdentity, ...] | None = None,
+    search_repeats: tuple[SearchRepeatObservation, ...] | None = None,
+    k_repeat: int | None = K_REPEAT,
     strict: bool = True,
 ) -> LeakageReport:
     """Run L6 over a clean study, with one part optionally mutated.
@@ -111,6 +129,12 @@ def _run_check(  # noqa: PLR0913
         ),
         held_out_observations=observations,
         splits=_clean_splits() if splits is None else splits,
+        search_repeats=(
+            _clean_search_repeats()
+            if search_repeats is None
+            else search_repeats
+        ),
+        k_repeat=k_repeat,
         strict=strict,
     )
 
@@ -306,6 +330,85 @@ def test_l4_catches_a_candidate_measured_with_different_repeats() -> None:
     finding = check_l4_identical_held_out_procedure(leaking)
     assert not finding.passed
     assert any("repeats" in offender for offender in finding.offenders)
+
+
+def test_l7_catches_a_run_that_searched_below_the_registered_k_repeat() -> (
+    None
+):
+    """The gap L4 and the per-run audits both leave open.
+
+    Fails-before: no rule compared a run's search repeat count against the
+    design. L4 checks that the *held-out* evaluations shared one
+    procedure, which a run that searched at one repeat and was then
+    measured on held-out like everyone else satisfies perfectly. The
+    per-optimizer ``*_repeats_as_recorded`` audits hold each run to the
+    count it recorded itself, which that run also satisfies. Only the diff
+    against the pre-registered number catches it.
+    """
+    searched_cheap = (
+        SearchRepeatObservation("copro-1000", K_REPEAT),
+        SearchRepeatObservation("gepa-1000", 1),
+    )
+    finding = check_l7_search_repeats_as_designed(
+        searched_cheap, k_repeat=K_REPEAT
+    )
+    assert not finding.passed
+    assert finding.checked
+    assert finding.offenders == ("gepa-1000 searched at 1",)
+
+
+def test_l7_catches_a_run_whose_repeat_count_was_never_established() -> None:
+    """``None`` is an absence, not a pass.
+
+    A run whose evaluations disagreed with each other has no single search
+    repeat count, so nothing establishes it ran the registered search.
+    Reading that as satisfying the rule would let exactly the evidence the
+    rule exists to catch through.
+    """
+    finding = check_l7_search_repeats_as_designed(
+        (SearchRepeatObservation("copro-1000", None),), k_repeat=K_REPEAT
+    )
+    assert not finding.passed
+    assert finding.offenders == (
+        "copro-1000 searched at no single repeat count",
+    )
+
+
+def test_l7_fails_the_whole_check_when_a_run_disagrees() -> None:
+    """L6 rolls L7 up, so one cheap search invalidates the study."""
+    report = _run_check(
+        search_repeats=(
+            SearchRepeatObservation("copro-1000", K_REPEAT),
+            SearchRepeatObservation("gepa-1000", 1),
+        ),
+        strict=False,
+    )
+    assert not report.passed
+    assert LeakageRule.L7_SEARCH_REPEATS_AS_DESIGNED in {
+        finding.rule for finding in report.failures()
+    }
+    assert not report.finding(LeakageRule.L6_CHECK_RAN).passed
+
+
+def test_l7_fails_when_no_run_recorded_a_repeat_count() -> None:
+    """An empty set is reported unchecked, as L1 and L4 report theirs."""
+    finding = check_l7_search_repeats_as_designed((), k_repeat=K_REPEAT)
+    assert not finding.passed
+    assert not finding.checked
+    assert "nothing to check" in finding.detail
+
+
+def test_l7_is_unchecked_when_the_study_records_no_design() -> None:
+    """No pre-registered K_REPEAT is nothing to check runs against.
+
+    Stage 0 writes the design, so this is a study whose arms were never
+    registered -- an unchecked rule rather than a passing one.
+    """
+    report = _run_check(k_repeat=None, strict=False)
+    assert not report.passed
+    finding = report.finding(LeakageRule.L7_SEARCH_REPEATS_AS_DESIGNED)
+    assert not finding.checked
+    assert "no design" in finding.detail
 
 
 def test_l4_fails_when_nothing_was_measured() -> None:

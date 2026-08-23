@@ -1144,7 +1144,7 @@ def test_every_non_evidence_pattern_matches_something_it_allows() -> None:
     was rewritten -- is removed rather than left widening the guard.
     """
     samples = {
-        r"\bL[1-6]\b": "L1 and L6 ran",
+        r"\bL[1-7]\b": "L1, L6, and L7 ran",
         r"\bF\d+\b": "the F16 fan-out check",
         (
             r"\bStages [0-2]-[0-2]\b|\bStages? [0-2]\b|\bStage-[0-2]\b"

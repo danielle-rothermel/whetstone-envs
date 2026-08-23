@@ -257,6 +257,53 @@ class RunEvidence:
         """Every resolvable eval-evidence record this run produced."""
         yield from self.eval_evidence_by_ref.items()
 
+    @property
+    def search_num_seeds(self) -> int | None:
+        """The repeat count this run's search actually ran at.
+
+        The study pre-registers ``K_REPEAT`` as covering every evaluation,
+        in-search ones included, and the per-optimizer ``*_as_recorded``
+        invariants already hold each run's evaluations to the count the run
+        *records*. That is a within-run check: a run that recorded one and
+        searched at one passes it. Diffing this number against the study's
+        ``K_REPEAT`` is what catches that run, so the number has to be
+        readable off the artifacts rather than taken from the caller who
+        asked for the run.
+
+        **The recorded number is preferred where one exists.** MIPROv2 and
+        GEPA both resolve their count from ``engine.sampling.num_seeds``
+        and persist it -- ``StudyTranscript.validation_num_seeds`` and
+        ``GepaDetailedResult.validation_num_seeds`` -- and MIPROv2 hashes
+        it into its control identity. That is the field the manifest is
+        diffed against, so it is the field read here; the audits are what
+        establish it agrees with the evaluations the run paid for.
+
+        COPRO and Codex record no such scalar: COPRO's control has no
+        repeat field and Codex's runtime config never reaches the run
+        directory. Both inherit the bound engine's sampling whole, so the
+        count is read off the evaluations themselves -- every
+        ``EvalEvidence`` carries the repeats the engine billed it for.
+        A run whose evaluations disagree with each other has no single
+        search repeat count, and ``None`` reports that rather than
+        picking one; the caller refuses on it exactly as it refuses a
+        disagreement with ``K_REPEAT``.
+        """
+        if self.optimizer == MIPROV2_OPTIMIZER:
+            for entry in reversed(self.steps):
+                state = entry.miprov2_state()
+                transcript = None if state is None else state.study_transcript
+                if transcript is not None:
+                    return int(transcript.validation_num_seeds)
+            return None
+        if self.optimizer == GEPA_OPTIMIZER:
+            if self.gepa_terminal is None:
+                return None
+            return int(self.gepa_terminal.detailed_result.validation_num_seeds)
+        counts = {found.num_seeds for _ref, found in self.all_eval_evidence()}
+        if len(counts) != 1:
+            return None
+        return int(next(iter(counts)))
+
 
 def _require_dict(value: object, what: str) -> dict[str, object]:
     """Narrow a decoded store payload to a string-keyed JSON object.

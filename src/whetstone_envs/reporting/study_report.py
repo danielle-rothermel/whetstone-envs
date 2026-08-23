@@ -1317,7 +1317,7 @@ def _leakage_section(manifest: StudyManifest) -> Section:
             tag="leakage",
             paragraphs=(
                 (
-                    "No leakage check is recorded. The study's rules L1-L6 "
+                    "No leakage check is recorded. The study's rules L1-L7 "
                     "were not run over this manifest, so nothing here "
                     "establishes that the optimizer never saw official or "
                     "held-out data."
@@ -1356,7 +1356,7 @@ def _leakage_section(manifest: StudyManifest) -> Section:
             Table(
                 headers=("rule", "verdict", "detail"),
                 rows=rows,
-                caption="The mechanical run of L1-L5, rolled up by L6.",
+                caption="The mechanical run of L1-L5 and L7, rolled up by L6.",
             ),
         ),
     )

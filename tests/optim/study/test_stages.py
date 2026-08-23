@@ -13,6 +13,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
+from whetstone.core.roles import EvalRole
 
 pytest.importorskip("whetstone.experiment.env")
 
@@ -83,6 +84,8 @@ from .conftest import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from whetstone.eval.protocol import EvalEngine
 
     from whetstone_envs.optim.codex import CodexTestSeam
 
@@ -180,6 +183,11 @@ def test_an_unknown_stage_is_named_rather_than_ignored(
 # --------------------------------------------------------------------------
 
 
+#: The ``K_REPEAT`` the stage fixtures' design pre-registers. The harness
+#: mints runs that searched at it, which is what an honest run records.
+HARNESS_K_REPEAT = 3
+
+
 def _pointer(char: str) -> EvidencePointer:
     return EvidencePointer(schema_name="s.schema", content_hash=char * 64)
 
@@ -193,10 +201,15 @@ class _Harness:
         *,
         scores: dict[str, float],
         task_calls: int = 10,
+        search_num_seeds: int | None = HARNESS_K_REPEAT,
     ) -> None:
         self.study_dir = study_dir
         self.scores = scores
         self.task_calls = task_calls
+        #: What each run this harness mints reports having searched at.
+        #: Defaults to the design's ``K_REPEAT``, which is what an honest
+        #: run records; a test lowers it to drive the stage's refusal.
+        self.search_num_seeds = search_num_seeds
         self.events: list[str] = []
         self.selection_seen_at_held_out: list[tuple[str, bool]] = []
 
@@ -223,6 +236,7 @@ class _Harness:
                 audit_passed=True,
                 transport=TransportName.FAKE.value,
                 spend=(),
+                search_num_seeds=self.search_num_seeds,
             ),
             observed_task_calls=self.task_calls,
         )
@@ -2022,3 +2036,138 @@ def test_the_stage_rebuild_keeps_the_pinned_search_shape() -> None:
         assert record.miprov2_num_candidates == expected.get("num_candidates")
         assert record.copro_breadth == expected.get("breadth")
         assert record.copro_depth == expected.get("depth")
+
+
+# --------------------------------------------------------------------------
+# The design's repeat count, structurally and after the fact
+# --------------------------------------------------------------------------
+
+
+def test_an_arm_stage_refuses_a_run_that_searched_below_k_repeat(
+    tmp_path: Path,
+) -> None:
+    """A run that searched at 1 under K_REPEAT = 3 is not recorded.
+
+    Fails-before: nothing diffed a run's own repeat count against the
+    design's. Each optimizer's ``*_repeats_as_recorded`` audit holds a
+    run's evaluations to the count that *same run* recorded, so a run that
+    consistently recorded and searched at one passed its audit, was
+    recorded, and entered selection -- having bought a third of the
+    evidence the pre-registration priced. Both numbers are named, because
+    either one of them could be the wrong one.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    assert read_study_manifest(study_dir).design is not None
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores, search_num_seeds=1)
+    with pytest.raises(StageError, match="K_REPEAT = 3") as caught:
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=harness.environment(),
+        )
+    assert "searched at 1 repeat(s) per task" in str(caught.value)
+    # Refused rather than recorded: the manifest keeps no run bought under
+    # a search the study never registered.
+    assert all(not arm.runs for arm in read_study_manifest(study_dir).arms)
+
+
+def test_an_arm_stage_refuses_a_run_whose_repeat_count_is_unknown(
+    tmp_path: Path,
+) -> None:
+    """A run recording no single repeat count is refused, not recorded.
+
+    Fails-before: ``None`` meant "not established", and an unestablished
+    count recorded as a run's evidence is indistinguishable from one that
+    was checked. A run whose evaluations disagree with each other has no
+    search repeat count to hold to the design, which is a refusal rather
+    than a number to pick from.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores, search_num_seeds=None)
+    with pytest.raises(StageError, match="no single repeat count"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=harness.environment(),
+        )
+
+
+def test_an_arm_stage_refuses_an_engine_that_would_not_sample_k_repeat(
+    tmp_path: Path,
+) -> None:
+    """The structural half: refused before any arm is dispatched.
+
+    Fails-before: an engine bound at the wrong repeat count was only ever
+    caught by the recorded-run diff, which is a whole stage of provider
+    spend later. Binding issues no evaluation, so this refusal is free --
+    and it is the one that keeps a misbound stage from buying anything at
+    all.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores)
+    base = harness.environment()
+
+    def bind_at_one(*, role: EvalRole, num_seeds: int) -> EvalEngine:
+        """A binder that ignores the count it is asked for."""
+        del num_seeds
+        return base.bind_engine(role=role, num_seeds=1)
+
+    with pytest.raises(
+        StageError,
+        match=r"would bind the (internal|official|held_out) engine sampling 1",
+    ):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=replace(base, bind_engine=bind_at_one),
+        )
+    # Before dispatch: no arm ran, so the stage bought nothing.
+    assert harness.events == []
+
+
+def test_an_arm_stage_refuses_an_engine_that_misbinds_only_the_internal_role(
+    tmp_path: Path,
+) -> None:
+    """A binder that honours one role and not another is still refused.
+
+    The optimizers search on the internal engine; a probe of the official
+    engine alone would pass this binder and discover the mismatch a full
+    stage of spend later.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores)
+    base = harness.environment()
+
+    def bind_at_one(*, role: EvalRole, num_seeds: int) -> EvalEngine:
+        """A binder that honours the count for every role but internal."""
+        if role is not EvalRole.INTERNAL:
+            return base.bind_engine(role=role, num_seeds=num_seeds)
+        return base.bind_engine(role=role, num_seeds=1)
+
+    with pytest.raises(
+        StageError,
+        match=r"would bind the (internal|official|held_out) engine sampling 1",
+    ):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=replace(base, bind_engine=bind_at_one),
+        )
+    # Before dispatch: no arm ran, so the stage bought nothing.
+    assert harness.events == []

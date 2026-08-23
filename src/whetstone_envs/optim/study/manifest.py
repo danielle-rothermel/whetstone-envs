@@ -147,7 +147,19 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: measured on held-out, were labelled efficacy results: five claims where
 #: the design pre-registers four, from single runs outside the Holm family.
 #: The role is part of the pre-registered design, so it is hashed.
-STUDY_MANIFEST_SCHEMA_VERSION = 10
+#: v11 records the repeat count each run's search actually ran at, as
+#: ``RunRecord.search_num_seeds``. v10 and the per-optimizer
+#: ``*_repeats_as_recorded`` audits between them established only that a
+#: run's evaluations agreed with the count that *same run* recorded, which
+#: is silent about the design: a run that recorded one repeat and searched
+#: at one passes its audit cleanly under a study registering three, having
+#: bought a third of the evidence the pre-registration priced. Nothing
+#: diffed the two numbers because the run's own count was never on the
+#: record to diff. It is recorded rather than hashed -- it is what a run
+#: *did*, not what the design registered, and the design's ``k_repeat`` is
+#: already pre-registered -- and ``None`` only on null-identity, which runs
+#: no optimizer and so has no search to have a repeat count.
+STUDY_MANIFEST_SCHEMA_VERSION = 11
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -1215,6 +1227,24 @@ class RunRecord(_StrictModel):
     #: once recorded, and the cross-transport refusal can only ever check
     #: the stage rows rather than the evidence itself.
     transport: StrictStr
+    #: The repeat count this run's search actually ran at.
+    #:
+    #: **The design's ``K_REPEAT`` is a claim about every evaluation, and
+    #: this is the evidence for it.** The per-optimizer
+    #: ``*_repeats_as_recorded`` audits hold a run's evaluations to the
+    #: count that run itself recorded, which a run that recorded and
+    #: searched at one satisfies perfectly -- while having bought a third
+    #: of the evidence a study registering three priced. Recording the
+    #: number here is what lets the arm stage refuse such a run and lets
+    #: L7 diff every recorded run against the design after the fact.
+    #:
+    #: Read off the run's own artifacts rather than taken from the runner
+    #: that asked for it: what the stage requested is exactly the claim in
+    #: question. ``None`` on null-identity, which runs no optimizer and so
+    #: has no search whose repeats could be counted -- and on a run whose
+    #: evaluations do not agree on one count, which is a defect the stage
+    #: refuses rather than a number to record.
+    search_num_seeds: StrictInt | None = None
 
     @model_validator(mode="after")
     def _validate_run(self) -> RunRecord:
@@ -1222,6 +1252,11 @@ class RunRecord(_StrictModel):
             raise ValueError("a run has a nonblank id")
         if not self.artifact_dir.strip():
             raise ValueError("a run names its artifact directory")
+        if self.search_num_seeds is not None and self.search_num_seeds < 1:
+            raise ValueError(
+                "a run that searched records at least 1 repeat, got "
+                f"{self.search_num_seeds}"
+            )
         if self.transport not in TRANSPORT_NAMES:
             raise ValueError(
                 f"a run records one of {list(TRANSPORT_NAMES)}, "
@@ -1549,7 +1584,7 @@ class BalanceRecord(_StrictModel):
 
 
 class LeakageCheckEntry(_StrictModel):
-    """One of L1-L5, with its verdict and one sentence of detail."""
+    """One of L1-L5 or L7, with its verdict and one sentence of detail."""
 
     check_id: StrictStr
     passed: StrictBool
@@ -1563,7 +1598,7 @@ class LeakageCheckEntry(_StrictModel):
 
 
 class LeakageCheckRecord(_StrictModel):
-    """L6: the mechanical run of L1-L5 over every run artifact."""
+    """L6: the mechanical run of L1-L5 and L7 over every run artifact."""
 
     passed: StrictBool
     checks: tuple[LeakageCheckEntry, ...]

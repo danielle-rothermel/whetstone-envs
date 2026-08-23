@@ -147,6 +147,46 @@ def test_the_models_block_pins_the_designs_models(
     assert manifest.models.codex_agent_model == toy.codex_agent_model
 
 
+def test_the_minibatch_design_reaches_the_arm_record(
+    toy: StudyProtocol, protocol_doc: Path
+) -> None:
+    """Minibatching is design, so the record carries it (schema v9).
+
+    ``spec_from_manifest`` rebuilds every stage's runnable spec from the
+    arm record. A record that said ``minibatch=False`` while the
+    pre-registration hashed a batch size would run MIPROv2 on the whole
+    valset under a design hash claiming it batched -- the exact drift the
+    round-trip exists to stop.
+    """
+    manifest = study_manifest_for(toy, protocol_doc=protocol_doc)
+    by_id = {arm.arm_id: arm for arm in manifest.arms}
+    for arm in toy.arms:
+        recorded = by_id[arm.arm_id]
+        assert recorded.minibatch == arm.miprov2_minibatch, arm.arm_id
+        assert recorded.minibatch_size == arm.miprov2_minibatch_size, (
+            arm.arm_id
+        )
+    # The MIPROv2 arms are the ones that carry it at all.
+    assert by_id["miprov2"].minibatch is True
+    assert by_id["miprov2"].minibatch_size == toy.miprov2_minibatch_size
+    assert by_id["copro"].minibatch is False
+    assert by_id["copro"].minibatch_size is None
+
+
+def test_the_written_manifest_rebuilds_the_minibatch_design(
+    tmp_path: Path, toy: StudyProtocol, protocol_doc: Path
+) -> None:
+    """What init writes is what the stage that runs MIPROv2 reads back."""
+    study_dir = tmp_path / "study"
+    init_study(study_dir, protocol=toy, protocol_doc=protocol_doc)
+    spec = load_study_spec(study_dir, stage=StageId.STAGE2)
+    by_id = {arm.arm_id: arm for arm in spec.arms}
+    assert by_id["miprov2"].miprov2_minibatch is True
+    assert (
+        by_id["miprov2"].miprov2_minibatch_size == toy.miprov2_minibatch_size
+    )
+
+
 # --------------------------------------------------------------------------
 # Refusals
 # --------------------------------------------------------------------------

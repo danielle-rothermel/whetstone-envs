@@ -149,6 +149,13 @@ def _arm_records(protocol: StudyProtocol) -> tuple[ArmRecord, ...]:
             demo_mode=arm.demo_mode,
             train_size=arm.train_size,
             val_size=arm.val_size,
+            # Minibatching is design, and schema v9 carries it on the arm
+            # record so it round-trips into the spec every stage runs. A
+            # record that said "unbatched" while the pre-registration
+            # hashed a size would evaluate every trial on the whole valset
+            # under a design hash claiming otherwise.
+            minibatch=arm.miprov2_minibatch,
+            minibatch_size=arm.miprov2_minibatch_size,
             control_identity_hash=_control_identity_hash(protocol, arm),
             seed_note=_seed_note(arm),
             runs=(),

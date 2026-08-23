@@ -63,7 +63,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from whetstone.eval.schema import EvalOutputRow, EvalOutputsRecord
 from whetstone.execution.call_support import evidences_provider_response
@@ -85,6 +85,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ReportSpendLedger",
     "ReportSpendRecord",
+    "ReportSpendSink",
     "row_observation",
     "run_spend_records",
     "stage_spend_records",
@@ -291,6 +292,18 @@ class ReportSpendRecord:
     spend: tuple[RunSpendRecord, ...]
 
 
+class ReportSpendSink(Protocol):
+    """Where a priced reporting evaluation is made durable.
+
+    A port rather than a direct manifest write, for the reason every other
+    collaborator here is one: the ledger prices evidence and knows nothing
+    about study directories, and a test injecting its own collaborators
+    has no manifest to write to.
+    """
+
+    def __call__(self, record: ReportSpendRecord) -> None: ...
+
+
 class ReportSpendLedger:
     """Every reporting evaluation this stage paid for, in issue order.
 
@@ -318,14 +331,31 @@ class ReportSpendLedger:
     free, which is a different and untrue claim from "not measured".
     """
 
-    __slots__ = ("_records", "_store")
+    __slots__ = ("_persist", "_records", "_store")
 
-    def __init__(self, store: ObjectStore | None) -> None:
+    def __init__(
+        self,
+        store: ObjectStore | None,
+        *,
+        persist: ReportSpendSink | None = None,
+    ) -> None:
         #: ``None`` on a caller that bound no store -- a test injecting
         #: its own collaborators -- in which case nothing is collected,
         #: because the rows are read back out of the store and there is
         #: nothing to read.
         self._store = store
+        #: Where a priced evaluation is made durable, called the moment it
+        #: is priced. ``None`` keeps the ledger in-memory only, which is
+        #: what a caller with no study directory can support.
+        #:
+        #: This is what closes the gap between paying for an evaluation
+        #: and recording that it was paid for. The reporting pass buys
+        #: evaluations one at a time and writes the stage's row only at
+        #: the end, so a crash in between used to strand the spend of
+        #: everything already bought: the resume rebuilt its claims
+        #: without re-evaluating, and the bill for those evaluations was
+        #: never written anywhere.
+        self._persist = persist
         self._records: list[ReportSpendRecord] = []
 
     def record(
@@ -335,24 +365,36 @@ class ReportSpendLedger:
         purpose: str,
         candidate_name: str,
     ) -> None:
-        """Price one reporting evaluation from its own persisted rows."""
+        """Price one reporting evaluation, and make the price durable."""
         if self._store is None:
             return
         spend = stage_spend_records(store=self._store, evidence=(evidence,))
         if not spend:
             return
         outputs_ref = evidence.outputs_ref
-        self._records.append(
-            ReportSpendRecord(
-                purpose=purpose,
-                candidate_name=candidate_name,
-                evidence_key=(
-                    outputs_ref.schema_name,
-                    outputs_ref.content_hash,
-                ),
-                spend=spend,
-            )
+        record = ReportSpendRecord(
+            purpose=purpose,
+            candidate_name=candidate_name,
+            evidence_key=(
+                outputs_ref.schema_name,
+                outputs_ref.content_hash,
+            ),
+            spend=spend,
         )
+        self._records.append(record)
+        if self._persist is not None:
+            self._persist(record)
+
+    def persist_to(self, persist: ReportSpendSink | None) -> None:
+        """Bind where a priced evaluation is made durable.
+
+        Set at the start of the reporting pass rather than at
+        construction, because the ledger is bound once per study while the
+        sink it writes through is per *stage*: the same ledger prices
+        Stage 1's pass and Stage 2's, and a record has to name which one
+        bought it.
+        """
+        self._persist = persist
 
     def records(self) -> tuple[ReportSpendRecord, ...]:
         """Every evaluation this ledger priced, in issue order."""

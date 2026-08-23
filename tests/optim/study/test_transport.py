@@ -55,6 +55,7 @@ from whetstone_envs.optim.study.manifest import (
     AMENDMENT_REASON_TRANSPORT_CHANGE,
     DISCARD_STALE_RUNS_FLAG,
     PROVIDER_CONTROL_UNSET,
+    PROVIDER_SEED_DERIVED_PER_CALL,
     STUDY_MANIFEST_NAME,
     STUDY_STORE_NAME,
     ArmRecord,
@@ -1776,7 +1777,10 @@ def test_binding_a_stage_records_what_the_transport_bound(
     # explains this study's per-call bill.
     assert record.reasoning == PROVIDER_CONTROL_UNSET
     assert record.temperature == PROVIDER_CONTROL_UNSET
-    assert record.seed == PROVIDER_CONTROL_UNSET
+    # The seed is the exception, and it is not "provider default": the
+    # eval contract puts a derived seed on every call, so the statically
+    # bound control is not what reaches the wire.
+    assert record.seed == PROVIDER_SEED_DERIVED_PER_CALL
 
 
 def test_rebinding_the_same_transport_rewrites_no_manifest(

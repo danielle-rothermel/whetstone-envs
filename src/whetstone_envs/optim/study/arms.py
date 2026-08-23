@@ -49,6 +49,10 @@ from whetstone.optim.contracts import OptimResult
 from whetstone_envs.optim.audit.registry import audit_run
 from whetstone_envs.optim.audit.schema import AUDIT_REPORT_SCHEMA
 from whetstone_envs.optim.families import family_spec
+from whetstone_envs.optim.nulls import (
+    NULL_IDENTITY_OPTIMIZER,
+    NULL_RANDOM_OPTIMIZER,
+)
 from whetstone_envs.optim.run import RunSpec, run_optimizer
 from whetstone_envs.optim.run_cost import (
     RUN_COST_SCHEMA_NAME,
@@ -86,11 +90,13 @@ __all__ = [
     "arm_run_directory",
 ]
 
-#: The two controls, named where they are dispatched on. They are arm ids
-#: and optimizer names at once, because a null is defined by what it does
-#: rather than by an optimizer that implements it.
-NULL_IDENTITY_OPTIMIZER = "null-identity"
-NULL_RANDOM_OPTIMIZER = "null-random"
+#: The two controls, re-exported from the transports that define them.
+#: They are arm ids and optimizer names at once, because a null is defined
+#: by what it does rather than by an optimizer that implements it -- so
+#: :mod:`whetstone_envs.optim.nulls` owns the names, and this module
+#: dispatches on them rather than restating them. Two copies of a
+#: persisted arm id is one rename away from a study that dispatches an arm
+#: it cannot then find.
 
 #: The arms whose runs go through the shared optimizer runner. Anything
 #: outside this set and null-B is refused rather than silently dispatched,

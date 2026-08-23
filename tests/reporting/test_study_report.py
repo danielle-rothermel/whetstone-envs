@@ -1341,15 +1341,17 @@ def _rendered(manifest: StudyManifest, tmp_path: Path, monkeypatch) -> str:
     return (packet / REPORT_MARKDOWN_NAME).read_text(encoding="utf-8")
 
 
-def test_the_report_says_which_calls_the_ledger_omits(
+def test_the_report_says_what_the_stage_spend_covers(
     reported_manifest: StudyManifest, tmp_path: Path, monkeypatch
 ) -> None:
-    """Official-selection and held-out spend is not ledgered yet.
+    """A stage's row states that it is the whole bill, and by what route.
 
-    Those calls reach the provider through the evaluation engine outside
-    any optimizer run, so no stage total includes them. Full ledgering is
-    Phase E; until then the report states the omission rather than
-    presenting a partial total as the whole bill.
+    Official-selection scoring and the held-out evaluations reach the
+    provider through the evaluation engine outside any optimizer run, so
+    a reader has no way to tell from the number alone whether they are in
+    it. They are: the row folds the arms' runs and the reporting pass
+    together, and the note says so rather than leaving the coverage of the
+    study's most consequential calls to be inferred.
     """
     manifest = reported_manifest.model_copy(
         update={

@@ -62,6 +62,7 @@ from whetstone_envs.optim.study.manifest import (
     CallCountGateRecord,
     DesignRecord,
     PreRegistrationRecord,
+    ReportSpendEntry,
     RunRecord,
     RunSpendRecord,
     SplitsRecord,
@@ -77,6 +78,7 @@ from whetstone_envs.optim.study.manifest import StageId as ManifestStageId
 from whetstone_envs.optim.study.power import COMPLETENESS_RULE, MDE_FORMULA
 from whetstone_envs.optim.study.selection import (
     ArmReport,
+    CandidateScore,
     HeldOutEvaluator,
     ManifestSelectionLog,
     OfficialScorer,
@@ -93,6 +95,7 @@ from whetstone_envs.optim.study.spec import (
 )
 from whetstone_envs.optim.study.spend import (
     ReportSpendLedger,
+    ReportSpendRecord,
     run_spend_records,
     stage_spend_records,
 )
@@ -438,15 +441,29 @@ def _arm_stage_record(
     because it is a property of the invocation that just ran and
     ``require_matching_transport`` has already refused a stage whose
     transport disagrees with the study's.
+
+    Only the *run* side is summed here. The reporting pass accumulates by
+    the opposite rule -- it is folded whole from durable records every
+    time, so adding it would bill one evaluation once per resume -- and
+    :func:`_record_report_spend` owns it. It is carried through unchanged
+    rather than dropped, because this writer runs before that one and must
+    not erase a total an earlier invocation already recorded.
     """
     existing = next(
         (entry for entry in manifest.stages if entry.stage == record.stage),
         None,
     )
-    if existing is None or not existing.spend:
+    if existing is None:
         return _stages_with(manifest, record)
     merged = record.model_copy(
-        update={"spend": run_spend_records((*existing.spend, *record.spend))}
+        update={
+            "spend": (
+                run_spend_records((*existing.spend, *record.spend))
+                if existing.spend
+                else record.spend
+            ),
+            "report_spend": existing.report_spend,
+        }
     )
     return _stages_with(manifest, merged)
 
@@ -1190,6 +1207,12 @@ def run_arm_stage(
     # One ledger per stage: the pilot's selection and the full design's are
     # each made once, over different run sets, and neither can be made twice.
     log = ManifestSelectionLog(study_dir, stage=stage.value)
+    # Every reporting evaluation from here on writes its own spend before
+    # the pass returns, so a crash mid-pass leaves the bill for what was
+    # already bought on disk rather than in a process that is gone.
+    _persist_report_spend_to(
+        study_dir=study_dir, stage=stage, environment=environment
+    )
     reports = tuple(
         _report_or_rebuild_arm(
             arm_id=arm.arm_id,
@@ -1230,6 +1253,59 @@ def run_arm_stage(
     )
 
 
+def _persist_report_spend_to(
+    *, study_dir: Path, stage: StageId, environment: StageEnvironment
+) -> None:
+    """Point this stage's ledger at the manifest, for the pass ahead.
+
+    Each priced evaluation is appended to ``report_spend`` the moment it
+    is priced, which is the moment after it was paid for. That ordering is
+    the guarantee: the reporting pass buys an official score per run, a
+    held-out measurement per arm, and the anchors, and it writes the
+    stage's row only once all of them are done -- so anything held only in
+    memory is lost by a crash in that window, and lost spend is the one
+    error the ledger cannot detect afterwards.
+
+    An entry whose evidence is already recorded for this stage is a no-op:
+    one evaluation cited twice was paid for once, and the manifest refuses
+    the duplicate structurally.
+    """
+    ledger = environment.report_spend
+    if ledger is None:
+        return
+
+    def persist(record: ReportSpendRecord) -> None:
+        manifest = read_study_manifest(study_dir)
+        if any(
+            entry.evidence_key == record.evidence_key
+            and entry.stage == stage.value
+            for entry in manifest.report_spend
+        ):
+            return
+        schema_name, content_hash = record.evidence_key
+        write_study_manifest(
+            study_dir,
+            manifest.model_copy(
+                update={
+                    "report_spend": (
+                        *manifest.report_spend,
+                        ReportSpendEntry(
+                            evidence_schema=schema_name,
+                            evidence_content_hash=content_hash,
+                            purpose=record.purpose,
+                            candidate_name=record.candidate_name,
+                            stage=stage.value,
+                            spend=record.spend,
+                        ),
+                    )
+                }
+            ),
+            replace=True,
+        )
+
+    ledger.persist_to(persist)
+
+
 def _record_report_spend(
     *, study_dir: Path, stage: StageId, environment: StageEnvironment
 ) -> None:
@@ -1241,33 +1317,85 @@ def _record_report_spend(
     the first. The fold re-applies the honesty rules, so one unpriced
     reporting evaluation withholds the role's whole ``usd``.
 
+    **Folded from the manifest, not from this process.** Each reporting
+    evaluation persisted its own spend as it was bought, and the fold
+    reads those records back. That is what makes this idempotent across a
+    resume: the row is a function of what is on disk rather than of what
+    this invocation happened to buy, so re-folding after a crash restates
+    the same total instead of adding a second copy of it -- and an
+    evaluation an earlier invocation paid for is still counted even though
+    this process never issued it.
+
     A fake-transport stage is skipped: its rows are real rows that would
     total to a bill nobody owes, which is the judgement
     :func:`_stage_record` keeps at the call site.
     """
-    ledger = environment.report_spend
-    if ledger is None or environment.transport == TransportName.FAKE.value:
-        return
-    folded = ledger.folded()
-    if not folded:
+    if environment.transport == TransportName.FAKE.value:
         return
     manifest = read_study_manifest(study_dir)
+    folded = run_spend_records(
+        entry
+        for record in manifest.report_spend
+        if record.stage == stage.value
+        for entry in record.spend
+    )
+    if not folded:
+        return
+    existing = next(
+        (entry for entry in manifest.stages if entry.stage == stage.value),
+        None,
+    )
+    updated = (
+        StageRecord(
+            stage=stage.value,
+            transport=environment.transport,
+            report_spend=folded,
+        )
+        if existing is None
+        # Set, never added: ``folded`` is already the whole pass, so the
+        # run-side row is carried through untouched and the reporting side
+        # is replaced with the total the durable records now describe.
+        else existing.model_copy(update={"report_spend": folded})
+    )
+    if existing == updated:
+        return
     write_study_manifest(
         study_dir,
         manifest.model_copy(
-            update={
-                "stages": _arm_stage_record(
-                    manifest,
-                    StageRecord(
-                        stage=stage.value,
-                        transport=environment.transport,
-                        spend=folded,
-                    ),
-                )
-            }
+            update={"stages": _stages_with(manifest, updated)}
         ),
         replace=True,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _DurableOfficialScorer:
+    """Score a run once per stage, ever, across every invocation.
+
+    Official scoring reaches the provider, so "score every run" and "score
+    every run *again* on resume" are the same code path with very
+    different bills. This wraps the real scorer in the manifest's own
+    record: a run already scored at this stage is answered from disk and
+    issues no call, and a run scored for the first time has its score
+    persisted before it is returned.
+
+    Persisted before returning, not after the pass: the arg-max that
+    consumes these scores is followed by a held-out evaluation and a
+    manifest write, and a crash anywhere in that window would otherwise
+    leave the study having paid for scores it kept no record of.
+    """
+
+    arm_id: str
+    log: ManifestSelectionLog
+    score_official: OfficialScorer
+
+    def __call__(self, candidate: RunCandidate) -> CandidateScore:
+        recorded = self.log.official_score_for(candidate.run_id)
+        if recorded is not None:
+            return recorded
+        score = self.score_official(candidate)
+        self.log.record_official_score(arm_id=self.arm_id, score=score)
+        return score
 
 
 def _report_or_rebuild_arm(  # noqa: PLR0913
@@ -1288,10 +1416,17 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     would be stranded behind a failure that never clears.
 
     An arm whose selection *and* completed held-out claim are both durable
-    has already been fully reported. Its report is rebuilt from those
-    records rather than re-derived, which is what makes resume cost nothing:
-    no second selection, and no second held-out evaluation of a candidate
-    that already spent its one shot.
+    has already been fully reported. Its report is rebuilt entirely from
+    persisted records -- the selection, each run's recorded official score,
+    and the completed claim -- so a resume of a fully reported arm re-buys
+    **nothing**: no second selection, no second official scoring of runs
+    the study already paid to score, and no second held-out evaluation of a
+    candidate that already spent its one shot.
+
+    Official scoring is durable for exactly that reason. It is a provider
+    call per run, and it previously ran unconditionally on every
+    invocation, so a resume silently re-bought the whole official pass for
+    every arm it was only rebuilding.
 
     An arm that selected but never claimed crashed in the window *between*
     the two writes, before any provider call. It continues from the
@@ -1304,12 +1439,15 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     would risk paying twice and skipping would report a number nobody
     measured -- and it is refused with the recovery named.
     """
+    durable_scorer = _DurableOfficialScorer(
+        arm_id=arm_id, log=log, score_official=score_official
+    )
     selection = log.selection_for(arm_id)
     if selection is None:
         return report_arm(
             arm_id=arm_id,
             runs=runs,
-            score_official=score_official,
+            score_official=durable_scorer,
             evaluate_held_out=evaluate_held_out,
             log=log,
             stage=stage.value,
@@ -1323,7 +1461,7 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
             f"{selection.selected_run_id!r} at {stage.value}, but that run "
             "is not among the runs this stage loaded"
         )
-    official_scores = tuple(score_official(run) for run in runs)
+    official_scores = tuple(durable_scorer(run) for run in runs)
     claim = log.completed_claim_for(arm_id)
     if claim is None:
         if log.held_out_count(arm_id) > 0:
@@ -1670,6 +1808,8 @@ def _arm_record(
         demo_mode=arm.demo_mode,
         train_size=arm.train_size,
         val_size=arm.val_size,
+        minibatch=arm.miprov2_minibatch,
+        minibatch_size=arm.miprov2_minibatch_size,
         control_identity_hash=control_identity_hash,
         seed_note=_seed_note(arm),
         runs=runs,

@@ -16,6 +16,8 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from whetstone.optim.cost import CostRole
+
 from whetstone_envs.optim.study.analysis import (
     CEILING_CANDIDATE_NAME,
     NAIVE_CANDIDATE_NAME,
@@ -27,7 +29,9 @@ from whetstone_envs.optim.study.manifest import (
     ArmRecord,
     CallCountGateRecord,
     EvidencePointer,
+    ReportSpendEntry,
     RunRecord,
+    RunSpendRecord,
     TransportName,
     read_study_manifest,
     write_study_manifest,
@@ -48,6 +52,7 @@ from whetstone_envs.optim.study.stages import (
     ArmRunResult,
     StageEnvironment,
     StageError,
+    _record_report_spend,
     run_arm_stage,
     run_stage,
     run_stage0_into_manifest,
@@ -1465,3 +1470,169 @@ def test_a_stage_that_crashed_between_arms_resumes(tmp_path: Path) -> None:
     assert len(stage1_selections) == len(
         {entry.arm_id for entry in stage1_selections}
     )
+
+
+def test_a_resumed_arm_rescores_nothing_it_already_paid_to_score(
+    tmp_path: Path,
+) -> None:
+    """**Resume of a fully reported arm re-buys nothing at all.**
+
+    Official-selection scoring is a provider call per run, and it used to
+    run unconditionally on every invocation: a resumed stage re-scored
+    every run of every already-reported arm purely to rebuild a report the
+    manifest could already answer. That is a second charge for a number
+    the study had already bought, and it is invisible in the result --
+    the rebuilt report looks identical either way.
+
+    So the assertion is on the calls, not on the report: the arm that
+    completed before the crash issues **zero** official scorings on
+    resume, and its rebuilt scores equal the ones it recorded.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 + index / 100
+        for arm in spec.arms
+        for index, seed in enumerate(arm.seeds)
+    }
+    crashing = _CrashingHarness(study_dir, scores=scores, crash_after=1)
+    with pytest.raises(_InjectedCrashError):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=crashing.environment(),
+        )
+    stage1 = StageId.STAGE1.value
+    crashed = read_study_manifest(study_dir)
+    first_arm = next(
+        entry.candidate_name
+        for entry in crashed.held_out_claims
+        if entry.stage == stage1 and entry.completed
+    )
+    # The scores that arm bought are durable, which is what a rebuild
+    # reads instead of re-issuing.
+    recorded = {
+        entry.run_id: entry
+        for entry in crashed.official_scores
+        if entry.stage == stage1 and entry.arm_id == first_arm
+    }
+    assert recorded, "a reported arm records the scores it paid for"
+
+    resumed = _Harness(study_dir, scores=scores)
+
+    def _load_recorded_run(
+        *, arm: ArmSpec, run: RunRecord
+    ) -> ArmRunResult | None:
+        del arm
+        assert run.seed is not None
+        return ArmRunResult(
+            candidate=RunCandidate(
+                run_id=run.run_id,
+                seed=run.seed,
+                candidate_name=run.run_id,
+                template="{grid} {command} {question}",
+            ),
+            record=run,
+            observed_task_calls=resumed.task_calls,
+        )
+
+    environment = resumed.environment()
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=replace(environment, load_recorded_run=_load_recorded_run),
+    )
+
+    # Zero scorer calls for the runs the crashed invocation already scored.
+    rescored = {
+        event.removeprefix("official:")
+        for event in resumed.events
+        if event.startswith("official:")
+    }
+    assert not (rescored & set(recorded)), (
+        "a resumed stage re-bought official scores it had already paid for: "
+        f"{sorted(rescored & set(recorded))}"
+    )
+    # And the rebuilt report carries the recorded numbers, not new ones.
+    rebuilt = next(
+        report for report in result.arms if report.arm_id == first_arm
+    )
+    for score in rebuilt.official_scores:
+        assert score.score == recorded[score.run_id].score
+        assert score.per_task == recorded[score.run_id].per_task
+
+
+def test_refolding_the_reporting_bill_restates_it_rather_than_doubling_it(
+    tmp_path: Path,
+) -> None:
+    """**The reporting fold is safe to repeat, because a resume repeats it.**
+
+    A stage's row is *merged* rather than replaced, so a resume cannot
+    erase what an earlier invocation paid. That rule and an additive
+    reporting fold are incompatible: each invocation added the whole pass
+    again, so a stage whose reporting ran twice claimed to have spent
+    twice -- and the reporting pass is exactly the set of calls every
+    efficacy claim is finally made against.
+
+    The fold now reads the manifest's own durable per-evaluation records,
+    so it is a function of what is on disk rather than of what this
+    process bought. Folding again restates the same total.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    stage1 = StageId.STAGE1.value
+    manifest = read_study_manifest(study_dir)
+    priced = RunSpendRecord(
+        role=CostRole.TASK_MODEL.value,
+        calls=4,
+        cached_calls=0,
+        input_tokens=100,
+        output_tokens=20,
+        priced_calls=4,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "report_spend": (
+                    ReportSpendEntry(
+                        evidence_schema="whetstone.eval.outputs",
+                        evidence_content_hash="a" * 64,
+                        purpose="official",
+                        candidate_name="copro",
+                        stage=stage1,
+                        spend=(priced,),
+                    ),
+                )
+            }
+        ),
+        replace=True,
+    )
+    environment = _Harness(study_dir, scores={}).environment()
+    paid = replace(environment, transport=TransportName.OPENROUTER.value)
+
+    _record_report_spend(
+        study_dir=study_dir, stage=StageId.STAGE1, environment=paid
+    )
+    once = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == stage1
+    )
+    assert [entry.usd for entry in once.report_spend] == [0.5]
+
+    # The resume: the same durable records, folded a second time.
+    _record_report_spend(
+        study_dir=study_dir, stage=StageId.STAGE1, environment=paid
+    )
+    twice = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == stage1
+    )
+    assert twice.report_spend == once.report_spend, (
+        "re-folding the reporting pass billed its evaluations a second time"
+    )
+    assert [entry.calls for entry in twice.report_spend] == [4]

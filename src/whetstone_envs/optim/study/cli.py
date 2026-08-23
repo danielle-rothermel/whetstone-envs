@@ -534,19 +534,24 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
         record = by_stage.get(stage)
         if record is None:
             continue
-        if not record.spend:
+        # The stage's whole bill: its runs and its reporting pass. The
+        # two are stored apart because they accumulate by opposite rules,
+        # but the run-side figure alone understates a paid stage by the
+        # entire pass its efficacy claims are made against.
+        spend = record.total_spend
+        if not spend:
             lines.append(
                 f"  {record.stage:<10}{record.transport:<14}"
                 f"  {_no_spend_label(record)}"
             )
             continue
-        calls = sum(entry.calls for entry in record.spend)
+        calls = sum(entry.calls for entry in spend)
         tokens = sum(
-            entry.input_tokens + entry.output_tokens for entry in record.spend
+            entry.input_tokens + entry.output_tokens for entry in spend
         )
         lines.append(
             f"  {record.stage:<10}{record.transport:<14}{calls:>10,}"
-            f"{tokens:>14,}  {_stage_usd(record.spend):>22}"
+            f"{tokens:>14,}  {_stage_usd(spend):>22}"
         )
     lines.append("")
     return tuple(lines)

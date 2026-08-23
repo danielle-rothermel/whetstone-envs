@@ -46,6 +46,7 @@ from whetstone_envs.optim.provider import (
 from whetstone_envs.optim.rows import task_rows_from_instances
 from whetstone_envs.optim.study.manifest import (
     PROVIDER_CONTROL_UNSET,
+    PROVIDER_SEED_DERIVED_PER_CALL,
     STUDY_STORE_NAME,
     ProviderCallRecord,
     SplitsRecord,
@@ -225,7 +226,13 @@ def _provider_call_record(
         # task-model reasoning effort is an open decision, and a field that
         # looked like a knob would answer it by accident.
         reasoning=_control_text(controls.reasoning),
-        seed=_control_text(controls.seed),
+        # Not the statically bound control, which is unset here and would
+        # read as "the provider chose the seed". Every eval call goes out
+        # seeded: whetstone's ``provider_call_config_with_parameters``
+        # sets ``seed`` unconditionally from ``derive_rng_seed``, and
+        # refuses a definition that cannot transport it. What is bound at
+        # this point is therefore not what reaches the wire.
+        seed=PROVIDER_SEED_DERIVED_PER_CALL,
         # Serialized rather than repr'd: an extension carries provider
         # request body the study did not otherwise name, and a reader
         # comparing two stages needs to read it, not a container's repr.

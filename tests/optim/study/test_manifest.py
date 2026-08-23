@@ -302,8 +302,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 8
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v8"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 9
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v9"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -329,6 +329,8 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "amendments",
         "design",
         "stages",
+        "report_spend",
+        "official_scores",
         "gepa_sizing",
         "fanout_check",
         "call_count_gate",
@@ -445,6 +447,8 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "demo_mode",
         "train_size",
         "val_size",
+        "minibatch",
+        "minibatch_size",
         "control_identity_hash",
         "seed_note",
         "runs",
@@ -533,7 +537,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v9"
+    payload["schema"] = "whetstone_envs.step10_study/v10"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 

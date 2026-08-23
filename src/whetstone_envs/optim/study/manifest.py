@@ -120,7 +120,17 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: "the same experiment" was auditable from the manifest. Recorded rather
 #: than hashed, like the transport itself: it is a property of the
 #: invocation, so two studies of one design still pre-register identically.
-STUDY_MANIFEST_SCHEMA_VERSION = 8
+#: v9 makes the reporting pass durable and completes the arm record. It adds
+#: ``report_spend`` and ``official_scores`` -- each reporting evaluation's
+#: spend and each run's official score, written as they are bought rather
+#: than folded from memory at the end of the pass, so a crash mid-pass
+#: neither strands the spend of an evaluation already paid for nor lets a
+#: resume charge for it a second time. It also adds ``minibatch``/
+#: ``minibatch_size`` to ``ArmRecord``: v8 hashed ``minibatch_by_arm`` into
+#: the pre-registration but gave the arm record nowhere to carry it, so a
+#: manifest-driven MIPROv2 study silently ran unbatched under a design hash
+#: that said otherwise.
+STUDY_MANIFEST_SCHEMA_VERSION = 9
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -176,6 +186,8 @@ class ManifestKey(StrEnum):
     AMENDMENTS = "amendments"
     DESIGN = "design"
     STAGES = "stages"
+    REPORT_SPEND = "report_spend"
+    OFFICIAL_SCORES = "official_scores"
     GEPA_SIZING = "gepa_sizing"
     FANOUT_CHECK = "fanout_check"
     CALL_COUNT_GATE = "call_count_gate"
@@ -416,6 +428,21 @@ class SplitsRecord(_StrictModel):
 #: state with real consequences, and spelling it out is what stops it
 #: from reading as an omission or, worse, as a zero.
 PROVIDER_CONTROL_UNSET = "provider default"
+
+#: What the recorded ``seed`` says, because no static value is the truth.
+#:
+#: The seed is the one control the study never leaves to the provider and
+#: never binds to a constant. Every eval call carries a seed derived from
+#: the evaluation's own identity -- whetstone's
+#: ``provider_call_config_with_parameters`` sets it unconditionally from
+#: ``derive_rng_seed(task_hash, seed_index)``, and refuses any definition
+#: that cannot transport ``RequestControl.SEED`` rather than running
+#: unseeded. Recording the statically bound control here would print
+#: :data:`PROVIDER_CONTROL_UNSET` and tell a reader the provider chose the
+#: seed, which is the opposite of what the eval contract guarantees.
+#:
+#: A persisted-format literal, like the constant above it.
+PROVIDER_SEED_DERIVED_PER_CALL = "derived per call (eval contract)"
 
 
 class ProviderCallRecord(_StrictModel):
@@ -1075,6 +1102,20 @@ class ArmRecord(_StrictModel):
     #: pre-registration rather than left implicit in the run's own control.
     train_size: StrictInt | None
     val_size: StrictInt | None
+    #: Whether this arm minibatched, and at what size. Design rather than a
+    #: runtime knob, exactly like the train/val split: the two enter the
+    #: pre-registration's ``minibatch_by_arm``, and an arm that evaluated
+    #: each trial on a sampled batch bought different evidence for the same
+    #: claim than one that evaluated on the whole valset. Recorded here
+    #: because the spec every stage after Stage 0 runs is rebuilt from the
+    #: arm record; without it a manifest-driven MIPROv2 arm silently fell
+    #: back to unbatched under a design hash that said it batched.
+    #:
+    #: The two travel together, as they do on ``ArmSpec``: minibatching on
+    #: without a size resolves the batch to the whole valset, which is
+    #: minibatching in name only.
+    minibatch: StrictBool = False
+    minibatch_size: StrictInt | None = None
     control_identity_hash: StrictStr
     seed_note: StrictStr
     runs: tuple[RunRecord, ...]
@@ -1087,6 +1128,16 @@ class ArmRecord(_StrictModel):
             raise ValueError(
                 "an arm records both halves of its train/val split or neither"
             )
+        if self.minibatch and self.minibatch_size is None:
+            raise ValueError(
+                "an arm that minibatches records the size it batched at"
+            )
+        if not self.minibatch and self.minibatch_size is not None:
+            raise ValueError(
+                "an arm that records a minibatch size minibatches"
+            )
+        if self.minibatch_size is not None and self.minibatch_size < 1:
+            raise ValueError("a recorded minibatch_size is at least 1")
         if self.train_size is not None and self.train_size < 1:
             raise ValueError("a recorded train_size is at least 1")
         if self.val_size is not None and self.val_size < 1:
@@ -1387,18 +1438,30 @@ class StageRecord(_StrictModel):
     provider are different evidence for the same claim, and every number
     the report prints downstream of a stage inherits which one it was.
 
-    ``spend`` is the stage's own provider spend, one entry per role, in the
+    ``spend`` is what the stage's *runs* cost, one entry per role, in the
     same record shape a run reports. Stage 0's anchors spend through the
     evaluation engine rather than through an optimizer run, so without this
     the study's most expensive calibration would be the one part of the
     accounting with no total. A stage that spent nothing measurable -- a
     fake-transport stage, whose rows carry no provider telemetry -- records
     an empty tuple rather than a fabricated zero-cost role.
+
+    ``report_spend`` is what the *reporting pass* cost, kept separate
+    because the two accumulate by opposite rules. Run spend is carried by
+    the runs a given invocation executed, so a resume adds what it newly
+    paid to what earlier invocations paid. Reporting spend is folded from
+    the manifest's own durable per-evaluation records, so it is already the
+    whole pass every time it is computed -- adding it to what was there
+    would bill the same evaluations once per resume. Summing them into one
+    field made those two rules indistinguishable; :attr:`total_spend` is
+    the number a reader wants, and it is derived rather than stored so the
+    parts cannot drift from the total.
     """
 
     stage: StrictStr
     transport: StrictStr
     spend: tuple[RunSpendRecord, ...] = ()
+    report_spend: tuple[RunSpendRecord, ...] = ()
 
     @model_validator(mode="after")
     def _validate_stage(self) -> StageRecord:
@@ -1412,9 +1475,147 @@ class StageRecord(_StrictModel):
                 f"a stage record names one of {list(TRANSPORT_NAMES)}, "
                 f"got {self.transport!r}"
             )
+        for field in (self.spend, self.report_spend):
+            roles = [entry.role for entry in field]
+            if len(set(roles)) != len(roles):
+                raise ValueError(
+                    "each provider role is reported once per stage"
+                )
+        return self
+
+    @property
+    def total_spend(self) -> tuple[RunSpendRecord, ...]:
+        """The stage's whole bill: its runs plus its reporting pass.
+
+        Derived rather than stored, so the total can never disagree with
+        the parts it is made of. The fold re-applies the honesty rules, so
+        an unknown ``usd`` on either side keeps the total unknown rather
+        than letting the priced half stand in for the whole.
+
+        The fold is imported at call time because it lives in the module
+        that imports *this* one: spend projects into these records, so the
+        dependency runs that way and a module-level import would close the
+        cycle.
+        """
+        from whetstone_envs.optim.study.spend import (  # noqa: PLC0415
+            run_spend_records,
+        )
+
+        return run_spend_records((*self.spend, *self.report_spend))
+
+
+class ReportSpendEntry(_StrictModel):
+    """One reporting evaluation's spend, made durable as it is bought.
+
+    The reporting pass buys evaluations one at a time -- an official score
+    per run, then a held-out measurement per arm, then the anchors -- and
+    each one reaches the provider before the stage's row is written. Held
+    only in memory, those numbers are wrong in both directions across a
+    crash: a resume that re-folded the in-memory ledger onto a row that
+    already carried them would *double* the pass's bill, and a resume that
+    rebuilt its claims without re-evaluating would drop the spend of every
+    evaluation the crashed invocation had already paid for.
+
+    So each evaluation records its own spend here the moment it completes,
+    and the stage's row is folded from these records rather than from what
+    accumulated in this process. That makes the fold idempotent: re-folding
+    the same evaluations yields the same total, because the total is a
+    function of what is on disk rather than of what this invocation
+    happened to buy.
+
+    ``evidence_key`` is the evaluation's own ``(schema, content_hash)``,
+    which is what makes an entry both checkable and de-duplicable: the same
+    evaluation recorded twice is one purchase, and the number is
+    re-derivable from the evidence rather than taken on the ledger's word.
+    """
+
+    #: The evidence's schema name and content hash, in that order. A pair
+    #: rather than a nested record: it is an identity, and the manifest
+    #: cites identities as the two strings that form them.
+    evidence_schema: StrictStr
+    evidence_content_hash: StrictStr
+    #: Which pass bought it -- official selection, held-out, an anchor --
+    #: and which candidate it measured, so a reader can attribute any part
+    #: of the total to the evaluation that produced it.
+    purpose: StrictStr
+    candidate_name: StrictStr
+    stage: StrictStr
+    spend: tuple[RunSpendRecord, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_report_spend(self) -> ReportSpendEntry:
+        if not self.evidence_schema.strip() or not (
+            self.evidence_content_hash.strip()
+        ):
+            raise ValueError("a report spend entry cites its evidence")
+        if not self.purpose.strip() or not self.candidate_name.strip():
+            raise ValueError(
+                "a report spend entry names its purpose and candidate"
+            )
+        if self.stage not in STAGE_IDS:
+            raise ValueError(
+                f"a report spend entry names one of {list(STAGE_IDS)}, "
+                f"got {self.stage!r}"
+            )
         roles = [entry.role for entry in self.spend]
         if len(set(roles)) != len(roles):
-            raise ValueError("each provider role is reported once per stage")
+            raise ValueError(
+                "each provider role is reported once per evaluation"
+            )
+        return self
+
+    @property
+    def evidence_key(self) -> tuple[str, str]:
+        """The evidence identity this entry was derived from."""
+        return (self.evidence_schema, self.evidence_content_hash)
+
+
+class OfficialScoreEntry(_StrictModel):
+    """One run's official score, made durable the first time it is bought.
+
+    Official-selection scoring is a provider call per run, and it happens
+    on every reporting invocation -- including a resume, which re-scored
+    every run of every already-reported arm purely to rebuild a report the
+    manifest could already have answered. That is a second charge for a
+    number the study had already bought.
+
+    Recording the score here is what lets a resume rebuild an arm's report
+    without re-issuing anything. The spend for these calls is recorded
+    separately, as a :class:`ReportSpendEntry`, so the two facts stay
+    independently checkable: what the run scored, and what learning that
+    cost.
+    """
+
+    run_id: StrictStr
+    arm_id: StrictStr
+    stage: StrictStr
+    score: StrictFloat
+    eval_config_hash: StrictStr
+    #: Rows achieved over rows requested, carried because a mean without
+    #: its completeness cannot be judged against the backstop.
+    completeness: StrictFloat
+    #: The per-task vector the scoring returned. Recorded because the
+    #: rebuild must reproduce the score object exactly rather than an
+    #: aggregate that merely agrees with it on the mean.
+    per_task: tuple[StrictFloat, ...]
+
+    @model_validator(mode="after")
+    def _validate_official_score(self) -> OfficialScoreEntry:
+        if not self.run_id.strip() or not self.arm_id.strip():
+            raise ValueError("an official score names its run and arm")
+        if not self.per_task:
+            raise ValueError("an official score carries its per-task vector")
+        if not 0.0 <= self.completeness <= 1.0:
+            raise ValueError("completeness is a fraction in [0, 1]")
+        if not self.eval_config_hash.strip():
+            raise ValueError("an official score names its Eval Config")
+        if self.stage not in STAGE_IDS:
+            raise ValueError(
+                f"an official score names one of {list(STAGE_IDS)}, "
+                f"got {self.stage!r}"
+            )
+        if self.stage == StageId.STAGE0.value:
+            raise ValueError("stage0 selects nothing; it scores no runs")
         return self
 
 
@@ -1591,6 +1792,34 @@ def _validate_design_matches_pre_registration(
         )
 
 
+def _validate_reporting_purchases(
+    *,
+    report_spend: tuple[ReportSpendEntry, ...],
+    official_scores: tuple[OfficialScoreEntry, ...],
+) -> None:
+    """Each reporting purchase is recorded at most once per stage.
+
+    Structural rather than checked where the numbers are folded, because
+    the fold's whole correctness rests on it: the stage's reporting row is
+    computed from these records on every invocation, so a duplicate entry
+    would bill one evaluation once per resume -- which is the failure the
+    durable records exist to prevent.
+    """
+    bought = [(entry.evidence_key, entry.stage) for entry in report_spend]
+    if len(set(bought)) != len(bought):
+        # One evaluation cited twice was paid for once.
+        raise ValueError(
+            "each reporting evaluation is recorded at most once per stage"
+        )
+    scored = [(entry.run_id, entry.stage) for entry in official_scores]
+    if len(set(scored)) != len(scored):
+        # One official score per run per stage: the pilot and the full
+        # design each score, over different run sets.
+        raise ValueError(
+            "each run is officially scored at most once per stage"
+        )
+
+
 class StudyManifest(_StrictModel):
     """``study.json``: everything the report is allowed to print.
 
@@ -1623,6 +1852,15 @@ class StudyManifest(_StrictModel):
     amendments: tuple[AmendmentRecord, ...] = ()
     design: DesignRecord | None = None
     stages: tuple[StageRecord, ...] = ()
+    #: Every reporting evaluation this study has paid for, in issue order.
+    #: Durable as it is bought rather than folded at the end of the pass,
+    #: so a crash mid-pass neither loses the spend of what was already
+    #: bought nor lets a resume charge for it twice.
+    report_spend: tuple[ReportSpendEntry, ...] = ()
+    #: Every run's official-selection score, durable the first time it is
+    #: bought, so a resume rebuilds an arm's report from the manifest
+    #: instead of re-scoring runs the study already paid to score.
+    official_scores: tuple[OfficialScoreEntry, ...] = ()
     gepa_sizing: GepaSizingRecord | None = None
     fanout_check: FanoutCheckRecord | None = None
     call_count_gate: CallCountGateRecord | None = None
@@ -1672,6 +1910,10 @@ class StudyManifest(_StrictModel):
         arm_ids = [arm.arm_id for arm in self.arms]
         if len(set(arm_ids)) != len(arm_ids):
             raise ValueError("arm ids are distinct")
+        _validate_reporting_purchases(
+            report_spend=self.report_spend,
+            official_scores=self.official_scores,
+        )
         selected = [(entry.arm_id, entry.stage) for entry in self.selection]
         if len(set(selected)) != len(selected):
             # L2 as a structural rule: one selection per arm per stage,
@@ -2033,6 +2275,7 @@ __all__ = [
     "PROVENANCE_ORIGINAL",
     "PROVENANCE_VALUES",
     "PROVIDER_CONTROL_UNSET",
+    "PROVIDER_SEED_DERIVED_PER_CALL",
     "SELECTION_RULE_ARGMAX_OFFICIAL",
     "STAGE_IDS",
     "STUDY_MANIFEST_NAME",
@@ -2059,12 +2302,14 @@ __all__ = [
     "ManifestExistsError",
     "ManifestKey",
     "ModelsRecord",
+    "OfficialScoreEntry",
     "PointerCheck",
     "PointerCheckReport",
     "PopulationRecord",
     "PreRegistrationRecord",
     "PreRegistrationViolationError",
     "ProviderCallRecord",
+    "ReportSpendEntry",
     "RunRecord",
     "RunSpendRecord",
     "SelectionRecord",

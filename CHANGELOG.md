@@ -103,6 +103,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whatever just ran.
 
 ### Fixed
+- **The reporting pass is durable, so a resume neither loses its spend nor
+  bills it twice.** Official-selection scoring, the held-out evaluations,
+  and the anchors each reach the provider before the stage's row is
+  written, and their cost lived only in an in-memory ledger until that
+  write. A crash in that window was wrong in both directions: the spend of
+  everything already bought was stranded in a process that was gone, and a
+  resume that re-folded the ledger onto a row already carrying it billed
+  the same evaluations a second time. Each evaluation now records its own
+  spend into the manifest's `report_spend` block the moment it is priced,
+  keyed by the evidence's `(schema, content_hash)`, and the stage's row is
+  folded from those durable records rather than from what this invocation
+  happened to buy — so the fold is a function of what is on disk and is
+  safe to repeat. `StageRecord` gains `report_spend` beside `spend`,
+  because the two accumulate by opposite rules; `total_spend` derives the
+  whole bill so the parts cannot drift from the total.
+- **A resumed arm no longer re-buys the official scores it already paid
+  for.** Official scoring is a provider call per run and ran
+  unconditionally on every invocation, so resuming a stage re-scored every
+  run of every already-reported arm purely to rebuild a report the
+  manifest could have answered — a second charge that was invisible in the
+  result, since the rebuilt report looked identical either way. Each run's
+  score is now recorded in `official_scores` the first time it is bought,
+  and a fully reported arm rebuilds from the manifest issuing zero scorer
+  calls.
+- **A study's minibatch design reaches the runs it describes.** The
+  pre-registration hashed `minibatch_by_arm`, but `ArmRecord` had nowhere
+  to carry it, so `spec_from_manifest` rebuilt every arm unbatched: a
+  manifest-driven MIPROv2 study could pin a batch size, validate its own
+  design hash, and then evaluate every trial on the whole valset. The arm
+  record now carries `minibatch`/`minibatch_size`, they round-trip through
+  the rebuilt spec, and an arm record disagreeing with the pinned
+  `minibatch_by_arm` is refused as a pre-registration violation — the same
+  class of check as the train/val split.
+- **The recorded `seed` says what is actually on the wire.** The manifest
+  recorded the statically bound seed control, which is unset, so
+  `provider_calls[].seed` read `provider default` — telling a reader the
+  provider chose the seed. The opposite is true: whetstone's eval contract
+  puts a derived seed on every call via `derive_rng_seed(task_hash,
+  seed_index)` and refuses a definition that cannot transport it. The
+  field now records `derived per call (eval contract)`. `reasoning`,
+  `temperature`, and `top_p` remain truthfully `provider default`.
 - **null-A no longer flattens the template it controls for.** The
   perturber split the seed on whitespace and rejoined its tokens with
   single spaces, so every draft it produced lost the template's entire

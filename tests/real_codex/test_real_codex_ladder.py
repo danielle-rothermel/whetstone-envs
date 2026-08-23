@@ -836,26 +836,19 @@ def test_rung8_the_c18_family_runs_unchanged(ladder_output) -> None:
 def _assert_codex_arm_is_scorable(study_dir: Path) -> None:
     """Every Codex run the stage produced ended somewhere the study can score.
 
-    This exists because of a real failure observed on this rung. The agent
-    spent its whole capacity on eight genuinely distinct templates and
-    then named the one that happened to be byte-identical to the c19 seed.
-    whetstone-ai refuses that as a selection-contract violation
-    (``proposal 'prompt_template' mutation must differ from its base``),
-    so the Step terminalizes as *failed* with no accepted and no retained
-    candidate -- and ``arms.py``'s ``_terminal_template`` then finds
-    neither, raising ``StageError`` and taking down the whole stage.
+    An agent that prefers the seed has two ways to say so, and as of
+    whetstone-ai 0.1.10 both are supported. Selecting nothing
+    (``selected_call_id=null``) yields ``seed_retained``, and *selecting* a
+    candidate byte-identical to the seed now yields ``seed_retained`` too
+    rather than terminalizing the Step as failed. Either way the run ends
+    with a template the study can score.
 
-    Selecting nothing (``selected_call_id=null``) is the supported way to
-    say "the seed won", and it yields a clean ``seed_retained``. The
-    production prompt says so. What it does not say is that *selecting* a
-    seed-identical candidate is a hard failure rather than the same
-    thing -- so a well-behaved agent that prefers the seed has two ways
-    to express it, and one of them destroys the run.
-
-    The assertion is therefore on the property the §6 run actually needs:
-    each run either accepted something or retained something. A run that
-    satisfies neither is the failure above, and the message says so
-    rather than leaving a bare ``StageError`` from three frames away.
+    The assertion is on the property the §6 run actually needs, which is
+    the same under both spellings: each run either accepted something or
+    retained something. A run that satisfies neither left
+    ``arms.py``'s ``_terminal_template`` with nothing to score, and the
+    message says so rather than leaving a bare ``StageError`` from three
+    frames away.
     """
     for run_dir in sorted((study_dir / "runs").glob("codex-*")):
         if not (run_dir / "result.json").is_file():
@@ -868,10 +861,10 @@ def _assert_codex_arm_is_scorable(study_dir: Path) -> None:
         assert scorable, (
             f"the Codex run at {run_dir} ended with neither an accepted "
             f"nor a retained candidate, so the study cannot score it: "
-            f"{result.terminal_failure}. If the failure is "
-            "'mutation must differ from its base', the agent selected a "
-            "candidate identical to the seed -- a supported preference "
-            "the production prompt offers no safe way to express."
+            f"{result.terminal_failure}. A run that preferred the seed "
+            "should have retained it -- whether the agent selected "
+            "nothing or selected a seed-identical candidate, both "
+            "terminalize as 'seed_retained'."
         )
 
 

@@ -613,6 +613,12 @@ def spec_from_manifest(
             # would let a rerun quietly measure a different design.
             train_size=arm.train_size,
             val_size=arm.val_size,
+            # Read back for the split's reason: minibatching is design,
+            # it is hashed into the pre-registration, and a spec rebuilt
+            # without it would run an arm unbatched under a design hash
+            # that says it batched.
+            miprov2_minibatch=arm.minibatch,
+            miprov2_minibatch_size=arm.minibatch_size,
         )
         for arm in manifest.arms
     )
@@ -685,6 +691,24 @@ def _require_pinned_split(manifest: StudyManifest) -> None:
             "these arm records disagree with the pre-registered "
             "split_by_arm, so the spec they rebuild is not the design this "
             "study registered: " + "; ".join(disagreements)
+        )
+    batched = [
+        f"{arm.arm_id}: records {arm.minibatch_size}, pre-registered "
+        f"{pinned.minibatch_by_arm[arm.arm_id]}"
+        for arm in manifest.arms
+        if arm.arm_id in pinned.minibatch_by_arm
+        and arm.minibatch_size != pinned.minibatch_by_arm[arm.arm_id]
+    ]
+    if batched:
+        # The same class of error as the split, for the same reason: an
+        # arm that evaluated each trial on a sampled batch bought
+        # different evidence for the same claim than one that evaluated
+        # on the whole valset, and ``minibatch_by_arm`` is hashed while
+        # the arm record is not.
+        raise PreRegistrationViolationError(
+            "these arm records disagree with the pre-registered "
+            "minibatch_by_arm, so the spec they rebuild is not the design "
+            "this study registered: " + "; ".join(batched)
         )
 
 

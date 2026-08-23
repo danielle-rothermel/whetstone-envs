@@ -728,3 +728,121 @@ def test_the_batch_size_reaches_the_runner_spec(tmp_path: Path) -> None:
     off = runner._spec_for(_miprov2_arm(), seed=2000, run_dir=tmp_path / "run")
     assert off.miprov2_minibatch is False
     assert off.miprov2_minibatch_size is None
+
+
+def test_a_recorded_minibatch_reaches_the_rebuilt_spec(
+    tmp_path: Path,
+) -> None:
+    """A manifest-driven MIPROv2 arm runs the batch size it recorded.
+
+    Fails-before: ``ArmRecord`` had no minibatch fields at all, so
+    ``spec_from_manifest`` rebuilt every arm unbatched. The
+    pre-registration still hashed ``minibatch_by_arm``, so a study could
+    pin a batch size, validate its own design hash, and then run every
+    trial on the whole valset -- buying different evidence from the design
+    it registered, with nothing in the manifest to show it.
+    """
+    from whetstone_envs.optim.study.manifest import read_study_manifest
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    pinned = manifest.pre_registration
+    assert pinned is not None
+    batched = tuple(
+        arm.model_copy(update={"minibatch": True, "minibatch_size": 8})
+        if arm.arm_id == "miprov2"
+        else arm
+        for arm in manifest.arms
+    )
+    repinned = pinned.model_copy(
+        update={"minibatch_by_arm": {**pinned.minibatch_by_arm, "miprov2": 8}}
+    )
+    spec = spec_from_manifest(
+        manifest.model_copy(
+            update={"arms": batched, "pre_registration": repinned}
+        )
+    )
+    arm = next(entry for entry in spec.arms if entry.arm_id == "miprov2")
+    assert arm.miprov2_minibatch is True
+    assert arm.miprov2_minibatch_size == 8
+
+
+def test_arm_records_disagreeing_with_the_pinned_minibatch_are_refused(
+    tmp_path: Path,
+) -> None:
+    """The pinned batch size is the truth; the arm record is not protected.
+
+    The same class of drift as the split, and refused the same way: an arm
+    that evaluated each trial on a sampled batch bought different evidence
+    for the same claim than one that evaluated on the whole valset, and
+    ``minibatch_by_arm`` is immutable and hashed while the arm record is
+    rewritten every time a stage merges runs.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        PreRegistrationViolationError,
+        read_study_manifest,
+    )
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    pinned = manifest.pre_registration
+    assert pinned is not None
+    # The pinned design does not minibatch; the record claims it did.
+    assert pinned.minibatch_by_arm["miprov2"] is None
+    edited = tuple(
+        arm.model_copy(update={"minibatch": True, "minibatch_size": 8})
+        if arm.arm_id == "miprov2"
+        else arm
+        for arm in manifest.arms
+    )
+    with pytest.raises(
+        PreRegistrationViolationError, match="minibatch_by_arm"
+    ):
+        spec_from_manifest(manifest.model_copy(update={"arms": edited}))
+
+
+def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
+    """The design hash is stored identity, so its value is pinned.
+
+    Every other test of this hash checks that two designs differ, which a
+    hash of the *wrong document* would satisfy just as well. This one pins
+    the actual digest over a fixed design, so a change to the payload's
+    field names, key order, or value spelling is caught rather than
+    silently re-hashing every study ever recorded.
+
+    ``minibatch_by_arm`` carries a real size rather than all-``None``,
+    because an all-``None`` mapping is exactly the shape a payload that
+    dropped the key entirely would produce.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        pre_registration_design_hash,
+    )
+
+    assert (
+        pre_registration_design_hash(
+            k_repeat=3,
+            k_run_by_arm={
+                "copro": 5,
+                "gepa": 5,
+                "miprov2": 5,
+                "null-identity": 1,
+            },
+            split_by_arm={
+                "copro": None,
+                "gepa": (2, 2),
+                "miprov2": (2, 2),
+                "null-identity": None,
+            },
+            minibatch_by_arm={
+                "copro": None,
+                "gepa": None,
+                "miprov2": 8,
+                "null-identity": None,
+            },
+            ci_level=CI_LEVEL,
+            resamples=RESAMPLES,
+            bootstrap_seed=0,
+            correction=CORRECTION_RULE,
+            m=HOLM_FAMILY_SIZE,
+            completeness_backstop=0.9,
+        )
+        == "abd85e49230ac497fada56682074b4312ce6281ff6a951bea09ecc9fbaa23a11"
+    )

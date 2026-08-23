@@ -1501,26 +1501,31 @@ NO_PROVIDER_STAGE_DETAIL = "no provider reached (fake transport)"
 def _stage_spend_detail(record: StageRecord) -> str:
     """What one stage spent, or why there is nothing to report.
 
-    An empty ``spend`` tuple means one of two opposite things, and the
-    transport is what tells them apart. A fake-transport stage reached no
-    provider, so there is no bill. A **paid** stage that recorded nothing
-    called a provider and lost track of what it bought -- reporting that as
+    Read off ``total_spend``, which is the stage's runs *and* its
+    reporting pass. The two are stored apart because they accumulate by
+    opposite rules, but a reader asking what a stage cost is asking for
+    both, and the run-side figure alone would understate a paid stage by
+    the whole pass its efficacy claims are made against.
+
+    An empty total means one of two opposite things, and the transport is
+    what tells them apart. A fake-transport stage reached no provider, so
+    there is no bill. A **paid** stage that recorded nothing called a
+    provider and lost track of what it bought -- reporting that as
     "reached no provider" would describe a fully billed stage as a free
     one, which is the reading this branch exists to prevent.
     """
-    if not record.spend:
+    spend = record.total_spend
+    if not spend:
         if record.transport == TransportName.FAKE.value:
             return NO_PROVIDER_STAGE_DETAIL
         return UNLEDGERED_STAGE_DETAIL
-    calls = sum(entry.calls for entry in record.spend)
-    tokens = sum(
-        entry.input_tokens + entry.output_tokens for entry in record.spend
-    )
-    unpriced = sum(entry.unpriced_calls for entry in record.spend)
+    calls = sum(entry.calls for entry in spend)
+    tokens = sum(entry.input_tokens + entry.output_tokens for entry in spend)
+    unpriced = sum(entry.unpriced_calls for entry in spend)
     total = (
         None
-        if any(entry.usd is None for entry in record.spend)
-        else sum(entry.usd or 0.0 for entry in record.spend)
+        if any(entry.usd is None for entry in spend)
+        else sum(entry.usd or 0.0 for entry in spend)
     )
     return (
         f"{calls:,} calls, {tokens:,} tokens, {_usd(total, unpriced, calls)}"

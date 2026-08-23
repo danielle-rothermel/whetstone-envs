@@ -163,7 +163,29 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: *did*, not what the design registered, and the design's ``k_repeat`` is
 #: already pre-registered -- and ``None`` only on null-identity, which runs
 #: no optimizer and so has no search to have a repeat count.
-STUDY_MANIFEST_SCHEMA_VERSION = 11
+#: v12 pushes the provider concurrency down onto each run, as
+#: ``RunRecord.provider_concurrency``, and adds ``StageRecord``'s
+#: ``width_change_notes``.
+#:
+#: v11 recorded the width once per *stage*, which names what the latest
+#: invocation asked for rather than what the runs beneath it ran at -- the
+#: same gap ``transport`` closed at v7, for the same reason. A resumed arm
+#: stage reuses the run directories an earlier invocation created, so a
+#: resume at a different ``--provider-concurrency`` re-ran none of them,
+#: overwrote the stage's single width with the new one, and left every
+#: reused run described by a width it never ran at. A stage's wall time and
+#: its rate-limit and timeout failures are only interpretable against the
+#: width that produced them, so a misdescribed width silently rewrites what
+#: the stage's timing evidence means.
+#:
+#: Recorded rather than hashed, exactly like the stage-level field and like
+#: the transport: it is a property of the invocation that produced the run,
+#: not of the design, so two studies of one design run at two widths still
+#: pre-register identically. ``width_change_notes`` is what an authorized
+#: ``--allow-width-change`` writes, so a stage whose runs really do span two
+#: widths says so on its own record instead of leaving a reader to diff the
+#: runs.
+STUDY_MANIFEST_SCHEMA_VERSION = 12
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -325,6 +347,17 @@ TRANSPORT_NAMES: tuple[str, ...] = tuple(
 #: and the runner quotes it, and the CLI deliberately does not import the
 #: optimizer stack at module scope.
 DISCARD_STALE_RUNS_FLAG = "--discard-stale-runs"
+
+#: The operator's opt-in to resuming an arm stage at a different provider
+#: concurrency than its surviving runs were produced at, spelled once.
+#:
+#: The width is not readable off a run's artifacts -- it is an execution
+#: property no optimizer reads and nothing persists -- so a resume that
+#: changes it cannot record the reused runs truthfully by inspection. The
+#: stage refuses instead and names this flag as the recovery, which is why
+#: the constant lives beside the record it is refused against rather than
+#: beside either the CLI that declares it or the harness that quotes it.
+ALLOW_WIDTH_CHANGE_FLAG = "--allow-width-change"
 
 
 class _StrictModel(BaseModel):
@@ -1268,9 +1301,38 @@ class RunRecord(_StrictModel):
     #: evaluations do not agree on one count, which is a defect the stage
     #: refuses rather than a number to record.
     search_num_seeds: StrictInt | None = None
+    #: The provider concurrency this run actually ran at.
+    #:
+    #: **A run's width is its own execution history, not its stage's.**
+    #: The stage record names the width *this invocation* asked for; a
+    #: resumed arm stage reuses the run directories an earlier invocation
+    #: created, so the runs beneath a stage row can have been produced at
+    #: a different width than the row names. Without this field the stage
+    #: row was the only record of either, and a resume at a new width
+    #: overwrote it -- so every reused run silently acquired a width it
+    #: never ran at, and the wall time and rate-limit failures that width
+    #: is read against became uninterpretable.
+    #:
+    #: Taken from the ``RunSpec`` this stage built rather than read back
+    #: off the run's artifacts, unlike ``search_num_seeds``, and the
+    #: difference is not an oversight: the width is an execution property
+    #: no optimizer reads and no control record hashes, so it is
+    #: deliberately absent from what a run persists. That is exactly why a
+    #: *reused* directory cannot have its width recovered, and why
+    #: :func:`~whetstone_envs.optim.study.stages.refuse_resumed_width_change`
+    #: refuses a resume that would have to guess it rather than recording
+    #: this invocation's width over evidence from another.
+    #:
+    #: Defaulted rather than required so run records written before this
+    #: field existed still load, reporting the width they in fact ran at:
+    #: that historical default is why
+    #: :data:`~whetstone_envs.optim.provider.DEFAULT_PROVIDER_CONCURRENCY`
+    #: is pinned as a literal instead of tracking the dependency's.
+    provider_concurrency: StrictInt = DEFAULT_PROVIDER_CONCURRENCY
 
     @model_validator(mode="after")
     def _validate_run(self) -> RunRecord:
+        validate_provider_concurrency(self.provider_concurrency)
         if not self.run_id.strip():
             raise ValueError("a run has a nonblank id")
         if not self.artifact_dir.strip():
@@ -1760,6 +1822,25 @@ class StageRecord(_StrictModel):
     #: calls -- a rate-limit storm and a run of transient 5xx cost the same
     #: attempts and mean different things about the provider.
     provider_transient_outcomes: tuple[StrictStr, ...] = ()
+    #: Each authorized change of this stage's provider concurrency, in the
+    #: order it was authorized.
+    #:
+    #: ``provider_concurrency`` above is *this* invocation's width, which is
+    #: the only honest thing a single field can say about a stage whose runs
+    #: span two. A resumed stage that changes the width is refused by
+    #: default precisely because the row would then misdescribe the runs it
+    #: kept; ``--allow-width-change`` is the operator saying the change is
+    #: deliberate, and this is where that assertion is recorded.
+    #:
+    #: An append-only note, not an :class:`AmendmentRecord`. An amendment
+    #: names evidence a re-calibration *invalidated and dropped*; a width
+    #: change drops nothing -- every run survives, at the width it ran at,
+    #: now recorded on each run. The width is an invocation property that
+    #: never entered the pre-registration hash, so changing it amends no
+    #: design and leaves the study's pre-registration untouched. What it
+    #: does change is how the stage's timing evidence reads, which is a
+    #: note rather than a drop.
+    width_change_notes: tuple[StrictStr, ...] = ()
     spend: tuple[RunSpendRecord, ...] = ()
     report_spend: tuple[RunSpendRecord, ...] = ()
 
@@ -1777,6 +1858,8 @@ class StageRecord(_StrictModel):
                 f"({len(self.provider_transient_outcomes)}) than the "
                 f"attempts it made ({self.provider_attempts})"
             )
+        if any(not note.strip() for note in self.width_change_notes):
+            raise ValueError("a width-change note is nonblank")
         if self.stage not in STAGE_IDS:
             raise ValueError(
                 f"a stage record names one of {list(STAGE_IDS)}, "
@@ -2064,6 +2147,27 @@ class AmendmentRecord(_StrictModel):
         if any(value < 0 for value in counts):
             raise ValueError("an amendment's drop counts are non-negative")
         return self
+
+
+def run_widths(arms: tuple[ArmRecord, ...]) -> tuple[int, ...]:
+    """Every distinct provider concurrency the recorded runs ran at.
+
+    Sorted and deduplicated, because the question both renderers ask is
+    "did this study's runs all run at one width", and the answer is a set
+    rather than a sequence. One element is the ordinary case and is what
+    the stage record already says; two or more is a study whose runs span
+    widths -- which only an authorized ``--allow-width-change`` resume can
+    produce -- and is the case a single stage-level field structurally
+    cannot report.
+
+    Owned here beside the record rather than at each caller, because the
+    CLI ledger and the report packet ask the same question and a
+    divergence between them would be a difference in what the study
+    appears to have done.
+    """
+    return tuple(
+        sorted({run.provider_concurrency for arm in arms for run in arm.runs})
+    )
 
 
 def recorded_transport(
@@ -2677,6 +2781,7 @@ def format_pointer_report(report: PointerCheckReport) -> Iterable[str]:
 
 
 __all__ = [
+    "ALLOW_WIDTH_CHANGE_FLAG",
     "AMENDMENT_REASONS",
     "AMENDMENT_REASON_TRANSPORT_CHANGE",
     "COMPLETENESS_BACKSTOP",
@@ -2739,6 +2844,7 @@ __all__ = [
     "pre_registration_design_hash",
     "read_study_manifest",
     "recorded_transport",
+    "run_widths",
     "study_manifest_path",
     "write_study_manifest",
 ]

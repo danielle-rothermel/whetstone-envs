@@ -68,10 +68,12 @@ from whetstone_envs.optim.study.leakage import (
     study_leakage_check,
 )
 from whetstone_envs.optim.study.manifest import (
+    ALLOW_WIDTH_CHANGE_FLAG,
     DISCARD_STALE_RUNS_FLAG,
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
     TRANSPORT_NAMES,
+    ArmRecord,
     LeakageCheckEntry,
     LeakageCheckRecord,
     RunSpendRecord,
@@ -82,6 +84,7 @@ from whetstone_envs.optim.study.manifest import (
     check_manifest_pointers,
     format_pointer_report,
     read_study_manifest,
+    run_widths,
     write_study_manifest,
 )
 from whetstone_envs.optim.study.power import (
@@ -216,7 +219,10 @@ class StageRunner(Protocol):
     ``provider_concurrency`` is recorded on the same terms and for the
     same reason: it does not change what the stage measures, but a
     stage's wall time and its rate-limit failures cannot be read without
-    knowing how wide it ran.
+    knowing how wide it ran. ``allow_width_change`` is the authorization
+    to change it on a resume, which is otherwise refused because a resume
+    reuses run directories produced at the old width and a run does not
+    persist the width it ran at.
     """
 
     def __call__(  # noqa: PLR0913
@@ -229,6 +235,7 @@ class StageRunner(Protocol):
         discard_stale_runs: bool = False,
         transport: str = FAKE_TRANSPORT,
         provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
+        allow_width_change: bool = False,
     ) -> StudyManifest: ...
 
 
@@ -526,6 +533,16 @@ UNLEDGERED_SPEND = (
 #: What the ledger prints when no stage has run yet.
 NO_STAGES_RUN = "no stage has run yet"
 
+#: What the ledger says when the study's runs did not all run at one
+#: provider concurrency.
+#:
+#: Only an authorized ``--allow-width-change`` resume produces this, and
+#: it is said explicitly because the ``width`` column above is one number
+#: per stage: a reader who saw only that column would take it for the
+#: width every run of the stage ran at, which is the confusion the
+#: per-run field exists to prevent.
+MIXED_RUN_WIDTHS = "runs did not all run at one width; per-run widths"
+
 
 def _stage_usd(spend: tuple[RunSpendRecord, ...]) -> str:
     """One stage's total USD, or the honest reason there is none.
@@ -562,7 +579,11 @@ def _no_spend_label(record: StageRecord) -> str:
     return UNLEDGERED_SPEND
 
 
-def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
+def stage_spend_lines(
+    stages: tuple[StageRecord, ...],
+    *,
+    arms: tuple[ArmRecord, ...] = (),
+) -> tuple[str, ...]:
     """Each recorded stage's transport, rows, calls, and USD.
 
     Read straight off the manifest's stage records, so ``plan`` before a
@@ -577,6 +598,17 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
     beside the transport because the two together say how the stage was
     executed rather than what it measured, and because it is what a
     reader comparing two stages' wall times needs.
+
+    When ``arms`` is supplied and the study's runs did **not** all run at
+    one width, the distinct per-run widths are printed under the table.
+    The column above is one number because a stage row holds one -- the
+    width of the latest invocation -- and a study resumed under
+    ``--allow-width-change`` really does hold runs from two. Printing the
+    stage width alone would then invite exactly the reading the per-run
+    field exists to prevent, so the difference is stated rather than left
+    to a reader diffing the manifest by hand. ``arms`` defaults to empty,
+    which prints nothing: a caller that has only the stage ledger is not
+    withholding the widths, it does not have them.
 
     A stage row is the whole of what the stage bought: its arms' optimizer
     runs, and the reporting pass -- official-selection scoring, the
@@ -618,6 +650,9 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
             f"{record.provider_concurrency:>6}{calls:>10,}"
             f"{tokens:>14,}  {_stage_usd(spend):>22}"
         )
+    widths = run_widths(arms)
+    if len(widths) > 1:
+        lines.append(f"  {MIXED_RUN_WIDTHS}: {', '.join(map(str, widths))}")
     lines.append("")
     return tuple(lines)
 
@@ -755,6 +790,7 @@ def _run_stage(  # noqa: PLR0913
     discard_stale_runs: bool = False,
     transport: str = FAKE_TRANSPORT,
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
+    allow_width_change: bool = False,
 ) -> int:
     if run_stage is None:
         print(
@@ -771,6 +807,7 @@ def _run_stage(  # noqa: PLR0913
         discard_stale_runs=discard_stale_runs,
         transport=transport,
         provider_concurrency=provider_concurrency,
+        allow_width_change=allow_width_change,
     )
     print(f"{stage} complete for study {manifest.study_id}")
     # The transport is echoed because it decides what the stage's numbers
@@ -781,7 +818,7 @@ def _run_stage(  # noqa: PLR0913
     # change on the next one.
     print(f"transport: {transport}")
     print(f"provider concurrency: {provider_concurrency}")
-    _emit(stage_spend_lines(manifest.stages))
+    _emit(stage_spend_lines(manifest.stages, arms=manifest.arms))
     print(study_dir / STUDY_MANIFEST_NAME)
     return EXIT_OK
 
@@ -1298,6 +1335,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        ALLOW_WIDTH_CHANGE_FLAG,
+        action="store_true",
+        help=(
+            "Resume an arm stage at a different provider concurrency than "
+            "the runs it will reuse were produced at, recording the change "
+            "as a note on the stage. Without this it is refused: a resume "
+            "re-runs only the seeds it has no record of and reuses the "
+            "rest, and a run does not persist the width it ran at, so the "
+            "stage row would describe runs by a width they never ran at -- "
+            "and the width is what a stage's wall time and its rate-limit "
+            "failures are read against. The width is an invocation "
+            "property and does not enter the pre-registration hash, so "
+            "changing it amends no design; each run records the width it "
+            "ran at."
+        ),
+    )
+    run.add_argument(
         PROVIDER_CONCURRENCY_FORCE_FLAG,
         action="store_true",
         help=(
@@ -1363,6 +1417,7 @@ def default_stage_runner(  # noqa: PLR0913
     discard_stale_runs: bool = False,
     transport: str = FAKE_TRANSPORT,
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
+    allow_width_change: bool = False,
 ) -> StudyManifest:
     """Run one stage on the fake transport, over the study's own directory.
 
@@ -1386,7 +1441,10 @@ def default_stage_runner(  # noqa: PLR0913
     ``provider_concurrency`` is forwarded the same way and does travel
     further: the binder sets it on every engine it builds and widens the
     transport's connection pool to match, and the stage writes it onto
-    its own record.
+    its own record and onto every run it executes.
+    ``allow_width_change`` travels with it and reaches only the arm
+    stage's pre-dispatch refusal, which is where a resume at a width its
+    surviving runs were not produced at is settled.
     """
     with bound_stage_environment(
         study_dir,
@@ -1394,6 +1452,7 @@ def default_stage_runner(  # noqa: PLR0913
         allow_real_codex=allow_real_codex,
         discard_stale_runs=discard_stale_runs,
         provider_concurrency=provider_concurrency,
+        allow_width_change=allow_width_change,
     ) as environment:
         return _run_stage_harness(
             study_dir=study_dir,
@@ -1461,6 +1520,7 @@ def _dispatch(
                 arguments.provider_concurrency,
                 force=arguments.force_provider_concurrency,
             ),
+            allow_width_change=arguments.allow_width_change,
         )
     if arguments.command == "report":
         return _run_report(
@@ -1540,6 +1600,7 @@ __all__ = [
     "MDE_TAU_SQ_CASES",
     "MEASURED_LABEL",
     "MEASURED_TASK_CALLS_BY_ARM",
+    "MIXED_RUN_WIDTHS",
     "NOT_CHECKED",
     "NO_RECORDED_SPEND",
     "NO_STAGES_RUN",

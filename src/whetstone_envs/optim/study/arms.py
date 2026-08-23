@@ -53,6 +53,7 @@ from whetstone_envs.optim.completeness import (
     TaskCompletenessError,
     require_task_completeness,
 )
+from whetstone_envs.optim.concurrency import DEFAULT_PROVIDER_CONCURRENCY
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.nulls import (
     NULL_IDENTITY_OPTIMIZER,
@@ -442,6 +443,21 @@ class StudyOptimizerRunner:
     #: A *matching* directory is still reused rather than discarded: this
     #: authorizes discarding the stale, not re-running the paid.
     discard_stale_runs: bool = False
+    #: How many task evaluations each in-search run drives against the
+    #: provider at once.
+    #:
+    #: Carried from ``whetstone-study run --provider-concurrency`` and
+    #: forwarded onto every arm's ``RunSpec``. It is here rather than left
+    #: to ``RunSpec``'s own default because the stage's scoring engines and
+    #: the operator's width are one decision: without this, the reporting
+    #: pass ran at the requested width while every in-search evaluation --
+    #: the large majority of a paid stage's calls -- ran at the default 5,
+    #: and the recorded width described neither.
+    #:
+    #: Like the transport, it changes how long an arm takes and never what
+    #: it computes, so no optimizer reads it and it never enters the
+    #: pre-registration hash.
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
 
     def __call__(
         self, *, arm: ArmSpec, seed: int, study_dir: Path
@@ -586,6 +602,12 @@ class StudyOptimizerRunner:
             n_per_stratum=self.n_per_stratum,
             pool_seed_start=self.pool_seed_start,
             seed=seed,
+            # Unconditional, unlike the arm-scoped forwards below: every
+            # optimizer evaluates, so every arm has to run at the width the
+            # operator asked for. This is also the Codex arm's only route to
+            # it -- ``_codex_runtime_config`` rebuilds the server's config
+            # from ``spec.provider_concurrency`` alone.
+            provider_concurrency=self.provider_concurrency,
             **(
                 {"demo_mode": arm.demo_mode}
                 if arm.demo_mode is not None
@@ -727,6 +749,15 @@ class StudyOptimizerRunner:
                 # asked for and so is the claim the record exists to be
                 # checkable against.
                 search_num_seeds=evidence.search_num_seeds,
+                # This invocation's width, and -- unlike the repeat count
+                # above -- taken from the runner rather than read back off
+                # the artifacts, because the width is an execution property
+                # a run deliberately does not persist. That is sound here
+                # only because a *reused* directory produced at another
+                # width never reaches this line: the stage refuses such a
+                # resume before dispatch, so every run recorded here either
+                # ran under this invocation or ran at this same width.
+                provider_concurrency=self.provider_concurrency,
             ),
             observed_task_calls=_observed_task_calls(result, run_dir=run_dir),
         )
@@ -783,6 +814,15 @@ class StudyOptimizerRunner:
                 audit_passed=True,
                 spend=(),
                 transport=self.transport,
+                # Null-B reaches no provider and so has no width of its
+                # own, but the record's field is not optional and a
+                # control that recorded some other number would read as
+                # having run at it. This invocation's width is the honest
+                # answer: it is what the control *would* have run at, and
+                # it keeps the stage's per-run widths agreeing rather than
+                # showing a spurious difference at the one arm that never
+                # ran.
+                provider_concurrency=self.provider_concurrency,
             ),
             observed_task_calls=0,
         )

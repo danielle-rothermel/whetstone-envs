@@ -308,6 +308,8 @@ class _Harness:
         *,
         real_codex_authorized: bool = False,
         codex_test_seam: CodexTestSeam | None = None,
+        provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
+        allow_width_change: bool = False,
     ) -> StageEnvironment:
         with bound_stage_environment(self.study_dir) as base:
             return StageEnvironment(
@@ -322,6 +324,8 @@ class _Harness:
                 load_recorded_run=self.load_recorded_run,
                 real_codex_authorized=real_codex_authorized,
                 codex_test_seam=codex_test_seam,
+                provider_concurrency=provider_concurrency,
+                allow_width_change=allow_width_change,
             )
 
 
@@ -1677,6 +1681,134 @@ def test_refolding_the_reporting_bill_restates_it_rather_than_doubling_it(
     assert [entry.calls for entry in twice.report_spend] == [4]
 
 
+def test_the_reporting_pass_refreshes_the_attempts_of_an_existing_row(
+    tmp_path: Path,
+) -> None:
+    """**A paid stage's row exists before the reporting pass ever runs.**
+
+    **Fails-before: 0 attempts, no outcomes.** The attempt counters were
+    read off the transport only in ``_record_report_spend``'s ``existing
+    is None`` branch. Stage 0 takes that branch -- it writes its row once,
+    at the end -- so the bug was invisible there. Stage 1 and Stage 2 do
+    not: the run pass records the stage long before the reporting pass
+    folds its bill onto the same row, so the ``else`` branch is the only
+    one a paid arm stage ever reaches, and it carried the run pass's
+    counters through untouched. Every retry the reporting pass fought --
+    the official scoring and held-out evaluation that every efficacy claim
+    is made against -- was dropped on the floor.
+
+    **Folded, never assigned.** The row's counters belong to the
+    invocations that already ran and the reporter's to this one, and a
+    resumed stage's second process starts its transport's tally at zero.
+    Assigning would report the resume's retries as the stage's whole
+    history and silently drop the original run's, so a stage that fought
+    the provider hard, crashed, and resumed cleanly would read as one that
+    never retried at all -- which is the crash shape this asserts.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    stage1 = StageId.STAGE1.value
+    manifest = read_study_manifest(study_dir)
+    priced = RunSpendRecord(
+        role=CostRole.TASK_MODEL.value,
+        calls=4,
+        cached_calls=0,
+        input_tokens=100,
+        output_tokens=20,
+        priced_calls=4,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+    # The row the *run* pass left behind, carrying the attempts that pass
+    # made. This is the state a paid Stage 1 is always in by the time its
+    # reporting pass starts.
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "report_spend": (
+                    ReportSpendEntry(
+                        evidence_schema="whetstone.eval.outputs",
+                        evidence_content_hash="a" * 64,
+                        purpose="official",
+                        candidate_name="copro",
+                        stage=stage1,
+                        transport=TransportName.OPENROUTER.value,
+                        spend=(priced,),
+                    ),
+                ),
+                "stages": (
+                    StageRecord(
+                        stage=stage1,
+                        transport=TransportName.OPENROUTER.value,
+                        provider_attempts=7,
+                        provider_transient_outcomes=("rate_limited",),
+                    ),
+                ),
+            }
+        ),
+        replace=True,
+    )
+    environment = _Harness(study_dir, scores={}).environment()
+    reporting = replace(
+        environment,
+        transport=TransportName.OPENROUTER.value,
+        # This process's transport, whose tally starts at zero and counts
+        # only what the reporting pass itself fought.
+        provider_attempts=_StubAttemptReporter(
+            attempts=4, transient_outcomes=("server_error", "rate_limited")
+        ),
+    )
+
+    _record_report_spend(
+        study_dir=study_dir, stage=StageId.STAGE1, environment=reporting
+    )
+    row = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == stage1
+    )
+    assert row.provider_attempts == 11, (
+        "the reporting pass's attempts did not reach the existing row"
+    )
+    # In order, run pass first: the sequence is what tells a rate-limit
+    # storm apart from a run of transient 5xx.
+    assert row.provider_transient_outcomes == (
+        "rate_limited",
+        "server_error",
+        "rate_limited",
+    )
+    # The reporting bill still landed, and the run-side row is untouched.
+    assert [entry.usd for entry in row.report_spend] == [0.5]
+
+
+def test_a_fake_reporting_pass_leaves_an_existing_rows_attempts_alone(
+    tmp_path: Path,
+) -> None:
+    """Nothing to add is not the same as zero to add.
+
+    A pass that bound no retrying transport reached no provider, so it
+    contributes nothing rather than a measured zero -- and must not reset
+    a row whose counters an earlier paid invocation wrote. Asserted at the
+    fold helper because ``_record_report_spend`` returns early on a
+    fake-transport environment, which is a different guard for a different
+    reason.
+    """
+    from whetstone_envs.optim.study.stages import _folded_attempts
+
+    existing = StageRecord(
+        stage=StageId.STAGE1.value,
+        transport=TransportName.OPENROUTER.value,
+        provider_attempts=7,
+        provider_transient_outcomes=("rate_limited",),
+    )
+    environment = _Harness(
+        _calibrated_study(tmp_path), scores={}
+    ).environment()
+    assert environment.provider_attempts is None
+    assert _folded_attempts(existing, environment) == {}
+
+
 def test_a_priced_reporting_evaluation_is_durable_before_the_pass_ends(
     tmp_path: Path,
 ) -> None:
@@ -2355,3 +2487,121 @@ def test_stage0_records_the_concurrency_it_ran_at(tmp_path: Path) -> None:
         "provider_concurrency"
         not in result.manifest.pre_registration.model_dump()
     )
+
+
+def test_a_resumed_stage_at_a_new_width_refuses_before_any_arm_runs(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: the resume dispatched and rewrote the recorded width.**
+
+    End to end through ``run_arm_stage``, because the property that
+    matters is that nothing is dispatched. A resumed arm stage re-runs
+    only the seeds it has no record of and reuses the run directories for
+    the rest, so a resume at a new width re-ran none of the survivors at
+    it -- and ``_arm_stage_record`` overwrote the stage's single
+    ``provider_concurrency`` with the new value, leaving the row naming a
+    width most of its runs never ran at.
+
+    Refused before dispatch and not after, because after is a stage of
+    provider spend later: the condition is settled entirely from the
+    manifest and costs nothing to check.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    first = _Harness(study_dir, scores=scores)
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=first.environment(provider_concurrency=16),
+    )
+    recorded = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == StageId.STAGE1.value
+    )
+    assert recorded.provider_concurrency == 16
+
+    resumed = _Harness(study_dir, scores=scores)
+    with pytest.raises(StageError) as excinfo:
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=resumed.environment(provider_concurrency=64),
+        )
+    assert "16" in str(excinfo.value)
+    assert "64" in str(excinfo.value)
+    # Nothing was dispatched: no run, no official score, no held-out call.
+    assert resumed.events == []
+    # And the recorded width still describes the runs the study holds.
+    assert (
+        next(
+            entry
+            for entry in read_study_manifest(study_dir).stages
+            if entry.stage == StageId.STAGE1.value
+        ).provider_concurrency
+        == 16
+    )
+
+
+def test_an_authorized_width_change_reaches_dispatch(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: no override existed, because no refusal did.**
+
+    The authorized resume clears the guard and proceeds. What it then
+    records -- this invocation's width on the stage row, the change as an
+    appended note, and no amendment -- is pinned on the merge itself in
+    ``test_transport``; what this covers is that the flag reaches
+    ``run_arm_stage`` and that the guard lets it through.
+
+    A resume of a *completed* Stage 1 is refused further down by the
+    held-out ledger, which measures each candidate exactly once. That is a
+    different guarantee and an older one, so it is what this asserts
+    against: reaching it proves the width guard did not fire.
+    """
+    from whetstone_envs.optim.study.selection import SelectionError
+
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=_Harness(study_dir, scores=scores).environment(
+            provider_concurrency=16
+        ),
+    )
+    before = read_study_manifest(study_dir)
+
+    with pytest.raises(SelectionError, match="exactly once"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=_Harness(study_dir, scores=scores).environment(
+                provider_concurrency=64, allow_width_change=True
+            ),
+        )
+
+    after = read_study_manifest(study_dir)
+    stage = next(
+        entry for entry in after.stages if entry.stage == StageId.STAGE1.value
+    )
+    # The row took this invocation's width and recorded the change.
+    assert stage.provider_concurrency == 64
+    assert len(stage.width_change_notes) == 1
+    assert "16" in stage.width_change_notes[0]
+    assert "64" in stage.width_change_notes[0]
+    # No amendment and no new pre-registration: the width is an
+    # invocation property, so the study's design is untouched.
+    assert after.amendments == before.amendments
+    assert after.pre_registration == before.pre_registration
+    # The runs it kept still say what they ran at, which the stage row
+    # structurally cannot.
+    assert {
+        run.provider_concurrency for arm in after.arms for run in arm.runs
+    } == {DEFAULT_PROVIDER_CONCURRENCY}

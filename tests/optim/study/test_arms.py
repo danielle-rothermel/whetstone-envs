@@ -316,6 +316,88 @@ def test_the_opt_in_is_not_forwarded_to_another_arm(tmp_path: Path) -> None:
     assert spec.allow_real_codex is False
 
 
+# --------------------------------------------------------------------------
+# The operator's provider width reaches every in-search evaluation
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "arm",
+    [
+        pytest.param(_arm(), id="miprov2"),
+        pytest.param(_codex_arm(), id="codex"),
+    ],
+)
+def test_the_operators_width_reaches_every_arms_run_spec(
+    tmp_path: Path, arm: ArmSpec
+) -> None:
+    """``--provider-concurrency`` has to reach the search, not just the report.
+
+    **Fails-before: 5 on every arm.** The flag reached the stage's scoring
+    engines and the stage record, but ``_spec_for`` built each arm's
+    ``RunSpec`` without a width -- so the in-search evaluations, which are
+    the large majority of a paid Stage 1 or Stage 2's calls, all ran at
+    ``RunSpec``'s default 5 while the manifest recorded the width the
+    operator asked for. One stage ran at two widths and was recorded as
+    one.
+
+    Unconditional across arms, unlike the Codex-scoped settings above:
+    every optimizer evaluates, so a width forwarded to only some of them
+    would make the arms incomparable on wall time for a reason that has
+    nothing to do with what they compute.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    spec = runner._spec_for(arm, seed=arm.seeds[0], run_dir=tmp_path / "run")
+    assert spec.provider_concurrency == 9
+
+
+def test_the_width_reaches_the_codex_arms_runtime_config(
+    tmp_path: Path,
+) -> None:
+    """The Codex server rebuilds its own engine, from the spec alone.
+
+    **Fails-before: 5.** ``build_codex_runtime_config`` already forwarded
+    ``spec.provider_concurrency`` faithfully, so this half was never
+    broken -- but it reads the width off the ``RunSpec`` the runner
+    builds, which means the Codex arm inherited the default along with
+    everyone else. Asserting the end of the chain rather than only
+    ``_spec_for`` is what makes the two halves one test: the arm that
+    evaluates inside a subprocess is the one whose width is easiest to
+    lose and hardest to notice.
+    """
+    from dataclasses import replace
+
+    from whetstone_envs.optim.run import (
+        _validate_spec,
+        build_codex_runtime_config,
+    )
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    spec = runner._spec_for(_codex_arm(), seed=4000, run_dir=tmp_path / "run")
+    config = build_codex_runtime_config(
+        spec=spec, validated=_validate_spec(spec)
+    )
+    assert config.provider_concurrency == 9
+
+
+def test_the_width_is_not_an_arm_field() -> None:
+    """An execution property must not enter the pre-registration hash.
+
+    The width changes how long a stage takes and never what it measures,
+    so it belongs to the invocation exactly like the transport and the
+    real-Codex authorization. On ``ArmSpec`` it would reach the manifest's
+    design and the pre-registration hash, making two runs of one design at
+    two widths pre-register as two different designs.
+    """
+    from dataclasses import fields
+
+    assert "provider_concurrency" not in {
+        field.name for field in fields(ArmSpec)
+    }
+
+
 def test_the_authorization_is_not_an_arm_field() -> None:
     """The design and the permission to spend stay separate types.
 
@@ -869,3 +951,45 @@ def test_a_zero_scoring_task_is_not_a_lost_task() -> None:
         per_task_counts=(4, 4, 4, 4),
     )
     require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_a_run_record_carries_the_width_the_run_ran_at(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: nothing on the record said how wide the run ran.**
+
+    The width lived on the stage row alone, which names what the *latest*
+    invocation asked for. A resumed arm stage reuses run directories
+    rather than re-running them, so a resume at a new width overwrote that
+    single field and left every reused run described by a width it never
+    ran at -- and a stage's wall time and its rate-limit failures are read
+    against nothing else.
+
+    Taken from the runner rather than read back off the artifacts, unlike
+    ``search_num_seeds``, because the width is an execution property a run
+    deliberately does not persist. The pre-dispatch refusal is what makes
+    that sound: a directory produced at another width never reaches this
+    record.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    result = runner(arm=_null_a_arm(), seed=5000, study_dir=tmp_path)
+    assert result.record.provider_concurrency == 9
+
+
+def test_the_control_records_this_invocations_width_too(
+    tmp_path: Path,
+) -> None:
+    """Null-B reaches no provider, and the field is not optional.
+
+    Recording some other number would read as a control that ran at it,
+    and recording this invocation's keeps the stage's per-run widths
+    agreeing rather than showing a spurious difference at the one arm
+    that never ran.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    result = runner(arm=_null_b_arm(), seed=6000, study_dir=tmp_path)
+    assert result.record.provider_concurrency == 9

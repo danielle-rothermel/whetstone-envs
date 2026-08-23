@@ -64,6 +64,7 @@ from whetstone_envs.optim.study.manifest import (
     SplitRecord,
     SplitsRecord,
     StageId,
+    StageRecord,
     StudyManifest,
     TransportName,
     check_manifest_pointers,
@@ -218,6 +219,29 @@ def _full_manifest() -> StudyManifest:
                     dropped_report_spend=1,
                 ),
             ),
+            "stages": (
+                StageRecord(
+                    stage="stage1",
+                    transport="openrouter",
+                    provider_concurrency=32,
+                    provider_attempts=7,
+                    provider_transient_outcomes=("rate_limited",),
+                    width_change_notes=("width changed from 16 to 32",),
+                    spend=(
+                        RunSpendRecord(
+                            role="task_model",
+                            calls=10,
+                            cached_calls=0,
+                            input_tokens=100,
+                            output_tokens=20,
+                            priced_calls=10,
+                            unpriced_calls=0,
+                            rows_missing_token_breakdown=0,
+                            usd=0.5,
+                        ),
+                    ),
+                ),
+            ),
             "gepa_sizing": GepaSizingRecord(
                 steps_per_run=732,
                 wall_seconds=1200.0,
@@ -343,8 +367,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 11
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v11"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 12
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v12"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -452,6 +476,16 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "completeness_rule",
         "completeness_backstop",
     ]
+    assert list(payload["stages"][0]) == [
+        "stage",
+        "transport",
+        "provider_concurrency",
+        "provider_attempts",
+        "provider_transient_outcomes",
+        "width_change_notes",
+        "spend",
+        "report_spend",
+    ]
     assert list(payload["gepa_sizing"]) == [
         "steps_per_run",
         "wall_seconds",
@@ -513,6 +547,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "spend",
         "transport",
         "search_num_seeds",
+        "provider_concurrency",
     ]
     assert list(payload["arms"][0]["runs"][0]["spend"][0]) == [
         "role",
@@ -606,7 +641,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v10"
+    payload["schema"] = "whetstone_envs.step10_study/v11"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 

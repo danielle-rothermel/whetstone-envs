@@ -401,3 +401,31 @@ def test_miprov2s_non_efficacy_modes_are_fidelity_arms() -> None:
     for arm_id in FIDELITY_ARM_IDS:
         assert by_id[arm_id].kind is ArmKind.FIDELITY
     assert by_id["miprov2"].kind is ArmKind.REAL
+
+
+def test_every_miprov2_mode_registers_the_same_trial_count() -> None:
+    """All three demo modes run at 10 trials, per revision 2 of the protocol.
+
+    Revision 1 derived per-mode counts (10 for ``fewshot``, 9 for the other
+    two) from DSPy's ``_recommended_num_trials`` at six candidates. Both
+    halves of that derivation are gone: the design pins three candidates,
+    where the same formula gives 7 and 5, and the study sets ``num_trials``
+    on the control directly, so auto-mode never runs. A count the code does
+    not derive is not a pre-registration, so the protocol registers one
+    number for all three modes.
+    """
+    miprov2_arms = [
+        arm for arm in STEP10_C19.arms if arm.optimizer == "miprov2"
+    ]
+    assert len(miprov2_arms) == 3
+    assert {arm.demo_mode for arm in miprov2_arms} == {
+        "fewshot",
+        "zeroshot",
+        "ground_only",
+    }
+    assert {arm.miprov2_num_trials for arm in miprov2_arms} == {
+        MIPROV2_NUM_TRIALS
+    }
+    assert {arm.miprov2_num_candidates for arm in miprov2_arms} == {
+        MIPROV2_NUM_CANDIDATES
+    }

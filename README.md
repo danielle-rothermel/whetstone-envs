@@ -320,6 +320,23 @@ rather than naming a file on one machine. `--protocol-doc` points at a
 different copy of that document; the digest always comes from the file
 read.
 
+**The in-repo protocol is Revision 2 (2026-08-23).** Revision 1 was
+written on 2026-08-22 and predates decisions ratified the next day, so its
+registered values and the executed design disagreed on sixteen points --
+the code being right about all of them. Revision 2 updates the body in
+place so every registered value equals `protocols.py`: held-out 440 with
+the MDE row recomputed, the explicit disjoint 44/44 train/val partition,
+the Codex evaluate-call cap at 8, GEPA pinned at 200 metric calls with
+reflection minibatch 3, null-B moved off the runner to the report harness,
+MIPROv2 at 3 candidates and a uniform 10 trials across all three demo
+modes, the Codex agent pinned to `gpt-5.6-sol`, MIPROv2 minibatch 35,
+COPRO 6/3, `K_REPEAT` stated to cover in-search evaluations, the measured
+`$0.00168`-per-call cost model, null-A routed through the ordinary runner,
+and the single real Codex run recorded as historical evidence only. A
+dated revision block at the head of the document lists each change with
+the plan note that decided it and carries revision 1's digest as a
+historical value.
+
 The manifest records no separate assignment digest: Step 10's authorising
 assignment *is* the protocol document, so `assignment_doc_sha256` is
 absent and the report says so, rather than carrying the digest of a fixed
@@ -508,8 +525,9 @@ same kind of fact under the same honesty rules.
 roughly **4,500 completion (reasoning) tokens per call** — about 7× the
 planning figure the protocol budgeted — at a measured **$0.00168 per
 call**. Carried forward at that rate, Stage 0 costs roughly **$9** and
-Stage 2 roughly **$210**, against a protocol estimate built on the smaller
-per-call figure.
+the whole study **$152-$176**, which is the cost model revision 2 of the
+protocol now registers -- revision 1 budgeted 30 completion tokens per
+call and called the study a small-tens-of-dollars run.
 
 The rate is a property of the model and the prompts, not a fixed constant,
 so it is not a number to plan from twice. Run Stage 0, then read

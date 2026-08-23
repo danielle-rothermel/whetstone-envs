@@ -126,7 +126,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   every recorded config and turn L1 into a check that always agrees with
   whatever just ran.
 
+### Changed
+- **The registered protocol document is Revision 2 (2026-08-23).** The
+  shipped text was written on 2026-08-22 and predates decisions ratified
+  the next day, so the pre-registration a reviewer diffs against and the
+  design the code executes disagreed on sixteen values — the code being
+  correct on all of them. Revision 2 updates the body in place so every
+  registered value equals `protocols.py`: held-out 440 with the MDE table
+  recomputed at 0.0622/0.0690, the explicit disjoint 44/44 train/val
+  partition, the Codex evaluate-call cap lowered from 20 to 8, GEPA pinned
+  at 200 metric calls with reflection minibatch 3, null-B moved off the
+  runner to the report harness, null-A routed through the ordinary runner,
+  MIPROv2 at 3 candidates and a uniform 10 trials across all three demo
+  modes, the Codex agent pinned to `gpt-5.6-sol`, MIPROv2 minibatch 35,
+  COPRO 6/3, `K_REPEAT` stated to cover in-search evaluations, the
+  measured `$0.00168`-per-call cost model with the study priced at
+  $152–$176, and the single real Codex run recorded as historical evidence
+  only. A dated revision block at the head lists each change against the
+  plan note that decided it; the pinned digest moves from `a311de47…`,
+  now a historical value, to `1fa2102b…`. MIPROv2's per-mode trial counts
+  are retired rather than re-derived: the old 10/9 split came from
+  auto-mode at six candidates, the design pins three, and the study sets
+  `num_trials` on the control so auto-mode never runs.
+
 ### Fixed
+- **Fidelity arms no longer produce efficacy verdicts.** MIPROv2's
+  `zeroshot` and `ground_only` modes run once each as evidence for two
+  audit invariants. They pass their audits and are measured on held-out,
+  which was the whole basis the report used to decide a verdict, so both
+  were reported as efficacy results — five claims where the design
+  pre-registers four, each from a single run and none in the Holm family.
+  `ArmKind` gains `FIDELITY` beside `REAL` and `NULL`, `ArmRecord` carries
+  the role, and it is hashed into the pre-registration as `kind_by_arm`,
+  so an arm cannot be promoted into the family after its interval is
+  visible. The analysis writes no held-out row for a fidelity arm rather
+  than computing one and declining to print it, and the report lists them
+  in their own section with their audit result and no verdict column. A
+  golden pins the Holm family to exactly the four `REAL` arms.
 - **The pinned search shape reaches the runs it describes** (manifest
   schema v10). Four registered control values never arrived.
   `StudyOptimizerRunner._spec_for` forwarded neither `copro_breadth` nor

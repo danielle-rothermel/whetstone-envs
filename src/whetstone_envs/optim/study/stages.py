@@ -219,6 +219,7 @@ class StageEnvironment:
     #: ``run_optimizer`` carries the same authorization and remains the
     #: thing that actually gates the spend, together with the opt-in
     #: environment variable.
+    real_codex_authorized: bool = False
     #: Where the reporting pass's own spend accumulates.
     #:
     #: Official-selection scoring and held-out evaluation reach the
@@ -229,7 +230,6 @@ class StageEnvironment:
     #: pass is done. ``None`` on a caller that supplies its own
     #: collaborators, which ledgers nothing rather than inventing a bill.
     report_spend: ReportSpendLedger | None = None
-    real_codex_authorized: bool = False
     #: How a test points the harness's Codex preflight at the scripted
     #: fake CLI instead of a real session.
     #:

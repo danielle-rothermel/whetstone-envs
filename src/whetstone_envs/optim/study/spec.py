@@ -53,7 +53,6 @@ __all__ = [
     "REAL_OPTIMIZER_ARM_IDS",
     "RESAMPLES",
     "SEED_RANGE_BY_ARM",
-    "SEED_RANGE_BY_OPTIMIZER",
     "SINGLE_RUN_ARM_IDS",
     "ArmKind",
     "ArmSpec",
@@ -151,21 +150,6 @@ SEED_RANGE_BY_ARM: dict[str, int] = {
     # share a seed with the efficacy arm's.
     "miprov2-zeroshot": 2100,
     "miprov2-ground_only": 2200,
-}
-
-#: The seed table under its former name, for callers that hold an
-#: optimizer rather than an arm. Every optimizer's own range is its
-#: same-named arm's.
-SEED_RANGE_BY_OPTIMIZER: dict[str, int] = {
-    optimizer: SEED_RANGE_BY_ARM[optimizer]
-    for optimizer in (
-        "copro",
-        "miprov2",
-        "gepa",
-        "codex",
-        "null-random",
-        "null-identity",
-    )
 }
 
 #: Arms that run once because one run is their whole contribution.

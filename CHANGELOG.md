@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-23
+
 ### Added
 
 - **Provider concurrency is an explicit, recorded operator setting.**

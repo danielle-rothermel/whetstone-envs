@@ -2126,7 +2126,7 @@ def test_an_arm_stage_refuses_an_engine_that_would_not_sample_k_repeat(
 
     with pytest.raises(
         StageError,
-        match="would bind the (internal|official|held_out) engine sampling 1",
+        match=r"would bind the (internal|official|held_out) engine sampling 1",
     ):
         run_arm_stage(
             study_dir=study_dir,
@@ -2162,7 +2162,7 @@ def test_an_arm_stage_refuses_an_engine_that_misbinds_only_the_internal_role(
 
     with pytest.raises(
         StageError,
-        match="would bind the (internal|official|held_out) engine sampling 1",
+        match=r"would bind the (internal|official|held_out) engine sampling 1",
     ):
         run_arm_stage(
             study_dir=study_dir,

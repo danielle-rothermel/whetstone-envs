@@ -151,12 +151,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (2026-08-23), with the digest golden and `PROTOCOL_DOC_SHA256`
   recomputed.
 - **Stage 1/2 calibration consistency is fixed upstream, not here.**
-  whetstone-ai is making `per_task_count`/`per_task_score` count *present*
-  rows rather than the padded repeat count; this package's pin will move
-  to the release carrying that change rather than working around it
-  locally. The task-completeness validator above is written against the
-  two means the evidence already reports, so it stays correct across that
-  change.
+  whetstone-ai is making `per_task_score` aggregate over *present* rows
+  (reporting `None` for a task with no OK reduction) and `per_task_count`
+  count present rows, under `EvalEvidence` schema v6; this package's pin
+  will move to the release carrying that change rather than working
+  around it locally. The task-completeness floor above is written to
+  compose with it: presence is read off the per-task vectors in both
+  spellings -- a `None` value or a `0` count -- rather than inferred from
+  arithmetic that would assume a missing row scores `0.0`. Refusing at
+  that seam also keeps a fully-lost task from reaching calibration, which
+  rejects `None` per-task values outright, so the failure surfaces as a
+  named completeness refusal rather than further down.
 - **Paid task calls are given a reasoning-sized timeout.** The 30 s
   default is a chat-completion bound; the live Stage 0 measured a median
   of 4,466 completion tokens and a maximum of 12,335 per call, which

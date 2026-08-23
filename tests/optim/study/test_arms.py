@@ -623,9 +623,11 @@ class _Evidence:
     def __init__(
         self,
         *,
-        per_task_values: tuple[float, ...],
+        per_task_values: tuple[float | None, ...],
         aggregate_value: float | None,
         aggregate_status: str = "ok",
+        per_task_counts: tuple[int, ...] | None = None,
+        num_seeds: int = 4,
     ) -> None:
         self.per_task_values = per_task_values
         self.aggregate_value = aggregate_value
@@ -633,24 +635,30 @@ class _Evidence:
         self.task_hashes = tuple(
             f"h{index:064x}" for index in range(len(per_task_values))
         )
-        self.per_task_counts = tuple(4 for _ in per_task_values)
+        self.per_task_counts = (
+            per_task_counts
+            if per_task_counts is not None
+            else tuple(
+                0 if value is None else num_seeds for value in per_task_values
+            )
+        )
 
 
 def _evidence_with_lost_tasks(
     *, tasks: int, lost: int, score: float = 1.0
 ) -> _Evidence:
-    """Evidence as whetstone really builds it when ``lost`` tasks vanish.
+    """Evidence as whetstone builds it when ``lost`` tasks vanish entirely.
 
-    Both means are derived exactly as the two upstream paths derive them:
-    ``per_task_values`` scores a fully-lost task ``0.0`` (its present
-    total over the padded repeat count), while the aggregate drops it and
-    averages over the tasks that produced a value.
+    A task with no present row reports ``None`` for its per-task score
+    and ``0`` for its per-task count, which is what per-task reporting
+    over *present* rows yields; the aggregate drops it and averages over
+    the tasks that produced a value.
     """
-    values = tuple(
-        0.0 if index >= tasks - lost else score for index in range(tasks)
+    values: tuple[float | None, ...] = tuple(
+        None if index >= tasks - lost else score for index in range(tasks)
     )
     contributing = tasks - lost
-    aggregate = (score * contributing) / contributing if contributing else None
+    aggregate = score if contributing else None
     return _Evidence(per_task_values=values, aggregate_value=aggregate)
 
 
@@ -672,11 +680,14 @@ def test_a_fully_lost_task_refuses_the_evaluation() -> None:
     from whetstone_envs.optim.study.arms import _require_task_completeness
 
     evidence = _evidence_with_lost_tasks(tasks=76, lost=1)
-    # The aggregate really does read as a clean 1.0 while a task is gone.
+    # The aggregate really does read as a clean 1.0 while a task is gone,
+    # and the row tolerance never sees it: 4 of 304 rows is 1.3%.
     assert evidence.aggregate_value == 1.0
-    assert sum(evidence.per_task_values) / 76 == pytest.approx(
-        0.98684, abs=1e-5
-    )
+    assert evidence.per_task_values[-1] is None
+    present = [v for v in evidence.per_task_values if v is not None]
+    assert len(present) == 75
+    # Counting the lost task at its worst case is what the mean hides.
+    assert sum(present) / 76 == pytest.approx(0.98684, abs=1e-5)
 
     with pytest.raises(StageError, match="lost every"):
         _require_task_completeness(evidence, purpose="official:cand")
@@ -735,18 +746,49 @@ def test_an_all_zero_evaluation_is_not_falsely_refused() -> None:
     _require_task_completeness(evidence, purpose="official:cand")
 
 
-def test_irreconcilable_means_refuse_rather_than_guess() -> None:
-    """If the two means disagree, the check has no basis to accept.
+def test_a_lost_task_is_caught_by_either_spelling() -> None:
+    """Presence is read off both per-task vectors, not just one.
 
-    The inference is only sound while both means are computed from the
-    same rows. An aggregate that cannot be reconciled with the per-task
-    vector is evidence this check cannot interpret, and interpreting it
-    anyway would be the failure mode it exists to prevent.
+    ``per_task_values`` carrying ``None`` and ``per_task_counts``
+    carrying ``0`` are the same fact reported two ways, and which one an
+    evidence record uses depends on the whetstone release it was written
+    by. Checking only one would make this floor silently stop working
+    across a dependency bump -- the exact failure mode it exists to
+    prevent.
+    """
+    from whetstone_envs.optim.study.arms import _require_task_completeness
+
+    # Value says None, count disagrees (still refused).
+    by_value = _Evidence(
+        per_task_values=(1.0, 1.0, 1.0, None),
+        aggregate_value=1.0,
+        per_task_counts=(4, 4, 4, 4),
+    )
+    with pytest.raises(StageError, match="lost every"):
+        _require_task_completeness(by_value, purpose="official:cand")
+
+    # Count says zero, value disagrees (still refused).
+    by_count = _Evidence(
+        per_task_values=(1.0, 1.0, 1.0, 0.0),
+        aggregate_value=1.0,
+        per_task_counts=(4, 4, 4, 0),
+    )
+    with pytest.raises(StageError, match="lost every"):
+        _require_task_completeness(by_count, purpose="official:cand")
+
+
+def test_a_zero_scoring_task_is_not_a_lost_task() -> None:
+    """Scoring zero is a measurement; losing every repeat is not.
+
+    The distinction matters because the floor must not refuse a genuinely
+    hard task that was fully measured and simply got everything wrong --
+    that number is real evidence, and the study needs it.
     """
     from whetstone_envs.optim.study.arms import _require_task_completeness
 
     evidence = _Evidence(
-        per_task_values=(1.0, 1.0, 1.0, 1.0), aggregate_value=0.31
+        per_task_values=(1.0, 1.0, 1.0, 0.0),
+        aggregate_value=0.75,
+        per_task_counts=(4, 4, 4, 4),
     )
-    with pytest.raises(StageError, match="could not reconcile"):
-        _require_task_completeness(evidence, purpose="official:cand")
+    _require_task_completeness(evidence, purpose="official:cand")

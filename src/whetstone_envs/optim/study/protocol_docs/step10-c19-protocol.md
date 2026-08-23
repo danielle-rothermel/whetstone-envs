@@ -677,6 +677,12 @@ candidate.
   evaluation is therefore refused if any task has zero present rows, and
   refused if fewer than **90%** of planned tasks were measured — the same
   backstop this section already states, applied to tasks as well as rows.
+  Presence is read from the per-task vectors the evidence reports (a task
+  with no successful reduction reports no score and a count of zero), never
+  inferred from arithmetic that would assume a missing row scores 0.0. The
+  refusal is applied before an evaluation is accepted, so a fully-lost task
+  cannot reach calibration — which requires complete per-task counts for its
+  anchors and rejects an absent per-task value outright.
 - **Never resume a partial run.** Recorded memory: clean reruns over stale
   partials — never resume or repair pre-stabilization partial experiment runs.
 - **No mid-run design changes.** Per `1756`'s execution rules, the only

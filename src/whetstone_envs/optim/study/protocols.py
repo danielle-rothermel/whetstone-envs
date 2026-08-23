@@ -120,8 +120,10 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: in the transport wrapper, with whetstone's driver pinned to one attempt so
 #: the two loops cannot multiply) and to add §3.9's per-task completeness
 #: floor, which refuses an evaluation that lost every repeat of any task.
+#: 06e51d15... is historical in turn: the floor's wording was made
+#: explicit about reading presence from the reported per-task vectors.
 PROTOCOL_DOC_SHA256 = (
-    "06e51d15b93fc9092df9eedaa40459a25d30cd7cd08cbdc17bf9b4a2954af53e"
+    "31425667cb1981ab0d952372639cd94ccfbfd668726b5017507070ab29c2c2ac"
 )
 
 

@@ -1897,6 +1897,17 @@ def _arm_record(
         val_size=arm.val_size,
         minibatch=arm.miprov2_minibatch,
         minibatch_size=arm.miprov2_minibatch_size,
+        # The pinned search shape is design and must survive the rebuild,
+        # for the same reason the minibatch does. ``init`` writes these
+        # four (schema v10); this function *replaces* the record after
+        # every stage, so omitting them dropped them to None the moment
+        # Stage 1 finished -- and ``_recorded_search`` then projected the
+        # arms to {} while the pinned block still said 6x3 and 3/10, so
+        # Stage 2 refused the study it had just spent an hour running.
+        copro_breadth=arm.copro_breadth,
+        copro_depth=arm.copro_depth,
+        miprov2_num_trials=arm.miprov2_num_trials,
+        miprov2_num_candidates=arm.miprov2_num_candidates,
         control_identity_hash=control_identity_hash,
         seed_note=_seed_note(arm),
         runs=runs,

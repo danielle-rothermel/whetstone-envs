@@ -60,11 +60,14 @@ from whetstone_envs.optim.run_cost import (
 )
 from whetstone_envs.optim.study.anchors import EngineBinder
 from whetstone_envs.optim.study.fanout import planned_rows_in_directory
-from whetstone_envs.optim.study.gates import GEPA_MAX_METRIC_CALLS_PINNED
 from whetstone_envs.optim.study.manifest import (
     DISCARD_STALE_RUNS_FLAG,
     EvidencePointer,
     RunRecord,
+)
+from whetstone_envs.optim.study.protocols import (
+    GEPA_MAX_METRIC_CALLS,
+    GEPA_REFLECTION_MINIBATCH_SIZE,
 )
 from whetstone_envs.optim.study.selection import (
     CandidateScore,
@@ -539,9 +542,18 @@ class StudyOptimizerRunner:
             **({"miprov2_minibatch": True} if arm.miprov2_minibatch else {}),
             # Only forwarded when the arm sets them, so an unset arm keeps
             # the runner's own default rather than pinning it here twice.
+            #
+            # ``copro_breadth``/``copro_depth`` are in here for a reason
+            # the others are not: the runner's default is 2x1 and the
+            # protocol pins 6x3, so an arm whose shape was never forwarded
+            # ran a third of the search the design priced -- and the
+            # estimator's own default matched the runner's, so the two
+            # agreed with each other and with nothing else.
             **{
                 field: value
                 for field, value in (
+                    ("copro_breadth", arm.copro_breadth),
+                    ("copro_depth", arm.copro_depth),
                     ("miprov2_num_trials", arm.miprov2_num_trials),
                     ("miprov2_num_candidates", arm.miprov2_num_candidates),
                     (
@@ -557,12 +569,22 @@ class StudyOptimizerRunner:
             # unset, ``build_gepa_control`` resolves ``auto`` to roughly
             # ``train + val + 1`` -- about 89 on the study's 44/44 split --
             # while the Stage-1 call-count gate and the power design are
-            # both built on ``GEPA_MAX_METRIC_CALLS_PINNED``. A GEPA arm
-            # that ran at the default would be judged against a ceiling it
-            # never had, so the pin is forwarded here rather than left to a
+            # both built on ``GEPA_MAX_METRIC_CALLS``. A GEPA arm that ran
+            # at the default would be judged against a ceiling it never
+            # had, so the pin is forwarded here rather than left to a
             # default that agrees with it only by accident.
+            #
+            # The reflection minibatch rides along for the same reason:
+            # ``build_gepa_control`` hardcoded a single trace per
+            # reflection round where the protocol registered three, and a
+            # hardcoded value cannot be audited against the design.
             **(
-                {"gepa_max_metric_calls": GEPA_MAX_METRIC_CALLS_PINNED}
+                {
+                    "gepa_max_metric_calls": GEPA_MAX_METRIC_CALLS,
+                    "gepa_reflection_minibatch_size": (
+                        GEPA_REFLECTION_MINIBATCH_SIZE
+                    ),
+                }
                 if arm.optimizer == "gepa"
                 else {}
             ),

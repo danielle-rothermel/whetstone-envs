@@ -281,6 +281,125 @@ WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
   --codex-capacity 8 --allow-real-codex
 ```
 
+### Running the Step 10 study
+
+The study's design is committed, not assembled at the command line.
+`whetstone_envs.optim.study.protocols` pins every pre-registered value --
+the splits, the models, the arm list, each arm's control shape -- and
+`whetstone-study init` mints the pre-Stage-0 `study.json` from it, so two
+initialisations of the same protocol produce the same manifest and a
+design that disagrees with the module is one somebody edited.
+
+```bash
+uv run --extra optim whetstone-study init \
+  --study-dir STUDY_DIR --protocol step10-c19
+uv run --extra optim whetstone-study plan --study-dir STUDY_DIR
+uv run --extra optim whetstone-study run \
+  --study-dir STUDY_DIR --stage stage0 --transport openrouter
+# read the Stage-0 gate in the output, then:
+uv run --extra optim whetstone-study run \
+  --study-dir STUDY_DIR --stage stage1 --transport openrouter \
+  --allow-real-codex
+uv run --extra optim whetstone-study run \
+  --study-dir STUDY_DIR --stage stage2 --transport openrouter \
+  --allow-real-codex
+uv run --extra optim whetstone-study leakage-check --study-dir STUDY_DIR
+uv run --extra optim whetstone-study report \
+  --study-dir STUDY_DIR --out REPORT_DIR
+```
+
+`init` regenerates the pinned population and records each split's task
+hashes, the pool manifest's content hash, and the sha256 of the protocol
+document itself, so the manifest names the revision of the
+pre-registration that was actually in force. **The registered text ships
+in the package**, at
+`src/whetstone_envs/optim/study/protocol_docs/step10-c19-protocol.md`,
+byte-identical to the durable authoring copy and pinned by a golden
+digest -- so the digest a manifest records is checkable from any checkout
+rather than naming a file on one machine. `--protocol-doc` points at a
+different copy of that document; the digest always comes from the file
+read.
+
+**The in-repo protocol is Revision 2 (2026-08-23).** Revision 1 was
+written on 2026-08-22 and predates decisions ratified the next day, so its
+registered values and the executed design disagreed on sixteen points --
+the code being right about all of them. Revision 2 updates the body in
+place so every registered value equals `protocols.py`: held-out 440 with
+the MDE row recomputed, the explicit disjoint 44/44 train/val partition,
+the Codex evaluate-call cap at 8, GEPA pinned at 200 metric calls with
+reflection minibatch 3, null-B moved off the runner to the report harness,
+MIPROv2 at 3 candidates and a uniform 10 trials across all three demo
+modes, the Codex agent pinned to `gpt-5.6-sol`, MIPROv2 minibatch 35,
+COPRO 6/3, `K_REPEAT` stated to cover in-search evaluations, the measured
+`$0.00168`-per-call cost model, null-A routed through the ordinary runner,
+and the single real Codex run recorded as historical evidence only. A
+dated revision block at the head of the document lists each change with
+the plan note that decided it and carries revision 1's digest as a
+historical value.
+
+The manifest records no separate assignment digest: Step 10's authorising
+assignment *is* the protocol document, so `assignment_doc_sha256` is
+absent and the report says so, rather than carrying the digest of a fixed
+marker string that would verify nothing. `init` refuses to overwrite an existing `study.json`, because a
+second initialisation over a study that already holds evidence would reset
+a design that evidence refers to.
+
+`--toy` authors the sized-down variant of the same protocol. Only the
+sized fields differ -- the splits, the per-arm train/val partition, the
+population size and seed, the MIPROv2 minibatch, and COPRO's breadth and
+depth -- and a golden test asserts every other field matches the real
+design, so a toy cannot rehearse a study the real one does not run.
+
+`--study-id` names a rehearsal so its artifacts cannot be mistaken for the
+study's. It is refused when it names a *registered protocol* on an
+invocation that is not that protocol at full size with no projection in
+effect: a toy or a `--without-codex` run initialised as `step10-c19` would
+leave every artifact downstream citing the pre-registration by name while
+holding a smaller design.
+
+The opt-ins each stage needs, by name:
+
+- **`--transport openrouter`** and a non-blank `OPENROUTER_API_KEY` for
+  every stage that spends. `--transport fake` is the default and reaches
+  no provider.
+- **`--allow-real-codex` plus `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1`** for
+  any stage whose design declares the Codex arm. Both halves are required
+  and are checked against the design *before any arm runs*, so a
+  Codex-bearing stage does not pay for the other arms and then discover it
+  cannot finish. This is a run-time spend authorization and never enters
+  the pre-registration hash.
+- **`--replace-design`** only on `stage0`, to record a deliberate
+  amendment over an already-pinned design.
+- **`--discard-stale-runs`** to discard a run directory whose own
+  artifacts say it belongs to another invocation.
+
+Stage order is enforced rather than documented: `stage1` and `stage2`
+refuse without a recorded design, and `stage2` refuses without a `stage1`
+whose call-count gate passed. Run `leakage-check` before `report` -- it
+writes the L1-L5 verdict the report reads, and a report generated without
+it is marked invalid.
+
+`--without-codex` authors the design with the Codex arm dropped. It exists
+for fake-transport rehearsals: the Codex guard fires on the *design*
+whatever transport the task model is on, so a rehearsal of the rest of the
+study drops the arm rather than stubbing it. What it produces is a
+strictly smaller design, not the pre-registration, and it says so on every
+axis a reader checks: its `study_id` gains a `-without-codex` suffix, its
+`models.codex_agent_model` records the omission instead of naming an agent
+no arm will reach, the manifest carries
+`design_projection: "without-codex"`, and the report's headline is
+prefixed with the projection so its numbers cannot be read as the study's.
+
+#### Storage the study needs
+
+Budget roughly **4.6 KB of `runtime.sqlite` per evaluated row**, dominated
+by `eval_outputs` and `eval_component_traces`. At the eight-arm design's
+row count that is **≈0.4-0.5 GB** for the study's own store, before the
+per-run directories the arms leave beside it. This is an operator note,
+not a gate: the number that has actually bitten is GEPA's, whose
+unpinned `auto` budget produced a 1.73 GB store from a single run --
+which is why `gepa_max_metric_calls` is pinned at 200.
+
 ### Study transports and the per-stage ledger
 
 A study stage evaluates on one of two transports, named per invocation:
@@ -406,8 +525,9 @@ same kind of fact under the same honesty rules.
 roughly **4,500 completion (reasoning) tokens per call** — about 7× the
 planning figure the protocol budgeted — at a measured **$0.00168 per
 call**. Carried forward at that rate, Stage 0 costs roughly **$9** and
-Stage 2 roughly **$210**, against a protocol estimate built on the smaller
-per-call figure.
+the whole study **$152-$176**, which is the cost model revision 2 of the
+protocol now registers -- revision 1 budgeted 30 completion tokens per
+call and called the study a small-tens-of-dollars run.
 
 The rate is a property of the model and the prompts, not a fixed constant,
 so it is not a number to plan from twice. Run Stage 0, then read

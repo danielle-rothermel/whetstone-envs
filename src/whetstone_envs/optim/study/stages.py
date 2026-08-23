@@ -54,6 +54,7 @@ from whetstone_envs.optim.study.manifest import (
     COMPLETENESS_BACKSTOP,
     CORRECTION_FAMILY_SIZE,
     CORRECTION_HOLM_BONFERRONI,
+    DESIGN_PROJECTION_FULL,
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
     STUDY_STORE_NAME,
@@ -76,6 +77,7 @@ from whetstone_envs.optim.study.manifest import (
 )
 from whetstone_envs.optim.study.manifest import StageId as ManifestStageId
 from whetstone_envs.optim.study.power import COMPLETENESS_RULE, MDE_FORMULA
+from whetstone_envs.optim.study.protocols import PROTOCOL_IDS
 from whetstone_envs.optim.study.selection import (
     ArmReport,
     CandidateScore,
@@ -930,6 +932,30 @@ def _minibatch_by_arm(spec: StudySpec) -> dict[str, int | None]:
     return {arm.arm_id: arm.miprov2_minibatch_size for arm in spec.arms}
 
 
+def _search_by_arm(spec: StudySpec) -> dict[str, dict[str, int]]:
+    """Each arm's pre-registered search shape, by field name.
+
+    Only the fields that arm's optimizer actually reads appear, so an arm
+    with no search shape pins an empty mapping rather than a row of nulls.
+    ``ArmSpec`` already refuses a shape on an optimizer that reads none and
+    requires COPRO's on the arms whose search is COPRO's, so this is a
+    projection rather than a second rule.
+    """
+    shapes: dict[str, dict[str, int]] = {}
+    for arm in spec.arms:
+        shape: dict[str, int] = {}
+        if arm.copro_breadth is not None:
+            shape["breadth"] = arm.copro_breadth
+        if arm.copro_depth is not None:
+            shape["depth"] = arm.copro_depth
+        if arm.miprov2_num_trials is not None:
+            shape["num_trials"] = arm.miprov2_num_trials
+        if arm.miprov2_num_candidates is not None:
+            shape["num_candidates"] = arm.miprov2_num_candidates
+        shapes[arm.arm_id] = shape
+    return shapes
+
+
 def _pre_registration_record(
     design: DesignRecord,
     *,
@@ -950,11 +976,17 @@ def _pre_registration_record(
     """
     split_by_arm = _split_by_arm(spec)
     minibatch_by_arm = _minibatch_by_arm(spec)
+    search_by_arm = _search_by_arm(spec)
+    # The arm's role, pinned with the rest: it decides which arms enter the
+    # Holm family and which produce a held-out verdict at all.
+    kind_by_arm = {arm.arm_id: arm.kind.value for arm in spec.arms}
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        kind_by_arm=kind_by_arm,
         split_by_arm=split_by_arm,
         minibatch_by_arm=minibatch_by_arm,
+        search_by_arm=search_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -970,8 +1002,10 @@ def _pre_registration_record(
     return PreRegistrationRecord(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
+        kind_by_arm=kind_by_arm,
         split_by_arm=split_by_arm,
         minibatch_by_arm=minibatch_by_arm,
+        search_by_arm=search_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1179,6 +1213,7 @@ def run_arm_stage(
     # nobody registered. Stage 0 tolerates that state -- it is how an
     # amendment is written -- so the check belongs here, not in the loader.
     require_pinned_arms(manifest)
+    _refuse_projection_claiming_the_design(manifest=manifest, stage=stage)
     # Both refusals are before dispatch and cost nothing, so the order is
     # about which one a reader should see first. An unauthorized Codex arm
     # is a property of the invocation the operator can fix now; a missing
@@ -1622,7 +1657,7 @@ def _run_every_arm(
     # the study spent.
     executed: list[RunRecord] = []
     for arm in spec.arms:
-        stage_seeds = arm_seeds(arm.optimizer, stage=stage)
+        stage_seeds = arm_seeds(arm.arm_id, stage=stage)
         existing = by_arm_id.get(arm.arm_id)
         existing_runs = () if existing is None else existing.runs
         done = {run.seed for run in existing_runs if run.seed is not None}
@@ -1703,6 +1738,8 @@ def _check_call_counts(
             k_repeat=design.k_repeat,
             official_size=spec.official.size,
             held_out_size=spec.held_out.size,
+            copro_breadth=arm.copro_breadth,
+            copro_depth=arm.copro_depth,
         )
     )
     manifest = read_study_manifest(study_dir)
@@ -1854,6 +1891,7 @@ def _arm_record(
     return ArmRecord(
         arm_id=arm.arm_id,
         optimizer=arm.optimizer,
+        kind=arm.kind,
         demo_mode=arm.demo_mode,
         train_size=arm.train_size,
         val_size=arm.val_size,
@@ -1879,6 +1917,32 @@ def _seed_note(arm: ArmSpec) -> str:
     return SEED_NOTE_CONTROL_FIELD
 
 
+def _refuse_projection_claiming_the_design(
+    *, manifest: StudyManifest, stage: StageId
+) -> None:
+    """Refuse an arm stage whose study id claims a design it is not.
+
+    The manifest model already refuses a ``full`` projection with no Codex
+    arm, so the two cannot disagree. What is left is the naming: a
+    projection whose ``study_id`` is a registered protocol id would spend a
+    whole stage and leave every artifact citing the pre-registration by
+    name. ``init`` refuses to author that, and this refuses to *spend* on
+    one, because a manifest can also arrive hand-edited.
+    """
+    if manifest.design_projection == DESIGN_PROJECTION_FULL:
+        return
+    if manifest.study_id not in PROTOCOL_IDS:
+        return
+    raise StageError(
+        f"{stage.value} refuses to run: this manifest declares the "
+        f"{manifest.design_projection!r} projection but carries study id "
+        f"{manifest.study_id!r}, which is a registered protocol id. Its "
+        "runs would be recorded against the pre-registration while "
+        "holding a smaller design. Re-initialise the projection under an "
+        "id of its own."
+    )
+
+
 def call_count_within_estimate(  # noqa: PLR0913
     *,
     optimizer: str,
@@ -1888,6 +1952,8 @@ def call_count_within_estimate(  # noqa: PLR0913
     tolerance: float = STAGE1_CALL_COUNT_TOLERANCE,
     official_size: int = 0,
     held_out_size: int = 0,
+    copro_breadth: int | None = None,
+    copro_depth: int | None = None,
 ) -> bool:
     """Whether a run's measured calls land near its pre-spend estimate.
 
@@ -1908,6 +1974,11 @@ def call_count_within_estimate(  # noqa: PLR0913
     ``official_size`` and ``held_out_size`` are needed only by
     ``null-identity``, whose estimate is the report harness rather than an
     optimizer search.
+
+    ``copro_breadth``/``copro_depth`` carry the *arm's own* pinned shape
+    into the estimate, because COPRO's whole per-run cost follows from
+    them. Gating a 6x3 run against a 2x1 estimate would flag every healthy
+    COPRO run as a fourfold overrun.
     """
     estimate = estimate_optimizer_calls(
         optimizer,
@@ -1915,6 +1986,14 @@ def call_count_within_estimate(  # noqa: PLR0913
         k_repeat=k_repeat,
         official_size=official_size,
         held_out_size=held_out_size,
+        **(
+            {}
+            if copro_breadth is None or copro_depth is None
+            else {
+                "copro_breadth": copro_breadth,
+                "copro_depth": copro_depth,
+            }
+        ),
     )
     if not estimate.gated:
         return True

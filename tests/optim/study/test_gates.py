@@ -12,6 +12,8 @@ from __future__ import annotations
 import pytest
 
 from whetstone_envs.optim.study.gates import (
+    COPRO_DEFAULT_BREADTH,
+    COPRO_DEFAULT_DEPTH,
     GEPA_MAX_METRIC_CALLS_PINNED,
     GEPA_MEASURED_FULL_VALSET_PASSES,
     GEPA_MEASURED_REFLECTION_MINIBATCHES,
@@ -51,6 +53,11 @@ from whetstone_envs.optim.study.gates import (
     STAGE1_CALL_COUNT_TOLERANCE,
     estimate_optimizer_calls,
     null_identity_report_rows,
+)
+from whetstone_envs.optim.study.protocols import (
+    COPRO_BREADTH,
+    COPRO_DEPTH,
+    GEPA_MAX_METRIC_CALLS,
 )
 from whetstone_envs.optim.study.spec import CODEX_EVALUATE_CALL_CAP
 from whetstone_envs.optim.study.stages import call_count_within_estimate
@@ -98,11 +105,39 @@ def test_the_codex_cap_has_exactly_one_owner() -> None:
 
 
 def test_copro_is_derived_from_its_configured_search_shape() -> None:
-    estimate = estimate_optimizer_calls("copro", internal_size=88, k_repeat=3)
-    # (depth 1 + 1) steps x breadth 2 x 88 tasks x 3 repeats.
-    assert estimate.low == estimate.high == 2 * 2 * 88 * 3
+    """The estimate follows the shape it is given, at any shape."""
+    estimate = estimate_optimizer_calls(
+        "copro",
+        internal_size=88,
+        k_repeat=3,
+        copro_breadth=2,
+        copro_depth=1,
+    )
+    # depth 1 evaluating round x breadth 2 x 88 tasks x 3 repeats.
+    assert estimate.low == estimate.high == 1 * 2 * 88 * 3
     assert "breadth 2" in estimate.basis
     assert estimate.gated
+
+
+def test_the_estimator_defaults_to_the_pinned_shape_not_the_runners() -> None:
+    """An unshaped estimate prices the study's search, not a smoke run.
+
+    These defaults were the *runner's* -- 2 and 1 -- which made the
+    estimate agree with a run that never received the pinned shape and
+    disagree with the design both were meant to describe. COPRO's whole
+    per-run cost is ``depth x breadth x T_int x K_REPEAT``, so a default
+    that understates the shape understates the budget ninefold.
+    """
+    assert (COPRO_DEFAULT_BREADTH, COPRO_DEFAULT_DEPTH) == (
+        COPRO_BREADTH,
+        COPRO_DEPTH,
+    )
+    estimate = estimate_optimizer_calls("copro", internal_size=88, k_repeat=3)
+    assert (
+        estimate.low == estimate.high == (COPRO_DEPTH * COPRO_BREADTH * 88 * 3)
+    )
+    # Which is the protocol's own section 5.1 arithmetic: 6 x 3 x 88 x 3.
+    assert estimate.low == 4_752
 
 
 def test_null_random_evaluates_exactly_as_copro_does() -> None:
@@ -392,6 +427,11 @@ def test_d3_pins_gepa_to_the_pre_registered_fallback() -> None:
     pre-registration rather than a number chosen to fit the measurement.
     """
     assert GEPA_MAX_METRIC_CALLS_PINNED == 200
+    # One owner, not two literals that happen to agree. ``protocols``
+    # pins every design value; the gate's name is an alias for it. Two
+    # independent 200s are one edit away from a gate that judges a run
+    # against a ceiling the run never had.
+    assert GEPA_MAX_METRIC_CALLS_PINNED is GEPA_MAX_METRIC_CALLS
     assert GEPA_MAX_METRIC_CALLS_PINNED < GEPA_RESOLVED_MAX_METRIC_CALLS
     assert GEPA_PIN_REASON.strip()
 

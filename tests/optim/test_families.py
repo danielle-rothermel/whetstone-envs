@@ -13,6 +13,7 @@ from dataclasses import replace
 from whetstone_envs.c18 import PROBES as C18_PROBES
 from whetstone_envs.c19 import PROBES as C19_PROBES
 from whetstone_envs.c19 import generate_pool as c19_generate_pool
+from whetstone_envs.c19.generation import build_manifest as c19_build_manifest
 from whetstone_envs.optim.c18_experiment import (
     C18_CONTRACT,
     C18_PROMPT_FIELDS,
@@ -49,6 +50,7 @@ def _c19_like_spec(**overrides: object) -> FamilySpec:
         "example_execution": "Score it.",
         "probes": C19_PROBES,
         "generate_pool": c19_generate_pool,
+        "pool_manifest": c19_build_manifest,
         "build_experiment": prepare_c19_experiment,
         "eval_runner": ExactMatchEvalProcedureRunner,
         "default_n_per_stratum": 2,

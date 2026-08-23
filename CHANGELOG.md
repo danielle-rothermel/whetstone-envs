@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The Step 10 c19 study is authored from a committed protocol.**
+  `whetstone_envs.optim.study.protocols` pins every pre-registered design
+  value as a named constant -- splits 88/132/440, the 44/44 per-arm
+  train/val partition, `openai/gpt-5-nano` and `openai/gpt-5.4-nano`, the
+  `gpt-5.6-sol` Codex agent, GEPA's 200-metric-call budget, MIPROv2's
+  trials/candidates/minibatch, the Codex evaluate-call cap, and the arm
+  list -- and `whetstone-study init --study-dir DIR --protocol step10-c19`
+  writes the pre-Stage-0 `study.json` from it. The task hashes of all three
+  splits, the pool manifest hash, and the sha256 of the protocol document
+  are recomputed at init rather than declared, so the manifest names the
+  population the harness will regenerate and the revision of the
+  pre-registration that was in force. `init` refuses to overwrite an
+  existing manifest.
+- **`--toy` authors the sized-down variant of the same protocol.** Both
+  sizes are built by one function from one body of pinned values, so they
+  can differ only in the fields `SIZED_FIELDS` names; a golden test asserts
+  every other field matches and that every sized field actually differs. A
+  toy that could drift on the models, the arm list, or the correction would
+  rehearse a study the real one does not run.
+- **`--without-codex` authors the design with the Codex arm dropped**, for
+  fake-transport rehearsals. The Codex guard fires on the design whatever
+  transport the task model is on, so a rehearsal of the rest of the study
+  has to drop the arm rather than stub it; the result is a strictly smaller
+  design, not the pre-registration.
 - **The study harness runs on the real OpenRouter transport.**
   `whetstone-study run --transport openrouter` binds the same provider
   route the single-run path already used — the seeded OpenRouter call
@@ -102,7 +126,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   every recorded config and turn L1 into a check that always agrees with
   whatever just ran.
 
+### Changed
+- **The registered protocol document is Revision 2 (2026-08-23).** The
+  shipped text was written on 2026-08-22 and predates decisions ratified
+  the next day, so the pre-registration a reviewer diffs against and the
+  design the code executes disagreed on sixteen values — the code being
+  correct on all of them. Revision 2 updates the body in place so every
+  registered value equals `protocols.py`: held-out 440 with the MDE table
+  recomputed at 0.0622/0.0690, the explicit disjoint 44/44 train/val
+  partition, the Codex evaluate-call cap lowered from 20 to 8, GEPA pinned
+  at 200 metric calls with reflection minibatch 3, null-B moved off the
+  runner to the report harness, null-A routed through the ordinary runner,
+  MIPROv2 at 3 candidates and a uniform 10 trials across all three demo
+  modes, the Codex agent pinned to `gpt-5.6-sol`, MIPROv2 minibatch 35,
+  COPRO 6/3, `K_REPEAT` stated to cover in-search evaluations, the
+  measured `$0.00168`-per-call cost model with the study priced at
+  $152–$176, and the single real Codex run recorded as historical evidence
+  only. A dated revision block at the head lists each change against the
+  plan note that decided it; the pinned digest moves from `a311de47…`,
+  now a historical value, to `1fa2102b…`. MIPROv2's per-mode trial counts
+  are retired rather than re-derived: the old 10/9 split came from
+  auto-mode at six candidates, the design pins three, and the study sets
+  `num_trials` on the control so auto-mode never runs.
+
 ### Fixed
+- **Fidelity arms no longer produce efficacy verdicts.** MIPROv2's
+  `zeroshot` and `ground_only` modes run once each as evidence for two
+  audit invariants. They pass their audits and are measured on held-out,
+  which was the whole basis the report used to decide a verdict, so both
+  were reported as efficacy results — five claims where the design
+  pre-registers four, each from a single run and none in the Holm family.
+  `ArmKind` gains `FIDELITY` beside `REAL` and `NULL`, `ArmRecord` carries
+  the role, and it is hashed into the pre-registration as `kind_by_arm`,
+  so an arm cannot be promoted into the family after its interval is
+  visible. The analysis writes no held-out row for a fidelity arm rather
+  than computing one and declining to print it, and the report lists them
+  in their own section with their audit result and no verdict column. A
+  golden pins the Holm family to exactly the four `REAL` arms.
+- **The pinned search shape reaches the runs it describes** (manifest
+  schema v10). Four registered control values never arrived.
+  `StudyOptimizerRunner._spec_for` forwarded neither `copro_breadth` nor
+  `copro_depth`, so every COPRO and null-A run took `RunSpec`'s smoke-run
+  defaults of 2 and 1 where the protocol pins 6 and 3 — and the estimator
+  defaulted to the same two values, so the estimate and the run agreed
+  with each other while disagreeing with the design both described.
+  `ArmRecord` likewise had nowhere to carry COPRO's breadth/depth or
+  MIPROv2's trials/candidates, so `spec_from_manifest` rebuilt all four as
+  `None` and a manifest-driven MIPROv2 arm ran 2 trials against a
+  registered 10. And `build_gepa_control` hardcoded
+  `reflection_minibatch_size=1` against the protocol's 3, with no spec
+  field able to carry the pin. All four are now pinned in `protocols.py`,
+  carried through `ArmDesign`/`ArmSpec`/`ArmRecord`, hashed into the
+  pre-registration's new `search_by_arm`, and forwarded to the run; an arm
+  record disagreeing with the pinned block is refused as a
+  `PreRegistrationViolationError`, as the split and minibatch already were.
+- **COPRO's estimate counts evaluating rounds, not its finalizing step.**
+  The row estimate multiplied by `depth + 1`, overstating COPRO and null-A
+  by a whole round — 6,336 rows per run at the pinned shape against the
+  protocol's own 4,752. A run does record `depth + 1` *steps*, but the
+  extra one is finalization, which consumes no budget and issues no
+  intents. The estimator and the protocol now agree, pinned by a golden.
+- **The Codex admission cap reaches the run from the design.**
+  `bound_stage_environment` built the runner without `codex_capacity`, so
+  the pinned cap arrived only because `RunSpec`'s own default happened to
+  equal it.
+- **One owner for the GEPA metric-call pin.** `protocols.py` and `gates.py`
+  each held their own `200` and the arm forwarded the gates copy; `gates`
+  now imports the protocol's, with an equality golden.
+- **A `--without-codex` projection can no longer be mistaken for the
+  study.** Its manifest was byte-indistinguishable from the
+  pre-registration — same `study_id`, same `models` block, nothing
+  recording that an arm had been dropped. The projection now takes a
+  `-without-codex` study id, records `design_projection`, marks
+  `codex_agent_model` as omitted, and the report prefixes its headline;
+  an arm stage refuses a projection carrying a registered protocol id.
+- **`--study-id` may not claim a design the invocation is not.** A toy or a
+  projection could be initialised as `step10-c19`, leaving every artifact
+  downstream citing the pre-registration while holding a smaller design.
+- **The manifest records no fabricated assignment digest.**
+  `assignment_doc_sha256` held the sha256 of a fixed marker string — a
+  digest of nothing that read like provenance. Step 10's authorising
+  assignment is the protocol document itself, so the field is now absent
+  and the report says so.
+- **The registered protocol document ships in the package.** The default
+  path pointed into one machine's `~/drotherm/data` tree, and `init`
+  refuses to author a study without reading it, so `whetstone-study init`
+  could not run from any other checkout. The text now lives at
+  `optim/study/protocol_docs/step10-c19-protocol.md`, byte-identical to the
+  durable copy and pinned by a golden digest.
 - **A cross-transport amendment takes the measurements its dropped evidence
   bought.** `stage0 --replace-design` onto another transport dropped the
   arm stages, their runs, the selections, and the held-out claims, but left
@@ -176,6 +287,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whitespace runs are exactly the input's, and character similarity to the
   real seed rises from 0.854 to 0.910 on average (the collapsed layout put
   a 0.85 ceiling on a template no token had yet moved in).
+- **An arm and its optimizer are no longer read as the same name.** The
+  study runs one optimizer under more than one arm -- MIPROv2's three demo
+  modes are three arms -- and three places read the arm id as an optimizer,
+  which held only while every arm was named after one. `k_run_for` gave the
+  two MIPROv2 fidelity arms `K_RUN = 5` instead of the protocol's 1,
+  buying eight runs the design never registered; `arm_seeds` handed all
+  three MIPROv2 arms seeds 2000-2004 of the same range, so three arms the
+  report presents as independent shared an RNG stream; and `plan` passed
+  the arm id to `estimate_optimizer_calls`, so both fidelity arms printed
+  "no estimate" and dropped out of the budget entirely. The seed and
+  run-count tables are now keyed by arm with an optimizer fallback, and
+  `StudySpec` grows `optimizer_by_arm`. `_arm_seeds_from`, which rebuilds
+  an arm's seeds when a manifest is read back, looks up by arm id too, so
+  a manifest authored at the disjoint ranges reads back at them. Every arm
+  named after its optimizer is unaffected.
 
 - **A report's scores are checked by the family that produced them.** The
   `EvalReport` schema re-derives every scored observation to validate it,

@@ -20,7 +20,7 @@ from whetstone_envs.optim.study.spec import (
     PROTOCOL_VAL_SIZE,
     REAL_OPTIMIZER_ARM_IDS,
     RESAMPLES,
-    SEED_RANGE_BY_OPTIMIZER,
+    SEED_RANGE_BY_ARM,
     ArmKind,
     ArmSpec,
     SplitSpec,
@@ -107,9 +107,9 @@ def test_stage0_runs_no_optimizers() -> None:
 def test_seed_ranges_are_disjoint_across_arms() -> None:
     """Disjointness is what lets a seed identify its arm."""
     assigned: list[int] = []
-    for optimizer in SEED_RANGE_BY_OPTIMIZER:
+    for arm_id in SEED_RANGE_BY_ARM:
         stage = StageId.STAGE2
-        assigned.extend(arm_seeds(optimizer, stage=stage))
+        assigned.extend(arm_seeds(arm_id, stage=stage))
     assert len(set(assigned)) == len(assigned)
 
 
@@ -122,8 +122,10 @@ def test_stage2_seeds_extend_stage1_rather_than_replacing_them() -> None:
     assert full == (1000, 1001, 1002, 1003, 1004)
 
 
-def test_an_unknown_optimizer_has_no_seed_range() -> None:
-    with pytest.raises(ValueError, match="unknown optimizer"):
+def test_an_unknown_arm_has_no_seed_range() -> None:
+    """The seed table is keyed by arm, so an unnamed arm is refused rather
+    than seeded from whatever its optimizer happened to hold."""
+    with pytest.raises(ValueError, match="unknown arm"):
         arm_seeds("copro-v2", stage=StageId.STAGE2)
 
 
@@ -288,6 +290,7 @@ def test_an_arm_naming_an_unseeded_optimizer_is_refused() -> None:
             ArmRecord(
                 arm_id="mystery",
                 optimizer="not-an-optimizer",
+                kind=ArmKind.REAL,
                 demo_mode=None,
                 train_size=None,
                 val_size=None,
@@ -437,6 +440,7 @@ def _pinned_study(tmp_path: Path) -> Path:
     miprov2 = ArmRecord(
         arm_id="miprov2",
         optimizer="miprov2",
+        kind=ArmKind.REAL,
         demo_mode=None,
         train_size=TOY_TRAIN_SIZE,
         val_size=TOY_VAL_SIZE,
@@ -678,7 +682,9 @@ def test_the_batch_size_enters_the_pre_registered_payload() -> None:
     common = {
         "k_repeat": 3,
         "k_run_by_arm": {"miprov2": 5},
+        "kind_by_arm": {"miprov2": ArmKind.REAL.value},
         "split_by_arm": {"miprov2": (44, 44)},
+        "search_by_arm": {"miprov2": {"num_trials": 10}},
         "ci_level": CI_LEVEL,
         "resamples": RESAMPLES,
         "bootstrap_seed": 0,
@@ -728,6 +734,205 @@ def test_the_batch_size_reaches_the_runner_spec(tmp_path: Path) -> None:
     off = runner._spec_for(_miprov2_arm(), seed=2000, run_dir=tmp_path / "run")
     assert off.miprov2_minibatch is False
     assert off.miprov2_minibatch_size is None
+
+
+def test_the_pinned_copro_shape_reaches_the_runner_spec(
+    tmp_path: Path,
+) -> None:
+    """COPRO's whole budget is its shape, so the shape must reach the run.
+
+    Fails-before: ``_spec_for`` never forwarded ``copro_breadth`` or
+    ``copro_depth``, so every COPRO and null-A run took ``RunSpec``'s own
+    defaults of 2 and 1. The estimator defaulted to the same two values,
+    so the estimate and the run agreed with each other and disagreed with
+    the design: a 6x3 search priced at 4,752 rows per run actually ran a
+    2x1 search of 1,056.
+    """
+    from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+    from whetstone_envs.optim.study.protocols import (
+        COPRO_BREADTH,
+        COPRO_DEPTH,
+        STEP10_C19,
+    )
+
+    runner = StudyOptimizerRunner(
+        study_dir=tmp_path,
+        family_id="c19",
+        transport="fake",
+        split_sizes=(88, 132, 220),
+        n_per_stratum=1,
+        pool_seed_start=1,
+        task_model="openai/gpt-4.1-nano",
+        proposer_model="openai/gpt-4.1-nano",
+        num_seeds=1,
+        naive_template="naive {input}",
+        store_path=tmp_path / "store.sqlite",
+    )
+    # Both COPRO-shaped arms, because null-A is a control for *selection*:
+    # a control that searched a different shape would control for a search
+    # the study never ran.
+    for arm_id in ("copro", "null-random"):
+        design = next(arm for arm in STEP10_C19.arms if arm.arm_id == arm_id)
+        spec = runner._spec_for(
+            design.to_spec(stage=StageId.STAGE2),
+            seed=1000,
+            run_dir=tmp_path / arm_id,
+        )
+        assert spec.copro_breadth == COPRO_BREADTH == 6, arm_id
+        assert spec.copro_depth == COPRO_DEPTH == 3, arm_id
+
+
+def test_the_pinned_gepa_reflection_batch_reaches_the_runner_spec(
+    tmp_path: Path,
+) -> None:
+    """How many traces a reflection round sees is design, not a default.
+
+    Fails-before: ``build_gepa_control`` hardcoded
+    ``reflection_minibatch_size=1`` where the protocol registered 3, and
+    ``RunSpec`` had no field to carry the pin -- so the audit invariant
+    could only have checked the run against its own hardcoded value.
+    """
+    from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+    from whetstone_envs.optim.study.protocols import (
+        GEPA_REFLECTION_MINIBATCH_SIZE,
+        STEP10_C19,
+    )
+
+    runner = StudyOptimizerRunner(
+        study_dir=tmp_path,
+        family_id="c19",
+        transport="fake",
+        split_sizes=(88, 132, 220),
+        n_per_stratum=1,
+        pool_seed_start=1,
+        task_model="openai/gpt-4.1-nano",
+        proposer_model="openai/gpt-4.1-nano",
+        num_seeds=1,
+        naive_template="naive {input}",
+        store_path=tmp_path / "store.sqlite",
+    )
+    design = next(arm for arm in STEP10_C19.arms if arm.arm_id == "gepa")
+    spec = runner._spec_for(
+        design.to_spec(stage=StageId.STAGE2),
+        seed=3000,
+        run_dir=tmp_path / "gepa",
+    )
+    assert spec.gepa_reflection_minibatch_size == (
+        GEPA_REFLECTION_MINIBATCH_SIZE
+    )
+    assert GEPA_REFLECTION_MINIBATCH_SIZE == 3
+
+
+def test_the_pinned_codex_cap_reaches_the_run_from_the_design(
+    tmp_path: Path,
+) -> None:
+    """Changing the pinned cap changes the RunSpec.
+
+    Fails-before: ``bound_stage_environment`` built the runner without
+    ``codex_capacity``, so the cap reached the run only because
+    ``RunSpec``'s own default and the study's pin happened to be the same
+    number. Two constants that agree are not a design reaching a run --
+    this asserts the cap the runner is *given* is the cap that arrives.
+    """
+    from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+    from whetstone_envs.optim.study.protocols import STEP10_C19
+
+    design = next(arm for arm in STEP10_C19.arms if arm.arm_id == "codex")
+    # A value deliberately not equal to CODEX_EVALUATE_CALL_CAP, so a
+    # runner that ignored what it was given would keep the default and
+    # fail here rather than passing by coincidence.
+    unusual_cap = 17
+    runner = StudyOptimizerRunner(
+        study_dir=tmp_path,
+        family_id="c19",
+        transport="fake",
+        split_sizes=(88, 132, 220),
+        n_per_stratum=1,
+        pool_seed_start=1,
+        task_model="openai/gpt-4.1-nano",
+        proposer_model="openai/gpt-4.1-nano",
+        num_seeds=1,
+        naive_template="naive {input}",
+        store_path=tmp_path / "store.sqlite",
+        codex_capacity=unusual_cap,
+    )
+    spec = runner._spec_for(
+        design.to_spec(stage=StageId.STAGE2),
+        seed=4000,
+        run_dir=tmp_path / "codex",
+    )
+    assert spec.codex_capacity == unusual_cap
+
+
+def test_a_recorded_search_shape_reaches_the_rebuilt_spec(
+    tmp_path: Path,
+) -> None:
+    """A manifest-driven arm runs the search shape it recorded.
+
+    Fails-before: ``ArmRecord`` carried the minibatch but not COPRO's
+    breadth/depth nor MIPROv2's trials/candidates, so
+    ``spec_from_manifest`` rebuilt all four as ``None`` and every
+    manifest-driven run fell back to ``RunSpec``'s smoke-run defaults --
+    2 MIPROv2 trials where the design registered 10.
+    """
+    from whetstone_envs.optim.study.manifest import read_study_manifest
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    pinned = manifest.pre_registration
+    assert pinned is not None
+    shaped = tuple(
+        arm.model_copy(
+            update={"miprov2_num_trials": 10, "miprov2_num_candidates": 3}
+        )
+        if arm.arm_id == "miprov2"
+        else arm
+        for arm in manifest.arms
+    )
+    repinned = pinned.model_copy(
+        update={
+            "search_by_arm": {
+                **pinned.search_by_arm,
+                "miprov2": {"num_candidates": 3, "num_trials": 10},
+            }
+        }
+    )
+    spec = spec_from_manifest(
+        manifest.model_copy(
+            update={"arms": shaped, "pre_registration": repinned}
+        )
+    )
+    arm = next(entry for entry in spec.arms if entry.arm_id == "miprov2")
+    assert arm.miprov2_num_trials == 10
+    assert arm.miprov2_num_candidates == 3
+
+
+def test_arm_records_disagreeing_with_the_pinned_search_are_refused(
+    tmp_path: Path,
+) -> None:
+    """The pinned shape is the truth; the arm record is not protected.
+
+    The same class of drift as the split and the minibatch, and the one
+    with the largest budget consequence: COPRO's whole per-run cost is
+    ``breadth x depth x T_int x K_REPEAT``, so an arm running a shape the
+    block did not pin both searched something else and spent something
+    else.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        PreRegistrationViolationError,
+        read_study_manifest,
+    )
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    pinned = manifest.pre_registration
+    assert pinned is not None
+    edited = tuple(
+        arm.model_copy(update={"miprov2_num_trials": 10})
+        if arm.arm_id == "miprov2"
+        else arm
+        for arm in manifest.arms
+    )
+    with pytest.raises(PreRegistrationViolationError, match="search_by_arm"):
+        spec_from_manifest(manifest.model_copy(update={"arms": edited}))
 
 
 def test_a_recorded_minibatch_reaches_the_rebuilt_spec(
@@ -825,6 +1030,12 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
                 "miprov2": 5,
                 "null-identity": 1,
             },
+            kind_by_arm={
+                "copro": "real",
+                "gepa": "real",
+                "miprov2": "real",
+                "null-identity": "null",
+            },
             split_by_arm={
                 "copro": None,
                 "gepa": (2, 2),
@@ -837,6 +1048,12 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
                 "miprov2": 8,
                 "null-identity": None,
             },
+            search_by_arm={
+                "copro": {"breadth": 6, "depth": 3},
+                "gepa": {},
+                "miprov2": {"num_candidates": 3, "num_trials": 10},
+                "null-identity": {},
+            },
             ci_level=CI_LEVEL,
             resamples=RESAMPLES,
             bootstrap_seed=0,
@@ -844,5 +1061,5 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
             m=HOLM_FAMILY_SIZE,
             completeness_backstop=0.9,
         )
-        == "abd85e49230ac497fada56682074b4312ce6281ff6a951bea09ecc9fbaa23a11"
+        == "d4f0e4de10158b0eb9c24df2b230608c7f26064f2d05767e983074cdf1a7c199"
     )

@@ -22,6 +22,7 @@ pytest.importorskip("whetstone.experiment.env")
 from dr_store.sync import open_sqlite
 
 from whetstone_envs.optim.run_cost import RUN_COST_SCHEMA_NAME
+from whetstone_envs.optim.split import COPRO_SHAPED_OPTIMIZERS
 from whetstone_envs.optim.study.cli import (
     DEFAULT_STORE_NAME,
     ESTIMATE_LABEL,
@@ -42,6 +43,7 @@ from whetstone_envs.optim.study.cli import (
 )
 from whetstone_envs.optim.study.manifest import (
     STUDY_MANIFEST_NAME,
+    ArmKind,
     ArmRecord,
     EvidencePointer,
     RunRecord,
@@ -51,6 +53,10 @@ from whetstone_envs.optim.study.manifest import (
     read_study_manifest,
     study_manifest_path,
     write_study_manifest,
+)
+from whetstone_envs.optim.study.protocols import (
+    COPRO_BREADTH,
+    COPRO_DEPTH,
 )
 
 from .conftest import toy_manifest
@@ -73,6 +79,34 @@ class _Spec:
         }
         self.k_repeat = 3
         self.split_sizes = (88, 132, 440)
+
+    @property
+    def optimizer_by_arm(self) -> Mapping[str, str]:
+        """Each arm's optimizer.
+
+        These fixtures name every arm after its optimizer, which is the
+        common case; the study's own MIPROv2 demo-mode arms are where the
+        two names come apart, and ``test_protocols`` covers that.
+        """
+        return {arm_id: arm_id for arm_id in self.arm_ids}
+
+    @property
+    def copro_shape_by_arm(self) -> Mapping[str, tuple[int, int] | None]:
+        """Each arm's pinned COPRO shape, at the protocol's own values.
+
+        Derived from ``arm_ids`` rather than listed, so a fixture that
+        renames or adds an arm keeps a shape for every arm it declares --
+        which is the block's own rule, and what ``plan`` reads for each.
+        Only the COPRO-shaped arms carry one, as in the real design.
+        """
+        return {
+            arm_id: (
+                (COPRO_BREADTH, COPRO_DEPTH)
+                if arm_id in COPRO_SHAPED_OPTIMIZERS
+                else None
+            )
+            for arm_id in self.arm_ids
+        }
 
 
 # --------------------------------------------------------------------------
@@ -455,6 +489,7 @@ def _manifest_citing(pointers: tuple[EvidencePointer, ...]) -> StudyManifest:
                 ArmRecord(
                     arm_id="copro",
                     optimizer="copro",
+                    kind=ArmKind.REAL,
                     demo_mode=None,
                     train_size=None,
                     val_size=None,
@@ -653,7 +688,7 @@ def test_plan_states_each_estimate_s_derivation() -> None:
     text = "\n".join(lines)
     assert "basis:" in text
     # COPRO's derivation is its own search shape.
-    assert "breadth 2" in text
+    assert f"breadth {COPRO_BREADTH}" in text
 
 
 def test_plan_prints_measured_numbers_beside_the_estimates() -> None:
@@ -718,8 +753,9 @@ def test_plan_prints_the_corrected_per_arm_estimates() -> None:
     def _row(arm: str) -> str:
         return next(line for line in optimizer_lines if line.startswith(arm))
 
-    # COPRO: (depth 1 + 1) x breadth 2 x 88 internal x 3 repeats.
-    assert "1056" in _row("copro")
+    # COPRO: depth 3 x breadth 6 x 88 internal x 3 repeats, at the
+    # protocol's pinned shape rather than the runner's smoke-run default.
+    assert str(COPRO_DEPTH * COPRO_BREADTH * 88 * 3) in _row("copro")
     # MIPROv2: its own control budget, 1870-2458, independent of the splits.
     assert "1870-2458" in _row("miprov2")
     # GEPA: the pinned 200 rows, not 732 metric calls.
@@ -854,3 +890,77 @@ def test_leakage_check_on_a_missing_manifest_fails_cleanly(
 ) -> None:
     assert main(["leakage-check", "--study-dir", str(tmp_path)]) == EXIT_ERROR
     assert capsys.readouterr().err.strip()
+
+
+# --------------------------------------------------------------------------
+# A study id may not claim a design this invocation is not
+# --------------------------------------------------------------------------
+
+
+def test_a_protocol_id_is_allowed_on_the_protocol_it_names() -> None:
+    """The full design at full size may be named after itself.
+
+    That is also the default, so passing it changes nothing -- which is
+    what keeps the refusal below a refusal of *false* claims rather than a
+    ban on the id.
+    """
+    from whetstone_envs.optim.study.cli import _require_honest_study_id
+    from whetstone_envs.optim.study.protocols import STEP10_C19
+
+    _require_honest_study_id(
+        STEP10_C19.study_id,
+        protocol=STEP10_C19,
+        toy=False,
+        without_codex_arm=False,
+    )
+    # An id of its own is always fine, on any invocation.
+    _require_honest_study_id(
+        "rehearsal-2026-08-23",
+        protocol=STEP10_C19,
+        toy=True,
+        without_codex_arm=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("toy", "without_codex_arm"),
+    [(True, False), (False, True), (True, True)],
+)
+def test_a_reduced_invocation_may_not_claim_a_protocol_id(
+    *, toy: bool, without_codex_arm: bool
+) -> None:
+    """A toy or a projection may not name itself the pre-registration.
+
+    Fails-before: ``--study-id step10-c19`` was accepted on any
+    invocation, so a toy or a ``--without-codex`` rehearsal could be
+    initialised under the study's own id -- and every artifact, directory,
+    and report headline downstream would cite the pre-registration by name
+    while holding a smaller design.
+    """
+    from whetstone_envs.optim.study.cli import _require_honest_study_id
+    from whetstone_envs.optim.study.protocols import STEP10_C19, STEP10_C19_ID
+
+    with pytest.raises(SystemExit, match="refusing --study-id"):
+        _require_honest_study_id(
+            STEP10_C19_ID,
+            protocol=STEP10_C19,
+            toy=toy,
+            without_codex_arm=without_codex_arm,
+        )
+
+
+def test_a_protocol_id_may_not_name_a_different_protocol() -> None:
+    """The toy may not be initialised under the real study's id."""
+    from whetstone_envs.optim.study.cli import _require_honest_study_id
+    from whetstone_envs.optim.study.protocols import (
+        STEP10_C19_ID,
+        STEP10_C19_TOY,
+    )
+
+    with pytest.raises(SystemExit, match="refusing --study-id"):
+        _require_honest_study_id(
+            STEP10_C19_ID,
+            protocol=STEP10_C19_TOY,
+            toy=False,
+            without_codex_arm=False,
+        )

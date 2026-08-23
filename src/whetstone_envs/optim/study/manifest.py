@@ -25,7 +25,7 @@ golden test rather than the report.
 from __future__ import annotations
 
 import json
-from enum import UNIQUE, StrEnum, verify
+from enum import UNIQUE, StrEnum, auto, verify
 from typing import TYPE_CHECKING, Protocol
 
 from dr_store import (
@@ -45,6 +45,7 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone_envs.optim.split import MIN_COPRO_BREADTH, MIN_COPRO_DEPTH
 from whetstone_envs.reporting.publication import validate_output_root
 
 if TYPE_CHECKING:
@@ -130,7 +131,23 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: the pre-registration but gave the arm record nowhere to carry it, so a
 #: manifest-driven MIPROv2 study silently ran unbatched under a design hash
 #: that said otherwise.
-STUDY_MANIFEST_SCHEMA_VERSION = 9
+#: v10 completes the arm record's coverage of the pinned search shape. v9
+#: carried the minibatch but still left four registered control values with
+#: nowhere to live: COPRO's ``breadth``/``depth`` and MIPROv2's
+#: ``num_trials``/``num_candidates``. ``spec_from_manifest`` rebuilt all
+#: four as ``None``, so every manifest-driven run fell back to the runner's
+#: own smoke-run defaults -- a 2x1 COPRO search where the protocol pinned
+#: 6x3, and 2 MIPROv2 trials where it pinned 10. Both are recorded on
+#: ``ArmRecord`` and hashed into the pre-registration's ``search_by_arm``,
+#: and ``spec_from_manifest`` refuses a record that disagrees with the
+#: pinned design rather than running the shape the record happens to hold.
+#: v10 also records each arm's ``kind`` -- what the arm is evidence *for*.
+#: Without it the report had only the audit result and the interval to go
+#: on, so MIPROv2's two fidelity arms, which pass their audits and are
+#: measured on held-out, were labelled efficacy results: five claims where
+#: the design pre-registers four, from single runs outside the Holm family.
+#: The role is part of the pre-registered design, so it is hashed.
+STUDY_MANIFEST_SCHEMA_VERSION = 10
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -179,6 +196,7 @@ class ManifestKey(StrEnum):
     PROTOCOL_DOC_PATH = "protocol_doc_path"
     PROTOCOL_DOC_SHA256 = "protocol_doc_sha256"
     ASSIGNMENT_DOC_SHA256 = "assignment_doc_sha256"
+    DESIGN_PROJECTION = "design_projection"
     POPULATION = "population"
     SPLITS = "splits"
     MODELS = "models"
@@ -207,6 +225,37 @@ class SplitName(StrEnum):
     INTERNAL = "internal"
     OFFICIAL = "official"
     HELD_OUT = "held_out"
+
+
+@verify(UNIQUE)
+class ArmKind(StrEnum):
+    """What an arm is evidence *for*.
+
+    The distinction is load-bearing for the statistics, and it decides what
+    the report is permitted to say about an arm:
+
+    * ``REAL`` -- an efficacy hypothesis. These and only these enter the Holm
+      family, and the family size is pre-registered at exactly four.
+    * ``FIDELITY`` -- an audit check. The arm runs and is audited, because
+      running it is its whole purpose, but it carries **no held-out claim
+      and no verdict**. MIPROv2's ``zeroshot`` and ``ground_only`` modes are
+      these: they evidence the ``MIPRO_ZEROSHOT_GROUNDING`` and
+      ``MIPRO_GROUND_ONLY_DEVIATION`` invariants at one run each. Analysing
+      them as hypotheses would report five efficacy results where the design
+      registered four, uncorrected, from arms whose single run was never
+      sized to support a claim.
+    * ``NULL`` -- a control. Analysed uncorrected beside the family, and the
+      only kind that can trigger the study-wide downgrade.
+
+    ``FIDELITY`` is a separate kind rather than a flag on ``REAL`` because
+    the difference is not a degree of confidence: a fidelity arm is evidence
+    about the *implementation*, and the question it answers has no held-out
+    delta in it.
+    """
+
+    REAL = auto()
+    FIDELITY = auto()
+    NULL = auto()
 
 
 @verify(UNIQUE)
@@ -575,6 +624,30 @@ PROVENANCE_AMENDED = "amended"
 #: Every provenance value the manifest accepts.
 PROVENANCE_VALUES: tuple[str, ...] = (PROVENANCE_ORIGINAL, PROVENANCE_AMENDED)
 
+#: What a manifest says when it holds the registered design in full.
+DESIGN_PROJECTION_FULL = "full"
+
+#: What a manifest says when it holds the registered design *minus its
+#: Codex arm*. A ``--without-codex`` rehearsal is a strictly smaller
+#: design, and a manifest that did not say so was byte-indistinguishable
+#: from the pre-registration on every field a reader checks -- so a
+#: fake-transport rehearsal could be read, and reported, as the study.
+DESIGN_PROJECTION_WITHOUT_CODEX = "without-codex"
+
+#: Every projection a manifest may declare.
+DESIGN_PROJECTIONS: tuple[str, ...] = (
+    DESIGN_PROJECTION_FULL,
+    DESIGN_PROJECTION_WITHOUT_CODEX,
+)
+
+#: What ``models.codex_agent_model`` says on a design with no Codex arm.
+#:
+#: The field is required -- every manifest states which agent the Codex
+#: arm would run -- so a projection that dropped the arm records the
+#: omission rather than naming an agent no arm will reach. Naming one
+#: would leave the rehearsal's ``models`` block identical to the study's.
+CODEX_AGENT_OMITTED = "omitted (no codex arm in this design)"
+
 
 class PreRegistrationRecord(_StrictModel):
     """The design fields fixed before any spend, and the hash over them.
@@ -609,6 +682,13 @@ class PreRegistrationRecord(_StrictModel):
     #: and GEPA measure search efficacy against a declared partition, and a
     #: partition chosen after a result is the same post-hoc adjustment the
     #: rest of this block exists to forbid.
+    #: Each arm's pre-registered role, as ``{arm_id: kind}``.
+    #:
+    #: Hashed because the role decides what the study may claim: which arms
+    #: enter the Holm family, and which produce a held-out verdict at all.
+    #: An arm promoted from ``fidelity`` to ``real`` after its interval was
+    #: visible would be exactly the post-hoc adjustment this block forbids.
+    kind_by_arm: dict[StrictStr, StrictStr]
     split_by_arm: dict[StrictStr, tuple[StrictInt, StrictInt] | None]
     #: Each arm's pre-registered MIPROv2 minibatch size, as
     #: ``{arm_id: size}``, with ``None`` for an arm that does not
@@ -620,6 +700,18 @@ class PreRegistrationRecord(_StrictModel):
     #: for the same claim, so a batch size chosen after a result is the
     #: post-hoc adjustment this block exists to forbid.
     minibatch_by_arm: dict[StrictStr, StrictInt | None]
+    #: Each arm's pre-registered search shape, as
+    #: ``{arm_id: {field: value}}`` over the fields that arm's optimizer
+    #: reads -- COPRO's ``breadth``/``depth`` and MIPROv2's
+    #: ``num_trials``/``num_candidates`` -- and an empty mapping for an arm
+    #: whose optimizer has neither.
+    #:
+    #: Hashed for ``minibatch_by_arm``'s reason, and with the largest
+    #: budget consequence of the three: COPRO's whole per-run cost is
+    #: ``breadth x depth x T_int x K_REPEAT``, so a shape chosen after a
+    #: result would change both what the arm searched and what it was
+    #: allowed to spend.
+    search_by_arm: dict[StrictStr, dict[StrictStr, StrictInt]]
     ci_level: StrictFloat
     resamples: StrictInt
     bootstrap_seed: StrictInt
@@ -643,6 +735,10 @@ class PreRegistrationRecord(_StrictModel):
         )
         _require_valid_minibatch_by_arm(
             minibatch_by_arm=self.minibatch_by_arm,
+            k_run_by_arm=self.k_run_by_arm,
+        )
+        _require_valid_search_by_arm(
+            search_by_arm=self.search_by_arm,
             k_run_by_arm=self.k_run_by_arm,
         )
         if not 0.0 < self.ci_level < 1.0:
@@ -672,8 +768,10 @@ class PreRegistrationRecord(_StrictModel):
         expected = pre_registration_design_hash(
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
+            kind_by_arm=self.kind_by_arm,
             split_by_arm=self.split_by_arm,
             minibatch_by_arm=self.minibatch_by_arm,
+            search_by_arm=self.search_by_arm,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -693,8 +791,10 @@ class PreRegistrationRecord(_StrictModel):
         return _pre_registration_payload(
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
+            kind_by_arm=self.kind_by_arm,
             split_by_arm=self.split_by_arm,
             minibatch_by_arm=self.minibatch_by_arm,
+            search_by_arm=self.search_by_arm,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -752,12 +852,52 @@ def _require_valid_minibatch_by_arm(
         raise ValueError("a pre-registered minibatch size is at least 1")
 
 
+#: The search-shape fields a pre-registration may pin, by name. Closed
+#: rather than free-form: the block is stored identity, and a typo'd key
+#: would hash as a different design while reading as the same one.
+SEARCH_SHAPE_FIELDS: tuple[str, ...] = (
+    "breadth",
+    "depth",
+    "num_trials",
+    "num_candidates",
+)
+
+
+def _require_valid_search_by_arm(
+    *,
+    search_by_arm: Mapping[str, Mapping[str, int]],
+    k_run_by_arm: Mapping[str, int],
+) -> None:
+    """The per-arm search shape names every arm, at known positive fields.
+
+    Named for every arm rather than only the shaped ones, for
+    ``split_by_arm``'s reason: "this arm's optimizer has no search shape"
+    is itself a pre-registered fact, and it is spelled as an empty mapping.
+    """
+    if set(search_by_arm) != set(k_run_by_arm):
+        raise ValueError(
+            "the pre-registered search shape names exactly the arms K_RUN does"
+        )
+    for arm_id, shape in search_by_arm.items():
+        unknown = set(shape) - set(SEARCH_SHAPE_FIELDS)
+        if unknown:
+            raise ValueError(
+                f"arm {arm_id!r} pins unknown search fields "
+                f"{sorted(unknown)}; the pinnable fields are "
+                f"{list(SEARCH_SHAPE_FIELDS)}"
+            )
+        if any(value < 1 for value in shape.values()):
+            raise ValueError("a pre-registered search value is at least 1")
+
+
 def _pre_registration_payload(  # noqa: PLR0913
     *,
     k_repeat: int,
     k_run_by_arm: dict[str, int],
+    kind_by_arm: Mapping[str, str],
     split_by_arm: Mapping[str, tuple[int, int] | None],
     minibatch_by_arm: Mapping[str, int | None],
+    search_by_arm: Mapping[str, Mapping[str, int]],
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -783,11 +923,16 @@ def _pre_registration_payload(  # noqa: PLR0913
     return {
         "k_repeat": k_repeat,
         "k_run_by_arm": dict(sorted(k_run_by_arm.items())),
+        "kind_by_arm": dict(sorted(kind_by_arm.items())),
         "split_by_arm": {
             arm_id: (None if split is None else [split[0], split[1]])
             for arm_id, split in sorted(split_by_arm.items())
         },
         "minibatch_by_arm": dict(sorted(minibatch_by_arm.items())),
+        "search_by_arm": {
+            arm_id: dict(sorted(shape.items()))
+            for arm_id, shape in sorted(search_by_arm.items())
+        },
         "ci_level": ci_level,
         "resamples": resamples,
         "bootstrap_seed": bootstrap_seed,
@@ -801,8 +946,10 @@ def pre_registration_design_hash(  # noqa: PLR0913
     *,
     k_repeat: int,
     k_run_by_arm: dict[str, int],
+    kind_by_arm: Mapping[str, str],
     split_by_arm: Mapping[str, tuple[int, int] | None],
     minibatch_by_arm: Mapping[str, int | None],
+    search_by_arm: Mapping[str, Mapping[str, int]],
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -815,8 +962,10 @@ def pre_registration_design_hash(  # noqa: PLR0913
         _pre_registration_payload(
             k_repeat=k_repeat,
             k_run_by_arm=k_run_by_arm,
+            kind_by_arm=kind_by_arm,
             split_by_arm=split_by_arm,
             minibatch_by_arm=minibatch_by_arm,
+            search_by_arm=search_by_arm,
             ci_level=ci_level,
             resamples=resamples,
             bootstrap_seed=bootstrap_seed,
@@ -1094,6 +1243,13 @@ class ArmRecord(_StrictModel):
 
     arm_id: StrictStr
     optimizer: StrictStr
+    #: What this arm is evidence for: an efficacy hypothesis, a fidelity
+    #: check, or a control. Recorded rather than re-derived from the arm id
+    #: because it decides what the report may claim about the arm -- a
+    #: fidelity arm carries no held-out verdict and enters no correction
+    #: family -- and a reader of the manifest should not have to know which
+    #: demo modes happen to be fidelity modes to check that.
+    kind: ArmKind
     demo_mode: StrictStr | None
     #: The arm's train/val partition of the internal split, or ``None`` on
     #: an arm whose optimizer has no train/val concept. Recorded because it
@@ -1116,9 +1272,46 @@ class ArmRecord(_StrictModel):
     #: minibatching in name only.
     minibatch: StrictBool = False
     minibatch_size: StrictInt | None = None
+    #: The pinned COPRO search shape, on the arms whose search is COPRO's,
+    #: and ``None`` on the rest. Recorded for ``minibatch``'s reason and
+    #: with more at stake: the whole COPRO budget is
+    #: ``breadth x depth x T_int x K_REPEAT``, and a record that carried
+    #: neither rebuilt the spec at the runner's smoke-run default, running
+    #: a third of the search the design priced.
+    copro_breadth: StrictInt | None = None
+    copro_depth: StrictInt | None = None
+    #: MIPROv2's pinned search shape, recorded for the same reason. v9
+    #: hashed the minibatch but left these two off the record, so a
+    #: manifest-driven MIPROv2 arm ran 2 trials where the design
+    #: registered 10.
+    miprov2_num_trials: StrictInt | None = None
+    miprov2_num_candidates: StrictInt | None = None
     control_identity_hash: StrictStr
     seed_note: StrictStr
     runs: tuple[RunRecord, ...]
+
+    def _validate_search_shape(self) -> None:
+        """The recorded search shape is whole and positive.
+
+        Split out of :meth:`_validate_arm` to keep that validator readable;
+        the rules are the record's own, restating what ``ArmSpec`` already
+        refuses so a hand-edited manifest cannot smuggle past the spec a
+        shape the spec would have rejected.
+        """
+        if (self.copro_breadth is None) != (self.copro_depth is None):
+            raise ValueError(
+                "an arm records both halves of its COPRO search shape or "
+                "neither"
+            )
+        floors = (
+            ("copro_breadth", self.copro_breadth, MIN_COPRO_BREADTH),
+            ("copro_depth", self.copro_depth, MIN_COPRO_DEPTH),
+            ("miprov2_num_trials", self.miprov2_num_trials, 1),
+            ("miprov2_num_candidates", self.miprov2_num_candidates, 1),
+        )
+        for name, value, floor in floors:
+            if value is not None and value < floor:
+                raise ValueError(f"a recorded {name} is at least {floor}")
 
     @model_validator(mode="after")
     def _validate_arm(self) -> ArmRecord:
@@ -1138,6 +1331,7 @@ class ArmRecord(_StrictModel):
             )
         if self.minibatch_size is not None and self.minibatch_size < 1:
             raise ValueError("a recorded minibatch_size is at least 1")
+        self._validate_search_shape()
         if self.train_size is not None and self.train_size < 1:
             raise ValueError("a recorded train_size is at least 1")
         if self.val_size is not None and self.val_size < 1:
@@ -1775,6 +1969,39 @@ def recorded_transport(
 # --------------------------------------------------------------------------
 
 
+def _validate_projection_matches_arms(
+    *, projection: str, arms: tuple[ArmRecord, ...]
+) -> None:
+    """The declared projection and the arm list must agree.
+
+    A label a reader trusts has to be checkable against the thing it
+    labels. A manifest that said ``without-codex`` while carrying a Codex
+    arm -- or claimed the full design while missing one -- would be a
+    projection marker that could be set independently of the design, which
+    is no better than not recording it.
+
+    Only one direction is checkable, and it is the one that matters. A
+    manifest claiming ``without-codex`` while carrying a Codex arm is
+    self-contradictory, so it is refused. The converse is *not* an error:
+    plenty of legitimate designs -- fixtures, partial studies, a protocol
+    that never declared a Codex arm -- hold no Codex arm without being a
+    projection of one that does. Refusing those would make the marker a
+    claim about the arm list rather than about provenance, which is not
+    what it records.
+
+    Checked only once a manifest carries arms at all: ``arms`` is empty in
+    intermediate states this model is also used for.
+    """
+    if not arms:
+        return
+    has_codex = any(arm.optimizer == "codex" for arm in arms)
+    if projection == DESIGN_PROJECTION_WITHOUT_CODEX and has_codex:
+        raise ValueError(
+            "a manifest declaring the without-codex projection carries no "
+            "codex arm, but this one does"
+        )
+
+
 def _validate_design_matches_pre_registration(
     *,
     pre_registration: PreRegistrationRecord | None,
@@ -1873,7 +2100,18 @@ class StudyManifest(_StrictModel):
     created_at: StrictStr
     protocol_doc_path: StrictStr
     protocol_doc_sha256: StrictStr
-    assignment_doc_sha256: StrictStr
+    #: The digest of a *separate* authorising assignment, when one exists.
+    #:
+    #: ``None`` when the protocol document is itself the authority, which
+    #: is the Step 10 case. It was previously the sha256 of a fixed marker
+    #: string -- a digest of nothing, that read like provenance and
+    #: verified nothing. An absent assignment is stated as absent.
+    assignment_doc_sha256: StrictStr | None = None
+    #: Whether this manifest holds the registered design or a projection
+    #: of it. A ``--without-codex`` rehearsal is a strictly smaller
+    #: design, and the report prints this so a projection's numbers cannot
+    #: be read as the study's.
+    design_projection: StrictStr = DESIGN_PROJECTION_FULL
     population: PopulationRecord
     splits: SplitsRecord
     models: ModelsRecord
@@ -1913,6 +2151,39 @@ class StudyManifest(_StrictModel):
         serialize_by_alias=True,
     )
 
+    def _validate_provenance(self) -> None:
+        """The manifest names itself, its protocol, and which design it is.
+
+        Split out of :meth:`_validate_manifest` to keep that validator
+        within one screen; these are the fields a reader checks before
+        trusting any number below them.
+        """
+        identifiers = (
+            self.study_id,
+            self.created_at,
+            self.protocol_doc_path,
+            self.protocol_doc_sha256,
+        )
+        if any(not value.strip() for value in identifiers):
+            raise ValueError("a manifest's provenance fields are nonblank")
+        if (
+            self.assignment_doc_sha256 is not None
+            and not self.assignment_doc_sha256.strip()
+        ):
+            # Absent is stated as ``None``. A blank string would be a
+            # third state meaning the same thing and reading as a value.
+            raise ValueError(
+                "assignment_doc_sha256 is a digest or None, never blank"
+            )
+        if self.design_projection not in DESIGN_PROJECTIONS:
+            raise ValueError(
+                f"design_projection is one of {DESIGN_PROJECTIONS}; "
+                f"got {self.design_projection!r}"
+            )
+        _validate_projection_matches_arms(
+            projection=self.design_projection, arms=self.arms
+        )
+
     @model_validator(mode="after")
     def _validate_manifest(self) -> StudyManifest:
         if self.schema_ != STUDY_MANIFEST_SCHEMA:
@@ -1920,15 +2191,7 @@ class StudyManifest(_StrictModel):
                 f"expected schema {STUDY_MANIFEST_SCHEMA!r}, "
                 f"got {self.schema_!r}"
             )
-        identifiers = (
-            self.study_id,
-            self.created_at,
-            self.protocol_doc_path,
-            self.protocol_doc_sha256,
-            self.assignment_doc_sha256,
-        )
-        if any(not value.strip() for value in identifiers):
-            raise ValueError("a manifest's provenance fields are nonblank")
+        self._validate_provenance()
         _validate_design_matches_pre_registration(
             pre_registration=self.pre_registration, design=self.design
         )
@@ -2318,6 +2581,7 @@ __all__ = [
     "TRANSPORT_NAMES",
     "AdapterSwapRecord",
     "AmendmentRecord",
+    "ArmKind",
     "ArmRecord",
     "BalanceRecord",
     "C18Record",

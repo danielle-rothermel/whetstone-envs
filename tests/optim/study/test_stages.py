@@ -26,6 +26,7 @@ from whetstone_envs.optim.study.environment import bound_stage_environment
 from whetstone_envs.optim.study.manifest import (
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
+    ArmKind,
     ArmRecord,
     CallCountGateRecord,
     EvidencePointer,
@@ -464,6 +465,7 @@ def _codex_study(tmp_path: Path) -> Path:
     codex = ArmRecord(
         arm_id="codex",
         optimizer="codex",
+        kind=ArmKind.REAL,
         demo_mode=None,
         train_size=None,
         val_size=None,

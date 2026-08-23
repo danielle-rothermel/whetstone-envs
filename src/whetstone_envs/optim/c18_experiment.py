@@ -31,6 +31,9 @@ from typing import TYPE_CHECKING
 from whetstone_envs.c18 import DEFAULT_CONFIG, PROBES
 from whetstone_envs.c18 import generate_pool as _c18_generate_pool
 from whetstone_envs.c18.config import GenerationConfig
+from whetstone_envs.c18.generation import (
+    build_manifest as _c18_build_manifest,
+)
 from whetstone_envs.c18.generation import default_split_sizes
 from whetstone_envs.optim.experiment import (
     ExperimentContract,
@@ -43,6 +46,7 @@ if TYPE_CHECKING:
 
     from dr_providers import ProviderCallConfig
 
+    from whetstone_envs.manifests import Manifest
     from whetstone_envs.optim.experiment import PreparedSplitExperiment
     from whetstone_envs.pools import TaskPool
 
@@ -140,6 +144,28 @@ def c18_generate_pool(*, n_per_stratum: int, seed_start: int) -> TaskPool:
         )
     )
     return _c18_generate_pool(config, n_per_stratum=n_per_stratum)
+
+
+def c18_pool_manifest(*, n_per_stratum: int, seed_start: int) -> Manifest:
+    """This family's manifest for the pool at these generation settings.
+
+    Adapts PrOntoQA's own ``build_manifest``, which takes a pool and a
+    config, to the registry's uniform keyword shape. The pool is generated
+    here rather than accepted as an argument so the manifest cannot
+    describe a pool other than the one those settings produce.
+    """
+    return _c18_build_manifest(
+        c18_generate_pool(n_per_stratum=n_per_stratum, seed_start=seed_start),
+        DEFAULT_CONFIG
+        if seed_start == C18_DEFAULT_POOL_SEED_START
+        else GenerationConfig(
+            generator_version=DEFAULT_CONFIG.generator_version,
+            seed_start=seed_start,
+            n_per_stratum=DEFAULT_CONFIG.n_per_stratum,
+            strata=DEFAULT_CONFIG.strata,
+            split=DEFAULT_CONFIG.split,
+        ),
+    )
 
 
 def c18_protocol_split_sizes(pool: TaskPool) -> tuple[int, int, int]:

@@ -15,11 +15,17 @@ rather than half-way through a paid stage.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import UNIQUE, StrEnum, auto, verify
+from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING
 
-from whetstone_envs.optim.split import TRAIN_VAL_OPTIMIZERS
+from whetstone_envs.optim.split import (
+    COPRO_SHAPED_OPTIMIZERS,
+    MIN_COPRO_BREADTH,
+    MIN_COPRO_DEPTH,
+    TRAIN_VAL_OPTIMIZERS,
+)
 from whetstone_envs.optim.study.manifest import (
+    ArmKind,
     PreRegistrationViolationError,
     read_study_manifest,
 )
@@ -39,6 +45,7 @@ __all__ = [
     "CODEX_ARM_ID",
     "CODEX_EVALUATE_CALL_CAP",
     "CORRECTION_RULE",
+    "FIDELITY_ARM_IDS",
     "HOLM_FAMILY_SIZE",
     "K_CAL_CAP",
     "K_CAL_INITIAL",
@@ -52,7 +59,8 @@ __all__ = [
     "PROTOCOL_VAL_SIZE",
     "REAL_OPTIMIZER_ARM_IDS",
     "RESAMPLES",
-    "SEED_RANGE_BY_OPTIMIZER",
+    "SEED_RANGE_BY_ARM",
+    "SINGLE_RUN_ARM_IDS",
     "ArmKind",
     "ArmSpec",
     "SplitSpec",
@@ -114,30 +122,43 @@ class StageId(StrEnum):
     STAGE2 = "stage2"
 
 
-@verify(UNIQUE)
-class ArmKind(StrEnum):
-    """What an arm is evidence *for*.
-
-    The distinction is load-bearing for the statistics: only ``REAL`` arms are
-    hypotheses and enter the Holm family, and only ``NULL`` arms can trigger
-    the study-wide downgrade.
-    """
-
-    REAL = auto()
-    NULL = auto()
-
-
-#: Disjoint per-optimizer seed ranges. Disjointness is what lets a run's seed
-#: identify its arm in a flat artifact directory, and null-B takes a single
-#: seed because it runs once.
-SEED_RANGE_BY_OPTIMIZER: dict[str, int] = {
+#: Disjoint seed ranges, keyed by arm. Disjointness is what lets a run's
+#: seed identify its arm in a flat artifact directory, and null-B takes a
+#: single seed because it runs once.
+#:
+#: Keyed by **arm**, not by optimizer, because the study runs one optimizer
+#: under more than one arm: MIPROv2's three demo modes are three separate
+#: arms of the same optimizer, and a table keyed by optimizer would hand
+#: all three the same seeds -- three arms the report would present as
+#: independent evidence while they shared an RNG stream. An arm the table
+#: does not name falls back to its optimizer's range, which is what keeps
+#: every existing single-arm-per-optimizer caller unchanged.
+SEED_RANGE_BY_ARM: dict[str, int] = {
     "copro": 1000,
     "miprov2": 2000,
     "gepa": 3000,
     "codex": 4000,
     "null-random": 5000,
     "null-identity": 6000,
+    # MIPROv2's fidelity modes, on their own ranges so their runs never
+    # share a seed with the efficacy arm's.
+    "miprov2-zeroshot": 2100,
+    "miprov2-ground_only": 2200,
 }
+
+#: Arms that run once because one run is their whole contribution.
+#:
+#: Null-B is a pipeline-overhead assertion (D4). MIPROv2's ``zeroshot`` and
+#: ``ground_only`` are fidelity evidence for two audit invariants, not
+#: efficacy arms: the protocol pre-registers ``fewshot`` as the arm that
+#: carries the MIPROv2 claim, and running the other two at the full count
+#: would both cost four extra runs each and invite promoting one of them
+#: into the efficacy slot after the deltas were visible (R2).
+SINGLE_RUN_ARM_IDS: tuple[str, ...] = (
+    "null-identity",
+    "miprov2-zeroshot",
+    "miprov2-ground_only",
+)
 
 #: The Codex arm, named where the study's spend guard reads it. It is the
 #: only arm whose runs can bill a foreign subscription, so the id is an
@@ -155,24 +176,36 @@ REAL_OPTIMIZER_ARM_IDS: tuple[str, ...] = (
 #: The two controls, in the order the report presents them.
 NULL_ARM_IDS: tuple[str, ...] = ("null-random", "null-identity")
 
+#: The fidelity arms: MIPROv2's two non-efficacy demo modes. They run and
+#: are audited, and they carry no held-out claim -- see :class:`ArmKind`.
+#: Named here so the analysis and the report agree on the membership by
+#: reading one tuple rather than each re-deriving it from a demo mode.
+FIDELITY_ARM_IDS: tuple[str, ...] = ("miprov2-zeroshot", "miprov2-ground_only")
 
-def k_run_for(optimizer: str, *, stage: StageId) -> int:
-    """Runs this optimizer gets at ``stage``.
 
-    Null-B is the exception at every stage: one run is the whole control, so
-    a pilot does not run it twice and Stage 2 does not run it five times.
+def k_run_for(arm_id: str, *, stage: StageId) -> int:
+    """Runs this arm gets at ``stage``.
+
+    Named by **arm**, because run count is a property of the arm rather
+    than of the optimizer behind it: MIPROv2's efficacy arm runs five
+    times and its two fidelity arms run once each, all on the same
+    optimizer. Every arm whose id is its optimizer's name is unaffected.
+
+    The single-run arms are the exception at every stage: one run is their
+    whole contribution, so a pilot does not run them twice and Stage 2
+    does not run them five times.
     """
-    if optimizer == "null-identity":
+    if arm_id in SINGLE_RUN_ARM_IDS:
         return K_RUN_NULL_B
     if stage is StageId.STAGE1:
         return K_RUN_PILOT
     if stage is StageId.STAGE2:
-        return K_RUN_NULL_A if optimizer == "null-random" else K_RUN_STAGE2
+        return K_RUN_NULL_A if arm_id == "null-random" else K_RUN_STAGE2
     raise ValueError(f"stage {stage.value!r} runs no optimizers")
 
 
-def arm_seeds(optimizer: str, *, stage: StageId) -> tuple[int, ...]:
-    """The seeds this optimizer runs at ``stage``, from its own range.
+def arm_seeds(arm_id: str, *, stage: StageId) -> tuple[int, ...]:
+    """The seeds this arm runs at ``stage``, from its own range.
 
     Stage 2 returns the full seed set including Stage 1's, because Stage 1's
     runs count toward Stage 2 rather than being repeated. A caller that has
@@ -180,10 +213,10 @@ def arm_seeds(optimizer: str, *, stage: StageId) -> tuple[int, ...]:
     either way, which is what makes "reused" checkable rather than asserted.
     """
     try:
-        base = SEED_RANGE_BY_OPTIMIZER[optimizer]
+        base = SEED_RANGE_BY_ARM[arm_id]
     except KeyError as error:
-        raise ValueError(f"unknown optimizer {optimizer!r}") from error
-    runs = k_run_for(optimizer, stage=stage)
+        raise ValueError(f"unknown arm {arm_id!r}") from error
+    runs = k_run_for(arm_id, stage=stage)
     return tuple(base + offset for offset in range(runs))
 
 
@@ -223,6 +256,20 @@ class ArmSpec:
     k_run: int
     seeds: tuple[int, ...]
     demo_mode: str | None = None
+    #: COPRO's search shape: ``breadth`` candidates over each of ``depth``
+    #: evaluating rounds. (A run records one further *step*, finalization,
+    #: which ranks the measured history and evaluates nothing.) Set on
+    #: every arm whose search *is* COPRO's
+    #: -- COPRO itself and ``null-random`` -- and refused on the others.
+    #:
+    #: Required rather than optional, unlike the MIPROv2 settings, because
+    #: the runner's own default is a smoke-run shape two thirds smaller
+    #: than the registered one and an unset arm would silently take it: the
+    #: study would run a 1,056-row search under a design that priced 4,752.
+    #: The whole COPRO budget is ``breadth x depth x T_int x K_REPEAT``, so
+    #: an arm that does not state its shape has not stated its cost.
+    copro_breadth: int | None = None
+    copro_depth: int | None = None
     #: MIPROv2 search shape and split, when this arm sets them. ``None``
     #: keeps the runner's own default, which is what every arm the study
     #: builds today does; they are here so an arm can request the
@@ -311,10 +358,61 @@ class ArmSpec:
                 "least 1"
             )
 
+    def _validate_copro(self) -> None:
+        """Refuse a COPRO shape this arm could not honestly claim.
+
+        The mirror of :meth:`_validate_miprov2`, and refused for the same
+        reason: a breadth or depth set on an optimizer that reads neither
+        looks honoured and is not.
+
+        The two halves travel together, as MIPROv2's minibatch and size do.
+        An arm may leave both unset -- a smoke run has no design to state
+        -- but an arm that states one and not the other would run half a
+        shape it chose and half the runner's default. What guarantees the
+        *study's* arms carry the pinned shape is the protocol that builds
+        them and the ``search_by_arm`` block that hashes it, not a rule
+        forbidding every unshaped COPRO arm everywhere.
+        """
+        shape = (self.copro_breadth, self.copro_depth)
+        if self.optimizer in COPRO_SHAPED_OPTIMIZERS:
+            if (self.copro_breadth is None) != (self.copro_depth is None):
+                # Half a shape is worse than none: the unset half silently
+                # takes the runner's default, so the arm would run a shape
+                # nobody chose.
+                raise ValueError(
+                    f"arm {self.arm_id!r} declares half a COPRO search "
+                    "shape; state copro_breadth and copro_depth together "
+                    "or neither"
+                )
+            if (
+                self.copro_breadth is not None
+                and self.copro_breadth < MIN_COPRO_BREADTH
+            ):
+                # A single draft per step leaves nothing to select
+                # between, which is upstream ``CoproControl``'s own floor.
+                raise ValueError(
+                    f"arm {self.arm_id!r} copro_breadth must be at least "
+                    f"{MIN_COPRO_BREADTH}"
+                )
+            if (
+                self.copro_depth is not None
+                and self.copro_depth < MIN_COPRO_DEPTH
+            ):
+                raise ValueError(
+                    f"arm {self.arm_id!r} copro_depth must be at least "
+                    f"{MIN_COPRO_DEPTH}"
+                )
+        elif any(value is not None for value in shape):
+            raise ValueError(
+                f"arm {self.arm_id!r} sets a COPRO search shape but runs "
+                f"optimizer {self.optimizer!r}"
+            )
+
     def __post_init__(self) -> None:
         if not self.arm_id.strip():
             raise ValueError("arm ids must be nonblank")
         self._validate_miprov2()
+        self._validate_copro()
         split_supplied = (
             self.train_size is not None or self.val_size is not None
         )
@@ -408,6 +506,8 @@ def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
                 arm_id=optimizer,
                 optimizer=optimizer,
                 kind=kind,
+                # ``default_arms`` names each arm after its optimizer, so
+                # the two coincide here; the lookups are by arm either way.
                 k_run=k_run_for(optimizer, stage=stage),
                 seeds=arm_seeds(optimizer, stage=stage),
                 **splits,
@@ -526,6 +626,35 @@ class StudySpec:
         return {arm.arm_id: arm.k_run for arm in self.arms}
 
     @property
+    def optimizer_by_arm(self) -> dict[str, str]:
+        """Which optimizer each arm runs, keyed by arm id.
+
+        The two are not the same name: MIPROv2's three demo modes are three
+        arms of one optimizer. A caller pricing an arm needs the optimizer
+        to estimate its calls, and reading the arm id as an optimizer is
+        how the two fidelity arms came to report no estimate at all.
+        """
+        return {arm.arm_id: arm.optimizer for arm in self.arms}
+
+    @property
+    def copro_shape_by_arm(self) -> dict[str, tuple[int, int] | None]:
+        """Each arm's pinned ``(breadth, depth)``, or ``None``.
+
+        A caller pricing a COPRO-shaped arm needs the shape, because the
+        arm's whole per-run cost is ``breadth x depth x T_int x K_REPEAT``:
+        an estimate taken at the estimator's default rather than the arm's
+        own prices a search the study does not run.
+        """
+        return {
+            arm.arm_id: (
+                None
+                if arm.copro_breadth is None or arm.copro_depth is None
+                else (arm.copro_breadth, arm.copro_depth)
+            )
+            for arm in self.arms
+        }
+
+    @property
     def real_arms(self) -> tuple[ArmSpec, ...]:
         """The hypotheses, in Holm-family order."""
         return tuple(arm for arm in self.arms if arm.kind is ArmKind.REAL)
@@ -619,6 +748,16 @@ def spec_from_manifest(
             # that says it batched.
             miprov2_minibatch=arm.minibatch,
             miprov2_minibatch_size=arm.minibatch_size,
+            # Read back for the minibatch's reason, and with the largest
+            # budget consequence of the three: COPRO's whole per-run cost
+            # is ``breadth x depth x T_int x K_REPEAT``, and MIPROv2's
+            # trials set its own. A spec rebuilt without them took the
+            # runner's smoke-run defaults under a design hash pinning the
+            # registered shape.
+            copro_breadth=arm.copro_breadth,
+            copro_depth=arm.copro_depth,
+            miprov2_num_trials=arm.miprov2_num_trials,
+            miprov2_num_candidates=arm.miprov2_num_candidates,
         )
         for arm in manifest.arms
     )
@@ -710,6 +849,42 @@ def _require_pinned_split(manifest: StudyManifest) -> None:
             "minibatch_by_arm, so the spec they rebuild is not the design "
             "this study registered: " + "; ".join(batched)
         )
+    searched = [
+        f"{arm.arm_id}: records {_recorded_search(arm)}, pre-registered "
+        f"{dict(pinned.search_by_arm[arm.arm_id])}"
+        for arm in manifest.arms
+        if arm.arm_id in pinned.search_by_arm
+        and _recorded_search(arm) != dict(pinned.search_by_arm[arm.arm_id])
+    ]
+    if searched:
+        # The same class of error again, and the one with the largest
+        # budget consequence: COPRO's whole per-run cost follows from
+        # breadth and depth, so an arm that ran a shape the block did not
+        # pin both searched something else and spent something else.
+        raise PreRegistrationViolationError(
+            "these arm records disagree with the pre-registered "
+            "search_by_arm, so the spec they rebuild is not the design "
+            "this study registered: " + "; ".join(searched)
+        )
+
+
+def _recorded_search(arm: ArmRecord) -> dict[str, int]:
+    """One arm record's search shape, in ``search_by_arm``'s own shape.
+
+    Only the fields the record actually carries appear, so a record with
+    no shape projects to an empty mapping and compares equal to the empty
+    mapping the block pins for an arm whose optimizer reads neither.
+    """
+    shape: dict[str, int] = {}
+    if arm.copro_breadth is not None:
+        shape["breadth"] = arm.copro_breadth
+    if arm.copro_depth is not None:
+        shape["depth"] = arm.copro_depth
+    if arm.miprov2_num_trials is not None:
+        shape["num_trials"] = arm.miprov2_num_trials
+    if arm.miprov2_num_candidates is not None:
+        shape["num_candidates"] = arm.miprov2_num_candidates
+    return shape
 
 
 def require_pinned_arms(manifest: StudyManifest) -> None:
@@ -817,22 +992,28 @@ def _arm_seeds_from(
 
     A run whose optimizer carries no control seed records ``None``, so a
     partially-run arm falls back to its pre-registered range rather than
-    inventing a seed the run never had. An arm whose optimizer is not in
-    the seed table is refused rather than seeded from zero: every other
-    lookup of that table raises, and a silently-seeded unknown arm would
-    collide with whatever else defaulted the same way.
+    inventing a seed the run never had. An arm the seed table does not
+    name is refused rather than seeded from zero: every other lookup of
+    that table raises, and a silently-seeded unknown arm would collide
+    with whatever else defaulted the same way.
+
+    Keyed by arm, then by optimizer. The study runs one optimizer under
+    more than one arm -- MIPROv2's three demo modes -- and reading the
+    range off the optimizer alone would give all three the same seeds,
+    so an arm with its own range must be looked up by its own name.
     """
     recorded = tuple(run.seed for run in arm.runs if run.seed is not None)
     k_run = _k_run_from(arm, design=design, stage=stage)
     if len(recorded) == k_run and len(set(recorded)) == k_run:
         return recorded
-    try:
-        base = SEED_RANGE_BY_OPTIMIZER[arm.optimizer]
-    except KeyError as error:
+    base = SEED_RANGE_BY_ARM.get(
+        arm.arm_id, SEED_RANGE_BY_ARM.get(arm.optimizer)
+    )
+    if base is None:
         raise ValueError(
             f"arm {arm.arm_id!r} names unknown optimizer {arm.optimizer!r}; "
-            f"seeded optimizers are {tuple(SEED_RANGE_BY_OPTIMIZER)}"
-        ) from error
+            f"seeded arms are {tuple(SEED_RANGE_BY_ARM)}"
+        )
     return tuple(base + offset for offset in range(k_run))
 
 
@@ -849,7 +1030,7 @@ def _k_run_from(
     """
     if design is not None and arm.arm_id in design.k_run_by_arm:
         return design.k_run_by_arm[arm.arm_id]
-    return k_run_for(arm.optimizer, stage=stage)
+    return k_run_for(arm.arm_id, stage=stage)
 
 
 def load_study_spec(

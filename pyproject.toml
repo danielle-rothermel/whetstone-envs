@@ -89,6 +89,7 @@ artifacts = [
     "src/whetstone_envs/c23/attribution/LICENSE",
     "src/whetstone_envs/c23/attribution/PROVENANCE.md",
     "src/whetstone_envs/c23/manifest.json",
+    "src/whetstone_envs/optim/study/protocol_docs/*.md",
 ]
 
 [tool.pytest.ini_options]

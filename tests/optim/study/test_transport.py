@@ -58,6 +58,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVIDER_SEED_DERIVED_PER_CALL,
     STUDY_MANIFEST_NAME,
     STUDY_STORE_NAME,
+    ArmKind,
     ArmRecord,
     EvidencePointer,
     LeakageCheckEntry,
@@ -72,6 +73,7 @@ from whetstone_envs.optim.study.manifest import (
     recorded_transport,
     write_study_manifest,
 )
+from whetstone_envs.optim.study.spec import NULL_ARM_IDS
 from whetstone_envs.optim.study.spec import StageId as SpecStageId
 from whetstone_envs.optim.study.spend import (
     ReportSpendLedger,
@@ -112,6 +114,7 @@ def _arms() -> tuple[ArmRecord, ...]:
         ArmRecord(
             arm_id=arm_id,
             optimizer=arm_id,
+            kind=(ArmKind.NULL if arm_id in NULL_ARM_IDS else ArmKind.REAL),
             demo_mode=None,
             train_size=None,
             val_size=None,

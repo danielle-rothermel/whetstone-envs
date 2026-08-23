@@ -45,6 +45,10 @@ from whetstone_envs.optim.study.selection import (
     SelectionRecord,
 )
 from whetstone_envs.optim.study.spec import StageId, spec_from_manifest
+from whetstone_envs.optim.study.spend import (
+    ReportSpendLedger,
+    ReportSpendRecord,
+)
 from whetstone_envs.optim.study.stages import (
     SEED_NOTE_CONTROL_FIELD,
     SEED_NOTE_PROVIDER_ONLY,
@@ -52,6 +56,7 @@ from whetstone_envs.optim.study.stages import (
     ArmRunResult,
     StageEnvironment,
     StageError,
+    _persist_report_spend_to,
     _record_report_spend,
     run_arm_stage,
     run_stage,
@@ -1636,3 +1641,75 @@ def test_refolding_the_reporting_bill_restates_it_rather_than_doubling_it(
         "re-folding the reporting pass billed its evaluations a second time"
     )
     assert [entry.calls for entry in twice.report_spend] == [4]
+
+
+def test_a_priced_reporting_evaluation_is_durable_before_the_pass_ends(
+    tmp_path: Path,
+) -> None:
+    """**The spend is on disk the moment it is paid, not at the end.**
+
+    The reporting pass buys an official score per run, a held-out
+    measurement per arm, and the anchors, and it writes the stage's row
+    only once all of them are done. Spend held in memory across that
+    window is lost by a crash inside it -- and lost reporting spend is
+    invisible afterwards, because the resume rebuilds its claims without
+    re-evaluating and never learns what the crashed invocation bought.
+
+    So the sink is installed before the pass rather than after: each
+    priced evaluation appends its own entry, and an evaluation whose
+    evidence is already recorded for this stage is a no-op, because one
+    evaluation cited twice was paid for once.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    stage = StageId.STAGE1
+    environment = _Harness(study_dir, scores={}).environment()
+    ledger = ReportSpendLedger(None)
+    _persist_report_spend_to(
+        study_dir=study_dir,
+        stage=stage,
+        environment=replace(environment, report_spend=ledger),
+    )
+    priced = RunSpendRecord(
+        role=CostRole.TASK_MODEL.value,
+        calls=2,
+        cached_calls=0,
+        input_tokens=10,
+        output_tokens=3,
+        priced_calls=2,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.25,
+    )
+    record = ReportSpendRecord(
+        purpose="official",
+        candidate_name="copro",
+        evidence_key=("whetstone.eval.outputs", "a" * 64),
+        spend=(priced,),
+    )
+    # The ledger calls its sink the moment an evaluation is priced.
+    assert ledger._persist is not None
+    ledger._persist(record)
+
+    entries = [
+        entry
+        for entry in read_study_manifest(study_dir).report_spend
+        if entry.stage == stage.value
+    ]
+    assert len(entries) == 1
+    assert entries[0].evidence_key == record.evidence_key
+    assert entries[0].purpose == "official"
+    assert entries[0].candidate_name == "copro"
+    assert [item.usd for item in entries[0].spend] == [0.25]
+
+    # The same evaluation, cited again, is one purchase and not two.
+    ledger._persist(record)
+    assert (
+        len(
+            [
+                entry
+                for entry in read_study_manifest(study_dir).report_spend
+                if entry.stage == stage.value
+            ]
+        )
+        == 1
+    )

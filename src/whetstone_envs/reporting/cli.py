@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Any
 
-from whetstone_envs.optim.provider import (
+from whetstone_envs.optim.concurrency import (
     DEFAULT_PROVIDER_CONCURRENCY,
     MAX_UNFORCED_PROVIDER_CONCURRENCY,
     PROVIDER_CONCURRENCY_FLAG,

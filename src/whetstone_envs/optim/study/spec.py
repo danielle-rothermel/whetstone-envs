@@ -879,22 +879,28 @@ def _arm_seeds_from(
 
     A run whose optimizer carries no control seed records ``None``, so a
     partially-run arm falls back to its pre-registered range rather than
-    inventing a seed the run never had. An arm whose optimizer is not in
-    the seed table is refused rather than seeded from zero: every other
-    lookup of that table raises, and a silently-seeded unknown arm would
-    collide with whatever else defaulted the same way.
+    inventing a seed the run never had. An arm the seed table does not
+    name is refused rather than seeded from zero: every other lookup of
+    that table raises, and a silently-seeded unknown arm would collide
+    with whatever else defaulted the same way.
+
+    Keyed by arm, then by optimizer. The study runs one optimizer under
+    more than one arm -- MIPROv2's three demo modes -- and reading the
+    range off the optimizer alone would give all three the same seeds,
+    so an arm with its own range must be looked up by its own name.
     """
     recorded = tuple(run.seed for run in arm.runs if run.seed is not None)
     k_run = _k_run_from(arm, design=design, stage=stage)
     if len(recorded) == k_run and len(set(recorded)) == k_run:
         return recorded
-    try:
-        base = SEED_RANGE_BY_OPTIMIZER[arm.optimizer]
-    except KeyError as error:
+    base = SEED_RANGE_BY_ARM.get(
+        arm.arm_id, SEED_RANGE_BY_ARM.get(arm.optimizer)
+    )
+    if base is None:
         raise ValueError(
             f"arm {arm.arm_id!r} names unknown optimizer {arm.optimizer!r}; "
-            f"seeded optimizers are {tuple(SEED_RANGE_BY_OPTIMIZER)}"
-        ) from error
+            f"seeded arms are {tuple(SEED_RANGE_BY_ARM)}"
+        )
     return tuple(base + offset for offset in range(k_run))
 
 

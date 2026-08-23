@@ -281,6 +281,76 @@ WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 uv run --extra optim \
   --codex-capacity 8 --allow-real-codex
 ```
 
+### Running the Step 10 study
+
+The study's design is committed, not assembled at the command line.
+`whetstone_envs.optim.study.protocols` pins every pre-registered value --
+the splits, the models, the arm list, each arm's control shape -- and
+`whetstone-study init` mints the pre-Stage-0 `study.json` from it, so two
+initialisations of the same protocol produce the same manifest and a
+design that disagrees with the module is one somebody edited.
+
+```bash
+uv run --extra optim whetstone-study init \
+  --study-dir STUDY_DIR --protocol step10-c19
+uv run --extra optim whetstone-study plan --study-dir STUDY_DIR
+uv run --extra optim whetstone-study run \
+  --study-dir STUDY_DIR --stage stage0 --transport openrouter
+# read the Stage-0 gate in the output, then:
+uv run --extra optim whetstone-study run \
+  --study-dir STUDY_DIR --stage stage1 --transport openrouter \
+  --allow-real-codex
+uv run --extra optim whetstone-study run \
+  --study-dir STUDY_DIR --stage stage2 --transport openrouter \
+  --allow-real-codex
+uv run --extra optim whetstone-study leakage-check --study-dir STUDY_DIR
+uv run --extra optim whetstone-study report \
+  --study-dir STUDY_DIR --out REPORT_DIR
+```
+
+`init` regenerates the pinned population and records each split's task
+hashes, the pool manifest's content hash, and the sha256 of the protocol
+document itself, so the manifest names the revision of the
+pre-registration that was actually in force. `--protocol-doc` points at a
+different copy of that document; the digest always comes from the file
+read. `init` refuses to overwrite an existing `study.json`, because a
+second initialisation over a study that already holds evidence would reset
+a design that evidence refers to.
+
+`--toy` authors the sized-down variant of the same protocol. Only the
+sized fields differ -- the splits, the per-arm train/val partition, the
+population size and seed, and the MIPROv2 minibatch -- and a golden test
+asserts every other field matches the real design, so a toy cannot
+rehearse a study the real one does not run.
+
+The opt-ins each stage needs, by name:
+
+- **`--transport openrouter`** and a non-blank `OPENROUTER_API_KEY` for
+  every stage that spends. `--transport fake` is the default and reaches
+  no provider.
+- **`--allow-real-codex` plus `WHETSTONE_ENVS_ALLOW_REAL_CODEX=1`** for
+  any stage whose design declares the Codex arm. Both halves are required
+  and are checked against the design *before any arm runs*, so a
+  Codex-bearing stage does not pay for the other arms and then discover it
+  cannot finish. This is a run-time spend authorization and never enters
+  the pre-registration hash.
+- **`--replace-design`** only on `stage0`, to record a deliberate
+  amendment over an already-pinned design.
+- **`--discard-stale-runs`** to discard a run directory whose own
+  artifacts say it belongs to another invocation.
+
+Stage order is enforced rather than documented: `stage1` and `stage2`
+refuse without a recorded design, and `stage2` refuses without a `stage1`
+whose call-count gate passed. Run `leakage-check` before `report` -- it
+writes the L1-L5 verdict the report reads, and a report generated without
+it is marked invalid.
+
+`--without-codex` authors the design with the Codex arm dropped. It exists
+for fake-transport rehearsals: the Codex guard fires on the *design*
+whatever transport the task model is on, so a rehearsal of the rest of the
+study drops the arm rather than stubbing it. What it produces is a
+strictly smaller design, not the pre-registration.
+
 ### Study transports and the per-stage ledger
 
 A study stage evaluates on one of two transports, named per invocation:

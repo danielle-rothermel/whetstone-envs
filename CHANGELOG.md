@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The Step 10 c19 study is authored from a committed protocol.**
+  `whetstone_envs.optim.study.protocols` pins every pre-registered design
+  value as a named constant -- splits 88/132/440, the 44/44 per-arm
+  train/val partition, `openai/gpt-5-nano` and `openai/gpt-5.4-nano`, the
+  `gpt-5.6-sol` Codex agent, GEPA's 200-metric-call budget, MIPROv2's
+  trials/candidates/minibatch, the Codex evaluate-call cap, and the arm
+  list -- and `whetstone-study init --study-dir DIR --protocol step10-c19`
+  writes the pre-Stage-0 `study.json` from it. The task hashes of all three
+  splits, the pool manifest hash, and the sha256 of the protocol document
+  are recomputed at init rather than declared, so the manifest names the
+  population the harness will regenerate and the revision of the
+  pre-registration that was in force. `init` refuses to overwrite an
+  existing manifest.
+- **`--toy` authors the sized-down variant of the same protocol.** Both
+  sizes are built by one function from one body of pinned values, so they
+  can differ only in the fields `SIZED_FIELDS` names; a golden test asserts
+  every other field matches and that every sized field actually differs. A
+  toy that could drift on the models, the arm list, or the correction would
+  rehearse a study the real one does not run.
+- **`--without-codex` authors the design with the Codex arm dropped**, for
+  fake-transport rehearsals. The Codex guard fires on the design whatever
+  transport the task model is on, so a rehearsal of the rest of the study
+  has to drop the arm rather than stub it; the result is a strictly smaller
+  design, not the pre-registration.
 - **The study harness runs on the real OpenRouter transport.**
   `whetstone-study run --transport openrouter` binds the same provider
   route the single-run path already used — the seeded OpenRouter call
@@ -176,6 +200,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whitespace runs are exactly the input's, and character similarity to the
   real seed rises from 0.854 to 0.910 on average (the collapsed layout put
   a 0.85 ceiling on a template no token had yet moved in).
+- **An arm and its optimizer are no longer read as the same name.** The
+  study runs one optimizer under more than one arm -- MIPROv2's three demo
+  modes are three arms -- and three places read the arm id as an optimizer,
+  which held only while every arm was named after one. `k_run_for` gave the
+  two MIPROv2 fidelity arms `K_RUN = 5` instead of the protocol's 1,
+  buying eight runs the design never registered; `arm_seeds` handed all
+  three MIPROv2 arms seeds 1000-1004 of the same range, so three arms the
+  report presents as independent shared an RNG stream; and `plan` passed
+  the arm id to `estimate_optimizer_calls`, so both fidelity arms printed
+  "no estimate" and dropped out of the budget entirely. The seed and
+  run-count tables are now keyed by arm with an optimizer fallback, and
+  `StudySpec` grows `optimizer_by_arm`. Every arm named after its
+  optimizer is unaffected.
 
 - **A report's scores are checked by the family that produced them.** The
   `EvalReport` schema re-derives every scored observation to validate it,

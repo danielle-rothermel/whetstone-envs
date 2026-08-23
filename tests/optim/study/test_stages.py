@@ -13,6 +13,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
+from whetstone.core.roles import EvalRole
 
 pytest.importorskip("whetstone.experiment.env")
 
@@ -84,7 +85,6 @@ from .conftest import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from whetstone.core.roles import EvalRole
     from whetstone.eval.protocol import EvalEngine
 
     from whetstone_envs.optim.codex import CodexTestSeam
@@ -2124,7 +2124,46 @@ def test_an_arm_stage_refuses_an_engine_that_would_not_sample_k_repeat(
         del num_seeds
         return base.bind_engine(role=role, num_seeds=1)
 
-    with pytest.raises(StageError, match="would bind an engine sampling 1"):
+    with pytest.raises(
+        StageError,
+        match="would bind the (internal|official|held_out) engine sampling 1",
+    ):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=replace(base, bind_engine=bind_at_one),
+        )
+    # Before dispatch: no arm ran, so the stage bought nothing.
+    assert harness.events == []
+
+
+def test_an_arm_stage_refuses_an_engine_that_misbinds_only_the_internal_role(
+    tmp_path: Path,
+) -> None:
+    """A binder that honours one role and not another is still refused.
+
+    The optimizers search on the internal engine; a probe of the official
+    engine alone would pass this binder and discover the mismatch a full
+    stage of spend later.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    harness = _Harness(study_dir, scores=scores)
+    base = harness.environment()
+
+    def bind_at_one(*, role: EvalRole, num_seeds: int) -> EvalEngine:
+        """A binder that honours the count for every role but internal."""
+        if role is not EvalRole.INTERNAL:
+            return base.bind_engine(role=role, num_seeds=num_seeds)
+        return base.bind_engine(role=role, num_seeds=1)
+
+    with pytest.raises(
+        StageError,
+        match="would bind the (internal|official|held_out) engine sampling 1",
+    ):
         run_arm_stage(
             study_dir=study_dir,
             stage=StageId.STAGE1,

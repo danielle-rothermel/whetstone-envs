@@ -1068,16 +1068,23 @@ def _refuse_engine_repeats_disagreeing_with_design(
     will *bind*, that one checks what each run *did*, and a run reused from
     an earlier invocation never passed through this binder at all.
     """
-    bound = environment.bind_engine(
-        role=EvalRole.OFFICIAL, num_seeds=k_repeat
-    ).sampling.num_seeds
-    if bound != k_repeat:
+    # Every role the stage will bind: the optimizers search on the internal
+    # engine, selection scores on official, and the reporting pass binds
+    # held-out. A binder that honours the repeat count for one role and
+    # not another would pass a single-role probe and be discovered a full
+    # stage of spend later.
+    for role in (EvalRole.INTERNAL, EvalRole.OFFICIAL, EvalRole.HELD_OUT):
+        bound = environment.bind_engine(
+            role=role, num_seeds=k_repeat
+        ).sampling.num_seeds
+        if bound == k_repeat:
+            continue
         raise StageError(
-            f"{stage.value} would bind an engine sampling {bound} "
-            f"repeat(s) per task, but the recorded design pre-registers "
-            f"K_REPEAT = {k_repeat}. Every evaluation this stage buys "
-            f"would be evidence for a search the study never registered, "
-            f"so no arm is dispatched"
+            f"{stage.value} would bind the {role.value} engine sampling "
+            f"{bound} repeat(s) per task, but the recorded design "
+            f"pre-registers K_REPEAT = {k_repeat}. Every evaluation this "
+            f"stage buys would be evidence for a search the study never "
+            f"registered, so no arm is dispatched"
         )
 
 

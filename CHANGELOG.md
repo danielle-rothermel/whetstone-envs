@@ -151,6 +151,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Pins published whetstone-ai 0.1.12, which unblocks the GEPA arm at the
+  protocol's pinned reflection minibatch.** Upstream GEPA's
+  `EpochShuffledBatchSampler` pads a shuffled epoch with *duplicate* ids
+  whenever `len(trainset) % reflection_minibatch_size != 0`, and the
+  protocol pins trainset 44 and minibatch 3 (`44 % 3 = 2`), so every
+  reflection minibatch spanning the padding carried one task twice and
+  `GepaEvaluationEffectRequest` refused it — `GEPA evaluation positions
+  must be unique` — inside the durable run boundary. It was a divisibility
+  bug, not a repeats bug: it reproduced at `num_seeds = 1`. 0.1.12 keeps
+  the pinned upstream algorithm and reconciles it at the request boundary
+  instead: duplicated positions collapse to their distinct instances for
+  one evaluation request, and the rows expand back to the upstream batch
+  shape, so a repeated instance still carries double weight in the
+  `sum(eval_curr.scores)` comparison upstream uses to accept a mutation.
+  [#145]
+
+  **The accounting deliberately splits in two, and the Stage-1 gate depends
+  on which side it reads.** Logical metric calls stay upstream's — it
+  charges the padded batch length, duplicates included — so the pinned
+  `max_metric_calls` budget means what it means upstream. Provider rows are
+  billed once per *distinct* instance, because a repeated instance under a
+  fixed candidate is the same evaluation. So a 200-metric-call GEPA run
+  bills marginally *fewer* than 600 rows at `K_REPEAT = 3`, not exactly
+  600. `gepa_task_call_ceiling(k_repeat)` is therefore an upper bound and
+  is correct as written: it converts the metric-call pin to rows at
+  `200 * K_REPEAT`, the run comes in under it, and the Stage-1 gate's
+  1.5x tolerance still applies on top. A ceiling derived to equal 600
+  exactly would abort the healthy runs it exists to protect.
+
+[#145]: https://github.com/danielle-rothermel/whetstone-ai/pull/145
+
 - **Pins published whetstone-ai 0.1.11, which lets MIPROv2 and GEPA run at
   the study's pre-registered repeat count.** Both optimizers refused a
   multi-repeat evaluation plan outright on 0.1.10 — MIPROv2 with `engine

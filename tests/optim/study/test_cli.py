@@ -21,6 +21,10 @@ pytest.importorskip("whetstone.experiment.env")
 
 from dr_store.sync import open_sqlite
 
+from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    MAX_UNFORCED_PROVIDER_CONCURRENCY,
+)
 from whetstone_envs.optim.run_cost import RUN_COST_SCHEMA_NAME
 from whetstone_envs.optim.split import COPRO_SHAPED_OPTIMIZERS
 from whetstone_envs.optim.study.cli import (
@@ -268,6 +272,7 @@ def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
         allow_real_codex: bool = False,
         discard_stale_runs: bool = False,
         transport: str = "fake",
+        provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
     ) -> StudyManifest:
         assert replace_design is False
         # An unflagged invocation authorizes no spend. Asserted rather than
@@ -278,6 +283,10 @@ def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
         # claim: that directory may be paid evidence.
         assert discard_stale_runs is False
         assert transport == "fake"
+        # An invocation that names no width runs at the width this
+        # package records for one, which is what makes the recorded
+        # value meaningful for a stage that was run with no flag.
+        assert provider_concurrency == DEFAULT_PROVIDER_CONCURRENCY
         seen.append((study_dir, stage))
         return _minimal_manifest()
 
@@ -290,6 +299,111 @@ def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
     out = capsys.readouterr().out
     assert f"{stage} complete for study step10-2026-08-22" in out
     assert str(tmp_path / STUDY_MANIFEST_NAME) in out
+
+
+def test_run_forwards_the_provider_concurrency(tmp_path: Path, capsys) -> None:
+    """The operator's width reaches the runner and is echoed.
+
+    Fails-before: ``run`` had no ``--provider-concurrency`` at all, so the
+    flag was rejected by the parser and every stage ran at whetstone's
+    default of five regardless of what the operator wanted.
+    """
+    seen: list[int] = []
+
+    def run_stage(**kwargs: object) -> StudyManifest:
+        width = kwargs["provider_concurrency"]
+        assert isinstance(width, int)
+        seen.append(width)
+        return _minimal_manifest()
+
+    code = main(
+        [
+            "run",
+            "--study-dir",
+            str(tmp_path),
+            "--stage",
+            "stage0",
+            "--provider-concurrency",
+            "32",
+        ],
+        run_stage=run_stage,
+    )
+    assert code == EXIT_OK
+    assert seen == [32]
+    # Echoed, because it is what decides how long the stage takes and it
+    # is the setting an operator changes between stages.
+    assert "provider concurrency: 32" in capsys.readouterr().out
+
+
+def test_run_refuses_a_provider_concurrency_below_one(
+    tmp_path: Path, capsys
+) -> None:
+    """A width below one names no run at all, and cannot be forced.
+
+    Fails-before: with no flag there was nothing to refuse; the bound is
+    what stops a zero from reaching a thread pool that would then do no
+    work while reporting success.
+    """
+    for width in ("0", "-4"):
+        code = main(
+            [
+                "run",
+                "--study-dir",
+                str(tmp_path),
+                "--stage",
+                "stage0",
+                "--provider-concurrency",
+                width,
+                # Even forced: the lower bound is arithmetic, not prudence.
+                "--force-provider-concurrency",
+            ],
+            run_stage=lambda **_: _minimal_manifest(),
+        )
+        # ``EXIT_ERROR``, not the study's refusal code: a width the
+        # operator mistyped is a bad invocation, not the study declining.
+        assert code == EXIT_ERROR
+        assert "at least 1" in capsys.readouterr().err
+
+
+def test_run_refuses_an_unforced_width_above_the_sanity_cap(
+    tmp_path: Path, capsys
+) -> None:
+    """Above the cap the operator must say so, and then may.
+
+    The cap is this study's own prudence rather than a provider-published
+    limit, so it is overridable -- but by a separate explicit flag, since
+    the number alone cannot distinguish a decision from an extra digit.
+    """
+    over = MAX_UNFORCED_PROVIDER_CONCURRENCY + 1
+    argv = [
+        "run",
+        "--study-dir",
+        str(tmp_path),
+        "--stage",
+        "stage0",
+        "--provider-concurrency",
+        str(over),
+    ]
+    assert main(argv, run_stage=lambda **_: _minimal_manifest()) == (
+        EXIT_ERROR
+    )
+    error = capsys.readouterr().err
+    assert "sanity cap" in error
+    assert "--force-provider-concurrency" in error
+
+    seen: list[int] = []
+
+    def run_stage(**kwargs: object) -> StudyManifest:
+        width = kwargs["provider_concurrency"]
+        assert isinstance(width, int)
+        seen.append(width)
+        return _minimal_manifest()
+
+    assert (
+        main([*argv, "--force-provider-concurrency"], run_stage=run_stage)
+        == EXIT_OK
+    )
+    assert seen == [over]
 
 
 def test_run_defaults_to_the_real_stage_harness(

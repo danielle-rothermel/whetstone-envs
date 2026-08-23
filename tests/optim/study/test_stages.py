@@ -17,8 +17,10 @@ from whetstone.core.roles import EvalRole
 
 pytest.importorskip("whetstone.experiment.env")
 
+from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.optim.cost import CostRole
 
+from whetstone_envs.optim.provider import DEFAULT_PROVIDER_CONCURRENCY
 from whetstone_envs.optim.study.analysis import (
     CEILING_CANDIDATE_NAME,
     NAIVE_CANDIDATE_NAME,
@@ -2171,3 +2173,185 @@ def test_an_arm_stage_refuses_an_engine_that_misbinds_only_the_internal_role(
         )
     # Before dispatch: no arm ran, so the stage bought nothing.
     assert harness.events == []
+
+
+# Provider concurrency: bound onto the engine, recorded on the stage
+# --------------------------------------------------------------------------
+
+
+def _runtime_engine(engine: object) -> RuntimeEvalEngine:
+    """The concrete engine, so its scheduling width can be read."""
+    assert isinstance(engine, RuntimeEvalEngine)
+    return engine
+
+
+def _concurrency_of(engine: RuntimeEvalEngine) -> int:
+    """The width the engine schedules rows at.
+
+    Read off the private attribute deliberately: whetstone exposes no
+    public accessor for it, and the alternative -- inferring the width by
+    timing concurrent rows -- would make a scheduling assertion depend on
+    wall-clock behaviour, which is exactly what a test must not do.
+    """
+    width = engine._concurrency
+    assert isinstance(width, int)
+    return width
+
+
+def test_the_bound_engine_runs_at_the_requested_concurrency(
+    tmp_path: Path,
+) -> None:
+    """The width reaches the engine that actually schedules the rows.
+
+    Fails-before: ``ReferenceEvalRuntimeConfig.build_engine`` forwards no
+    concurrency, so every engine the study bound fell back to whetstone's
+    ``DEFAULT_CONCURRENCY`` of 5 no matter what the operator asked for --
+    a setting could be accepted and recorded while the run stayed at 5.
+
+    Read off the engine's own attribute rather than by timing anything:
+    what is under test is which number the scheduler holds.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(
+        study_dir, provider_concurrency=17
+    ) as environment:
+        engine = _runtime_engine(
+            environment.bind_engine(role=EvalRole.INTERNAL, num_seeds=1)
+        )
+        assert _concurrency_of(engine) == 17
+        # Derived engines share it: a stage narrows to a task or a seed
+        # constantly, and a derivation that dropped back to the default
+        # would silently undo the setting partway through the stage.
+        derived = engine.for_task_ids(
+            (environment.task_ids_by_role[EvalRole.INTERNAL][0],)
+        )
+        assert _concurrency_of(derived) == 17
+
+
+def test_an_unnamed_concurrency_binds_the_recorded_default(
+    tmp_path: Path,
+) -> None:
+    """What a stage run with no flag actually ran at."""
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        engine = _runtime_engine(
+            environment.bind_engine(role=EvalRole.INTERNAL, num_seeds=1)
+        )
+        assert _concurrency_of(engine) == DEFAULT_PROVIDER_CONCURRENCY
+        assert environment.provider_concurrency == (
+            DEFAULT_PROVIDER_CONCURRENCY
+        )
+
+
+def test_binding_refuses_a_concurrency_below_one(tmp_path: Path) -> None:
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with (
+        pytest.raises(ValueError, match="at least 1"),
+        bound_stage_environment(study_dir, provider_concurrency=0),
+    ):
+        pass
+
+
+class _StubAttemptReporter:
+    """A transport's attempt counters, without a transport.
+
+    ``StageEnvironment`` takes the reporter as a protocol precisely so a
+    test can assert the numbers reach the record without standing up an
+    HTTP client and a rate limiter to produce them.
+    """
+
+    def __init__(
+        self, *, attempts: int, transient_outcomes: tuple[str, ...]
+    ) -> None:
+        self.attempts = attempts
+        self.transient_outcomes = transient_outcomes
+
+
+def test_stage0_records_the_attempts_its_transport_made(
+    tmp_path: Path,
+) -> None:
+    """Retries reach the record as attempts, beside the calls they cost.
+
+    **Fails-before: ``StageRecord`` had no such field.** The wrapper owns
+    the whole retry budget and whetstone's driver is pinned to one
+    attempt, so a call that survived two 429s persisted one row -- and
+    every spend surface re-derives from rows. A stage that spent its
+    afternoon fighting a rate limit recorded exactly the same numbers as
+    one that sailed through, and nothing in the manifest could tell them
+    apart.
+
+    This is the one number that cannot be projected: a retried attempt
+    persists nothing, so the transport's own counter is the only record.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    reporter = _StubAttemptReporter(
+        attempts=3, transient_outcomes=("rate_limited", "rate_limited")
+    )
+    with bound_stage_environment(study_dir) as environment:
+        result = run_stage0_into_manifest(
+            study_dir=study_dir,
+            environment=replace(environment, provider_attempts=reporter),
+        )
+    stage = next(
+        entry for entry in result.manifest.stages if entry.stage == "stage0"
+    )
+    assert stage.provider_attempts == 3
+    assert stage.provider_transient_outcomes == (
+        "rate_limited",
+        "rate_limited",
+    )
+    # ``calls`` still counts persisted rows, so the retries did not
+    # inflate the bill: the attempts aggregate into the row beside it.
+    assert all(entry.calls <= 3 for entry in stage.spend)
+
+
+def test_a_fake_transport_stage_reports_no_attempts(tmp_path: Path) -> None:
+    """No provider was reached, so there is nothing to report -- not zero.
+
+    A fake stage binds no retrying transport, and recording ``0``
+    attempts would claim it measured an absence of retries rather than
+    never having been in a position to retry. The record's default is
+    what says "not applicable".
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        assert environment.provider_attempts is None
+        result = run_stage0_into_manifest(
+            study_dir=study_dir, environment=environment
+        )
+    stage = next(
+        entry for entry in result.manifest.stages if entry.stage == "stage0"
+    )
+    assert stage.provider_attempts == 0
+    assert stage.provider_transient_outcomes == ()
+
+
+def test_stage0_records_the_concurrency_it_ran_at(tmp_path: Path) -> None:
+    """The width lands on the stage record, like the transport.
+
+    Fails-before: ``StageRecord`` had no such field, so a stage's wall
+    time and its rate-limit failures were uninterpretable after the fact
+    -- nothing said how wide the run had been.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(
+        study_dir, provider_concurrency=9
+    ) as environment:
+        result = run_stage0_into_manifest(
+            study_dir=study_dir, environment=environment
+        )
+    stage = next(
+        entry for entry in result.manifest.stages if entry.stage == "stage0"
+    )
+    assert stage.provider_concurrency == 9
+    # And it is not design: the pre-registration is unchanged by it.
+    assert result.manifest.pre_registration is None or (
+        "provider_concurrency"
+        not in result.manifest.pre_registration.model_dump()
+    )

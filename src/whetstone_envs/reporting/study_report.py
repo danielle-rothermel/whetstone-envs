@@ -1524,7 +1524,8 @@ def _transport_rows(manifest: StudyManifest) -> tuple[Row, ...]:
                     _presence_cell(present=True),
                     Cell(
                         figure=_manifest_figure(
-                            f"ran on {record.transport}; "
+                            f"ran on {record.transport} at concurrency "
+                            f"{record.provider_concurrency}; "
                             f"{_stage_spend_detail(record)}",
                             f"stages[{record.stage}]",
                         )

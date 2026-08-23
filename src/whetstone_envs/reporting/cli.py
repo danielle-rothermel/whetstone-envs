@@ -8,6 +8,14 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Any
 
+from whetstone_envs.optim.concurrency import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    MAX_UNFORCED_PROVIDER_CONCURRENCY,
+    PROVIDER_CONCURRENCY_FLAG,
+    PROVIDER_CONCURRENCY_FORCE_FLAG,
+    resolve_provider_concurrency,
+)
+
 _SPLIT_PARTS = 3
 CandidateInputKind = Literal["naive", "ceiling", "custom"]
 
@@ -96,6 +104,29 @@ def build_parser() -> argparse.ArgumentParser:
         default="internal",
     )
     run.add_argument("--repeats", type=int, default=1)
+    # Declared through the same constants the study CLI uses, so the two
+    # surfaces cannot drift on the flag's spelling or its bounds.
+    run.add_argument(
+        PROVIDER_CONCURRENCY_FLAG,
+        type=int,
+        default=DEFAULT_PROVIDER_CONCURRENCY,
+        metavar="N",
+        help=(
+            "How many task evaluations run against the provider at once. "
+            f"Defaults to {DEFAULT_PROVIDER_CONCURRENCY}. Sets both the "
+            "evaluation worker pool and the HTTP connection pool. Above "
+            f"{MAX_UNFORCED_PROVIDER_CONCURRENCY} it is refused unless "
+            f"{PROVIDER_CONCURRENCY_FORCE_FLAG} is also passed."
+        ),
+    )
+    run.add_argument(
+        PROVIDER_CONCURRENCY_FORCE_FLAG,
+        action="store_true",
+        help=(
+            "Authorize a provider concurrency above the sanity cap of "
+            f"{MAX_UNFORCED_PROVIDER_CONCURRENCY}."
+        ),
+    )
     run.add_argument("--split-sizes", type=_split_sizes, default=(20, 20, 0))
     run.add_argument("--model", default="openai/gpt-4.1-nano")
     run.add_argument("--run-id")
@@ -194,6 +225,10 @@ def _dispatch(arguments: argparse.Namespace) -> int:
                 output_dir=arguments.output,
                 run_id=arguments.run_id,
                 model=arguments.model,
+                provider_concurrency=resolve_provider_concurrency(
+                    arguments.provider_concurrency,
+                    force=arguments.force_provider_concurrency,
+                ),
             )
         )
         render_summary(console, output.report)

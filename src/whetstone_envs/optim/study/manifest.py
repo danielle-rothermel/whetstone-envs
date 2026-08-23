@@ -45,6 +45,10 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    validate_provider_concurrency,
+)
 from whetstone_envs.optim.split import MIN_COPRO_BREADTH, MIN_COPRO_DEPTH
 from whetstone_envs.reporting.publication import validate_output_root
 
@@ -545,6 +549,22 @@ class ProviderCallRecord(_StrictModel):
     reasoning: StrictStr
     seed: StrictStr
     extensions: StrictStr
+    #: The execution settings this transport was bound with, as text.
+    #:
+    #: Recorded for the same reason the controls above are: they are
+    #: properties of the invocation rather than of the design, they are
+    #: not hashed, and they are the difference between two stages whose
+    #: numbers look alike and whose runs did not. A stage that lost rows
+    #: to timeouts at 30 s and one that did not lose them at 300 s are
+    #: different evidence about the provider, and nothing else in the
+    #: manifest says which was in force.
+    #:
+    #: Defaulted so records written before these fields existed still
+    #: load; the defaults name whetstone's own values, which is what
+    #: those earlier records in fact ran under.
+    timeout_seconds: StrictStr = "30.0"
+    max_attempts: StrictStr = "3"
+    retry_backoff: StrictStr = PROVIDER_CONTROL_UNSET
 
     @model_validator(mode="after")
     def _validate_provider_call(self) -> ProviderCallRecord:
@@ -559,6 +579,9 @@ class ProviderCallRecord(_StrictModel):
             self.reasoning,
             self.seed,
             self.extensions,
+            self.timeout_seconds,
+            self.max_attempts,
+            self.retry_backoff,
         )
         if any(not value.strip() for value in values):
             raise ValueError(
@@ -1689,11 +1712,71 @@ class StageRecord(_StrictModel):
 
     stage: StrictStr
     transport: StrictStr
+    #: How many task evaluations this stage ran against the provider at
+    #: once.
+    #:
+    #: An invocation property of exactly the same kind as ``transport``:
+    #: it changes how long the stage took and how hard it leaned on the
+    #: provider, not what the stage was designed to measure, so it is
+    #: recorded here and never enters the pre-registration hash. Two
+    #: studies that differ only in it pre-register identically.
+    #:
+    #: It is recorded rather than merely used because a stage's wall time
+    #: and its rate-limit and timeout failures are only interpretable
+    #: against the width it ran at -- a stage that retried under load at
+    #: 64 and a clean stage at 5 are different evidence about the
+    #: provider, and nothing else in the manifest says which one happened.
+    #:
+    #: Defaulted rather than required so that stage records written before
+    #: this field existed still load, reporting the width they in fact ran
+    #: at: that historical default is the point of pinning
+    #: :data:`~whetstone_envs.optim.provider.DEFAULT_PROVIDER_CONCURRENCY`
+    #: as a literal instead of tracking the dependency's.
+    provider_concurrency: StrictInt = DEFAULT_PROVIDER_CONCURRENCY
+    #: Provider invocations the retrying transport made during this stage.
+    #:
+    #: **Not a second spelling of ``calls``.** ``calls`` counts persisted
+    #: output rows -- one per logical call, which is what the study is
+    #: billed a completion for -- and every spend record re-derives it from
+    #: those rows. ``provider_attempts`` counts *invocations*, so a call
+    #: that survived two 429s before succeeding contributes one to ``calls``
+    #: and three here. The two are reported side by side and neither is
+    #: folded into the other: spend is unchanged by a retry that eventually
+    #: succeeded, and the retry is exactly what a reader needs to see to
+    #: know the stage was fighting the provider.
+    #:
+    #: This is the one number in the manifest that cannot be projected from
+    #: the store. A transient attempt persists no row -- that is what makes
+    #: it transient -- so the retrying transport's own counter is the only
+    #: record it ever had, and the stage reads it back at the end.
+    #:
+    #: ``0`` on a stage that bound no retrying transport, which is every
+    #: fake-transport stage: no invocation went to a provider, so there is
+    #: nothing to report rather than a measured zero.
+    provider_attempts: StrictInt = 0
+    #: Each transient failure the transport retried past, in order, named
+    #: by the recoverability class the retry decision was made on. Read
+    #: beside ``provider_attempts`` to see *why* the attempts exceeded the
+    #: calls -- a rate-limit storm and a run of transient 5xx cost the same
+    #: attempts and mean different things about the provider.
+    provider_transient_outcomes: tuple[StrictStr, ...] = ()
     spend: tuple[RunSpendRecord, ...] = ()
     report_spend: tuple[RunSpendRecord, ...] = ()
 
     @model_validator(mode="after")
     def _validate_stage(self) -> StageRecord:
+        validate_provider_concurrency(self.provider_concurrency)
+        if self.provider_attempts < 0:
+            raise ValueError(
+                "a stage cannot have made a negative number of provider "
+                f"attempts; got {self.provider_attempts}"
+            )
+        if len(self.provider_transient_outcomes) > self.provider_attempts:
+            raise ValueError(
+                "a stage cannot have retried past more transient failures "
+                f"({len(self.provider_transient_outcomes)}) than the "
+                f"attempts it made ({self.provider_attempts})"
+            )
         if self.stage not in STAGE_IDS:
             raise ValueError(
                 f"a stage record names one of {list(STAGE_IDS)}, "

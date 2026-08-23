@@ -1263,6 +1263,12 @@ def test_provider_call_wire_keys_are_pinned() -> None:
         "reasoning",
         "seed",
         "extensions",
+        # The effective execution settings, added beside the controls
+        # rather than in place of any: what a call was bound with is the
+        # same kind of fact as what it asked for.
+        "timeout_seconds",
+        "max_attempts",
+        "retry_backoff",
     ]
 
 

@@ -16,6 +16,7 @@ pytest.importorskip("whetstone.experiment.env")
 
 from dr_store.sync import open_sqlite
 from whetstone.core.roles import EvalRole
+from whetstone.eval.protocol import EvalRequest
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.eval.schema import EvalEvidence
 
@@ -308,3 +309,209 @@ def test_each_role_calibrates_under_its_own_eval_config(toy_study) -> None:
         )
     )
     assert finding.passed
+
+
+# --------------------------------------------------------------------------
+# A genuinely fully-lost task refuses the stage, on real evidence
+# --------------------------------------------------------------------------
+
+
+class _LosesOneTask:
+    """A fake transport that permanently refuses one task's calls.
+
+    Real loss rather than a stubbed vector: the engine runs, the rows are
+    persisted, whetstone aggregates them, and the task that never
+    succeeded reports `None` for its per-task value under `EvalEvidence`
+    v6. That is the evidence the floor has to recognise, and only driving
+    it end to end shows that it does.
+
+    The failure is permanent so the retrying transport does not spend its
+    budget re-asking; what is under test is a lost task, not a retry.
+    """
+
+    def __init__(
+        self, inner, *, doomed_question: str, doomed_grid: str
+    ) -> None:
+        self._inner = inner
+        self._doomed_question = doomed_question
+        self._doomed_grid = doomed_grid
+        self.refusals = 0
+
+    def __call__(self, request):
+        from dr_providers import (
+            ProviderInvocationEvidence,
+            ProviderTransportFailure,
+            RecoverabilityClass,
+        )
+        from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
+
+        messages = getattr(
+            getattr(request, "transcript", None), "messages", ()
+        )
+        prompt = str(messages[-1].content) if messages else ""
+        if self._doomed_question in prompt and self._doomed_grid in prompt:
+            self.refusals += 1
+            return ProviderInvocationEvidence.build(
+                request=request,
+                policy=self._inner._policy.transport_policy,
+                http_request=ProviderHttpRequestEvidence(
+                    method="POST",
+                    url="http://whetstone.fake/llm",
+                    headers={},
+                    body={},
+                    body_bytes=0,
+                ),
+                outcome=ProviderTransportFailure(
+                    recoverability=RecoverabilityClass.PERMANENT,
+                    message="this task is refused for the whole evaluation",
+                    status_code=400,
+                ),
+            )
+        return self._inner(request)
+
+
+def test_a_fully_lost_task_refuses_stage0_on_real_evidence(
+    tmp_path,
+) -> None:
+    """A task losing every repeat cannot become a Stage-0 anchor.
+
+    Real loss, driven end to end: one task's calls are permanently
+    refused, the engine runs, the rows persist, and whetstone reports the
+    task with no per-task value at all under ``EvalEvidence`` v6.
+
+    **Stage 0 refuses in whetstone's own calibration**, which requires a
+    full ``per_task_counts`` for every anchor -- an anchor defines the
+    achievable range, so a partially measured one is not a weaker anchor
+    but a wrong one. That refusal is upstream's and fires before this
+    package sees the evidence, so the assertion here is that the loss is
+    *caught*, not that this package's floor is what catches it.
+
+    The floor is what covers the case calibration does not: an arm's
+    scored and held-out evaluations, which are not anchors and which
+    whetstone is content to aggregate over a shrunken denominator. This
+    test pins both halves against the same real evidence -- and pins that
+    the 0.1.13 upgrade did not quietly stop the floor from seeing a lost
+    task, since v6 spells it ``None`` where v5 spelled it ``0.0``.
+    """
+    from whetstone_envs.optim.completeness import (
+        TaskCompletenessError,
+        fully_lost_task_count,
+    )
+
+    pool = generate_pool(n_per_stratum=1, seed_start=765_432)
+    prepared = prepare_c19_experiment(
+        pool, split_sizes=TOY_SPLIT_SIZES, num_seeds=1
+    )
+    # Doom one held-out task by what identifies it inside the prompt. The
+    # task id never reaches the prompt, and the grid alone is shared by
+    # the instances built from one seed, so the question is what
+    # distinguishes them.
+    doomed = prepared.split.held_out[0]
+    doomed_question = str(doomed.prompt_inputs["question"])
+    doomed_grid = str(doomed.prompt_inputs["grid"])
+    assert (
+        sum(
+            1
+            for instance in prepared.split.held_out
+            if str(instance.prompt_inputs["question"]) == doomed_question
+            and str(instance.prompt_inputs["grid"]) == doomed_grid
+        )
+        == 1
+    )
+
+    refusers: list[_LosesOneTask] = []
+
+    with open_sqlite(str(tmp_path / "runtime.sqlite")) as store:
+
+        def bind_engine(*, role: EvalRole, num_seeds: int):
+            role_prepared = prepare_c19_experiment(
+                pool, split_sizes=TOY_SPLIT_SIZES, num_seeds=num_seeds
+            )
+            config = ReferenceEvalRuntimeConfig(
+                split_role=SPLIT_ROLE_BY_EVAL_ROLE[role],
+                transport_api_key_env="WHETSTONE_TOY_API_KEY",
+            )
+            inner_factory = fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    role_prepared.experiment,
+                    render_contract=c19_render_contract(),
+                    ceiling_template=PROBES.ceiling_template,
+                )
+            )
+
+            def transport_factory(policy):
+                refuser = _LosesOneTask(
+                    inner_factory(policy),
+                    doomed_question=doomed_question,
+                    doomed_grid=doomed_grid,
+                )
+                refusers.append(refuser)
+                return refuser
+
+            return config.build_engine(
+                cast("ObjectStore", store),
+                experiment=role_prepared.experiment,
+                eval_runner=ExactMatchEvalProcedureRunner(),
+                mutation_field=C19_MUTATION_FIELD,
+                render_contract=c19_render_contract(),
+                transport_factory=transport_factory,
+            )
+
+        from whetstone_envs.optim.completeness import (
+            require_task_completeness,
+        )
+
+        # Stage 0 refuses rather than anchoring on a shrunken population.
+        with pytest.raises(
+            ValueError, match="per-task sample counts"
+        ) as refused:
+            run_stage0(
+                spec=_spec(),
+                bind_engine=bind_engine,
+                naive_candidate=c19_candidate(
+                    candidate_id="c19-naive", template=PROBES.naive_template
+                ),
+                ceiling_candidate=c19_candidate(
+                    candidate_id="c19-ceiling",
+                    template=PROBES.ceiling_template,
+                ),
+                task_ids_by_role=_task_ids_by_role(prepared),
+                pool_ceiling=sum(TOY_SPLIT_SIZES),
+            )
+        assert refused.value is not None
+
+        # The loss was real: the doomed task's calls were actually refused.
+        assert refusers
+        assert any(refuser.refusals for refuser in refusers)
+
+        # And the same real loss, evaluated the way an arm evaluates rather
+        # than the way an anchor calibrates, is what the floor refuses. This
+        # is the path calibration does not cover: whetstone aggregates it
+        # happily, over a denominator one task smaller than it reports.
+        config = ReferenceEvalRuntimeConfig(
+            split_role=SPLIT_ROLE_BY_EVAL_ROLE[EvalRole.HELD_OUT],
+            transport_api_key_env="WHETSTONE_TOY_API_KEY",
+        )
+        engine = bind_engine(role=EvalRole.HELD_OUT, num_seeds=1)
+        assert config is not None
+        subset = engine.for_task_ids(
+            _task_ids_by_role(prepared)[EvalRole.HELD_OUT]
+        )
+        outcome = subset.evaluate(
+            EvalRequest(
+                request_id="held_out:naive",
+                candidate=c19_candidate(
+                    candidate_id="c19-naive", template=PROBES.naive_template
+                ),
+                metadata={},
+            )
+        )
+        lost_evidence = outcome.evidence
+
+    assert isinstance(lost_evidence, EvalEvidence)
+    # v6 spells a fully-lost task as an absent per-task value.
+    assert any(value is None for value in lost_evidence.per_task_values)
+    assert fully_lost_task_count(lost_evidence) == 1
+
+    with pytest.raises(TaskCompletenessError, match="lost every"):
+        require_task_completeness(lost_evidence, purpose="held_out:naive")

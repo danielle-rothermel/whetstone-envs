@@ -49,6 +49,10 @@ from whetstone.optim.contracts import OptimResult
 from whetstone_envs.optim.audit._evidence import load_run_evidence
 from whetstone_envs.optim.audit.registry import audit_evidence
 from whetstone_envs.optim.audit.schema import AUDIT_REPORT_SCHEMA
+from whetstone_envs.optim.completeness import (
+    TaskCompletenessError,
+    require_task_completeness,
+)
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.nulls import (
     NULL_IDENTITY_OPTIMIZER,
@@ -230,6 +234,18 @@ class RoleScorer:
                 purpose=purpose,
                 candidate_name=candidate_name,
             )
+        # Priced first, then judged: the calls were billed whether or not
+        # the evidence is fit to report, and a ledger that omitted a
+        # refused evaluation would under-count real spend.
+        try:
+            require_task_completeness(
+                evidence, purpose=f"{purpose}:{candidate_name}"
+            )
+        except TaskCompletenessError as error:
+            # Re-raised as the stage's own type: a stage that cannot
+            # report truthfully must not continue, and every other
+            # refusal on this path is a ``StageError``.
+            raise StageError(str(error)) from error
         return evidence
 
     def eval_config_hash(self) -> str:
@@ -253,7 +269,7 @@ class RoleScorer:
         return CandidateScore(
             run_id=candidate.run_id,
             score=_mean_of(evidence),
-            per_task=evidence.per_task_values,
+            per_task=_measured_per_task(evidence),
             eval_config_hash=str(evidence.eval_config_ref.config_hash),
             completeness=_completeness_of(evidence),
         )
@@ -274,7 +290,7 @@ class RoleScorer:
         )
         return HeldOutMeasurement(
             candidate_name=candidate_name,
-            per_task=evidence.per_task_values,
+            per_task=_measured_per_task(evidence),
             mean=_mean_of(evidence),
             eval_config_hash=str(evidence.eval_config_ref.config_hash),
             repeats=evidence.num_seeds,
@@ -292,6 +308,34 @@ def _purpose_metadata(purpose: str) -> dict[str, str]:
     return {"purpose": purpose}
 
 
+def _measured_per_task(evidence: EvalEvidence) -> tuple[float, ...]:
+    """This evidence's per-task vector, with every task measured.
+
+    Since ``EvalEvidence`` v6 a task that lost every repeat reports
+    ``None`` rather than ``0.0``, so ``per_task_values`` is
+    ``tuple[float | None, ...]`` while every consumer downstream --
+    calibration anchors, the selection score, the held-out measurement --
+    requires real numbers and would otherwise fail on a ``None`` deep
+    inside an arithmetic it cannot explain.
+
+    Reaching this with a ``None`` present is a bug rather than a data
+    condition: :func:`~whetstone_envs.optim.completeness.
+    require_task_completeness` runs first on every path that produces one
+    of these vectors and refuses the evaluation outright. The check here
+    is therefore an assertion of that ordering, kept because the ordering
+    is what makes the narrowing sound -- if a future caller ever produced
+    a vector without passing the floor, this says so in those terms
+    instead of raising a ``TypeError`` several frames away.
+    """
+    values = evidence.per_task_values
+    if any(value is None for value in values):
+        raise StageError(
+            "a per-task vector reached reporting with an unmeasured task, "
+            "which the completeness floor should have refused first"
+        )
+    return tuple(value for value in values if value is not None)
+
+
 def _mean_of(evidence: EvalEvidence) -> float:
     """The evidence's aggregate, or its per-task mean when absent.
 
@@ -302,7 +346,7 @@ def _mean_of(evidence: EvalEvidence) -> float:
     """
     if evidence.aggregate_value is not None:
         return float(evidence.aggregate_value)
-    values = evidence.per_task_values
+    values = _measured_per_task(evidence)
     if not values:
         raise StageError("an evaluation produced no per-task values")
     return sum(values) / len(values)

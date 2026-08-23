@@ -29,13 +29,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypedDict
 
 from dr_store import ObjectStore
 from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate
 
 from whetstone_envs.optim.nulls import NULL_IDENTITY_OPTIMIZER
+from whetstone_envs.optim.provider import DEFAULT_PROVIDER_CONCURRENCY
 from whetstone_envs.optim.study.analysis import (
     AnalysisResult,
     measure_reference_candidates,
@@ -179,6 +180,24 @@ class RecordedRunLoader(Protocol):
     ) -> ArmRunResult | None: ...
 
 
+class ProviderAttemptReporter(Protocol):
+    """What a stage reads its transport's attempt count back from.
+
+    A protocol rather than the concrete
+    :class:`~whetstone_envs.optim.provider.RetryingTransport` because
+    ``stages`` imports no provider-touching collaborator -- the same rule
+    that makes the engine binder and the optimizer runner callables here
+    -- and because a test asserting the attempts reached the record has no
+    HTTP client to stand up.
+    """
+
+    @property
+    def attempts(self) -> int: ...
+
+    @property
+    def transient_outcomes(self) -> tuple[str, ...]: ...
+
+
 class OptimizerRunner(Protocol):
     """Run one arm's optimizer at one seed and report what it produced.
 
@@ -259,11 +278,32 @@ class StageEnvironment:
     #: stage produces is evidence of, so the stage writes it into the
     #: manifest and the cross-stage check reads it back.
     transport: str = TransportName.FAKE.value
+    #: How many task evaluations this invocation runs against the provider
+    #: at once. Recorded for the same reason the transport is: it does not
+    #: change what the stage measures, but a stage's wall time and its
+    #: rate-limit failures are only interpretable against the width it ran
+    #: at. Set by ``whetstone-study run --provider-concurrency``, never
+    #: read off the manifest's design, and never hashed into the
+    #: pre-registration.
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
     #: The study's evidence store, when the caller bound one. A stage that
     #: evaluates through the engine prices what it evaluated by reading its
     #: own persisted output rows back out of this store; without it the
     #: stage records no spend rather than guessing at one.
     store: ObjectStore | None = None
+    #: How the stage reads back what its transport actually attempted.
+    #:
+    #: Every other number a stage records is projected from persisted
+    #: rows, and this one cannot be: a transient attempt that was retried
+    #: past leaves no row behind, so the retrying transport's own counter
+    #: is the only place it was ever recorded. The stage reads it at the
+    #: end rather than accumulating alongside it, which keeps the reader
+    #: pull-shaped like the rest of the accounting.
+    #:
+    #: ``None`` on a fake-transport stage and on a caller that supplies
+    #: its own collaborators: no provider was reached, so the record
+    #: reports nothing rather than a measured zero.
+    provider_attempts: ProviderAttemptReporter | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,6 +511,36 @@ def _arm_stage_record(
     return _stages_with(manifest, merged)
 
 
+class _AttemptFields(TypedDict, total=False):
+    """``StageRecord``'s attempt fields, spread into its constructor.
+
+    Typed rather than a bare ``dict`` so the spread is checked against the
+    model's own field types; ``total=False`` is what lets the fake-transport
+    case contribute nothing and leave the record's defaults in place.
+    """
+
+    provider_attempts: int
+    provider_transient_outcomes: tuple[str, ...]
+
+
+def _attempt_fields(environment: StageEnvironment) -> _AttemptFields:
+    """The transport's attempt counters, as ``StageRecord`` fields.
+
+    Empty on a stage that bound no retrying transport, which leaves the
+    record's own defaults in place: a fake-transport stage reached no
+    provider, and reporting ``0`` attempts would claim it measured an
+    absence of retries rather than never having been in a position to
+    retry.
+    """
+    reporter = environment.provider_attempts
+    if reporter is None:
+        return {}
+    return {
+        "provider_attempts": reporter.attempts,
+        "provider_transient_outcomes": reporter.transient_outcomes,
+    }
+
+
 def _stage_record(
     *,
     stage: StageId,
@@ -538,7 +608,9 @@ def _stage_record(
     return StageRecord(
         stage=stage.value,
         transport=environment.transport,
+        provider_concurrency=environment.provider_concurrency,
         spend=spend,
+        **_attempt_fields(environment),
     )
 
 
@@ -1519,7 +1591,9 @@ def _record_report_spend(
         StageRecord(
             stage=stage.value,
             transport=environment.transport,
+            provider_concurrency=environment.provider_concurrency,
             report_spend=folded,
+            **_attempt_fields(environment),
         )
         if existing is None
         # Set, never added: ``folded`` is already the whole pass, so the

@@ -275,11 +275,65 @@ def _reference_rollout_graph(
     )
 
 
+#: The fraction of an evaluation's planned rows that may be lost before
+#: the evaluation itself is void.
+#:
+#: **Why this is not zero.** A task-model call can fail for reasons that
+#: are nothing to do with the candidate being measured -- a rate limit, a
+#: transient 5xx, a timeout. Under ``missing_data="propagate"`` a single
+#: such row sets the whole aggregate to ``None``: the live Stage 0 lost
+#: exactly one row out of 352 and the entire naive-anchor evaluation, and
+#: with it the stage, was voided. Discarding 351 good rows -- and their
+#: cost -- over one 429 measures nothing and reports nothing.
+#:
+#: ``skip`` instead aggregates over the rows that are present and lets the
+#: shortfall show up as reduced completeness, which is the handling the
+#: protocol already pre-registered for this problem: §8's O7 recommends
+#: per-task weighting by achieved sample count with a hard backstop at
+#: 90%, the analysis already weights by ``per_task_counts``, and
+#: :data:`~whetstone_envs.optim.study.manifest.COMPLETENESS_BACKSTOP` is
+#: already 0.90. Propagating was the one piece inconsistent with that
+#: rule.
+#:
+#: The tolerance is set to match the backstop rather than to something
+#: laxer: beyond it the aggregate goes back to ``None``, so an evaluation
+#: that lost more than a tenth of its rows still refuses to report a
+#: number rather than quietly averaging a biased subset. Retries -- see
+#: :class:`~whetstone_envs.optim.provider.RetryingTransport` -- are what
+#: keep normal operation far away from this bound; this is the floor, not
+#: the plan.
+MAX_SKIP_FRACTION = 0.10
+
+
+#: The smallest fraction of planned *tasks* an evaluation may measure.
+#:
+#: The row tolerance above is not sufficient by itself, because the two
+#: bounds count different things. ``max_skip_fraction`` is a bound on
+#: lost *rows* across the whole matrix; this is a bound on lost *tasks*.
+#: A task whose every repeat was lost contributes no value to the task
+#: mean and is silently dropped from its denominator -- whetstone's
+#: ``unweighted_task_mean`` gives it ``ZERO_DENOMINATOR``, and
+#: ``missing_data="skip"`` then averages over the tasks that survived.
+#:
+#: At study scale the row bound cannot catch that. 76 tasks at 4 repeats
+#: is 304 planned rows; one task lost entirely is 4 rows, or 1.3% -- well
+#: inside the 10% row tolerance -- and the evaluation reports ``ok`` with
+#: a mean taken over 75 tasks as though 76 had been measured. The bias is
+#: upward and not random: the tasks that lose every repeat are the slow
+#: and hard ones, which are also the ones that would have scored low.
+#:
+#: Set to the same 0.90 as
+#: :data:`~whetstone_envs.optim.study.manifest.COMPLETENESS_BACKSTOP`, so
+#: the study states one completeness rule rather than three.
+MIN_TASK_COMPLETENESS = 0.90
+
+
 def _reference_aggregation(namespace: str):
     return aggregation_definition(f"{namespace}.aggregation").materialize(
         {
             "reduction": "mean",
-            "missing_data": "propagate",
+            "missing_data": "skip",
+            "max_skip_fraction": repr(MAX_SKIP_FRACTION),
         }
     )
 

@@ -6,12 +6,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- The release workflow's validate jobs allow 30 minutes: the 3.13 and 3.14 legs
-  take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
-  before it could publish (v0.2.3 is tagged but not on PyPI).
-
 ### Added
+
+- **Provider concurrency is an explicit, recorded operator setting.**
+  `whetstone-study run --provider-concurrency N` (and the single-run CLI's
+  flag of the same name) sets how many task evaluations run against the
+  provider at once. It reaches both bounds that matter -- the evaluation
+  engine's worker pool and the HTTP client's connection pool, which is
+  widened to match so workers are not queued behind sockets -- and is
+  written onto the stage record. It is an invocation property like the
+  transport: it changes how long a stage takes, never what it measures, so
+  it does not enter the pre-registration hash. Previously nothing named
+  it and every stage ran at whetstone's default of 5 in-flight calls,
+  which at 20-30 s per reasoning-model call is 10-15 rows/minute.
+  `plan` and `run` print the width beside the transport. Values below 1
+  are refused, and values above 64 are refused unless
+  `--force-provider-concurrency` is passed -- OpenRouter publishes no
+  per-account concurrency limit for paid models, so that cap is this
+  package's own prudence rather than a quoted provider limit.
+- **The width and the hardening reach every live engine, not just the
+  study's.** Two other surfaces build their own paid engines and were
+  left at whetstone's defaults, which meant the concurrency and
+  timeout/retry work stopped at the study path:
+  - `whetstone-eval run --transport openrouter` (the standalone report
+    CLI) built its engine through
+    `ReferenceEvalRuntimeConfig.build_engine`, which accepts neither a
+    policy nor a concurrency, so it kept spending against the reasoning
+    models at the 30 s chat-completion timeout with retries that never
+    waited. It now takes `--provider-concurrency` and
+    `--force-provider-concurrency` -- declared from the same constants as
+    the study CLI -- and binds the widened, hardened policy.
+  - The Codex arm's hosted-MCP evaluator rebuilds its engine in a
+    *separate process* from `EnvsCodexRuntimeConfig` and nothing else, so
+    the study's own hardening could not reach it: it ran at the default
+    width, a 30 s timeout, and no waiting retry at all. The config now
+    carries `provider_concurrency` as a recorded serialized field
+    (forwarded from the `RunSpec`, and pinned by the cross-process field
+    golden), applies both transforms to the policy it rebuilds, and binds
+    the retrying transport rather than the bare client.
 
 - **Each run records the repeat count its search actually ran at, and the
   study refuses one that disagrees with `K_REPEAT`.** The per-optimizer
@@ -28,6 +60,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   evaluations' own `EvalEvidence.num_seeds` for COPRO, null-A, and Codex,
   which record no such scalar and inherit the bound engine's sampling
   whole. `None` on null-identity, which runs no optimizer.
+
+- **Pins published whetstone-ai 0.1.13.** `EvalEvidence` reaches schema
+  version 6, in which a task that lost every repeat reports `None` for its
+  per-task value rather than `0.0`. The per-task completeness floor already
+  read presence off the reported vectors rather than inferring it from
+  arithmetic, so it reads the new spelling unchanged; the reporting and
+  calibration paths now narrow the vector explicitly, which is sound
+  because the floor refuses a lost task before either can see one. The
+  committed Codex audit fixtures are regenerated at v6: they store real
+  evidence records, so a fixture written under v5 fails
+  `reported_numbers_resolve` against the new validator.
+- **Transport retries are visible as attempts.** `StageRecord` gains
+  `provider_attempts` and `provider_transient_outcomes`: a call that
+  survived two 429s before succeeding is one `calls` and three attempts,
+  reported side by side. `calls` is unchanged and still counts persisted
+  rows, which is what the study is billed a completion for. This is the
+  one manifest number that cannot be projected from the store, since a
+  retried attempt persists no row -- the retrying transport counts its own
+  invocations and the stage reads them back at the end. A fake-transport
+  stage reports nothing rather than a measured zero.
+
+### Fixed
+- The release workflow's validate jobs allow 30 minutes: the 3.13 and 3.14 legs
+  take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
+  before it could publish (v0.2.3 is tagged but not on PyPI).
+- **`whetstone-eval` applies the per-task completeness floor.** The floor
+  lived only in the study's `RoleScorer`, so the standalone command --
+  which publishes the held-out number a claim is finally made from --
+  projected and published exactly the biased mean the floor exists to
+  refuse. Both paths now apply one shared owner in
+  `whetstone_envs.optim.completeness`. Evaluations *inside* a search stay
+  exempt: under 0.1.13 a lost task reports `None` per-task and the
+  optimizer's reward policy governs what a candidate is worth mid-search,
+  so refusing there would make the floor a stopping rule rather than a
+  reporting one.
+- **The 90% task-completeness floor can actually fire.** It compared
+  `(planned - lost) / planned` against 0.90, but the stricter zero-present
+  rule above it already refused whenever `lost` was nonzero -- so the
+  fraction was always exactly 1.0 at that comparison and the bound could
+  never bind on any input. It now counts tasks measuring fewer than
+  `k_repeat` present rows as incomplete, which is the population the
+  zero-present rule does not cover. That rule remains unconditional.
+- **The base install no longer imports the optimizer stack.**
+  `whetstone-eval` is a base-install console script, but
+  `reporting.cli` imported its concurrency bounds from `optim.provider`,
+  whose module scope reaches `dr-providers` and whetstone. Any install
+  without the `optim` extra failed the entry point at import. The bounds
+  move to a dependency-free `optim.concurrency`, and a regression test
+  imports every base-install module with the optional distributions
+  blocked.
+
 - **The arm stage refuses on both sides of the dispatch.** Before any arm
   runs it refuses a stage whose bound engine would not sample at the
   design's `K_REPEAT` -- structural, and free, because binding issues no
@@ -44,6 +127,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   rather than renumbering the rules, which would silently redefine what an
   already-recorded `leakage_check` block claims, and its verdict is
   recorded in the manifest and printed by the report.
+
+- **A single rate-limited row no longer voids a whole paid evaluation.**
+  The live Stage 0 evaluated 352 rows, lost exactly one to an unretried
+  429, and aborted -- discarding 351 good rows and the money spent on
+  them. Two independent causes, both fixed:
+  - *Retries never waited.* `ProviderExecutionPolicy` already classified
+    rate limits as retryable and already computed a backoff, but the
+    delay is applied through an injected `sleep` that the evaluation path
+    never supplies, so all three attempts fired within microseconds.
+    Paid transports are now wrapped in a `RetryingTransport` that waits:
+    5 attempts, 2-32 s exponential backoff with jitter, honouring the
+    provider's `Retry-After` (bounded at 120 s, and only in its
+    delta-seconds form -- the HTTP-date form is ignored by design, since
+    resolving it needs two clocks to agree exactly when that is least
+    safe). Transient 5xx and timeouts retry on the same terms; permanent
+    rejections still do not.
+  - *And then they multiplied.* `RetryingTransport` loops internally and
+    then **returns** an exhausted transient failure, which whetstone's
+    `run_provider_call` reads as one failed attempt and retries under its
+    own `max_attempts` -- so five apiece composed multiplicatively rather
+    than additively: 5 x 5 = 25 billed invocations for a single row
+    against a rate limit that never clears, sleeping the full backoff
+    schedule five times over (up to ~40 minutes of wall clock for one
+    row). It also corrupted the record, because the driver appends one
+    attempt per *driver* iteration: a row that cost 25 invocations
+    persisted 5, so the ledger under-counted billed calls by exactly the
+    wrapper's factor. Retries now have exactly one owner. The wrapper
+    keeps the budget -- it is the layer that actually waits -- and the
+    driver's policy is pinned to `max_attempts=1`, making it a
+    pass-through. The manifest records the *effective* count (5) rather
+    than the driver's, so the number an operator reconciles spend against
+    is the number of calls really made.
+  - *One missing row poisoned the aggregate.* Aggregation ran with
+    `missing_data="propagate"`, so a single absent row set the mean to
+    `None`, which made the reward term missing, which its `FAIL`
+    missing-data policy then raised on. Aggregation now runs with
+    `missing_data="skip"` and `max_skip_fraction = 0.10`: present rows
+    are averaged and the shortfall is reported as reduced completeness,
+    which the analysis already weights by per-task achieved counts.
+    Beyond that fraction the aggregate returns to `None`, so the
+    tolerance is a floor against losing an evaluation to one bad row, not
+    permission to average a biased subset. The bound is the complement of
+    the 90% completeness backstop §3.9 already pre-registered, so there
+    is one threshold rather than two.
+  - *But a row bound cannot see a lost task.* `skip` counts rows, and a
+    task that loses **every** repeat is dropped from the task mean's
+    *denominator* rather than counted as a zero -- whetstone's
+    `unweighted_task_mean` gives it `ZERO_DENOMINATOR` and the outer mean
+    divides by the tasks that produced a value. At the study's own shape
+    the two bounds disagree badly: 76 tasks x 4 repeats is 304 rows, one
+    fully-lost task is 1.3% of them, so the 10% row tolerance passes it
+    and the evaluation reports `status=ok` with a mean over 75 tasks
+    presented as though it covered 76 (measured: 1.0 reported where the
+    truth is 0.9868). The bias is upward and systematic rather than
+    noise, because a task that loses every repeat is a slow,
+    long-generation one -- the task that would have scored low. An
+    envs-side validator now refuses the evaluation before it is accepted
+    if any task has zero present rows, or if fewer than 90% of planned
+    tasks were measured. It lives on the envs side because whetstone's
+    `AggregationConfig` has no per-task completeness variable to set:
+    its knobs all act on the flat row vector.
+
+  This changes the reward-policy and eval-config hashes. That is
+  acceptable only because nothing is pinned yet: the live Stage 0 failed
+  before writing `design` or `pre_registration`, and its manifest records
+  no stages. Recorded as item 18 of the protocol document's Revision 2
+  (2026-08-23), with the digest golden and `PROTOCOL_DOC_SHA256`
+  recomputed.
+- **Stage 1/2 calibration consistency is fixed upstream, not here.**
+  whetstone-ai is making `per_task_score` aggregate over *present* rows
+  (reporting `None` for a task with no OK reduction) and `per_task_count`
+  count present rows, under `EvalEvidence` schema v6; this package's pin
+  will move to the release carrying that change rather than working
+  around it locally. The task-completeness floor above is written to
+  compose with it: presence is read off the per-task vectors in both
+  spellings -- a `None` value or a `0` count -- rather than inferred from
+  arithmetic that would assume a missing row scores `0.0`. Refusing at
+  that seam also keeps a fully-lost task from reaching calibration, which
+  rejects `None` per-task values outright, so the failure surfaces as a
+  named completeness refusal rather than further down.
+- **Paid task calls are given a reasoning-sized timeout.** The 30 s
+  default is a chat-completion bound; the live Stage 0 measured a median
+  of 4,466 completion tokens and a maximum of 12,335 per call, which
+  routinely outruns it and turns an ordinary slow call into a billed
+  timeout. Paid transports now use 300 s. The effective timeout, attempt
+  count, and backoff schedule are recorded in the manifest's
+  `provider_calls` block, unhashed, beside the controls already there.
 
 ## [0.2.3] - 2026-08-23
 

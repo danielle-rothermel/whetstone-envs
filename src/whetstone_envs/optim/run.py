@@ -32,7 +32,9 @@ from whetstone.core.identity import (
 )
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.core.roles import EvalRole
+from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.optim.adapters import MappingAdapterRegistry, OptimizerAdapter
 from whetstone.optim.codex.control import CodexControl
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
@@ -104,10 +106,13 @@ from whetstone_envs.optim.nulls import (
     NullRandomTransport,
 )
 from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
     bind_openrouter_transport,
     fake_gold_by_prompt,
     fake_transport_factory,
+    hardened_execution_policy,
     openrouter_seeded_call_config,
+    widened_execution_policy,
 )
 from whetstone_envs.optim.run_cost import project_run_cost, write_run_cost
 from whetstone_envs.optim.split import (
@@ -258,6 +263,13 @@ class RunSpec:
     miprov2_minibatch_size: int | None = None
     #: Trials between full-validation re-evaluations of the incumbent.
     miprov2_minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS
+    #: How many task evaluations run against the provider at once.
+    #:
+    #: An execution property, not an algorithmic one: it changes how long
+    #: the run takes, never what it computes, so it is not part of any
+    #: control record and no optimizer reads it. It sets the evaluation
+    #: engine's worker pool and widens the HTTP connection pool to match.
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
     #: MIPROv2 optimization trials. The default is this runner's own shape,
     #: which is below the protocol's auto-light 10; Wave 3's measured call
     #: counts are the cost of the default, and raising this raises them.
@@ -723,6 +735,11 @@ def build_codex_runtime_config(
         num_seeds=spec.num_seeds,
         transport=cast("CodexRuntimeTransport", spec.transport),
         model=spec.model,
+        # Forwarded rather than defaulted: the server rebuilds from this
+        # config alone, so an unforwarded width would leave the Codex arm
+        # evaluating at whetstone's default while every other arm ran at
+        # the operator's.
+        provider_concurrency=spec.provider_concurrency,
     )
 
 
@@ -1128,10 +1145,18 @@ def run_optimizer(  # noqa: PLR0915
         runtime_config = ReferenceEvalRuntimeConfig(
             transport_api_key_env=api_key_env,
         )
+    # Widened once, here, so the engine's worker pool, the live transport's
+    # connection pool, and the proposer all describe one decision.
+    execution_policy = widened_execution_policy(
+        runtime_config.execution_policy,
+        concurrency=spec.provider_concurrency,
+    )
+    if spec.transport == "openrouter":
+        execution_policy = hardened_execution_policy(execution_policy)
     live_transport = None
     if spec.transport == "openrouter":
         live_transport, transport_factory = bind_openrouter_transport(
-            runtime_config.execution_policy
+            execution_policy
         )
     else:
         transport_factory = fake_transport_factory(
@@ -1149,13 +1174,25 @@ def run_optimizer(  # noqa: PLR0915
         durable_run_boundary(resolved_output),
         open_sqlite(str(sqlite_path)) as store,
     ):
-        engine = runtime_config.build_engine(
-            cast("ObjectStore", store),
+        # Built directly rather than through ``build_engine``, which
+        # forwards neither a concurrency nor a policy and so would run at
+        # whetstone's default width over the unwidened pool. This is the
+        # same in-process driver that helper assembles for the default
+        # ``driver_mode``.
+        engine = RuntimeEvalEngine(
+            store=cast("ObjectStore", store),
             experiment=experiment,
-            eval_runner=family.eval_runner(),
-            mutation_field=family.mutation_field,
-            render_contract=family.render_contract(),
-            transport_factory=transport_factory,
+            sampling=experiment.eval_configs.split_for(
+                runtime_config.split_role
+            ),
+            execution_policy=execution_policy,
+            driver=GraphRolloutEvalDriver(
+                eval_runner=family.eval_runner(),
+                mutation_field=family.mutation_field,
+                render_contract=family.render_contract(),
+                transport_factory=transport_factory,
+            ),
+            concurrency=spec.provider_concurrency,
         )
         prompt_adapter = PlainPromptAdapter()
         proposer_transport = None
@@ -1166,7 +1203,7 @@ def run_optimizer(  # noqa: PLR0915
                     proposer_model=spec.proposer_model,
                 ),
                 transport=live_transport,
-                execution_policy=runtime_config.execution_policy,
+                execution_policy=execution_policy,
                 prompt_adapter=prompt_adapter,
             )
         defaults = CoproInjectedDefaults(

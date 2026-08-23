@@ -321,6 +321,7 @@ def test_the_runtime_config_field_names_are_pinned() -> None:
         "num_seeds",
         "transport",
         "model",
+        "provider_concurrency",
         "partial_log_path",
         "prompt_cache_path",
         "row_job_entrypoint",
@@ -351,6 +352,7 @@ def test_the_runtime_config_serialized_keys_are_the_field_names() -> None:
         "num_seeds",
         "transport",
         "model",
+        "provider_concurrency",
         "partial_log_path",
         "prompt_cache_path",
         "row_job_entrypoint",
@@ -1077,3 +1079,58 @@ def test_the_tool_input_schema_ordering_the_projection_unpacks() -> None:
     )
 
     assert CODEX_EVAL_INPUT_FIELDS == ("base_ref", "model_route", "template")
+
+
+def test_the_codex_runtime_hardens_and_widens_its_own_policy() -> None:
+    """The hosted evaluator runs the study's policy, not whetstone's default.
+
+    **Fails-before: 30 s timeout, 5 driver attempts, default width.** This
+    config is rebuilt inside the MCP evaluation server, a *separate
+    process*, from its serialized fields and nothing else -- so the
+    hardening the study applies to its own engines could not reach it.
+    The Codex arm therefore evaluated the same paid tasks at whetstone's
+    chat-completion timeout with retries that never waited, which is the
+    exact pair of defects that aborted the live Stage 0.
+    """
+    from whetstone_envs.optim.provider import (
+        DRIVER_MAX_ATTEMPTS,
+        TASK_CALL_TIMEOUT_SECONDS,
+    )
+
+    paid = EnvsCodexRuntimeConfig(
+        family_id="c19",
+        split_sizes=(4, 4, 0),
+        n_per_stratum=1,
+        pool_seed_start=765_432,
+        num_seeds=1,
+        transport="openrouter",
+        model="openai/gpt-5-nano",
+        provider_concurrency=16,
+    )
+    policy = paid.execution_policy
+    assert policy.transport_policy.timeout_seconds == TASK_CALL_TIMEOUT_SECONDS
+    assert policy.max_attempts == DRIVER_MAX_ATTEMPTS
+    # The connection pool is widened to the requested width, or the
+    # workers would queue on sockets rather than on the provider.
+    assert policy.transport_policy.max_connections >= 16
+
+
+def test_the_fake_codex_runtime_is_not_hardened() -> None:
+    """The fake route answers from gold, so hardening would describe nothing.
+
+    It still widens: concurrency is about how many rows run at once, which
+    is as real on the fake path as on the paid one.
+    """
+    fake = EnvsCodexRuntimeConfig(
+        family_id="c19",
+        split_sizes=(4, 4, 0),
+        n_per_stratum=1,
+        pool_seed_start=765_432,
+        num_seeds=1,
+        transport="fake",
+        model="openai/gpt-4.1-nano",
+        provider_concurrency=12,
+    )
+    policy = fake.execution_policy
+    assert policy.transport_policy.timeout_seconds == 30.0
+    assert policy.transport_policy.max_connections >= 12

@@ -8,20 +8,26 @@ beside `runtime.sqlite`.
 | `codex-completed/` | Two admitted evaluations, the second selected and returned. Every Codex invariant passes. |
 | `codex-failed/` | One admitted evaluation, plus an artifact naming a call that was never issued. The Step fails under `codex_selection_unevaluated` and still keeps its one paid evaluation reachable as Tool Evidence. |
 
-They are **committed rather than generated at test time** because the
-installed whetstone-ai (0.1.6) carries no Codex-direct surface: the
-adapter that produces such a run only exists on 0.1.7. Committing them
-lets the audit's read paths be exercised the moment 0.1.7 lands, without
-the audit's own tests depending on which tip happens to be installed.
+They are **committed rather than generated at test time** so the audit's
+read paths are exercised against a real recorded run without the audit's
+own tests depending on a whetstone-ai source checkout being present.
+
+Because they are recorded, they carry a pinned `EvalEvidence` schema
+version and must be **regenerated whenever whetstone-ai changes it** —
+the audit validates the stored records, so a fixture written under an
+older version fails `reported_numbers_resolve` with "cites
+whetstone.eval_evidence which is not eval evidence". They currently carry
+v6 (whetstone-ai 0.1.13).
 
 ## Regenerating
 
-`generate.py` builds both. It needs a whetstone-ai checkout carrying the
-Codex-direct surface **and** `OptimStepResult.proposer_usage` — at the
-time of writing that is the merge of `08-22-codex` into the 0.1.6 tip,
-not either branch alone (see the note in `test_codex.py`).
+`generate.py` builds both from a whetstone-ai checkout at the version
+this package pins:
 
     PYTHONPATH=<whetstone-ai>/src python generate.py <whetstone-ai> <out-dir>
+
+Copy `result.json` and `runtime.sqlite` from each generated run directory
+over the committed one.
 
 The agent is an in-process `CodexRunner` stand-in rather than the
 subprocess fake CLI. The admission authority, the evaluating executor,

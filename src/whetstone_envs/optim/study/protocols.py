@@ -112,9 +112,23 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: not run. The revision block at the head of the document lists every
 #: change and the plan note that decided it. Revision 2 was amended the same
 #: day by item 17 -- L1 restated as task-set containment -- so its earlier
-#: digest ``1fa2102b...`` is historical for the same reason.
+#: digest ``1fa2102b...`` is historical for the same reason, as is
+#: ``2e98198b...``, which item 18 superseded later the same day when §3.9
+#: gained the row-level retry and missing-row rules. ``086dc1ba...`` is
+#: historical in turn: item 18 was amended once more on 2026-08-23 to give
+#: the retry budget a single owner (5 attempts total per logical call, spent
+#: in the transport wrapper, with whetstone's driver pinned to one attempt so
+#: the two loops cannot multiply) and to add §3.9's per-task completeness
+#: floor, which refuses an evaluation that lost every repeat of any task.
+#: 06e51d15... is historical in turn: the floor's wording was made
+#: explicit about reading presence from the reported per-task vectors.
+#: ``31425667...`` is historical in turn: §3.9 now names which evaluations
+#: the floor applies to -- the two reported scores and the standalone
+#: ``whetstone-eval`` report, with in-search evaluations exempt to the
+#: optimizer's reward policy -- and states that "measured" means measured to
+#: a full ``K_REPEAT``, without which the 90% bound could never bind.
 PROTOCOL_DOC_SHA256 = (
-    "2e98198b8bdcc9721993f7dfce66c7e059901b5195814e5213df3fa75698c813"
+    "df0e9d4c4a969f8d3a7c9866bc4e207b7e6ff3bc2d8e548a282ea53f600fecf9"
 )
 
 

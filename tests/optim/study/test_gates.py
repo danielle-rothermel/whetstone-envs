@@ -113,8 +113,8 @@ def test_copro_is_derived_from_its_configured_search_shape() -> None:
         copro_breadth=2,
         copro_depth=1,
     )
-    # (depth 1 + 1) steps x breadth 2 x 88 tasks x 3 repeats.
-    assert estimate.low == estimate.high == 2 * 2 * 88 * 3
+    # depth 1 evaluating round x breadth 2 x 88 tasks x 3 repeats.
+    assert estimate.low == estimate.high == 1 * 2 * 88 * 3
     assert "breadth 2" in estimate.basis
     assert estimate.gated
 
@@ -125,8 +125,8 @@ def test_the_estimator_defaults_to_the_pinned_shape_not_the_runners() -> None:
     These defaults were the *runner's* -- 2 and 1 -- which made the
     estimate agree with a run that never received the pinned shape and
     disagree with the design both were meant to describe. COPRO's whole
-    per-run cost is ``(depth + 1) x breadth x T_int x K_REPEAT``, so a
-    default that understates the shape understates the budget fourfold.
+    per-run cost is ``depth x breadth x T_int x K_REPEAT``, so a default
+    that understates the shape understates the budget ninefold.
     """
     assert (COPRO_DEFAULT_BREADTH, COPRO_DEFAULT_DEPTH) == (
         COPRO_BREADTH,
@@ -134,10 +134,10 @@ def test_the_estimator_defaults_to_the_pinned_shape_not_the_runners() -> None:
     )
     estimate = estimate_optimizer_calls("copro", internal_size=88, k_repeat=3)
     assert (
-        estimate.low
-        == estimate.high
-        == ((COPRO_DEPTH + 1) * COPRO_BREADTH * 88 * 3)
+        estimate.low == estimate.high == (COPRO_DEPTH * COPRO_BREADTH * 88 * 3)
     )
+    # Which is the protocol's own section 5.1 arithmetic: 6 x 3 x 88 x 3.
+    assert estimate.low == 4_752
 
 
 def test_null_random_evaluates_exactly_as_copro_does() -> None:

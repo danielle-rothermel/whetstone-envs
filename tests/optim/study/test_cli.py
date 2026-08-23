@@ -751,9 +751,9 @@ def test_plan_prints_the_corrected_per_arm_estimates() -> None:
     def _row(arm: str) -> str:
         return next(line for line in optimizer_lines if line.startswith(arm))
 
-    # COPRO: (depth 3 + 1) x breadth 6 x 88 internal x 3 repeats, at the
+    # COPRO: depth 3 x breadth 6 x 88 internal x 3 repeats, at the
     # protocol's pinned shape rather than the runner's smoke-run default.
-    assert str((COPRO_DEPTH + 1) * COPRO_BREADTH * 88 * 3) in _row("copro")
+    assert str(COPRO_DEPTH * COPRO_BREADTH * 88 * 3) in _row("copro")
     # MIPROv2: its own control budget, 1870-2458, independent of the splits.
     assert "1870-2458" in _row("miprov2")
     # GEPA: the pinned 200 rows, not 732 metric calls.

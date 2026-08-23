@@ -261,8 +261,10 @@ class ArmSpec:
     k_run: int
     seeds: tuple[int, ...]
     demo_mode: str | None = None
-    #: COPRO's search shape: ``breadth`` candidates per step over
-    #: ``depth + 1`` steps. Required on every arm whose search *is* COPRO's
+    #: COPRO's search shape: ``breadth`` candidates over each of ``depth``
+    #: evaluating rounds. (A run records one further *step*, finalization,
+    #: which ranks the measured history and evaluates nothing.) Set on
+    #: every arm whose search *is* COPRO's
     #: -- COPRO itself and ``null-random`` -- and refused on the others.
     #:
     #: Required rather than optional, unlike the MIPROv2 settings, because

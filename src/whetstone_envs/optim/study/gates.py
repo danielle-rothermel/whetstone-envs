@@ -237,8 +237,8 @@ def estimate_optimizer_calls(  # noqa: PLR0913
     is gated against.
 
     COPRO is the only arm whose count follows from the study's own split
-    sizes, because its search shape is fully configured: ``depth + 1`` steps
-    of ``breadth`` candidates, each scored over the whole internal split at
+    sizes, because its search shape is fully configured: ``depth`` steps of
+    ``breadth`` candidates, each scored over the whole internal split at
     ``K_REPEAT`` repeats. ``null-random`` perturbs the anchor but still
     drives the same selection machinery, so it shares COPRO's shape.
     MIPROv2 and GEPA carry their own internal budgets, so their estimates
@@ -269,14 +269,25 @@ def estimate_optimizer_calls(  # noqa: PLR0913
             ),
         )
     if optimizer in {"copro", "null-random"}:
-        steps = copro_depth + 1
-        rows = steps * copro_breadth * internal_size * k_repeat
+        # ``depth`` evaluating rounds, not ``depth + 1``. A COPRO run does
+        # record ``depth + 1`` *steps* -- that is the
+        # ``COPRO_DEPTH_STEPS`` audit invariant -- but the extra one is
+        # finalization, which by that invariant's own statement "consumes
+        # no budget, issues no intents": it ranks the measured history and
+        # evaluates nothing. Upstream agrees on the proposal rounds, since
+        # ``step_hyperparameters`` refuses ``iteration >= depth``.
+        #
+        # This estimate is in *rows*, so it counts the rounds that evaluate.
+        # Counting the finalizing step inflated COPRO's budget by a full
+        # round: 6,336 rows against the protocol's own 4,752 at the pinned
+        # 6x3 shape.
+        rows = copro_depth * copro_breadth * internal_size * k_repeat
         return OptimizerCallEstimate(
             optimizer=optimizer,
             low=rows,
             high=rows,
             basis=(
-                f"(depth {copro_depth} + 1) steps x breadth {copro_breadth} "
+                f"depth {copro_depth} steps x breadth {copro_breadth} "
                 f"x {internal_size} internal tasks x {k_repeat} repeats"
             ),
         )
@@ -616,7 +627,7 @@ GEPA_MEASURED_TASK_CALLS_AT_PIN = -(
 #: **``null-identity`` runs no optimizer, so it has no optimizer-side cost.**
 #:
 #: The estimate this replaces gave null-B COPRO's full search shape --
-#: ``(depth + 1) x breadth x internal x K_REPEAT`` -- which is the cost of a
+#: ``depth x breadth x internal x K_REPEAT`` -- which is the cost of a
 #: search null-B never performs. ``StudyOptimizerRunner._run_null`` does not
 #: call ``run_optimizer`` at all: it emits the naive anchor unchanged as its
 #: terminal candidate and reports ``observed_task_calls=0``. Null-A is the

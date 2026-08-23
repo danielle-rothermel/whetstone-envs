@@ -41,6 +41,7 @@ from whetstone_envs.optim.study.cli import (
     main,
     plan_lines,
 )
+from whetstone_envs.optim.study.gates import MEASUREMENT_NUM_SEEDS
 from whetstone_envs.optim.study.manifest import (
     STUDY_MANIFEST_NAME,
     ArmKind,
@@ -61,6 +62,9 @@ from whetstone_envs.optim.study.protocols import (
 
 from .conftest import toy_manifest
 from .test_manifest import _minimal_manifest
+
+#: The repeat count the plan fixtures render at.
+K_REPEAT = 3
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -710,7 +714,12 @@ def test_plan_prints_measured_numbers_beside_the_estimates() -> None:
     assert ESTIMATE_LABEL in text
     for arm, measured in MEASURED_TASK_CALLS_BY_ARM.items():
         assert arm in text
-        assert str(measured) in text
+        # ``plan`` scales each Wave 3 measurement from the one seed it was
+        # taken at to the study's K_REPEAT, so the rendered figure is the
+        # scaled one. Asserting the raw constant here passed only because
+        # "245" was a substring of the old band's "2458" -- it was never
+        # printed in its own right.
+        assert str(measured * K_REPEAT // MEASUREMENT_NUM_SEEDS) in text
     # COPRO was not measured, so it prints only its estimate.
     copro_lines = [
         line for line in plan_lines(_MeasuredArmSpec()) if "copro" in line
@@ -758,8 +767,8 @@ def test_plan_prints_the_corrected_per_arm_estimates() -> None:
     # COPRO: depth 3 x breadth 6 x 88 internal x 3 repeats, at the
     # protocol's pinned shape rather than the runner's smoke-run default.
     assert str(COPRO_DEPTH * COPRO_BREADTH * 88 * 3) in _row("copro")
-    # MIPROv2: its own control budget, 1870-2458, independent of the splits.
-    assert "1870-2458" in _row("miprov2")
+    # MIPROv2: its own control budget, 1210-3118, independent of the splits.
+    assert "1210-3118" in _row("miprov2")
     # GEPA: the pinned 200 metric calls x 3 repeats = 600 rows, not the
     # 732 metric calls, and not the unscaled 200 that would gate a 600-row
     # entitlement at 300.

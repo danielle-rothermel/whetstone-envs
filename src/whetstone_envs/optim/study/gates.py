@@ -84,16 +84,27 @@ __all__ = [
     "MIPROV2_BOOTSTRAPPING_PLANS",
     "MIPROV2_BOOTSTRAP_ROWS_BEST_CASE",
     "MIPROV2_BOOTSTRAP_ROWS_WORST_CASE",
+    "MIPROV2_ESTIMATE_K_REPEAT",
     "MIPROV2_FEWSHOT_TASK_CALL_CEILING",
     "MIPROV2_FEWSHOT_TASK_CALL_FLOOR",
-    "MIPROV2_FULL_EVAL_CALLS",
+    "MIPROV2_FULL_EVAL_CALLS_MAX",
+    "MIPROV2_FULL_EVAL_CALLS_MIN",
+    "MIPROV2_FULL_EVAL_PASSES_ISSUED",
+    "MIPROV2_FULL_EVAL_PASSES_MAX",
+    "MIPROV2_FULL_EVAL_PASSES_MIN",
+    "MIPROV2_FULL_EVAL_STEPS",
     "MIPROV2_MINIBATCH_CALLS",
+    "MIPROV2_MINIBATCH_SIZE",
+    "MIPROV2_NUM_TRIALS",
+    "MIPROV2_VALSET_TASKS",
     "NULL_IDENTITY_HELD_OUT_PASSES",
     "NULL_IDENTITY_OFFICIAL_PASSES",
     "STAGE1_CALL_COUNT_TOLERANCE",
     "OptimizerCallEstimate",
     "estimate_optimizer_calls",
     "gepa_task_call_ceiling",
+    "miprov2_full_eval_rows",
+    "miprov2_minibatch_rows",
     "null_identity_report_rows",
 ]
 
@@ -140,23 +151,98 @@ MIPROV2_BOOTSTRAPPING_PLANS = 7
 MIPROV2_BOOTSTRAP_ROWS_BEST_CASE = 28
 MIPROV2_BOOTSTRAP_ROWS_WORST_CASE = 616
 
-#: MIPROv2's non-bootstrap evaluation volume at the study's control
-#: defaults: full-valset passes of the incumbent, and the minibatch trials.
-#: Both are row counts over the 88-task internal split.
-MIPROV2_FULL_EVAL_CALLS = 1_050
-MIPROV2_MINIBATCH_CALLS = 792
+# --------------------------------------------------------------------------
+# MIPROv2 -- the F11 correction to the non-bootstrap volume
+# --------------------------------------------------------------------------
+#
+# The previous model priced the two non-bootstrap components as flat
+# constants, 1,050 "full-eval" and 792 "minibatch". Both labels were
+# attached to the wrong quantity -- 1,050 is ``10 x 35 x 3``, the
+# *minibatch* volume, and 792 is ``6 x 44 x 3``, six *full-valset*
+# passes -- and the 6 was the substantive error: the schedule does not
+# issue six.
+#
+# Reconciled against the 2b run records, every observed fewshot count
+# decomposes exactly as ``bootstrap + minibatch + full-valset``, and only
+# the last term varies.
 
-#: The ``fewshot`` per-run task-call range: the two fixed components plus the
-#: bootstrap bound at each end. The **ceiling** is what the Stage-1 gate's
-#: "within 1.5x" comparison divides by, per F10.
+#: MIPROv2's trial count and minibatch shape at the study's registered
+#: control (revision 2 pins ``num_trials`` at 10 for all three demo modes;
+#: ``minibatch_full_eval_steps`` is 1, and the train/val partition gives a
+#: 44-task valset with a 35-task minibatch).
+MIPROV2_NUM_TRIALS = 10
+MIPROV2_MINIBATCH_SIZE = 35
+MIPROV2_VALSET_TASKS = 44
+MIPROV2_FULL_EVAL_STEPS = 1
+
+#: Full-valset passes the schedule *issues* per run.
+#:
+#: ``Schedule.adjusted_num_trials`` is
+#: ``num_trials + num_trials // full_eval_steps + 1 + extra_at_end`` = 21,
+#: and ``promotion_due`` fires when the display trial number is a multiple
+#: of ``full_eval_steps + 1`` or is ``adjusted_num_trials - 1``: ten
+#: promotions, at display trials 2, 4, ..., 20. The baseline is evaluated on
+#: the full valset once more, for **11 issued passes**.
+MIPROV2_FULL_EVAL_PASSES_ISSUED = (
+    MIPROV2_NUM_TRIALS // MIPROV2_FULL_EVAL_STEPS + 1
+)
+
+#: Full-valset passes that survive into the gate's numerator.
+#:
+#: The gate counts ``EvalEvidence.row_accounting.planned`` **once per
+#: distinct evidence record**, and an evaluation is content-addressed over
+#: the candidate and the task batch. A promotion that re-evaluates an
+#: unchanged incumbent on the same 44 tasks therefore resolves to the
+#: record the previous one already wrote and is counted once, not twice.
+#:
+#: So the issued 11 is the ceiling and the floor is 1 -- every promotion
+#: collapsing onto the baseline's record. The 2b run records land inside
+#: this: 9 and 10 distinct passes across the five fewshot seeds, and 4 for
+#: both ``zeroshot`` and ``ground_only``, whose candidate sets repeat more.
+#: The bimodality the fewshot arms show is this deduplication, not the
+#: bootstrap walk.
+MIPROV2_FULL_EVAL_PASSES_MIN = 1
+MIPROV2_FULL_EVAL_PASSES_MAX = MIPROV2_FULL_EVAL_PASSES_ISSUED
+
+
+def miprov2_full_eval_rows(passes: int, k_repeat: int) -> int:
+    """Rows ``passes`` full-valset passes cost at ``k_repeat`` repeats."""
+    return passes * MIPROV2_VALSET_TASKS * k_repeat
+
+
+def miprov2_minibatch_rows(k_repeat: int) -> int:
+    """Rows the minibatch trials cost at ``k_repeat`` repeats.
+
+    One minibatch evaluation per trial, each over ``minibatch_size``
+    tasks. These never deduplicate: the sampled batch differs per trial.
+    """
+    return MIPROV2_NUM_TRIALS * MIPROV2_MINIBATCH_SIZE * k_repeat
+
+
+#: The design's repeat count, which the constants below are pinned at.
+MIPROV2_ESTIMATE_K_REPEAT = 3
+
+#: MIPROv2's non-bootstrap evaluation volume at the study's control
+#: defaults, in rows over the internal split's 44-task valset.
+MIPROV2_MINIBATCH_CALLS = miprov2_minibatch_rows(MIPROV2_ESTIMATE_K_REPEAT)
+MIPROV2_FULL_EVAL_CALLS_MIN = miprov2_full_eval_rows(
+    MIPROV2_FULL_EVAL_PASSES_MIN, MIPROV2_ESTIMATE_K_REPEAT
+)
+MIPROV2_FULL_EVAL_CALLS_MAX = miprov2_full_eval_rows(
+    MIPROV2_FULL_EVAL_PASSES_MAX, MIPROV2_ESTIMATE_K_REPEAT
+)
+
+#: The ``fewshot`` per-run task-call range: minibatch, plus the full-valset
+#: and bootstrap bounds at each end. The **ceiling** is what the Stage-1
+#: gate's "within 1.5x" comparison divides by, per F10.
 MIPROV2_FEWSHOT_TASK_CALL_FLOOR = (
-    MIPROV2_FULL_EVAL_CALLS
-    + MIPROV2_MINIBATCH_CALLS
+    MIPROV2_MINIBATCH_CALLS
+    + MIPROV2_FULL_EVAL_CALLS_MIN
     + MIPROV2_BOOTSTRAP_ROWS_BEST_CASE
 )
 MIPROV2_FEWSHOT_TASK_CALL_CEILING = (
-    MIPROV2_FULL_EVAL_CALLS
-    + MIPROV2_MINIBATCH_CALLS
+    MIPROV2_MINIBATCH_CALLS
+    + MIPROV2_FULL_EVAL_CALLS_MAX
     + MIPROV2_BOOTSTRAP_ROWS_WORST_CASE
 )
 
@@ -298,8 +384,11 @@ def estimate_optimizer_calls(  # noqa: PLR0913
             low=MIPROV2_FEWSHOT_TASK_CALL_FLOOR,
             high=MIPROV2_FEWSHOT_TASK_CALL_CEILING,
             basis=(
-                f"{MIPROV2_FULL_EVAL_CALLS} full-eval + "
                 f"{MIPROV2_MINIBATCH_CALLS} minibatch + "
+                f"{MIPROV2_FULL_EVAL_CALLS_MIN}-"
+                f"{MIPROV2_FULL_EVAL_CALLS_MAX} full-valset "
+                f"({MIPROV2_FULL_EVAL_PASSES_MIN}-"
+                f"{MIPROV2_FULL_EVAL_PASSES_MAX} passes, F11) + "
                 f"{MIPROV2_BOOTSTRAP_ROWS_BEST_CASE}-"
                 f"{MIPROV2_BOOTSTRAP_ROWS_WORST_CASE} bootstrap rows (F10)"
             ),

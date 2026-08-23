@@ -45,13 +45,23 @@ from whetstone_envs.optim.study.gates import (
     MIPROV2_BOOTSTRAPPING_PLANS,
     MIPROV2_FEWSHOT_TASK_CALL_CEILING,
     MIPROV2_FEWSHOT_TASK_CALL_FLOOR,
-    MIPROV2_FULL_EVAL_CALLS,
+    MIPROV2_FULL_EVAL_CALLS_MAX,
+    MIPROV2_FULL_EVAL_CALLS_MIN,
+    MIPROV2_FULL_EVAL_PASSES_ISSUED,
+    MIPROV2_FULL_EVAL_PASSES_MAX,
+    MIPROV2_FULL_EVAL_PASSES_MIN,
+    MIPROV2_FULL_EVAL_STEPS,
     MIPROV2_MINIBATCH_CALLS,
+    MIPROV2_MINIBATCH_SIZE,
+    MIPROV2_NUM_TRIALS,
+    MIPROV2_VALSET_TASKS,
     NULL_IDENTITY_HELD_OUT_PASSES,
     NULL_IDENTITY_OFFICIAL_PASSES,
     STAGE1_CALL_COUNT_TOLERANCE,
     estimate_optimizer_calls,
     gepa_task_call_ceiling,
+    miprov2_full_eval_rows,
+    miprov2_minibatch_rows,
     null_identity_report_rows,
 )
 from whetstone_envs.optim.study.protocols import (
@@ -76,12 +86,66 @@ def test_the_f10_bootstrap_bound_is_the_corrected_one() -> None:
     assert MIPROV2_BOOTSTRAP_ROWS_WORST_CASE != 72
 
 
-def test_the_fewshot_range_is_pinned_at_1870_to_2458() -> None:
+def test_the_fewshot_range_is_pinned_at_1210_to_3118() -> None:
     """The Stage-1 gate divides by the ceiling, so both ends are pinned."""
-    assert MIPROV2_FULL_EVAL_CALLS == 1_050
-    assert MIPROV2_MINIBATCH_CALLS == 792
-    assert MIPROV2_FEWSHOT_TASK_CALL_FLOOR == 1_870
-    assert MIPROV2_FEWSHOT_TASK_CALL_CEILING == 2_458
+    assert MIPROV2_MINIBATCH_CALLS == 1_050
+    assert MIPROV2_FULL_EVAL_CALLS_MIN == 132
+    assert MIPROV2_FULL_EVAL_CALLS_MAX == 1_452
+    assert MIPROV2_FEWSHOT_TASK_CALL_FLOOR == 1_210
+    assert MIPROV2_FEWSHOT_TASK_CALL_CEILING == 3_118
+
+
+def test_the_full_valset_pass_count_follows_the_schedule() -> None:
+    """F11: the schedule issues 11 passes, not the 6 the old model assumed.
+
+    ``adjusted_num_trials`` is 21 at the registered control, and
+    ``promotion_due`` fires on every even display trial -- ten promotions
+    -- plus the one baseline full evaluation.
+    """
+    assert MIPROV2_NUM_TRIALS == 10
+    assert MIPROV2_FULL_EVAL_STEPS == 1
+    assert MIPROV2_VALSET_TASKS == 44
+    assert MIPROV2_MINIBATCH_SIZE == 35
+    assert MIPROV2_FULL_EVAL_PASSES_ISSUED == 11
+    assert MIPROV2_FULL_EVAL_PASSES_MAX == 11
+    # Every promotion may collapse onto the baseline's evidence record.
+    assert MIPROV2_FULL_EVAL_PASSES_MIN == 1
+    assert miprov2_minibatch_rows(3) == 1_050
+    assert miprov2_full_eval_rows(11, 3) == 1_452
+
+
+@pytest.mark.parametrize(
+    ("observed", "bootstrap_attempts", "full_passes"),
+    [
+        # The five fewshot seeds, bimodal by deduplication.
+        (2_370, 44, 9),
+        (2_502, 44, 10),
+        (1_842, 88, 4),
+        (1_710, 44, 4),
+    ],
+)
+def test_the_2b_observations_decompose_and_sit_inside_the_band(
+    observed: int, bootstrap_attempts: int, full_passes: int
+) -> None:
+    """F11's reconciliation, pinned against the 2b run records.
+
+    Each observed count is exactly bootstrap + minibatch + full-valset,
+    and the corrected band contains all four. The previous band's high of
+    2,458 excluded 2,502 and its low of 1,870 excluded both 1,842 and
+    1,710.
+    """
+    bootstrap = bootstrap_attempts * 1 * 3
+    decomposed = (
+        bootstrap
+        + miprov2_minibatch_rows(3)
+        + miprov2_full_eval_rows(full_passes, 3)
+    )
+    assert decomposed == observed
+    assert (
+        MIPROV2_FEWSHOT_TASK_CALL_FLOOR
+        <= observed
+        <= MIPROV2_FEWSHOT_TASK_CALL_CEILING
+    )
 
 
 def test_the_gepa_and_codex_constants_are_pinned() -> None:

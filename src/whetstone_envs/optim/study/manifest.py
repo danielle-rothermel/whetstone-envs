@@ -483,11 +483,16 @@ class ProviderCallRecord(_StrictModel):
 class ModelsRecord(_StrictModel):
     """Which models ran, and what the study could and could not control.
 
-    ``temperature``, ``seed_control``, and ``codex_agent_model`` are honest
-    strings rather than numbers because the study does not control them:
-    the provider ignores temperature on the nano models, the seed control is
-    advertised rather than guaranteed, and the Codex agent's own model runs
-    off the study's key entirely.
+    ``temperature`` and ``seed_control`` are honest strings rather than
+    numbers because the study does not control them: the provider ignores
+    temperature on the nano models, and the seed control is advertised
+    rather than guaranteed.
+
+    ``codex_agent_model`` is different, and is a string for a different
+    reason. It **is** pre-registered -- the Codex arm refuses to run an
+    agent that disagrees with it -- but the agent's own calls run off the
+    study's key entirely, so what the study controls is *which* agent ran,
+    never what it cost.
     """
 
     task_model: StrictStr

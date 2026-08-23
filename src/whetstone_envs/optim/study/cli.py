@@ -46,6 +46,7 @@ from whetstone_envs.optim.study.gates import (
     GEPA_MEASURED_TASK_CALLS_AT_PIN,
     MEASURED_GEPA_TASK_CALLS,
     MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
+    MEASUREMENT_NUM_SEEDS,
     estimate_optimizer_calls,
 )
 from whetstone_envs.optim.study.init import init_study
@@ -380,12 +381,16 @@ MEASURED_TASK_CALLS_BY_ARM = {
 #: provenance differs from it. GEPA's number is the measurement *scaled* to
 #: the pinned budget rather than a figure read straight off a run, and a
 #: label that did not say so would overstate what was measured.
-MEASURED_BASIS_DEFAULT = "measured on fake transport at these splits (Wave 3)"
+MEASURED_BASIS_DEFAULT = (
+    f"measured on fake transport at these splits at "
+    f"{MEASUREMENT_NUM_SEEDS} repeat(s), scaled to K_REPEAT (Wave 3)"
+)
 MEASURED_BASIS_BY_ARM = {
     "gepa": (
         f"measured at max_metric_calls=732 "
-        f"({MEASURED_GEPA_TASK_CALLS} rows) on fake transport at these "
-        f"splits, scaled to the pinned {GEPA_MAX_METRIC_CALLS_PINNED} "
+        f"({MEASURED_GEPA_TASK_CALLS} rows at {MEASUREMENT_NUM_SEEDS} "
+        f"repeat(s)) on fake transport at these splits, scaled to the "
+        f"pinned {GEPA_MAX_METRIC_CALLS_PINNED} and to K_REPEAT "
         f"(Wave 3, D3)"
     ),
 }
@@ -451,6 +456,12 @@ def _optimizer_budget_lines(
         lines.append(f"{'':<24}basis: {estimate.basis}")
         measured = MEASURED_TASK_CALLS_BY_ARM.get(arm_id)
         if measured is not None:
+            # Every Wave 3 measurement was taken at one repeat, and a row
+            # count scales with the repeat count: whetstone-ai 0.1.11 bills
+            # K_REPEAT rows per evaluation. Printing the raw figure beside
+            # an estimate the study runs at K_REPEAT would understate the
+            # measured arm by exactly that factor.
+            measured = measured * k_repeat // MEASUREMENT_NUM_SEEDS
             lines.append(
                 f"{'':<24}{'':>8}{measured:>20}{measured * k_run:>22}"
                 f"  {MEASURED_LABEL}"

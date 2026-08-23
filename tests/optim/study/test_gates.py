@@ -21,7 +21,6 @@ from whetstone_envs.optim.study.gates import (
     GEPA_PIN_REASON,
     GEPA_REFLECTION_MINIBATCH_TASKS,
     GEPA_RESOLVED_MAX_METRIC_CALLS,
-    GEPA_TASK_CALL_CEILING,
     MEASURED_FANOUT_RATIO,
     MEASURED_GEPA_DISTINCT_EVALUATIONS,
     MEASURED_GEPA_RESULT_JSON_BYTES,
@@ -52,6 +51,7 @@ from whetstone_envs.optim.study.gates import (
     NULL_IDENTITY_OFFICIAL_PASSES,
     STAGE1_CALL_COUNT_TOLERANCE,
     estimate_optimizer_calls,
+    gepa_task_call_ceiling,
     null_identity_report_rows,
 )
 from whetstone_envs.optim.study.protocols import (
@@ -238,9 +238,9 @@ def test_gepa_is_estimated_in_task_rows_at_the_pinned_budget() -> None:
     unit ``observed_task_calls`` carries.
     """
     estimate = estimate_optimizer_calls("gepa", internal_size=88, k_repeat=3)
-    assert estimate.low == estimate.high == GEPA_TASK_CALL_CEILING == 200
+    assert estimate.low == estimate.high == gepa_task_call_ceiling(3) == 600
     assert estimate.high != GEPA_RESOLVED_MAX_METRIC_CALLS
-    assert "metric calls bounds task rows" in estimate.basis
+    assert "bounds task rows" in estimate.basis
 
 
 def test_codex_is_a_cap_and_is_not_gated() -> None:
@@ -303,7 +303,7 @@ def test_a_fanned_out_gepa_run_trips_the_gate() -> None:
     """The gate exists to catch a fan-out bug, so it must catch one."""
     assert not call_count_within_estimate(
         optimizer="gepa",
-        observed_task_calls=GEPA_TASK_CALL_CEILING * 3,
+        observed_task_calls=gepa_task_call_ceiling(3) * 3,
         internal_size=88,
         k_repeat=3,
     )
@@ -490,9 +490,42 @@ def test_metric_calls_and_task_rows_are_different_units() -> None:
 
 
 def test_the_gepa_ceiling_is_sourced_from_the_d3_pin() -> None:
-    """D3 pinned 200, so 200 is what the gate bounds -- not the retired 732."""
-    assert GEPA_TASK_CALL_CEILING == GEPA_MAX_METRIC_CALLS_PINNED == 200
-    assert GEPA_TASK_CALL_CEILING != GEPA_RESOLVED_MAX_METRIC_CALLS
+    """D3 pinned 200 metric calls, and the gate bounds rows -- not the 732."""
+    assert GEPA_MAX_METRIC_CALLS_PINNED == 200
+    assert gepa_task_call_ceiling(1) == GEPA_MAX_METRIC_CALLS_PINNED
+    assert gepa_task_call_ceiling(3) != GEPA_RESOLVED_MAX_METRIC_CALLS
+
+
+def test_the_gepa_ceiling_scales_with_the_repeat_count() -> None:
+    """**The 0.1.11 unit correction.** A metric call bills K_REPEAT rows.
+
+    Upstream made a repeated evaluation bill ``K_REPEAT`` times as many
+    provider rows while leaving its metric-call count unchanged, so the pin
+    stopped bounding rows on its own. At the design's ``K_REPEAT = 3`` a
+    run charged the pinned 200 metric calls may execute up to 600 rows,
+    against a gate limit the unscaled ceiling would have put at
+    ``200 x 1.5 = 300`` -- the gate would abort the healthy run it exists
+    to protect.
+    """
+    assert gepa_task_call_ceiling(3) == 600
+    assert gepa_task_call_ceiling(3) == 3 * gepa_task_call_ceiling(1)
+    # The failure the scaling prevents: a run entitled to 600 rows, judged.
+    entitled = GEPA_MAX_METRIC_CALLS_PINNED * 3
+    assert entitled > int(
+        GEPA_MAX_METRIC_CALLS_PINNED * STAGE1_CALL_COUNT_TOLERANCE
+    )
+    assert call_count_within_estimate(
+        optimizer="gepa",
+        observed_task_calls=entitled,
+        internal_size=88,
+        k_repeat=3,
+    )
+
+
+def test_the_gepa_ceiling_refuses_a_non_positive_repeat_count() -> None:
+    assert gepa_task_call_ceiling(1) == 200
+    with pytest.raises(ValueError, match="k_repeat must be at least 1"):
+        gepa_task_call_ceiling(0)
 
 
 def test_the_measured_run_scaled_to_the_pin_is_inside_the_ceiling() -> None:
@@ -502,7 +535,9 @@ def test_the_measured_run_scaled_to_the_pin_is_inside_the_ceiling() -> None:
     rounded up to 73.
     """
     assert GEPA_MEASURED_TASK_CALLS_AT_PIN == 73
-    assert GEPA_MEASURED_TASK_CALLS_AT_PIN < GEPA_TASK_CALL_CEILING
+    assert gepa_task_call_ceiling(1) > GEPA_MEASURED_TASK_CALLS_AT_PIN
+    # The measurement was taken at one repeat, so it scales with the run's.
+    assert gepa_task_call_ceiling(3) > GEPA_MEASURED_TASK_CALLS_AT_PIN * 3
 
 
 def test_the_wave3_gepa_run_scaled_to_the_pin_passes_the_gate() -> None:
@@ -531,7 +566,7 @@ def test_the_wave3_gepa_run_scaled_to_the_pin_passes_the_gate() -> None:
 
 def test_a_gepa_run_above_the_tolerance_is_still_rejected() -> None:
     """The gate must keep its teeth: 1.5x of the ceiling is the boundary."""
-    boundary = int(GEPA_TASK_CALL_CEILING * STAGE1_CALL_COUNT_TOLERANCE)
+    boundary = int(gepa_task_call_ceiling(3) * STAGE1_CALL_COUNT_TOLERANCE)
     assert call_count_within_estimate(
         optimizer="gepa",
         observed_task_calls=boundary,

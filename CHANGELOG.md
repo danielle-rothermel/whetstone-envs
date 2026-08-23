@@ -192,6 +192,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `total_metric_calls`. Each invariant ships a negative fixture that FAILs
   it alone.
 
+- **GEPA's row estimate converts its metric-call pin at `K_REPEAT`.** The
+  Stage-1 gate compares task-model rows, and GEPA's budget is pinned in
+  *metric calls*; the conversion used to be the identity, on the argument
+  that every row costs at least one metric call. whetstone-ai 0.1.11 broke
+  that: a metric call is one candidate-task evaluation at any repeat count,
+  and each repeat bills its own row. `GEPA_TASK_CALL_CEILING` is now
+  `gepa_task_call_ceiling(k_repeat)` and returns `200 x K_REPEAT` — **600
+  rows** at the design's `K_REPEAT = 3`.
+
+  Left unscaled the gate would have judged a run entitled to 600 rows
+  against a limit of `200 x 1.5 = 300` and aborted the healthy GEPA run it
+  exists to catch fan-out in. The gate's own docstring now states that
+  GEPA's pin is in metric calls while its estimate is in rows, since that
+  is the pair most easily confused. The plan's MEASURED rows are scaled the
+  same way — every Wave 3 measurement was taken at one repeat, now pinned
+  as `MEASUREMENT_NUM_SEEDS` rather than left in a reproduce command — so
+  MIPROv2 prints 735 rather than 245 and GEPA 219 rather than 73, and the
+  study-wide total moves from 63,326-78,002 to **65,326-80,002**.
+
+- **The storage note is re-derived from measurement.** The README budgeted
+  4.6 KB of `runtime.sqlite` per evaluated row and ≈0.4-0.5 GB for the
+  study. Measured at the pinned search shapes it is **~20 KB/row**: a COPRO
+  run plans 4,752 rows and leaves a 90 MB run directory, and a MIPROv2 run
+  leaves 209 MB. The eight-arm design leaves **26 run directories** across
+  Stage 1 and Stage 2, totalling **≈2.5 GB** before the study's own store —
+  so the per-run directories dominate it rather than the reverse. The note
+  now also gives fake-transport wall time per run as rehearsal guidance:
+  COPRO ~25 s, MIPROv2 ~10 min.
+
 - **The MIPROv2 effect ceilings are derived from the control's search
   shape.** `miprov2_budget` returned four fixed numbers -- 32 bootstrap
   generations, 32 proposal calls, 32 evaluations, 256 task rows -- chosen

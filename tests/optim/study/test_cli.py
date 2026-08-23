@@ -722,8 +722,10 @@ def test_plan_prints_measured_numbers_beside_the_estimates() -> None:
 def test_plan_prints_the_corrected_per_arm_estimates() -> None:
     """Golden pin: the numbers ``plan`` reports, in task-model rows.
 
-    Both corrections are visible here. GEPA prints 200 rows -- the D3 pin
-    -- rather than the 732 metric calls the auto budget resolves to, and
+    Both corrections are visible here. GEPA prints 600 rows -- the D3 pin
+    of 200 metric calls times ``K_REPEAT``, since a metric call bills one
+    row per repeat -- rather than the 732 metric calls the auto budget
+    resolves to, and
     null-identity prints the report harness rather than COPRO's search
     shape. The split sizes are deliberately *not* the protocol's, because
     at ``(88, 132, 220)`` with ``K_REPEAT = 3`` the harness formula and
@@ -758,9 +760,11 @@ def test_plan_prints_the_corrected_per_arm_estimates() -> None:
     assert str(COPRO_DEPTH * COPRO_BREADTH * 88 * 3) in _row("copro")
     # MIPROv2: its own control budget, 1870-2458, independent of the splits.
     assert "1870-2458" in _row("miprov2")
-    # GEPA: the pinned 200 rows, not 732 metric calls.
+    # GEPA: the pinned 200 metric calls x 3 repeats = 600 rows, not the
+    # 732 metric calls, and not the unscaled 200 that would gate a 600-row
+    # entitlement at 300.
     gepa = _row("gepa")
-    assert "200" in gepa
+    assert "600" in gepa
     assert "732" not in gepa
     # Null-B: 1 official pass x 10 + 1 held-out pass x 20, at K_REPEAT 3.
     assert "90" in _row("null-identity")
@@ -776,7 +780,7 @@ def test_plan_states_the_gepa_basis_in_rows_not_metric_calls() -> None:
             self.k_run_by_arm = {"gepa": 5}
 
     text = "\n".join(plan_lines(_GepaSpec()))
-    assert "bounds task rows at 200" in text
+    assert "metric calls x 3 repeats bounds task rows at 600" in text
     assert "no optimizer run" not in text
 
 
@@ -791,11 +795,12 @@ def test_plan_states_the_null_identity_basis_as_the_harness() -> None:
 
 
 def test_the_gepa_measurement_says_it_was_scaled() -> None:
-    """73 is not a number read off a run, and the label must not imply it.
+    """219 is not a number read off a run, and the label must not imply it.
 
-    The run was measured at the retired 732-call budget; what the plan
-    prints is that measurement scaled to the pinned 200, so its provenance
-    names both budgets rather than claiming a direct measurement.
+    The run was measured at the retired 732-call budget *at one repeat*;
+    what the plan prints is that measurement scaled to the pinned 200 and
+    then to ``K_REPEAT``, so its provenance names both budgets and the
+    repeat count rather than claiming a direct measurement.
     """
 
     class _GepaSpec(_Spec):
@@ -806,8 +811,11 @@ def test_the_gepa_measurement_says_it_was_scaled() -> None:
 
     text = "\n".join(plan_lines(_GepaSpec()))
     assert MEASURED_BASIS_BY_ARM["gepa"] in text
-    assert "scaled to the pinned 200" in text
+    assert "scaled to the pinned 200 and to K_REPEAT" in text
     assert "max_metric_calls=732" in text
+    assert "265 rows at 1 repeat(s)" in text
+    # 265 rows scaled to the pin is 73; at K_REPEAT 3 the plan prints 219.
+    assert "219" in text
     # And the generic line is not what GEPA printed.
     assert MEASURED_BASIS_DEFAULT not in text
 

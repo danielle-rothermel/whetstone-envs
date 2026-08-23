@@ -951,3 +951,45 @@ def test_a_zero_scoring_task_is_not_a_lost_task() -> None:
         per_task_counts=(4, 4, 4, 4),
     )
     require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_a_run_record_carries_the_width_the_run_ran_at(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: nothing on the record said how wide the run ran.**
+
+    The width lived on the stage row alone, which names what the *latest*
+    invocation asked for. A resumed arm stage reuses run directories
+    rather than re-running them, so a resume at a new width overwrote that
+    single field and left every reused run described by a width it never
+    ran at -- and a stage's wall time and its rate-limit failures are read
+    against nothing else.
+
+    Taken from the runner rather than read back off the artifacts, unlike
+    ``search_num_seeds``, because the width is an execution property a run
+    deliberately does not persist. The pre-dispatch refusal is what makes
+    that sound: a directory produced at another width never reaches this
+    record.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    result = runner(arm=_null_a_arm(), seed=5000, study_dir=tmp_path)
+    assert result.record.provider_concurrency == 9
+
+
+def test_the_control_records_this_invocations_width_too(
+    tmp_path: Path,
+) -> None:
+    """Null-B reaches no provider, and the field is not optional.
+
+    Recording some other number would read as a control that ran at it,
+    and recording this invocation's keeps the stage's per-run widths
+    agreeing rather than showing a spurious difference at the one arm
+    that never ran.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    result = runner(arm=_null_b_arm(), seed=6000, study_dir=tmp_path)
+    assert result.record.provider_concurrency == 9

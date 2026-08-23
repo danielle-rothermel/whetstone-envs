@@ -749,6 +749,15 @@ class StudyOptimizerRunner:
                 # asked for and so is the claim the record exists to be
                 # checkable against.
                 search_num_seeds=evidence.search_num_seeds,
+                # This invocation's width, and -- unlike the repeat count
+                # above -- taken from the runner rather than read back off
+                # the artifacts, because the width is an execution property
+                # a run deliberately does not persist. That is sound here
+                # only because a *reused* directory produced at another
+                # width never reaches this line: the stage refuses such a
+                # resume before dispatch, so every run recorded here either
+                # ran under this invocation or ran at this same width.
+                provider_concurrency=self.provider_concurrency,
             ),
             observed_task_calls=_observed_task_calls(result, run_dir=run_dir),
         )
@@ -805,6 +814,15 @@ class StudyOptimizerRunner:
                 audit_passed=True,
                 spend=(),
                 transport=self.transport,
+                # Null-B reaches no provider and so has no width of its
+                # own, but the record's field is not optional and a
+                # control that recorded some other number would read as
+                # having run at it. This invocation's width is the honest
+                # answer: it is what the control *would* have run at, and
+                # it keeps the stage's per-run widths agreeing rather than
+                # showing a spurious difference at the one arm that never
+                # ran.
+                provider_concurrency=self.provider_concurrency,
             ),
             observed_task_calls=0,
         )

@@ -273,6 +273,7 @@ def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
         discard_stale_runs: bool = False,
         transport: str = "fake",
         provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
+        allow_width_change: bool = False,
     ) -> StudyManifest:
         assert replace_design is False
         # An unflagged invocation authorizes no spend. Asserted rather than
@@ -287,6 +288,9 @@ def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
         # package records for one, which is what makes the recorded
         # value meaningful for a stage that was run with no flag.
         assert provider_concurrency == DEFAULT_PROVIDER_CONCURRENCY
+        # And it does not authorize changing that width on a resume,
+        # which would record runs under a width they never ran at.
+        assert allow_width_change is False
         seen.append((study_dir, stage))
         return _minimal_manifest()
 

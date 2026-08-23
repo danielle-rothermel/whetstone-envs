@@ -60,6 +60,7 @@ from whetstone_envs.optim.study.manifest import (
     StageId,
     StudyManifest,
     TransportName,
+    run_widths,
 )
 from whetstone_envs.reporting.publication import (
     TRAJECTORY_REPORT_NAME,
@@ -83,6 +84,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ASSET_NAMES",
     "MISSING",
+    "MIXED_RUN_WIDTHS_DETAIL",
     "NO_PROVIDER_STAGE_DETAIL",
     "NULL_ARM_PREFIX",
     "REPORT_HTML_NAME",
@@ -1505,6 +1507,14 @@ def _transport_rows(manifest: StudyManifest) -> tuple[Row, ...]:
     Ordered by the stage sequence rather than by the manifest's storage
     order, so a study whose Stage 0 was re-run after Stage 1 still reads in
     the order the stages happen.
+
+    The width in a stage row is that stage record's own -- the width of the
+    invocation that last wrote it. When the study's runs did **not** all
+    run at one width, which only an authorized ``--allow-width-change``
+    resume produces, the distinct per-run widths are named as well: a
+    single stage-level number would otherwise read as the width every run
+    beneath it ran at, which is precisely the claim
+    ``RunRecord.provider_concurrency`` exists to keep truthful.
     """
     by_stage = {entry.stage: entry for entry in manifest.stages}
     rows: list[Row] = []
@@ -1525,7 +1535,8 @@ def _transport_rows(manifest: StudyManifest) -> tuple[Row, ...]:
                     Cell(
                         figure=_manifest_figure(
                             f"ran on {record.transport} at concurrency "
-                            f"{record.provider_concurrency}; "
+                            f"{record.provider_concurrency}"
+                            f"{_mixed_width_detail(manifest)}; "
                             f"{_stage_spend_detail(record)}",
                             f"stages[{record.stage}]",
                         )
@@ -1576,6 +1587,27 @@ UNLEDGERED_STAGE_DETAIL = (
 
 #: What a fake-transport stage with no spend reports.
 NO_PROVIDER_STAGE_DETAIL = "no provider reached (fake transport)"
+
+
+#: How the report names a study whose runs did not all run at one width.
+#:
+#: Said explicitly rather than left to the stage-level number, which names
+#: one width per stage and would otherwise read as the width every run
+#: beneath it ran at.
+MIXED_RUN_WIDTHS_DETAIL = "runs recorded at widths"
+
+
+def _mixed_width_detail(manifest: StudyManifest) -> str:
+    """The per-run widths, when the study's runs span more than one.
+
+    Empty in the ordinary case, where every run ran at one width and the
+    stage-level number already says so -- appending "recorded at widths
+    64" to every study would turn the exception into noise and hide it.
+    """
+    widths = run_widths(manifest.arms)
+    if len(widths) <= 1:
+        return ""
+    return f" ({MIXED_RUN_WIDTHS_DETAIL} {', '.join(map(str, widths))})"
 
 
 def _stage_spend_detail(record: StageRecord) -> str:

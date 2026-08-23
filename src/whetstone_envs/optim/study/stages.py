@@ -36,7 +36,10 @@ from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate
 
 from whetstone_envs.optim.nulls import NULL_IDENTITY_OPTIMIZER
-from whetstone_envs.optim.provider import DEFAULT_PROVIDER_CONCURRENCY
+from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    PROVIDER_CONCURRENCY_FLAG,
+)
 from whetstone_envs.optim.study.analysis import (
     AnalysisResult,
     measure_reference_candidates,
@@ -52,6 +55,7 @@ from whetstone_envs.optim.study.gates import (
     estimate_optimizer_calls,
 )
 from whetstone_envs.optim.study.manifest import (
+    ALLOW_WIDTH_CHANGE_FLAG,
     AMENDMENT_REASON_TRANSPORT_CHANGE,
     COMPLETENESS_BACKSTOP,
     CORRECTION_FAMILY_SIZE,
@@ -123,6 +127,7 @@ __all__ = [
     "StageError",
     "StageResult",
     "call_count_within_estimate",
+    "refuse_resumed_width_change",
     "require_matching_transport",
     "run_arm_stage",
     "run_stage",
@@ -286,6 +291,19 @@ class StageEnvironment:
     #: read off the manifest's design, and never hashed into the
     #: pre-registration.
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
+    #: Whether this invocation may resume an arm stage at a different
+    #: width than its surviving runs were produced at.
+    #:
+    #: Off by default. A resumed arm stage reuses run directories rather
+    #: than re-running them, and a run does not persist the width it ran
+    #: at, so a changed width cannot be reconciled by inspection --
+    #: :func:`refuse_resumed_width_change` refuses instead. Carried from
+    #: ``whetstone-study run --allow-width-change``, and like the
+    #: real-Codex and stale-run authorizations it is a property of the
+    #: invocation rather than of the design: the width never entered the
+    #: pre-registration hash, so authorizing a change to it amends no
+    #: design. What it does do is get recorded, as a note on the stage.
+    allow_width_change: bool = False
     #: The study's evidence store, when the caller bound one. A stage that
     #: evaluates through the engine prices what it evaluated by reading its
     #: own persisted output rows back out of this store; without it the
@@ -442,6 +460,139 @@ def _runs_on_other_transports(
     }
 
 
+#: How many surviving run ids a width refusal names before summarising
+#: the rest. The same bound the transport refusal uses, and for the same
+#: reason: actionable without printing every run of the full design.
+_WIDTH_RUNS_SHOWN = _STALE_RUNS_SHOWN
+
+
+def _surviving_runs_of_stage(
+    manifest: StudyManifest, *, stage: StageId
+) -> tuple[str, ...]:
+    """Every recorded run this stage would reuse rather than re-run.
+
+    A stage re-runs only the seeds it has no record of, so the runs an
+    earlier invocation produced *for this stage's seeds* are exactly the
+    ones a resume keeps. Stage 2 selects over Stage 1's seeds as well, and
+    those runs are equally reused, which is why the check is on the seeds
+    the stage would dispatch rather than on the stage the run was first
+    recorded under.
+
+    An arm the spec does not know contributes nothing rather than raising.
+    ``require_pinned_arms`` is the refusal that owns an unrecognised arm,
+    and it runs after this one; a lookup failure here would replace its
+    message with an unrelated ``ValueError`` about seed ranges.
+    """
+    surviving: set[str] = set()
+    for arm in manifest.arms:
+        try:
+            seeds = set(arm_seeds(arm.arm_id, stage=stage))
+        except ValueError:
+            continue
+        surviving.update(
+            run.run_id
+            for run in arm.runs
+            if run.seed is not None and run.seed in seeds
+        )
+    return tuple(sorted(surviving))
+
+
+def refuse_resumed_width_change(
+    manifest: StudyManifest,
+    *,
+    stage: StageId,
+    provider_concurrency: int,
+    allow_width_change: bool = False,
+) -> str | None:
+    """Refuse a resume that would misdescribe the runs it keeps, or note it.
+
+    **The width is the one execution property a run cannot be asked
+    about.** The transport, the repeat count, the arm's search shape are
+    all readable back off a run's own artifacts, which is what lets a
+    resumed stage record them truthfully for runs it never executed. The
+    width is deliberately not: it changes how long a run takes and never
+    what it computes, so no optimizer reads it, no control record hashes
+    it, and nothing persists it.
+
+    That is exactly what makes a changed width unrecoverable rather than
+    merely unrecorded. A resumed arm stage re-runs only the seeds it has
+    no record of and *reuses the run directories* for the rest, so a
+    resume at a new width runs none of the survivors at it -- while the
+    stage record carries a single width, which this invocation overwrites.
+    The row then names a width most of its runs never ran at, and a
+    stage's wall time and its rate-limit and timeout failures are read
+    against nothing else.
+
+    So the default is a refusal, before dispatch, naming both widths and
+    both recoveries: re-run at the recorded width, or start a fresh study
+    directory whose runs are all this width's. Refused *before* dispatch
+    because after it is a stage of provider spend later, and because the
+    condition is settled entirely from the manifest.
+
+    ``allow_width_change`` is the operator saying the change is deliberate
+    -- a stage resumed onto a faster machine, or narrowed after a
+    rate-limit storm. It returns the note the caller records on the stage
+    instead of raising. **It amends no design**: the width never entered
+    the pre-registration hash, so a study that changed it pre-registers
+    exactly as it did before, and no ``AmendmentRecord`` is written. What
+    changes is how the stage's timing evidence reads, and the note is
+    what says so.
+
+    Returns ``None`` when there is nothing to say: a stage with no
+    recorded width, no surviving runs, or a requested width equal to the
+    recorded one is a stage whose row already describes its runs.
+    """
+    recorded = next(
+        (
+            entry.provider_concurrency
+            for entry in manifest.stages
+            if entry.stage == stage.value
+        ),
+        None,
+    )
+    if recorded is None or recorded == provider_concurrency:
+        return None
+    surviving = _surviving_runs_of_stage(manifest, stage=stage)
+    if not surviving:
+        # The row records a width but no run of this stage's survives to
+        # be misdescribed by changing it -- a stage whose runs an
+        # amendment dropped, or one that recorded its row and died before
+        # its first run. Nothing to refuse and nothing to note.
+        return None
+    if allow_width_change:
+        return (
+            f"provider concurrency changed from {recorded} to "
+            f"{provider_concurrency} on a resume of {stage.value} that "
+            f"reused {len(surviving)} run(s) produced at {recorded}; "
+            f"authorized with {ALLOW_WIDTH_CHANGE_FLAG}. The width is an "
+            f"invocation property and does not enter the pre-registration "
+            f"hash, so the study's design is unchanged; each run records "
+            f"the width it ran at"
+        )
+    shown = list(surviving[:_WIDTH_RUNS_SHOWN])
+    more = (
+        ""
+        if len(surviving) <= _WIDTH_RUNS_SHOWN
+        else f" (+{len(surviving) - _WIDTH_RUNS_SHOWN} more)"
+    )
+    raise StageError(
+        f"{stage.value} was asked to run at provider concurrency "
+        f"{provider_concurrency}, but it already ran at {recorded} and "
+        f"still holds {len(surviving)} run(s) produced at that width: "
+        f"{shown}{more}. A resume reuses those run directories rather "
+        f"than re-running them, and a run does not persist the width it "
+        f"ran at, so recording {provider_concurrency} over them would "
+        f"describe runs by a width they never ran at -- and the width is "
+        f"what a stage's wall time and its rate-limit failures are read "
+        f"against. Re-run with "
+        f"{PROVIDER_CONCURRENCY_FLAG} {recorded}, or start a fresh study "
+        f"directory whose runs are all at the new width. To change it "
+        f"deliberately and record the change, pass "
+        f"{ALLOW_WIDTH_CHANGE_FLAG}; it amends no design, because the "
+        f"width does not enter the pre-registration hash"
+    )
+
+
 def _stages_with(
     manifest: StudyManifest, record: StageRecord
 ) -> tuple[StageRecord, ...]:
@@ -458,7 +609,10 @@ def _stages_with(
 
 
 def _arm_stage_record(
-    manifest: StudyManifest, record: StageRecord
+    manifest: StudyManifest,
+    record: StageRecord,
+    *,
+    width_change_note: str | None = None,
 ) -> tuple[StageRecord, ...]:
     """``manifest.stages`` with an arm stage's record merged in, not over.
 
@@ -485,6 +639,20 @@ def _arm_stage_record(
     ``require_matching_transport`` has already refused a stage whose
     transport disagrees with the study's.
 
+    ``provider_concurrency`` comes from the new record for the same
+    reason, and unlike the transport it can legitimately differ from what
+    the row held: a single field can only ever name one width, and the
+    honest one is *this* invocation's -- what the runs this invocation
+    executed ran at, and what its reporting pass ran at. The runs it kept
+    carry their own widths on their own records, which is the fact a
+    single stage field structurally cannot hold.
+    ``refuse_resumed_width_change`` has already refused an unauthorized
+    change, so a row whose width moves here is one an operator authorized.
+    ``width_change_note`` is that authorization, appended rather than
+    assigned: the notes on the row belong to earlier invocations and this
+    one adds its own, so a stage narrowed and then widened again records
+    both rather than only the last.
+
     Only the *run* side is summed here. The reporting pass accumulates by
     the opposite rule -- it is folded whole from durable records every
     time, so adding it would bill one evaluation once per resume -- and
@@ -492,12 +660,15 @@ def _arm_stage_record(
     rather than dropped, because this writer runs before that one and must
     not erase a total an earlier invocation already recorded.
     """
+    notes = () if width_change_note is None else (width_change_note,)
     existing = next(
         (entry for entry in manifest.stages if entry.stage == record.stage),
         None,
     )
     if existing is None:
-        return _stages_with(manifest, record)
+        return _stages_with(
+            manifest, record.model_copy(update={"width_change_notes": notes})
+        )
     merged = record.model_copy(
         update={
             "spend": (
@@ -506,6 +677,10 @@ def _arm_stage_record(
                 else record.spend
             ),
             "report_spend": existing.report_spend,
+            "width_change_notes": (
+                *existing.width_change_notes,
+                *notes,
+            ),
         }
     )
     return _stages_with(manifest, merged)
@@ -1381,6 +1556,17 @@ def run_arm_stage(
     require_matching_transport(
         manifest, stage=stage, transport=environment.transport
     )
+    # The same shape of check on the same kind of property, and equally
+    # free: a resume at a new width reuses run directories produced at the
+    # old one, and a run does not persist the width it ran at, so the row
+    # would describe runs by a width they never ran at. The note an
+    # authorized change returns is recorded on the stage below.
+    width_change_note = refuse_resumed_width_change(
+        manifest,
+        stage=stage,
+        provider_concurrency=environment.provider_concurrency,
+        allow_width_change=environment.allow_width_change,
+    )
     # The design's ``k_run_by_arm`` is the *full* pre-registration, so it
     # says how many runs Stage 2 gets, not how many this stage does. Stage 1
     # spends a prefix of the same seeds, which is what makes "Stage 1's runs
@@ -1452,6 +1638,7 @@ def run_arm_stage(
                         environment=environment,
                         run_spend=_executed_run_spend(executed_runs),
                     ),
+                    width_change_note=width_change_note,
                 ),
             }
         ),

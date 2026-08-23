@@ -36,6 +36,7 @@ from whetstone_envs.optim.study.cli import (
     EXIT_CHECK_FAILED,
     EXIT_ERROR,
     EXIT_OK,
+    MIXED_RUN_WIDTHS,
     NO_RECORDED_SPEND,
     NO_STAGES_RUN,
     STAGE_SPEND_HEADING,
@@ -52,6 +53,7 @@ from whetstone_envs.optim.study.environment import (
     require_transport_credentials,
 )
 from whetstone_envs.optim.study.manifest import (
+    ALLOW_WIDTH_CHANGE_FLAG,
     AMENDMENT_REASON_TRANSPORT_CHANGE,
     DISCARD_STALE_RUNS_FLAG,
     PROVIDER_CONTROL_UNSET,
@@ -71,6 +73,7 @@ from whetstone_envs.optim.study.manifest import (
     TransportName,
     read_study_manifest,
     recorded_transport,
+    run_widths,
     write_study_manifest,
 )
 from whetstone_envs.optim.study.spec import NULL_ARM_IDS
@@ -85,12 +88,15 @@ from whetstone_envs.optim.study.stages import (
     _arm_stage_record,
     _executed_run_spend,
     _stage_record,
+    refuse_resumed_width_change,
     require_matching_transport,
 )
 from whetstone_envs.reporting.study_report import (
+    MIXED_RUN_WIDTHS_DETAIL,
     NO_PROVIDER_STAGE_DETAIL,
     STAGE_SPEND_COVERAGE_NOTE,
     UNLEDGERED_STAGE_DETAIL,
+    _mixed_width_detail,
     study_leakage_failed,
 )
 
@@ -1854,3 +1860,322 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     # header is honoured in full.
     assert "Retry-After delta honoured" in record.retry_backoff
     assert "HTTP-date ignored" in record.retry_backoff
+
+
+# --------------------------------------------------------------------------
+# The width is an invocation property recorded per run, and a resume that
+# changes it is refused
+# --------------------------------------------------------------------------
+
+
+def _run_at(run_id: str, *, seed: int, width: int) -> RunRecord:
+    """One recorded run at a given seed and provider concurrency."""
+    pointer = EvidencePointer(schema_name="s/v1", content_hash="f" * 64)
+    return RunRecord(
+        run_id=run_id,
+        seed=seed,
+        artifact_dir=f"/tmp/runs/{run_id}",  # noqa: S108
+        result_ref=pointer,
+        audit_ref=pointer,
+        cost_ref=pointer,
+        audit_passed=True,
+        spend=(),
+        transport=OPENROUTER_TRANSPORT,
+        provider_concurrency=width,
+    )
+
+
+def _manifest_run_at(
+    width: int, *, stage_width: int, seed: int = 1000
+) -> StudyManifest:
+    """A study whose Stage 1 row and whose surviving run name two widths."""
+    arms = tuple(
+        arm.model_copy(
+            update={
+                "runs": (
+                    (_run_at(f"{arm.arm_id}-{seed}", seed=seed, width=width),)
+                    if arm.arm_id == "copro"
+                    else ()
+                )
+            }
+        )
+        for arm in _arms()
+    )
+    return toy_manifest(arms=arms).model_copy(
+        update={
+            "stages": (
+                StageRecord(
+                    stage=StageId.STAGE1.value,
+                    transport=OPENROUTER_TRANSPORT,
+                    provider_concurrency=stage_width,
+                ),
+            )
+        }
+    )
+
+
+def test_a_run_records_the_width_it_ran_at() -> None:
+    """**Fails-before: ``RunRecord`` had no width at all.**
+
+    The stage row carried one width for the whole stage, so a resume at a
+    new width left every reused run described by a width it never ran at
+    -- and there was no field on the run that could have said otherwise.
+    """
+    run = _run_at("copro-1000", seed=1000, width=32)
+    assert run.provider_concurrency == 32
+    payload = run.model_dump(mode="json", by_alias=True)
+    assert payload["provider_concurrency"] == 32
+
+
+def test_a_run_record_refuses_a_width_below_one() -> None:
+    """A width below one names no run at all, on a run as on a stage."""
+    with pytest.raises(ValueError, match="provider concurrency is at least"):
+        _run_at("copro-1000", seed=1000, width=0)
+
+
+def test_a_pre_width_run_record_reads_as_the_recorded_default() -> None:
+    """The historical default, pinned as a literal rather than tracked.
+
+    A run written before the field existed ran at whetstone's default of
+    the day, which this package pins so a record keeps meaning what it
+    said even if the dependency's default moves.
+    """
+    from whetstone_envs.optim.provider import DEFAULT_PROVIDER_CONCURRENCY
+
+    assert (
+        _run_on("copro-1000", transport=FAKE_TRANSPORT).provider_concurrency
+        == DEFAULT_PROVIDER_CONCURRENCY
+    )
+
+
+def test_a_resume_at_a_new_width_is_refused_before_dispatch() -> None:
+    """**Fails-before: the resume ran and silently rewrote the width.**
+
+    ``StudyOptimizerRunner.__call__`` reuses a run directory it can claim
+    rather than re-running it, so a resume at a new width re-ran none of
+    the survivors at it -- while ``_arm_stage_record`` overwrote the
+    stage's single ``provider_concurrency`` with the new value. The row
+    then named a width most of its runs never ran at, and a stage's wall
+    time and its rate-limit failures are read against nothing else.
+    """
+    with pytest.raises(StageError) as excinfo:
+        refuse_resumed_width_change(
+            _manifest_run_at(16, stage_width=16),
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+        )
+    message = str(excinfo.value)
+    # Both widths, because "the width changed" is not actionable without
+    # knowing in which direction.
+    assert "16" in message
+    assert "64" in message
+    # The run that would have been misdescribed, named rather than counted.
+    assert "copro-1000" in message
+    # Both recoveries, and the override.
+    assert "--provider-concurrency 16" in message
+    assert "fresh study directory" in message
+    assert ALLOW_WIDTH_CHANGE_FLAG in message
+    # The width is not design, and the refusal says so rather than
+    # leaving an operator to fear they are amending a pre-registration.
+    assert "amends no design" in message
+    assert "pre-registration hash" in message
+
+
+def test_the_same_width_resumes_without_a_refusal() -> None:
+    """The ordinary resume is untouched: same width, nothing to reconcile."""
+    assert (
+        refuse_resumed_width_change(
+            _manifest_run_at(16, stage_width=16),
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=16,
+        )
+        is None
+    )
+
+
+def test_a_stage_with_no_surviving_runs_may_change_width_freely() -> None:
+    """Nothing to misdescribe, so nothing to refuse.
+
+    A stage whose runs an amendment dropped, or one that recorded its row
+    and died before its first run, has no evidence a new width could
+    misdescribe -- and refusing it would strand the study behind a guard
+    protecting nothing.
+    """
+    manifest = toy_manifest(arms=_arms()).model_copy(
+        update={
+            "stages": (
+                StageRecord(
+                    stage=StageId.STAGE1.value,
+                    transport=OPENROUTER_TRANSPORT,
+                    provider_concurrency=16,
+                ),
+            )
+        }
+    )
+    assert not any(arm.runs for arm in manifest.arms)
+    assert (
+        refuse_resumed_width_change(
+            manifest, stage=SpecStageId.STAGE1, provider_concurrency=64
+        )
+        is None
+    )
+
+
+def test_a_first_run_of_a_stage_has_no_width_to_disagree_with() -> None:
+    """No recorded row, so no earlier width and no refusal."""
+    assert (
+        refuse_resumed_width_change(
+            toy_manifest(arms=_arms()),
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+        )
+        is None
+    )
+
+
+def test_the_override_records_the_change_instead_of_refusing() -> None:
+    """**Fails-before: there was no override, because there was no refusal.**
+
+    ``--allow-width-change`` is the operator asserting the change is
+    deliberate. It returns the note the stage records rather than raising,
+    and the note states that no design was amended: the width never
+    entered the pre-registration hash, so a study that changed it
+    pre-registers exactly as it did before.
+    """
+    note = refuse_resumed_width_change(
+        _manifest_run_at(16, stage_width=16),
+        stage=SpecStageId.STAGE1,
+        provider_concurrency=64,
+        allow_width_change=True,
+    )
+    assert note is not None
+    assert "16" in note
+    assert "64" in note
+    assert ALLOW_WIDTH_CHANGE_FLAG in note
+    # No amendment: the width is an invocation property, so the study's
+    # pre-registration is untouched and the note says so.
+    assert "does not enter the pre-registration hash" in note
+    assert "design is unchanged" in note
+
+
+def test_an_authorized_change_is_appended_to_the_stages_notes() -> None:
+    """Append-only, so a stage narrowed and re-widened records both.
+
+    Assigning would report the latest change as the stage's whole
+    history, which is the same defect the attempt counters avoid by
+    folding rather than replacing.
+    """
+    first = "narrowed from 64 to 16"
+    manifest = _manifest_run_at(16, stage_width=16).model_copy(
+        update={
+            "stages": (
+                StageRecord(
+                    stage=StageId.STAGE1.value,
+                    transport=OPENROUTER_TRANSPORT,
+                    provider_concurrency=16,
+                    width_change_notes=(first,),
+                ),
+            )
+        }
+    )
+    merged = _arm_stage_record(
+        manifest,
+        _stage_record(
+            stage=SpecStageId.STAGE1,
+            environment=_paid_environment(),
+            run_spend=(),
+        ),
+        width_change_note="widened from 16 to 64",
+    )
+    kept = {entry.stage: entry for entry in merged}[SpecStageId.STAGE1.value]
+    assert kept.width_change_notes == (first, "widened from 16 to 64")
+
+
+def test_the_stage_row_records_this_invocations_width() -> None:
+    """A single field can only name one width, and this is the honest one.
+
+    It is what the runs this invocation executed ran at and what its
+    reporting pass ran at. The runs it kept carry their own widths on
+    their own records, which is the fact the stage-level field
+    structurally cannot hold.
+    """
+    from dataclasses import replace
+
+    manifest = _manifest_run_at(16, stage_width=16)
+    merged = _arm_stage_record(
+        manifest,
+        _stage_record(
+            stage=SpecStageId.STAGE1,
+            environment=replace(_paid_environment(), provider_concurrency=64),
+            run_spend=(),
+        ),
+        width_change_note="widened from 16 to 64",
+    )
+    kept = {entry.stage: entry for entry in merged}[SpecStageId.STAGE1.value]
+    assert kept.provider_concurrency == 64
+
+
+def test_the_ledger_names_the_per_run_widths_when_they_differ() -> None:
+    """**Fails-before: the ledger printed one width and nothing else.**
+
+    A study resumed under ``--allow-width-change`` really does hold runs
+    from two widths, and a reader seeing only the stage column would take
+    it for the width every run beneath it ran at.
+    """
+    manifest = _manifest_run_at(16, stage_width=64)
+    mixed = tuple(
+        arm.model_copy(
+            update={
+                "runs": (
+                    *arm.runs,
+                    _run_at("copro-1001", seed=1001, width=64),
+                )
+            }
+        )
+        if arm.arm_id == "copro"
+        else arm
+        for arm in manifest.arms
+    )
+    text = "\n".join(stage_spend_lines(manifest.stages, arms=mixed))
+    assert MIXED_RUN_WIDTHS in text
+    assert "16, 64" in text
+
+
+def test_the_ledger_stays_quiet_when_every_run_ran_at_one_width() -> None:
+    """The exception is stated; the ordinary case is not annotated.
+
+    Appending "recorded at widths 64" to every study would turn the
+    exception into noise and hide the case the note exists for.
+    """
+    manifest = _manifest_run_at(16, stage_width=16)
+    text = "\n".join(stage_spend_lines(manifest.stages, arms=manifest.arms))
+    assert MIXED_RUN_WIDTHS not in text
+
+
+def test_the_report_names_the_per_run_widths_when_they_differ() -> None:
+    """The report packet asks the same question the ledger does."""
+    manifest = _manifest_run_at(16, stage_width=64)
+    mixed = tuple(
+        arm.model_copy(
+            update={
+                "runs": (
+                    *arm.runs,
+                    _run_at("copro-1001", seed=1001, width=64),
+                )
+            }
+        )
+        if arm.arm_id == "copro"
+        else arm
+        for arm in manifest.arms
+    )
+    assert _mixed_width_detail(
+        manifest.model_copy(update={"arms": mixed})
+    ) == (f" ({MIXED_RUN_WIDTHS_DETAIL} 16, 64)")
+    assert _mixed_width_detail(manifest) == ""
+
+
+def test_run_widths_is_the_distinct_set_the_runs_ran_at() -> None:
+    """Sorted and deduplicated: the question is a set, not a sequence."""
+    manifest = _manifest_run_at(16, stage_width=16)
+    assert run_widths(manifest.arms) == (16,)
+    assert run_widths(()) == ()

@@ -396,13 +396,14 @@ def _record_provider_call_config(
 
 
 @contextmanager
-def bound_stage_environment(
+def bound_stage_environment(  # noqa: PLR0913
     study_dir: Path,
     *,
     transport: str = FAKE_TRANSPORT,
     allow_real_codex: bool = False,
     discard_stale_runs: bool = False,
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
+    allow_width_change: bool = False,
 ) -> Iterator[StageEnvironment]:
     """Open a study's store and bind one engine per evaluation role.
 
@@ -437,6 +438,15 @@ def bound_stage_environment(
     at. It reaches both bounds that matter: the engine's worker pool and
     the HTTP client's connection pool, which is raised to match so the
     workers are not queued behind sockets.
+
+    ``allow_width_change`` is the operator's authorization to resume an
+    arm stage at a different width than its surviving runs were produced
+    at. It defaults off because a resume reuses those run directories and
+    a run does not persist the width it ran at, so an unauthorized change
+    would record runs under a width they never ran at. Like the other
+    three authorizations it belongs to the invocation, and unlike them it
+    leaves a recorded note -- the width is what a stage's wall time is
+    read against, so a stage whose runs span two widths says so.
     """
     require_transport_credentials(transport)
     validate_provider_concurrency(provider_concurrency)
@@ -680,6 +690,12 @@ def bound_stage_environment(
             real_codex_authorized=allow_real_codex,
             transport=transport,
             provider_concurrency=provider_concurrency,
+            # Read only by the arm stage's pre-dispatch width refusal.
+            # It never reaches the runner: the runner records this
+            # invocation's width on the runs it executes, and whether the
+            # *reused* runs may carry a different one is a question about
+            # the manifest, settled before anything is dispatched.
+            allow_width_change=allow_width_change,
             # The stage's own store, so a stage that evaluates through the
             # engine can price what it evaluated. It is the same connection
             # every engine writes into, which is what makes reading the

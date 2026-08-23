@@ -6,6 +6,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Each run records the provider concurrency it ran at, and a resume that
+  changes the width is refused.** The width was recorded once per *stage*,
+  which names what the latest invocation asked for -- not what the runs
+  beneath it ran at. A resumed arm stage re-runs only the seeds it has no
+  record of and reuses the run directories for the rest, so a resume at a
+  different `--provider-concurrency` re-ran none of the survivors at it
+  while `_arm_stage_record` overwrote the stage's single
+  `provider_concurrency` with the new value. The row then named a width most
+  of its runs never ran at, and a stage's wall time and its rate-limit and
+  timeout failures are read against nothing else.
+
+  Manifest schema v12 adds `RunRecord.provider_concurrency`, taken from the
+  `RunSpec` the stage built rather than read back off the run's artifacts:
+  unlike the repeat count, the width is an execution property no optimizer
+  reads and nothing persists, which is exactly why a *reused* directory's
+  width cannot be recovered by inspection. So an arm stage whose requested
+  width differs from its recorded stage width, while any run from the
+  earlier invocation survives, is refused before dispatch -- naming both
+  widths, the runs that would have been misdescribed, and both recoveries
+  (`--provider-concurrency <recorded>`, or a fresh study directory).
+  `--allow-width-change` proceeds instead and records the change as an
+  appended note on the stage record (`StageRecord.width_change_notes`).
+  Widths are invocation properties and never entered the pre-registration
+  hash, so an authorized change amends no design and writes no
+  `AmendmentRecord`; the study pre-registers exactly as it did before.
+
+  The stage record's `provider_concurrency` is now explicitly *this*
+  invocation's width -- the only thing one field can honestly say about a
+  stage whose runs span two -- and both renderers name the distinct per-run
+  widths when they differ: `whetstone-study run`'s ledger and the report
+  packet's stage rows. The ordinary single-width study is not annotated.
+
 ## [0.2.4] - 2026-08-23
 
 ### Added

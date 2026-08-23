@@ -308,6 +308,8 @@ class _Harness:
         *,
         real_codex_authorized: bool = False,
         codex_test_seam: CodexTestSeam | None = None,
+        provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
+        allow_width_change: bool = False,
     ) -> StageEnvironment:
         with bound_stage_environment(self.study_dir) as base:
             return StageEnvironment(
@@ -322,6 +324,8 @@ class _Harness:
                 load_recorded_run=self.load_recorded_run,
                 real_codex_authorized=real_codex_authorized,
                 codex_test_seam=codex_test_seam,
+                provider_concurrency=provider_concurrency,
+                allow_width_change=allow_width_change,
             )
 
 
@@ -2483,3 +2487,121 @@ def test_stage0_records_the_concurrency_it_ran_at(tmp_path: Path) -> None:
         "provider_concurrency"
         not in result.manifest.pre_registration.model_dump()
     )
+
+
+def test_a_resumed_stage_at_a_new_width_refuses_before_any_arm_runs(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: the resume dispatched and rewrote the recorded width.**
+
+    End to end through ``run_arm_stage``, because the property that
+    matters is that nothing is dispatched. A resumed arm stage re-runs
+    only the seeds it has no record of and reuses the run directories for
+    the rest, so a resume at a new width re-ran none of the survivors at
+    it -- and ``_arm_stage_record`` overwrote the stage's single
+    ``provider_concurrency`` with the new value, leaving the row naming a
+    width most of its runs never ran at.
+
+    Refused before dispatch and not after, because after is a stage of
+    provider spend later: the condition is settled entirely from the
+    manifest and costs nothing to check.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    first = _Harness(study_dir, scores=scores)
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=first.environment(provider_concurrency=16),
+    )
+    recorded = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == StageId.STAGE1.value
+    )
+    assert recorded.provider_concurrency == 16
+
+    resumed = _Harness(study_dir, scores=scores)
+    with pytest.raises(StageError) as excinfo:
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=resumed.environment(provider_concurrency=64),
+        )
+    assert "16" in str(excinfo.value)
+    assert "64" in str(excinfo.value)
+    # Nothing was dispatched: no run, no official score, no held-out call.
+    assert resumed.events == []
+    # And the recorded width still describes the runs the study holds.
+    assert (
+        next(
+            entry
+            for entry in read_study_manifest(study_dir).stages
+            if entry.stage == StageId.STAGE1.value
+        ).provider_concurrency
+        == 16
+    )
+
+
+def test_an_authorized_width_change_reaches_dispatch(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: no override existed, because no refusal did.**
+
+    The authorized resume clears the guard and proceeds. What it then
+    records -- this invocation's width on the stage row, the change as an
+    appended note, and no amendment -- is pinned on the merge itself in
+    ``test_transport``; what this covers is that the flag reaches
+    ``run_arm_stage`` and that the guard lets it through.
+
+    A resume of a *completed* Stage 1 is refused further down by the
+    held-out ledger, which measures each candidate exactly once. That is a
+    different guarantee and an older one, so it is what this asserts
+    against: reaching it proves the width guard did not fire.
+    """
+    from whetstone_envs.optim.study.selection import SelectionError
+
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=_Harness(study_dir, scores=scores).environment(
+            provider_concurrency=16
+        ),
+    )
+    before = read_study_manifest(study_dir)
+
+    with pytest.raises(SelectionError, match="exactly once"):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=_Harness(study_dir, scores=scores).environment(
+                provider_concurrency=64, allow_width_change=True
+            ),
+        )
+
+    after = read_study_manifest(study_dir)
+    stage = next(
+        entry for entry in after.stages if entry.stage == StageId.STAGE1.value
+    )
+    # The row took this invocation's width and recorded the change.
+    assert stage.provider_concurrency == 64
+    assert len(stage.width_change_notes) == 1
+    assert "16" in stage.width_change_notes[0]
+    assert "64" in stage.width_change_notes[0]
+    # No amendment and no new pre-registration: the width is an
+    # invocation property, so the study's design is untouched.
+    assert after.amendments == before.amendments
+    assert after.pre_registration == before.pre_registration
+    # The runs it kept still say what they ran at, which the stage row
+    # structurally cannot.
+    assert {
+        run.provider_concurrency for arm in after.arms for run in arm.runs
+    } == {DEFAULT_PROVIDER_CONCURRENCY}

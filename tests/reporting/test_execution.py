@@ -10,7 +10,10 @@ from whetstone_envs.reporting.execution import (
     CandidateInput,
     run_c19_evaluation,
 )
-from whetstone_envs.reporting.publication import load_eval_report
+from whetstone_envs.reporting.publication import (
+    DurableRunError,
+    load_eval_report,
+)
 from whetstone_envs.reporting.schema import EvalRoleName, EvalSuccess
 
 if TYPE_CHECKING:
@@ -288,3 +291,83 @@ def test_a_report_with_no_provider_rows_publishes_no_cost() -> None:
         )
         is None
     )
+
+
+# --------------------------------------------------------------------------
+# The standalone report applies the study's per-task completeness floor
+# --------------------------------------------------------------------------
+
+
+def test_standalone_eval_refuses_a_fully_lost_task(
+    tmp_path, monkeypatch
+) -> None:
+    """``whetstone-eval`` publishes claim-grade numbers, so it takes the floor.
+
+    **Fails-before: published.** The per-task floor lived only in
+    ``RoleScorer.evidence_for``, so a study stage refused an evaluation
+    that lost a whole task while this path -- the one behind the
+    standalone command, and the one a held-out number is finally reported
+    from -- projected and published exactly the biased mean the floor
+    exists to catch.
+
+    The loss is injected at the evidence rather than at the transport
+    because what is under test is that this path *consults* the shared
+    helper at all. Whether the helper classifies correctly is settled in
+    ``tests/optim/study/test_arms.py``; duplicating that here would test
+    the helper twice and the wiring not at all.
+    """
+    from whetstone_envs.optim.completeness import TaskCompletenessError
+
+    seen: list[str] = []
+
+    def _refuse(_evidence: object, *, purpose: str) -> None:
+        seen.append(purpose)
+        raise TaskCompletenessError(
+            f"{purpose}: 1 of 2 tasks lost every repeat"
+        )
+
+    monkeypatch.setattr(
+        "whetstone_envs.reporting.execution.require_task_completeness",
+        _refuse,
+    )
+    # Surfaced through the durable-run boundary, which is this path's own
+    # contract: the directory already exists, so a failure after it is
+    # created is reported with the directory it left behind. The
+    # completeness refusal is preserved as the cause rather than flattened.
+    with pytest.raises(DurableRunError, match="lost every repeat") as raised:
+        run_c19_evaluation(
+            C19EvalSpec(
+                transport="fake",
+                role="official",
+                candidates=(
+                    CandidateInput(
+                        "ceiling", "ceiling", PROBES.ceiling_template
+                    ),
+                ),
+                split_sizes=(1, 1, 0),
+                output_dir=tmp_path / "lost",
+                run_id="lost-test",
+            )
+        )
+    assert isinstance(raised.value.cause, TaskCompletenessError)
+    # Consulted once per candidate, named by the candidate it judged.
+    assert seen == ["eval:ceiling"]
+
+
+def test_standalone_eval_publishes_a_complete_evaluation(tmp_path) -> None:
+    """The floor is a floor, not a tax on the path's normal operation."""
+    output = run_c19_evaluation(
+        C19EvalSpec(
+            transport="fake",
+            role="official",
+            candidates=(
+                CandidateInput("ceiling", "ceiling", PROBES.ceiling_template),
+            ),
+            split_sizes=(1, 1, 0),
+            output_dir=tmp_path / "complete",
+            run_id="complete-test",
+        )
+    )
+    result = output.report.results[0]
+    assert isinstance(result, EvalSuccess)
+    assert result.score == 1.0

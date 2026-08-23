@@ -17,6 +17,10 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from whetstone_envs.optim.completeness import (
+    TaskCompletenessError,
+    require_task_completeness,
+)
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_NUM_CANDIDATES,
@@ -632,6 +636,7 @@ class _Evidence:
         self.per_task_values = per_task_values
         self.aggregate_value = aggregate_value
         self.aggregate_status = aggregate_status
+        self.num_seeds = num_seeds
         self.task_hashes = tuple(
             f"h{index:064x}" for index in range(len(per_task_values))
         )
@@ -677,8 +682,6 @@ def test_a_fully_lost_task_refuses_the_evaluation() -> None:
     loses *every* repeat is a slow, long-generation one, which is
     precisely the task that would have scored low.
     """
-    from whetstone_envs.optim.study.arms import _require_task_completeness
-
     evidence = _evidence_with_lost_tasks(tasks=76, lost=1)
     # The aggregate really does read as a clean 1.0 while a task is gone,
     # and the row tolerance never sees it: 4 of 304 rows is 1.3%.
@@ -689,8 +692,8 @@ def test_a_fully_lost_task_refuses_the_evaluation() -> None:
     # Counting the lost task at its worst case is what the mean hides.
     assert sum(present) / 76 == pytest.approx(0.98684, abs=1e-5)
 
-    with pytest.raises(StageError, match="lost every"):
-        _require_task_completeness(evidence, purpose="official:cand")
+    with pytest.raises(TaskCompletenessError, match="lost every"):
+        require_task_completeness(evidence, purpose="official:cand")
 
 
 def test_a_partially_lost_task_is_accepted() -> None:
@@ -700,34 +703,114 @@ def test_a_partially_lost_task_is_accepted() -> None:
     mean is over the population it claims, and the shortfall shows up as
     reduced completeness the way the protocol pre-registered.
     """
-    from whetstone_envs.optim.study.arms import _require_task_completeness
-
     # Four tasks, four repeats each; one task lost one of its four. Its
     # per-task value drops to 0.75 and it still contributes.
     evidence = _Evidence(
         per_task_values=(1.0, 1.0, 1.0, 0.75),
         aggregate_value=(1.0 + 1.0 + 1.0 + 0.75) / 4,
     )
-    _require_task_completeness(evidence, purpose="official:cand")
+    require_task_completeness(evidence, purpose="official:cand")
 
 
 def test_losing_a_tenth_of_the_tasks_trips_the_floor() -> None:
     """The task floor is the same 90% the row bound complements."""
-    from whetstone_envs.optim.study.arms import _require_task_completeness
-
     # Refused by the zero-present rule first, which is stricter; the floor
     # exists for the case where tasks vanish before they are counted.
     evidence = _evidence_with_lost_tasks(tasks=76, lost=8)
-    with pytest.raises(StageError, match="lost every"):
-        _require_task_completeness(evidence, purpose="official:cand")
+    with pytest.raises(TaskCompletenessError, match="lost every"):
+        require_task_completeness(evidence, purpose="official:cand")
+
+
+def _evidence_with_short_tasks(
+    *, tasks: int, short: int, num_seeds: int = 4, score: float = 1.0
+) -> _Evidence:
+    """Evidence where ``short`` tasks ran fewer than every repeat.
+
+    Every task still contributes a value, so the zero-present rule passes
+    and only the completeness floor can see the shortfall.
+    """
+    counts = tuple(
+        num_seeds - 1 if index < short else num_seeds for index in range(tasks)
+    )
+    return _Evidence(
+        per_task_values=tuple(score for _ in range(tasks)),
+        aggregate_value=score,
+        per_task_counts=counts,
+        num_seeds=num_seeds,
+    )
+
+
+def test_the_floor_fires_on_short_tasks_the_zero_rule_passes() -> None:
+    """The 90% floor bounds a population the zero-present rule cannot see.
+
+    **Fails-before: accepted.** ``achieved`` was computed as
+    ``(planned - lost) / planned``, but the zero-present rule above it
+    already refused whenever ``lost`` was nonzero -- so by the time the
+    floor was evaluated ``lost`` was always 0, ``achieved`` was always
+    exactly 1.0, and the comparison against 0.90 could never be true. The
+    floor was decorative: it could not fire on any input.
+
+    Counting *incomplete* tasks -- present, but measured to less than
+    ``k_repeat`` -- gives it a real population. Here 20 of 76 tasks ran
+    three of their four repeats: every task contributes a value, nothing
+    is fully lost, and the split is still measured more shallowly than
+    the design pre-registered.
+    """
+    evidence = _evidence_with_short_tasks(tasks=76, short=20)
+    # Nothing is fully lost, so the stricter rule genuinely passes.
+    assert all(value is not None for value in evidence.per_task_values)
+    assert all(count > 0 for count in evidence.per_task_counts)
+    # 56 of 76 complete is 0.737, below the 0.90 floor.
+    with pytest.raises(TaskCompletenessError, match="task-completeness floor"):
+        require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_a_few_short_tasks_stay_inside_the_floor() -> None:
+    """The floor tolerates the scattered shortfall it was set to allow.
+
+    Seven of 76 tasks short leaves 69 complete, or 0.908 -- just above
+    the bound -- so a handful of dropped repeats does not void an
+    otherwise sound evaluation. This is the tolerance the row bound and
+    the retry schedule are both aimed at preserving.
+    """
+    evidence = _evidence_with_short_tasks(tasks=76, short=7)
+    require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_the_zero_present_rule_stays_unconditional() -> None:
+    """A fully-lost task refuses even when completeness is otherwise fine.
+
+    75 of 76 tasks complete is 0.987, far above the floor, so only the
+    unconditional rule can catch the one task that vanished. The two
+    conditions are independent and neither subsumes the other.
+    """
+    evidence = _evidence_with_lost_tasks(tasks=76, lost=1)
+    with pytest.raises(TaskCompletenessError, match="lost every"):
+        require_task_completeness(evidence, purpose="official:cand")
+
+
+def test_evidence_without_counts_reports_no_incomplete_tasks() -> None:
+    """An evidence record carrying no counts is not guessed at.
+
+    A short task's value is a real number either way, so ``per_task_counts``
+    is the only spelling that can express the shortfall. Absent it, the
+    floor reports nothing rather than inventing a population.
+    """
+    from whetstone_envs.optim.completeness import incomplete_task_count
+
+    evidence = _Evidence(
+        per_task_values=(1.0, 1.0, 1.0, 1.0),
+        aggregate_value=1.0,
+        per_task_counts=(),
+    )
+    assert incomplete_task_count(evidence) == 0
+    require_task_completeness(evidence, purpose="official:cand")
 
 
 def test_a_complete_evaluation_is_untouched() -> None:
     """The check is a floor, not a tax on the normal path."""
-    from whetstone_envs.optim.study.arms import _require_task_completeness
-
     evidence = _evidence_with_lost_tasks(tasks=76, lost=0, score=0.62)
-    _require_task_completeness(evidence, purpose="official:cand")
+    require_task_completeness(evidence, purpose="official:cand")
 
 
 def test_an_all_zero_evaluation_is_not_falsely_refused() -> None:
@@ -738,12 +821,10 @@ def test_an_all_zero_evaluation_is_not_falsely_refused() -> None:
     scored zero -- but both leave the mean at zero, so nothing is being
     hidden.
     """
-    from whetstone_envs.optim.study.arms import _require_task_completeness
-
     evidence = _Evidence(
         per_task_values=(0.0, 0.0, 0.0, 0.0), aggregate_value=0.0
     )
-    _require_task_completeness(evidence, purpose="official:cand")
+    require_task_completeness(evidence, purpose="official:cand")
 
 
 def test_a_lost_task_is_caught_by_either_spelling() -> None:
@@ -756,16 +837,14 @@ def test_a_lost_task_is_caught_by_either_spelling() -> None:
     across a dependency bump -- the exact failure mode it exists to
     prevent.
     """
-    from whetstone_envs.optim.study.arms import _require_task_completeness
-
     # Value says None, count disagrees (still refused).
     by_value = _Evidence(
         per_task_values=(1.0, 1.0, 1.0, None),
         aggregate_value=1.0,
         per_task_counts=(4, 4, 4, 4),
     )
-    with pytest.raises(StageError, match="lost every"):
-        _require_task_completeness(by_value, purpose="official:cand")
+    with pytest.raises(TaskCompletenessError, match="lost every"):
+        require_task_completeness(by_value, purpose="official:cand")
 
     # Count says zero, value disagrees (still refused).
     by_count = _Evidence(
@@ -773,8 +852,8 @@ def test_a_lost_task_is_caught_by_either_spelling() -> None:
         aggregate_value=1.0,
         per_task_counts=(4, 4, 4, 0),
     )
-    with pytest.raises(StageError, match="lost every"):
-        _require_task_completeness(by_count, purpose="official:cand")
+    with pytest.raises(TaskCompletenessError, match="lost every"):
+        require_task_completeness(by_count, purpose="official:cand")
 
 
 def test_a_zero_scoring_task_is_not_a_lost_task() -> None:
@@ -784,11 +863,9 @@ def test_a_zero_scoring_task_is_not_a_lost_task() -> None:
     hard task that was fully measured and simply got everything wrong --
     that number is real evidence, and the study needs it.
     """
-    from whetstone_envs.optim.study.arms import _require_task_completeness
-
     evidence = _Evidence(
         per_task_values=(1.0, 1.0, 1.0, 0.0),
         aggregate_value=0.75,
         per_task_counts=(4, 4, 4, 4),
     )
-    _require_task_completeness(evidence, purpose="official:cand")
+    require_task_completeness(evidence, purpose="official:cand")

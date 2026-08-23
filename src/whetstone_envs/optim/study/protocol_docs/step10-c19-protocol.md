@@ -683,6 +683,24 @@ candidate.
   refusal is applied before an evaluation is accepted, so a fully-lost task
   cannot reach calibration — which requires complete per-task counts for its
   anchors and rejects an absent per-task value outright.
+- **The floor applies to every evaluation a claim is read from**, and only
+  those: the official selection score, the held-out measurement, and the
+  standalone `whetstone-eval` report all apply it through one shared owner, so
+  the command that publishes a held-out number is subject to the same refusal
+  as the stage that records one. Evaluations *inside* a search are deliberately
+  exempt. Under whetstone 0.1.13 a fully-lost task reports an absent per-task
+  value rather than a zero, and what a candidate is worth mid-search is the
+  optimizer's reward policy to decide; aborting a run over a transient loss the
+  search itself is entitled to tolerate would make the floor a stopping rule
+  rather than a reporting one.
+- **"Measured" means measured to depth.** The 90% bound counts tasks that
+  produced a full `K_REPEAT` of present rows, not merely tasks that produced
+  something. Counting only fully-lost tasks would make the bound unreachable —
+  the zero-present rule above already refuses those, so the remaining fraction
+  would be 100% by construction and the 90% threshold could never bind. Counting
+  short tasks gives it the population it is written for: a split whose tasks
+  broadly ran three of four repeats is measured more shallowly than this
+  protocol pre-registers, even though every task contributed a value.
 - **Never resume a partial run.** Recorded memory: clean reruns over stale
   partials — never resume or repair pre-stabilization partial experiment runs.
 - **No mid-run design changes.** Per `1756`'s execution rules, the only

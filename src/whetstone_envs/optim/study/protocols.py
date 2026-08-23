@@ -122,8 +122,13 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: floor, which refuses an evaluation that lost every repeat of any task.
 #: 06e51d15... is historical in turn: the floor's wording was made
 #: explicit about reading presence from the reported per-task vectors.
+#: ``31425667...`` is historical in turn: §3.9 now names which evaluations
+#: the floor applies to -- the two reported scores and the standalone
+#: ``whetstone-eval`` report, with in-search evaluations exempt to the
+#: optimizer's reward policy -- and states that "measured" means measured to
+#: a full ``K_REPEAT``, without which the 90% bound could never bind.
 PROTOCOL_DOC_SHA256 = (
-    "31425667cb1981ab0d952372639cd94ccfbfd668726b5017507070ab29c2c2ac"
+    "df0e9d4c4a969f8d3a7c9866bc4e207b7e6ff3bc2d8e548a282ea53f600fecf9"
 )
 
 

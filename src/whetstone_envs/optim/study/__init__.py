@@ -67,6 +67,10 @@ from whetstone_envs.optim.study.gates import (
     OptimizerCallEstimate,
     estimate_optimizer_calls,
 )
+from whetstone_envs.optim.study.init import (
+    init_study,
+    study_manifest_for,
+)
 from whetstone_envs.optim.study.leakage import (
     HeldOutObservation,
     LeakageCheckError,
@@ -93,6 +97,15 @@ from whetstone_envs.optim.study.power import (
     split_half_stable,
     weighted_per_task_delta,
     within_variance_divergence,
+)
+from whetstone_envs.optim.study.protocols import (
+    STEP10_C19,
+    STEP10_C19_TOY,
+    ArmDesign,
+    StudyProtocol,
+    protocol_doc_sha256,
+    study_protocol,
+    without_codex,
 )
 from whetstone_envs.optim.study.selection import (
     SELECTION_RULE,
@@ -185,8 +198,11 @@ __all__ = [
     "SELECTION_RULE",
     "STAGE0_TRANSPORT_STAGE",
     "STAGE1_CALL_COUNT_TOLERANCE",
+    "STEP10_C19",
+    "STEP10_C19_TOY",
     "AnchorPurpose",
     "ArmDelta",
+    "ArmDesign",
     "ArmKind",
     "ArmReport",
     "ArmRunResult",
@@ -224,6 +240,7 @@ __all__ = [
     "StageError",
     "StageId",
     "StageResult",
+    "StudyProtocol",
     "StudySpec",
     "WithinVarianceCheck",
     "analyze_arms",
@@ -235,6 +252,7 @@ __all__ = [
     "default_arms",
     "estimate_optimizer_calls",
     "evaluate_stage0_gate",
+    "init_study",
     "k_run_for",
     "load_study_spec",
     "measure_fanout",
@@ -243,6 +261,7 @@ __all__ = [
     "next_k_cal",
     "nondeterminism_floor",
     "null_triggers_downgrade",
+    "protocol_doc_sha256",
     "report_arm",
     "report_reference_candidate",
     "require_matching_transport",
@@ -255,6 +274,9 @@ __all__ = [
     "split_half_stable",
     "stage_spend_records",
     "study_leakage_check",
+    "study_manifest_for",
+    "study_protocol",
     "weighted_per_task_delta",
     "within_variance_divergence",
+    "without_codex",
 ]

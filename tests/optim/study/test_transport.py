@@ -1843,6 +1843,14 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     # The execution settings that were actually in force, so a stage that
     # lost rows to timeouts and one that did not are distinguishable.
     assert record.timeout_seconds == repr(TASK_CALL_TIMEOUT_SECONDS)
+    # The *effective* count, not the driver policy's. The driver is pinned
+    # to one attempt so the two retry loops cannot multiply; the five
+    # attempts are spent inside the transport wrapper, and five is what an
+    # operator reconciles billed calls against.
     assert record.max_attempts == str(TASK_CALL_MAX_ATTEMPTS)
     assert "exponential" in record.retry_backoff
-    assert "Retry-After honoured" in record.retry_backoff
+    # Only the delta-seconds form is honoured; the HTTP-date form is
+    # ignored by design, and the record says so rather than implying the
+    # header is honoured in full.
+    assert "Retry-After delta honoured" in record.retry_backoff
+    assert "HTTP-date ignored" in record.retry_backoff

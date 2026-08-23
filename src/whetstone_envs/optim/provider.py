@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import time
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from dr_providers import (
@@ -212,6 +213,42 @@ class RetryingTransport:
         # Jitter spreads retries apart so concurrent workers do not
         # retry in lockstep; it is not a security primitive.
         self._rng = rng if rng is not None else random.Random()  # noqa: S311
+        self._attempts = 0
+        self._transient_outcomes: list[str] = []
+        self._lock = Lock()
+
+    @property
+    def attempts(self) -> int:
+        """Provider invocations this wrapper has made, across all calls.
+
+        **Not the same number as ``calls``, and deliberately so.** ``calls``
+        counts persisted output rows -- one per logical call, which is what
+        the study is billed a completion for and what every cost projection
+        re-derives from the store. A retried call still persists one row,
+        so a report that showed only ``calls`` said nothing about the 429s
+        it survived: the wrapper's retries were invisible in the record
+        even though each one was a real request to the provider.
+
+        This is a live counter rather than a projected number because it
+        is the one quantity that *cannot* be read back: a transient
+        attempt leaves no row to re-derive it from. It is therefore
+        reported beside ``calls`` rather than folded into it, and nothing
+        here changes what ``calls`` means.
+        """
+        with self._lock:
+            return self._attempts
+
+    @property
+    def transient_outcomes(self) -> tuple[str, ...]:
+        """Each transient failure this wrapper retried past, in order.
+
+        The recoverability class rather than a status code, because that
+        is what the retry decision was actually made on -- see
+        :func:`_is_transient` -- so a stage report explains its own
+        attempt count in the same terms the wrapper used to produce it.
+        """
+        with self._lock:
+            return tuple(self._transient_outcomes)
 
     def delay_for(self, attempt_number: int) -> float:
         """The jittered wait before ``attempt_number``'s retry."""
@@ -222,11 +259,31 @@ class RetryingTransport:
         low = capped * (1.0 - RETRY_JITTER_FRACTION)
         return self._rng.uniform(low, capped)
 
+    def _count(self, evidence: object, *, transient: bool) -> None:
+        """Record one provider invocation, and why it was retried.
+
+        Under a lock because one wrapper is shared by every worker in the
+        stage -- ``bind_openrouter_transport`` returns a single instance so
+        the pool is shared -- and a counter incremented from N concurrent
+        evaluations would otherwise lose increments to the read-modify-write
+        race, under-reporting exactly the attempt storm it exists to show.
+        """
+        with self._lock:
+            self._attempts += 1
+            if transient:
+                failure = getattr(evidence, "failure", None)
+                recoverability = getattr(failure, "recoverability", None)
+                self._transient_outcomes.append(
+                    getattr(recoverability, "value", str(recoverability))
+                )
+
     def __call__(self, request: object):
         evidence = self._inner(request)
         for attempt_number in range(1, self._max_attempts):
             if not _is_transient(evidence):
+                self._count(evidence, transient=False)
                 return evidence
+            self._count(evidence, transient=True)
             # The provider's own instruction wins over the schedule when
             # it gave one, because it knows when it will accept traffic.
             requested = _retry_after_seconds(evidence)
@@ -237,6 +294,10 @@ class RetryingTransport:
             )
             self._sleep(delay)
             evidence = self._inner(request)
+        # The budget is spent. This last outcome is returned whatever it
+        # is, so it is counted here rather than in the loop -- which would
+        # have counted it only on the paths that retried past it.
+        self._count(evidence, transient=False)
         return evidence
 
 

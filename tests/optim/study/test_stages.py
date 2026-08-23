@@ -2255,6 +2255,82 @@ def test_binding_refuses_a_concurrency_below_one(tmp_path: Path) -> None:
         pass
 
 
+class _StubAttemptReporter:
+    """A transport's attempt counters, without a transport.
+
+    ``StageEnvironment`` takes the reporter as a protocol precisely so a
+    test can assert the numbers reach the record without standing up an
+    HTTP client and a rate limiter to produce them.
+    """
+
+    def __init__(
+        self, *, attempts: int, transient_outcomes: tuple[str, ...]
+    ) -> None:
+        self.attempts = attempts
+        self.transient_outcomes = transient_outcomes
+
+
+def test_stage0_records_the_attempts_its_transport_made(
+    tmp_path: Path,
+) -> None:
+    """Retries reach the record as attempts, beside the calls they cost.
+
+    **Fails-before: ``StageRecord`` had no such field.** The wrapper owns
+    the whole retry budget and whetstone's driver is pinned to one
+    attempt, so a call that survived two 429s persisted one row -- and
+    every spend surface re-derives from rows. A stage that spent its
+    afternoon fighting a rate limit recorded exactly the same numbers as
+    one that sailed through, and nothing in the manifest could tell them
+    apart.
+
+    This is the one number that cannot be projected: a retried attempt
+    persists nothing, so the transport's own counter is the only record.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    reporter = _StubAttemptReporter(
+        attempts=3, transient_outcomes=("rate_limited", "rate_limited")
+    )
+    with bound_stage_environment(study_dir) as environment:
+        result = run_stage0_into_manifest(
+            study_dir=study_dir,
+            environment=replace(environment, provider_attempts=reporter),
+        )
+    stage = next(
+        entry for entry in result.manifest.stages if entry.stage == "stage0"
+    )
+    assert stage.provider_attempts == 3
+    assert stage.provider_transient_outcomes == (
+        "rate_limited",
+        "rate_limited",
+    )
+    # ``calls`` still counts persisted rows, so the retries did not
+    # inflate the bill: the attempts aggregate into the row beside it.
+    assert all(entry.calls <= 3 for entry in stage.spend)
+
+
+def test_a_fake_transport_stage_reports_no_attempts(tmp_path: Path) -> None:
+    """No provider was reached, so there is nothing to report -- not zero.
+
+    A fake stage binds no retrying transport, and recording ``0``
+    attempts would claim it measured an absence of retries rather than
+    never having been in a position to retry. The record's default is
+    what says "not applicable".
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        assert environment.provider_attempts is None
+        result = run_stage0_into_manifest(
+            study_dir=study_dir, environment=environment
+        )
+    stage = next(
+        entry for entry in result.manifest.stages if entry.stage == "stage0"
+    )
+    assert stage.provider_attempts == 0
+    assert stage.provider_transient_outcomes == ()
+
+
 def test_stage0_records_the_concurrency_it_ran_at(tmp_path: Path) -> None:
     """The width lands on the stage record, like the transport.
 

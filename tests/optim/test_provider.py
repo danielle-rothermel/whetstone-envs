@@ -506,3 +506,115 @@ def test_the_driver_does_not_loop_on_the_hardened_policy() -> None:
     # The driver's own backoff is dead code at one attempt, which is the
     # point: it is the backoff that never waited.
     assert hardened.delay_before(1) == 0.0
+
+
+# --------------------------------------------------------------------------
+# Retries are visible as attempts, without changing what ``calls`` counts
+# --------------------------------------------------------------------------
+
+
+def test_two_rate_limits_then_success_records_three_attempts() -> None:
+    """429, 429, 200 is one logical call and three provider invocations.
+
+    **Fails-before: the retries were invisible.** The wrapper owns the
+    whole retry budget and whetstone's driver is pinned to a single
+    attempt, so a call that survived two rate limits persisted exactly one
+    ``ProviderCallAttempt`` and one output row. Every cost surface
+    re-derives its numbers from those rows, which meant the record showed
+    one call and no sign that three requests had been made -- the attempt
+    storm the wrapper exists to absorb left no trace anywhere.
+
+    ``calls`` is deliberately unchanged by this: one completion was
+    billed, and plan note 16 keeps ``calls`` counting persisted rows.
+    The attempts aggregate into that row and are reported beside it.
+    """
+    from dr_providers import RecoverabilityClass
+
+    from whetstone_envs.optim.provider import RetryingTransport
+
+    ok = _StubEvidence()
+    limited = _StubEvidence(recoverability=RecoverabilityClass.RATE_LIMITED)
+    inner, calls = _scripted(limited, limited, ok)
+
+    transport = RetryingTransport(inner, sleep=lambda _: None)
+    assert transport("req") is ok
+
+    # Three invocations went to the provider...
+    assert len(calls) == 3
+    assert transport.attempts == 3
+    # ...and both rate limits are named by the class the retry was decided on.
+    assert transport.transient_outcomes == (
+        RecoverabilityClass.RATE_LIMITED.value,
+        RecoverabilityClass.RATE_LIMITED.value,
+    )
+
+
+def test_a_clean_call_records_one_attempt_and_no_transients() -> None:
+    """The counter is not a retry counter: every invocation is an attempt."""
+    from whetstone_envs.optim.provider import RetryingTransport
+
+    ok = _StubEvidence()
+    inner, _ = _scripted(ok)
+    transport = RetryingTransport(inner, sleep=lambda _: None)
+    transport("req")
+    assert transport.attempts == 1
+    assert transport.transient_outcomes == ()
+
+
+def test_attempts_accumulate_across_logical_calls() -> None:
+    """One wrapper serves the whole stage, so its counter is the stage's.
+
+    ``bind_openrouter_transport`` returns a single instance precisely so
+    the connection pool is shared, which makes this counter a per-stage
+    total rather than a per-call one -- which is the grain the stage
+    record reports at.
+    """
+    from dr_providers import RecoverabilityClass
+
+    from whetstone_envs.optim.provider import RetryingTransport
+
+    ok = _StubEvidence()
+    limited = _StubEvidence(recoverability=RecoverabilityClass.RATE_LIMITED)
+    inner, _ = _scripted(limited, ok, ok)
+    transport = RetryingTransport(inner, sleep=lambda _: None)
+
+    transport("first")  # 429 then 200: two attempts.
+    transport("second")  # 200: one attempt.
+    assert transport.attempts == 3
+    assert transport.transient_outcomes == (
+        RecoverabilityClass.RATE_LIMITED.value,
+    )
+
+
+def test_an_exhausted_budget_counts_every_attempt_it_spent() -> None:
+    """A call that never succeeded still made every request it was billed for.
+
+    The failing final outcome is counted too: it was a real invocation,
+    and a counter that dropped it would under-report exactly the storm
+    that exhausted the budget.
+    """
+    from dr_providers import RecoverabilityClass
+
+    from whetstone_envs.optim.provider import RetryingTransport
+
+    limited = _StubEvidence(recoverability=RecoverabilityClass.RATE_LIMITED)
+    inner, calls = _scripted(limited)
+    transport = RetryingTransport(inner, max_attempts=4, sleep=lambda _: None)
+    assert transport("req") is limited
+    assert len(calls) == 4
+    assert transport.attempts == 4
+    assert len(transport.transient_outcomes) == 3
+
+
+def test_a_permanent_rejection_is_one_attempt_and_no_transient() -> None:
+    """A refusal is an attempt, never a transient one: it was not retried."""
+    from dr_providers import RecoverabilityClass
+
+    from whetstone_envs.optim.provider import RetryingTransport
+
+    refused = _StubEvidence(recoverability=RecoverabilityClass.PERMANENT)
+    inner, _ = _scripted(refused)
+    transport = RetryingTransport(inner, sleep=lambda _: None)
+    transport("req")
+    assert transport.attempts == 1
+    assert transport.transient_outcomes == ()

@@ -538,8 +538,17 @@ def bound_stage_environment(
         # rebinds on every scored candidate, so a factory that built a
         # fresh HTTP client each time would open one connection pool per
         # evaluation against a provider the study is rate-limited by.
+        # The transport itself is kept, not just its factory: it is the
+        # sole owner of the retry budget and therefore the only record of
+        # the attempts it spent, which no persisted row can be read back
+        # for. The stage reports them off this object at the end.
+        retrying_transport = (
+            bind_openrouter_transport(execution_policy)[0] if paid else None
+        )
         openrouter_factory = (
-            bind_openrouter_transport(execution_policy)[1] if paid else None
+            None
+            if retrying_transport is None
+            else (lambda _policy: retrying_transport)
         )
 
         def bind_engine(*, role: EvalRole, num_seeds: int) -> EvalEngine:
@@ -671,4 +680,7 @@ def bound_stage_environment(
             # rows back a read of this stage's own evidence.
             store=cast("ObjectStore", store),
             report_spend=report_spend,
+            # ``None`` on the fake transport, which reaches no provider
+            # and so has no attempts to report.
+            provider_attempts=retrying_transport,
         )

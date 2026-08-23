@@ -95,15 +95,11 @@ set -e
     # line, rung 9's stage and leakage output) lands between the two --
     # and a regex that required them adjacent silently dropped exactly
     # those rungs from the table while still reporting "all rungs
-    # passed". So this remembers the last rung seen and pairs it with the
-    # next verdict token, wherever that lands.
-    # Only lines pytest itself emitted for a collected item: the name has
-    # to arrive as "<file>::test_rungN...". A bare "test_rungN" appearing
-    # in a traceback, a temp path, or this very table would otherwise be
-    # read as another rung starting.
+    # passed". So this remembers the rung awaiting a verdict and pairs it
+    # with the next verdict token, wherever that lands.
     #
-    # Anchored at the start of the line and required to carry the ladder
-    # file's own prefix. pytest emits a collected item as
+    # The name is anchored at the start of the line and required to carry
+    # the ladder file's own prefix. pytest emits a collected item as
     # "tests/real_codex/test_real_codex_ladder.py::test_rungN ...", and
     # nothing else legitimately starts that way -- while an unanchored
     # match accepted "::test_rung9" anywhere on a line, including inside

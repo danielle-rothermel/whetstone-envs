@@ -103,6 +103,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whatever just ran.
 
 ### Fixed
+- **null-A no longer flattens the template it controls for.** The
+  perturber split the seed on whitespace and rejoined its tokens with
+  single spaces, so every draft it produced lost the template's entire
+  layout. On the real c19 seed that is six newlines and two blank lines
+  holding the grid, the action list, and the question apart — destroyed on
+  every seed, in every draft. The control was therefore running a
+  structurally degraded prompt no real arm ever ran, which would have made
+  a null-A delta partly a measurement of formatting damage rather than of
+  selection on noise. The perturber now holds the whitespace runs aside
+  and lays them back down unchanged, editing wording only: the output's
+  whitespace runs are exactly the input's, and character similarity to the
+  real seed rises from 0.854 to 0.910 on average (the collapsed layout put
+  a 0.85 ceiling on a template no token had yet moved in).
+
 - **A report's scores are checked by the family that produced them.** The
   `EvalReport` schema re-derives every scored observation to validate it,
   but re-derived it as normalized exact match — a c19 rule wearing a

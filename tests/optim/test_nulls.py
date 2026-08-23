@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from difflib import SequenceMatcher
+
 import pytest
 
 pytest.importorskip("whetstone.experiment.env")
@@ -20,6 +23,7 @@ from whetstone.optim.proposal.proposer import (
 )
 
 from whetstone_envs.optim.experiment import (
+    C19_CONTRACT,
     C19_MUTATION_FIELD,
     C19_ROOT_BASE_SCHEMA,
     c19_render_contract,
@@ -242,6 +246,67 @@ def test_identity_fallback_is_recorded_on_the_draft() -> None:
         draft.response_evidence.to_json()["identity_fallback"]
         for draft in drafts
     )
+
+
+# --- layout preservation on the real, multi-line seed --------------------
+
+
+#: The template null-A actually controls for, imported rather than restated
+#: so this fixture cannot drift away from the one the study runs.
+REAL_TEMPLATE = C19_CONTRACT.naive_template
+
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+
+def _whitespace_runs(template: str) -> list[str]:
+    """Every run of whitespace in ``template``, in order."""
+    return _WHITESPACE_RUN.findall(template)
+
+
+def test_the_real_seed_is_multi_line_so_layout_is_worth_preserving() -> None:
+    """The premise of the tests below, asserted rather than assumed."""
+    assert REAL_TEMPLATE.count("\n") == 6
+    assert "\n\n" in REAL_TEMPLATE
+
+
+def test_perturbation_preserves_every_whitespace_run_exactly() -> None:
+    """null-A edits wording, never layout.
+
+    The real c19 seed holds its grid, action list, and question apart with
+    six newlines. A perturber that rejoined its tokens on single spaces
+    would hand the control a structurally degraded prompt -- a different
+    template from the one every real arm was given -- so a null-A delta
+    would measure formatting damage rather than selection on noise.
+    """
+    contract = c19_render_contract()
+    expected = _whitespace_runs(REAL_TEMPLATE)
+    for seed in range(20):
+        result = perturb_template(
+            REAL_TEMPLATE, seed=seed, render_contract=contract
+        )
+        assert _whitespace_runs(result) == expected
+        assert result.count("\n") == REAL_TEMPLATE.count("\n")
+
+
+def test_perturbation_of_the_real_seed_is_a_small_edit() -> None:
+    """The edit is one token's worth, not a rewrite of the template.
+
+    Measured as character similarity against the raw seed, whose floor is
+    what collapsing the layout would destroy: rejoining the six newlines
+    as spaces scores about 0.85 even before any token moves, while a true
+    one-token edit on the preserved layout stays well above it.
+    """
+    contract = c19_render_contract()
+    for seed in range(20):
+        result = perturb_template(
+            REAL_TEMPLATE, seed=seed, render_contract=contract
+        )
+        similarity = SequenceMatcher(None, REAL_TEMPLATE, result).ratio()
+        assert similarity >= 0.83
+        contract.validate_template(result)
+        assert set(contract.placeholder_fields(result)) == set(
+            contract.required_fields
+        )
 
 
 def test_perturbation_respects_a_foreign_render_contract() -> None:

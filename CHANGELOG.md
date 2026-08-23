@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-23
+
 ### Added
 
 - **The Step 10 c19 study is authored from a committed protocol.**
@@ -151,6 +153,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **L1 is checked as task-set containment, not as one exact Eval Config
+  hash.** The registered rule is that an optimizer saw the internal split
+  and nothing else, but the implementation demanded that every optimizer
+  evaluation resolve the study's *full* internal Eval Config. MIPROv2
+  minibatches the internal split and GEPA scores single tasks and Pareto
+  subsets, so each such evaluation mints its own derived config over a
+  subset -- which the exact-hash predicate reported as a leak. Against the
+  full-design dry run that was 499 false offenders and a failing study.
+  L1 now requires each evaluation's task hashes to be contained in the
+  internal split, under the internal role, against a config that is
+  neither the official nor the held-out one; a derived config cannot
+  smuggle in a foreign task, because the task hashes are content-addressed
+  and checked directly. How many evaluations used the full internal config
+  versus a derived subset is recorded as an observation beside the
+  verdict rather than as a failure.
+- **L1 reads all three evaluation surfaces, so GEPA can no longer pass it
+  vacuously.** The evidence walk read only intent resolutions and
+  `tool_evidence`. GEPA resolves no intent and records every evaluation as
+  `search_evidence`, so a GEPA run contributed nothing -- yet with other
+  arms supplying rows, L1 reported itself *checked* having never opened
+  the run whose rule it was asserting. `search_evidence` is now read
+  alongside the other two, and each observation carries the surface it
+  came from so an offender location is unambiguous. On the same dry run
+  L1's evidence goes from 679 evaluations to 879, the difference being
+  GEPA's 200.
+- **The MIPROv2 call estimate models the full-valset passes the schedule
+  actually issues.** The band was 1,870-2,458 rows per run, and the
+  observed fewshot counts were bimodal at 2,370/2,502 across five
+  independent seeds -- deterministically over the ceiling. The two
+  non-bootstrap constants had their labels attached to the wrong
+  quantities (1,050 is the minibatch volume, `10 x 35 x 3`; 792 was six
+  full-valset passes, `6 x 44 x 3`), and the six was the substantive
+  error: at the registered control `adjusted_num_trials` is 21 and
+  `promotion_due` fires on every even display trial, so **eleven** passes
+  are issued -- ten promotions plus the baseline. The gate counts planned
+  rows once per distinct evidence record, so a promotion re-evaluating an
+  unchanged incumbent collapses onto the earlier record; the surviving
+  count ranges from 1 to 11. The band is now **1,210-3,118**, every
+  observed value decomposes exactly as `bootstrap + minibatch +
+  full-valset`, and a golden pins the decomposition.
 - **Pins published whetstone-ai 0.1.12, which unblocks the GEPA arm at the
   protocol's pinned reflection minibatch.** Upstream GEPA's
   `EpochShuffledBatchSampler` pads a shuffled epoch with *duplicate* ids

@@ -424,6 +424,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "to_transport",
         "dropped_stages",
         "dropped_run_ids",
+        "dropped_run_directories",
         "dropped_selections",
         "dropped_held_out_claims",
         "dropped_held_out_rows",

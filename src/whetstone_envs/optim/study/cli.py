@@ -57,6 +57,7 @@ from whetstone_envs.optim.study.leakage import (
     study_leakage_check,
 )
 from whetstone_envs.optim.study.manifest import (
+    DISCARD_STALE_RUNS_FLAG,
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
     TRANSPORT_NAMES,
@@ -187,13 +188,14 @@ class StageRunner(Protocol):
     are different evidence for whatever the stage measured.
     """
 
-    def __call__(
+    def __call__(  # noqa: PLR0913
         self,
         *,
         study_dir: Path,
         stage: str,
         replace_design: bool = False,
         allow_real_codex: bool = False,
+        discard_stale_runs: bool = False,
         transport: str = FAKE_TRANSPORT,
     ) -> StudyManifest: ...
 
@@ -600,6 +602,7 @@ def _run_stage(  # noqa: PLR0913
     run_stage: StageRunner | None,
     replace_design: bool = False,
     allow_real_codex: bool = False,
+    discard_stale_runs: bool = False,
     transport: str = FAKE_TRANSPORT,
 ) -> int:
     if run_stage is None:
@@ -614,6 +617,7 @@ def _run_stage(  # noqa: PLR0913
         stage=stage,
         replace_design=replace_design,
         allow_real_codex=allow_real_codex,
+        discard_stale_runs=discard_stale_runs,
         transport=transport,
     )
     print(f"{stage} complete for study {manifest.study_id}")
@@ -1000,6 +1004,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        DISCARD_STALE_RUNS_FLAG,
+        action="store_true",
+        help=(
+            "Discard a run directory whose own artifacts say it is not "
+            "this invocation's run, instead of refusing. Run directories "
+            "are named deterministically from the arm and seed, so a "
+            "cross-transport 'stage0 --replace-design' -- which drops the "
+            "stale runs from the manifest but leaves their directories on "
+            "disk -- would otherwise leave this stage refusing to reuse "
+            "them. Off by default because such a directory may be paid "
+            "evidence; a matching directory is still reused either way."
+        ),
+    )
+    run.add_argument(
         "--replace-design",
         action="store_true",
         help=(
@@ -1044,12 +1062,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def default_stage_runner(
+def default_stage_runner(  # noqa: PLR0913
     *,
     study_dir: Path,
     stage: str,
     replace_design: bool = False,
     allow_real_codex: bool = False,
+    discard_stale_runs: bool = False,
     transport: str = FAKE_TRANSPORT,
 ) -> StudyManifest:
     """Run one stage on the fake transport, over the study's own directory.
@@ -1072,7 +1091,10 @@ def default_stage_runner(
     design, and an authorization to spend is not one.
     """
     with bound_stage_environment(
-        study_dir, transport=transport, allow_real_codex=allow_real_codex
+        study_dir,
+        transport=transport,
+        allow_real_codex=allow_real_codex,
+        discard_stale_runs=discard_stale_runs,
     ) as environment:
         return _run_stage_harness(
             study_dir=study_dir,
@@ -1125,6 +1147,7 @@ def _dispatch(
             run_stage=run_stage,
             replace_design=arguments.replace_design,
             allow_real_codex=arguments.allow_real_codex,
+            discard_stale_runs=arguments.discard_stale_runs,
             transport=arguments.transport,
         )
     if arguments.command == "report":

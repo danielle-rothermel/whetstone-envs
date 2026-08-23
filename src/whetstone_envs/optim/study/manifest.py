@@ -225,6 +225,23 @@ TRANSPORT_NAMES: tuple[str, ...] = tuple(
 )
 
 
+#: The operator's opt-in to discarding run directories a stage cannot
+#: claim, spelled once.
+#:
+#: A run directory is named deterministically from its arm and seed, so a
+#: cross-transport ``stage0 --replace-design`` -- which drops the stale runs
+#: from the manifest but leaves their directories on disk -- leaves behind
+#: directories the replacement stage would otherwise silently reuse. The
+#: stage refuses instead, and names this flag as the recovery, so the
+#: refusal message and the CLI declaration cannot drift apart into advice
+#: for a flag that does not exist.
+#:
+#: It lives here rather than beside the runner because the CLI declares it
+#: and the runner quotes it, and the CLI deliberately does not import the
+#: optimizer stack at module scope.
+DISCARD_STALE_RUNS_FLAG = "--discard-stale-runs"
+
+
 class _StrictModel(BaseModel):
     """Frozen, strict, extra-forbidding, no NaN or infinity."""
 
@@ -1300,6 +1317,15 @@ class AmendmentRecord(_StrictModel):
     #: Every arm run dropped, by run id. Named individually because a count
     #: cannot be checked against the artifacts still on disk.
     dropped_run_ids: tuple[StrictStr, ...]
+    #: The directories those runs left behind, which the drop does *not*
+    #: remove. A run id identifies the evidence in the manifest; this
+    #: identifies it on disk, and the two are different facts precisely
+    #: because the amendment separates them. Recorded because the stage
+    #: that re-runs these arms refuses to reuse a directory it cannot
+    #: claim, and an operator resolving that refusal needs to know which
+    #: directories the amendment orphaned without reconstructing the
+    #: deterministic naming rule by hand.
+    dropped_run_directories: tuple[StrictStr, ...] = ()
     dropped_selections: StrictInt
     dropped_held_out_claims: StrictInt
     dropped_held_out_rows: StrictInt
@@ -1859,6 +1885,7 @@ __all__ = [
     "COMPLETENESS_BACKSTOP",
     "CORRECTION_FAMILY_SIZE",
     "CORRECTION_HOLM_BONFERRONI",
+    "DISCARD_STALE_RUNS_FLAG",
     "MAX_MANIFEST_BYTES",
     "PROVENANCE_AMENDED",
     "PROVENANCE_ORIGINAL",

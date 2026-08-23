@@ -110,6 +110,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Stage-1 call-count verdict: a pilot gate describes the design it was
   computed against, so Stage 2 owes the amended study a fresh pilot.
 
+- **An arm stage refuses to reuse a run directory it cannot claim.** Run
+  directories are named deterministically from arm and seed, which is what
+  makes a crashed stage resumable — and also what let a cross-transport
+  `--replace-design` leak a run across the amendment. The amendment drops
+  the stale runs from the manifest, but their directories stay on disk
+  under exactly the names the replacement stage computes, so that stage
+  found a directory, skipped `run_optimizer`, and recorded the old fake run
+  as a paid one: a manifest that reads as a paid study whose numbers came
+  from the free transport. A directory is now reusable only when its **own
+  artifacts** — the transport, family, model, and run id its trajectory
+  report records — say it is the run this invocation would produce.
+  Otherwise the stage refuses, naming the directory and both recoveries;
+  it never silently re-runs over artifacts that may be paid evidence and
+  never silently reuses someone else's run. A directory that records no
+  readable identity is refused on the same grounds, because a run that
+  cannot vouch for itself is not evidence that it matches. The new
+  `whetstone-study run --discard-stale-runs` authorizes discarding such a
+  directory instead; it is off by default and, like the other invocation
+  authorizations, stays out of the pre-registration hash. The amendment
+  record gains `dropped_run_directories`, so an operator resolving a
+  refusal can see which directories the drop orphaned without
+  reconstructing the naming rule by hand.
+- **A cross-transport amendment clears the leakage verdict it invalidated.**
+  `manifest.leakage_check` is L6's mechanical pass over the very run
+  artifacts the amendment drops, and it was left in place — so a report
+  regenerated after the amendment inherited a *passing* leakage result
+  established over evidence the study no longer holds, which reads exactly
+  like a study whose leakage rules passed over its current runs. It is now
+  cleared in the same update that drops the evidence, and the report
+  already treats an absent block as not-established. The other verdicts are
+  deliberately untouched: `gepa_sizing` and `fanout_check` measure the
+  optimizer's own mechanics before Stage 1, `balance` is the key's balance
+  at each spend gate, and `c18` carries its own separate run list.
+- **A resumed arm stage keeps the spend it already measured.** A stage that
+  crashed after its manifest write has already paid for its runs and
+  already recorded what they cost; resuming it re-runs nothing, so the
+  replacement stage record was built from an empty set of executed runs and
+  overwrote the measured bill with silence — the ledger then rendered a
+  fully paid stage as `UNLEDGERED`. An arm stage's spend is now merged onto
+  whatever its row already carries rather than replacing it, folded per
+  role so a partial resume bills both halves and an unknown `usd` on either
+  side keeps the total unknown. A stage's row can only grow. A first run of
+  a stage has nothing to merge and still records exactly the runs it
+  executed, so the ledger's rows continue not to sum to more than the study
+  spent.
+
 - **Stage 2 requires a Stage 1 whose call-count gate passed.** The gate
   catches a fan-out bug — an optimizer whose minibatch intents silently
   expanded to the full valset — for the price of one run per arm, which is

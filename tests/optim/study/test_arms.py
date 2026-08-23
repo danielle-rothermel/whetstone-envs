@@ -9,7 +9,9 @@ itself is pinned here rather than assumed.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -19,8 +21,13 @@ from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
 )
-from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+from whetstone_envs.optim.study.arms import (
+    StudyOptimizerRunner,
+    arm_run_directory,
+)
+from whetstone_envs.optim.study.manifest import DISCARD_STALE_RUNS_FLAG
 from whetstone_envs.optim.study.spec import ArmKind, ArmSpec
+from whetstone_envs.optim.study.stages import StageError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -269,3 +276,127 @@ def test_an_authorized_runner_still_needs_the_environment_half(
     runner = replace(_runner(tmp_path), allow_real_codex=True)
     with pytest.raises(RealCodexRefusedError):
         runner(arm=_codex_arm(), seed=4000, study_dir=tmp_path)
+
+
+# --------------------------------------------------------------------------
+# A run directory is only reusable when it is this invocation's own run
+# --------------------------------------------------------------------------
+
+
+def _copro_arm() -> ArmSpec:
+    """A real optimizer arm whose run actually produces artifacts."""
+    return ArmSpec(
+        arm_id="copro",
+        optimizer="copro",
+        kind=ArmKind.REAL,
+        k_run=1,
+        seeds=(2000,),
+    )
+
+
+def _fake_run_directory(tmp_path: Path) -> tuple[StudyOptimizerRunner, Path]:
+    """One real fake-transport run, left on disk under its own name.
+
+    This is the state a cross-transport ``--replace-design`` leaves: the
+    manifest dropped the run, its deterministically named directory did
+    not go with it.
+    """
+    runner = _runner(tmp_path)
+    arm = _copro_arm()
+    result = runner(arm=arm, seed=2000, study_dir=tmp_path)
+    run_dir = arm_run_directory(tmp_path, result.record.run_id)
+    assert run_dir.is_dir()
+    assert result.record.transport == "fake"
+    return runner, run_dir
+
+
+def test_a_run_directory_from_another_transport_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The defect: a paid stage silently re-recorded a free run as paid.
+
+    Run ids are deterministic on arm and seed, so after a cross-transport
+    amendment the replacement stage computes the same directory name the
+    dropped run already occupies. It found the directory, skipped
+    ``run_optimizer``, and recorded the fake run under its own transport --
+    a manifest that reads as a paid study whose numbers came from the free
+    transport.
+
+    Nothing here reaches a provider: the openrouter runner refuses on the
+    directory's own evidence, before any run is dispatched.
+    """
+    _, run_dir = _fake_run_directory(tmp_path)
+
+    paid = replace(_runner(tmp_path), transport="openrouter")
+    with pytest.raises(StageError) as refusal:
+        paid(arm=_copro_arm(), seed=2000, study_dir=tmp_path)
+
+    message = str(refusal.value)
+    # The refusal names the directory and both recoveries, because the
+    # operator is the one who knows which of their runs is the real one.
+    assert str(run_dir) in message
+    assert "transport" in message
+    assert DISCARD_STALE_RUNS_FLAG in message
+    # And it refused rather than overwriting: the artifacts are untouched.
+    assert (run_dir / "result.json").is_file()
+
+
+def test_a_matching_run_directory_is_still_reused(tmp_path: Path) -> None:
+    """The resume path survives: a run this invocation owns is not re-run.
+
+    Reuse is what makes a crashed stage resumable without paying twice, so
+    the check must refuse the stale without refusing the ordinary.
+    """
+    runner, run_dir = _fake_run_directory(tmp_path)
+    before = (run_dir / "result.json").read_bytes()
+
+    with patch(
+        "whetstone_envs.optim.study.arms.run_optimizer",
+        side_effect=AssertionError("a reusable run must not be re-run"),
+    ):
+        again = runner(arm=_copro_arm(), seed=2000, study_dir=tmp_path)
+
+    assert again.record.run_id
+    assert (run_dir / "result.json").read_bytes() == before
+
+
+def test_a_directory_with_no_readable_identity_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A directory that cannot vouch for itself is not evidence it matches.
+
+    An empty or half-written directory is a different fact from a
+    mismatch, and it is resolved the same way: not silently. Re-running
+    would overwrite artifacts that may be paid evidence.
+    """
+    run_dir = arm_run_directory(tmp_path, "copro-seed2000")
+    run_dir.mkdir(parents=True)
+
+    with pytest.raises(StageError) as refusal:
+        _runner(tmp_path)(arm=_copro_arm(), seed=2000, study_dir=tmp_path)
+
+    message = str(refusal.value)
+    assert str(run_dir) in message
+    assert DISCARD_STALE_RUNS_FLAG in message
+
+
+def test_discard_stale_runs_replaces_the_directory_it_cannot_claim(
+    tmp_path: Path,
+) -> None:
+    """The named recovery works, and produces this invocation's own run.
+
+    The refusal is only honest if the recovery it names does something, so
+    the authorized path is exercised rather than merely advertised.
+    """
+    _, run_dir = _fake_run_directory(tmp_path)
+    authorized = replace(_runner(tmp_path), discard_stale_runs=True)
+    # Re-run on the same transport after corrupting the directory's
+    # identity, so the discard path runs without needing a provider.
+    (run_dir / "trajectory-report.json").unlink()
+    result = authorized(arm=_copro_arm(), seed=2000, study_dir=tmp_path)
+
+    assert result.record.transport == "fake"
+    # The directory was rebuilt rather than left half-stale: the report
+    # the discard removed is back, written by the run this invocation made.
+    assert (run_dir / "trajectory-report.json").is_file()
+    assert (run_dir / "result.json").is_file()

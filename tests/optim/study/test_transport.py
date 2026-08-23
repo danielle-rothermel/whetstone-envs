@@ -21,6 +21,7 @@ Three properties, each with its own failure mode if it drifts:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -52,10 +53,13 @@ from whetstone_envs.optim.study.environment import (
 )
 from whetstone_envs.optim.study.manifest import (
     AMENDMENT_REASON_TRANSPORT_CHANGE,
+    DISCARD_STALE_RUNS_FLAG,
     STUDY_MANIFEST_NAME,
     STUDY_STORE_NAME,
     ArmRecord,
     EvidencePointer,
+    LeakageCheckEntry,
+    LeakageCheckRecord,
     RunRecord,
     RunSpendRecord,
     StageId,
@@ -71,6 +75,7 @@ from whetstone_envs.optim.study.spend import run_spend_records
 from whetstone_envs.optim.study.stages import (
     StageEnvironment,
     StageError,
+    _arm_stage_record,
     _executed_run_spend,
     _stage_record,
     require_matching_transport,
@@ -79,13 +84,12 @@ from whetstone_envs.reporting.study_report import (
     NO_PROVIDER_STAGE_DETAIL,
     UNLEDGERED_SCORING_NOTE_REPORT,
     UNLEDGERED_STAGE_DETAIL,
+    study_leakage_failed,
 )
 
 from .conftest import toy_manifest
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from whetstone.experiment.candidate import Candidate
 
     from whetstone_envs.optim.study.anchors import EngineBinder
@@ -752,6 +756,101 @@ def test_a_paid_arm_stage_with_no_run_spend_stays_unledgered() -> None:
     assert UNLEDGERED_SPEND in "\n".join(stage_spend_lines((record,)))
 
 
+def test_a_resumed_arm_stage_keeps_the_spend_it_already_measured() -> None:
+    """The defect: a resume with nothing to run erased the stage's bill.
+
+    An arm stage that crashed after its manifest write has already paid
+    for its runs and already recorded what they cost. Resuming it re-runs
+    nothing -- every seed is recorded, so ``executed_runs`` is empty --
+    and the replacement stage record was built from that empty tuple, so
+    the measured spend was overwritten with nothing and the ledger
+    reported a fully paid stage as UNLEDGERED.
+
+    Reaches no provider: the existing record and the (empty) executed runs
+    are handed to the merge directly, which is what ``run_arm_stage``
+    does.
+    """
+    measured = _stage_record(
+        stage=SpecStageId.STAGE1,
+        environment=_paid_environment(),
+        run_spend=(_spend(calls=24, usd=0.04),),
+    )
+    assert measured.spend  # the fixture really did measure something
+    manifest = toy_manifest(arms=_arms()).model_copy(
+        update={"stages": (measured,)}
+    )
+
+    merged = _arm_stage_record(
+        manifest,
+        _stage_record(
+            stage=SpecStageId.STAGE1,
+            environment=_paid_environment(),
+            run_spend=_executed_run_spend(()),
+        ),
+    )
+
+    by_stage = {entry.stage: entry for entry in merged}
+    kept = by_stage[SpecStageId.STAGE1.value]
+    assert kept.spend == measured.spend
+    assert UNLEDGERED_SPEND not in "\n".join(stage_spend_lines((kept,)))
+
+
+def test_a_resumed_arm_stage_adds_the_runs_it_did_execute() -> None:
+    """Merged, not merely preserved: a partial resume bills both halves.
+
+    The spend already on the row is what an earlier invocation paid; the
+    executed runs are what this one paid. The stage's bill is the sum, and
+    taking either alone would under-report the study's cost.
+    """
+    existing = _stage_record(
+        stage=SpecStageId.STAGE1,
+        environment=_paid_environment(),
+        run_spend=(_spend(calls=24, usd=0.04),),
+    )
+    manifest = toy_manifest(arms=_arms()).model_copy(
+        update={"stages": (existing,)}
+    )
+
+    merged = _arm_stage_record(
+        manifest,
+        _stage_record(
+            stage=SpecStageId.STAGE1,
+            environment=_paid_environment(),
+            run_spend=(_spend(calls=6, usd=0.01),),
+        ),
+    )
+
+    by_role = {
+        entry.role: entry
+        for entry in {entry.stage: entry for entry in merged}[
+            SpecStageId.STAGE1.value
+        ].spend
+    }
+    assert by_role["task_model"].calls == 30
+    assert by_role["task_model"].usd == pytest.approx(0.05)
+
+
+def test_a_fresh_arm_stage_still_records_only_what_it_ran() -> None:
+    """The normal path is untouched: no prior record, no merge.
+
+    A first run of a stage has nothing to preserve, so its row is exactly
+    the runs this invocation executed -- which is what keeps the ledger's
+    rows summing to what the study spent rather than double-billing a run
+    Stage 1 already paid for.
+    """
+    manifest = toy_manifest(arms=_arms())
+    assert not manifest.stages
+
+    fresh = _stage_record(
+        stage=SpecStageId.STAGE1,
+        environment=_paid_environment(),
+        run_spend=(_spend(calls=6, usd=0.01),),
+    )
+    merged = _arm_stage_record(manifest, fresh)
+
+    assert merged == (fresh,)
+
+
 def test_the_fold_sums_counters_and_withholds_an_unknown_total() -> None:
     """Two runs' records add, and one unpriced run withholds the total.
 
@@ -1124,6 +1223,110 @@ def test_replace_design_across_transports_drops_the_stale_evidence(
     assert amendment.dropped_held_out_claims == len(ran.held_out_claims)
     assert amendment.dropped_held_out_rows == len(ran.held_out)
     assert amendment.dropped_call_count_gate is True
+    # The manifest drops the runs; the disk keeps their directories, and
+    # the next stage to compute one of those names refuses to reuse what
+    # it finds. The amendment names them so the operator resolving that
+    # refusal does not have to reconstruct the naming rule by hand.
+    assert set(amendment.dropped_run_directories) == {
+        run.artifact_dir for arm in ran.arms for run in arm.runs
+    }
+    # A real optimizer arm's directory is really on disk, which is what
+    # makes this list actionable. A control writes no run directory, so
+    # the list names what each dropped run *claimed* as its artifacts
+    # rather than asserting every entry survives -- the operator needs the
+    # names the next stage will compute, not a filtered subset.
+    optimizer_runs = tuple(
+        run for arm in ran.arms if arm.optimizer == "copro" for run in arm.runs
+    )
+    assert optimizer_runs
+    assert all(
+        Path(run.artifact_dir).is_dir()
+        and run.artifact_dir in amendment.dropped_run_directories
+        for run in optimizer_runs
+    )
+
+
+def test_the_amendment_leaves_directories_the_next_stage_refuses(
+    study_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """The two halves meet: the drop orphans directories, the stage refuses.
+
+    End to end through the CLI, because the refusal is only useful if it
+    survives the wiring. After the amendment the replacement Stage 1
+    recomputes the dropped runs' directory names, finds the old runs still
+    there, and must refuse rather than re-record them -- and
+    ``--discard-stale-runs`` must then actually get the study moving.
+
+    Reaches no provider: everything runs on the fake transport, and the
+    amendment is driven by relabelling the manifest rather than by
+    calibrating on a paid one.
+    """
+    monkeypatch.delenv(OPENROUTER_API_KEY_ENV, raising=False)
+    for stage in (StageId.STAGE0, StageId.STAGE1):
+        assert _run_stage(study_dir, stage.value, FAKE_TRANSPORT) == EXIT_OK
+    ran = read_study_manifest(study_dir)
+    write_study_manifest(
+        study_dir,
+        ran.model_copy(
+            update={
+                "stages": tuple(
+                    entry.model_copy(
+                        update={"transport": OPENROUTER_TRANSPORT}
+                    )
+                    for entry in ran.stages
+                )
+            }
+        ),
+        replace=True,
+    )
+    assert _replace_design_on(study_dir, FAKE_TRANSPORT) == EXIT_OK
+    amendment = read_study_manifest(study_dir).amendments[0]
+    orphaned = tuple(
+        directory
+        for directory in amendment.dropped_run_directories
+        if Path(directory).is_dir()
+    )
+    # The drop cleared the manifest and not the disk, which is the whole
+    # reason the next stage needs a check at all.
+    assert orphaned
+
+    # The stale directories now claim a *different design*: the amendment
+    # replaced the one they ran against. Their transport still matches, so
+    # this drives the check on run identity rather than on transport --
+    # the same refusal, reached without a paid calibration.
+    for directory in orphaned:
+        report = Path(directory) / "trajectory-report.json"
+        payload = json.loads(report.read_text(encoding="utf-8"))
+        payload["run_id"] = "a-run-from-somewhere-else"
+        report.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert _run_stage(study_dir, StageId.STAGE1.value, FAKE_TRANSPORT) == (
+        EXIT_CHECK_FAILED
+    )
+    error = capsys.readouterr().err
+    assert orphaned[0] in error
+    assert DISCARD_STALE_RUNS_FLAG in error
+    # It refused rather than overwriting, so the artifacts are still there
+    # for the operator to inspect.
+    assert all(Path(directory).is_dir() for directory in orphaned)
+
+    # And the recovery the message names actually recovers.
+    assert (
+        main(
+            [
+                "run",
+                "--study-dir",
+                str(study_dir),
+                "--stage",
+                StageId.STAGE1.value,
+                "--transport",
+                FAKE_TRANSPORT,
+                DISCARD_STALE_RUNS_FLAG,
+            ]
+        )
+        == EXIT_OK
+    )
+    assert read_study_manifest(study_dir).arms[0].runs
 
 
 def test_replace_design_refuses_to_discard_paid_evidence(
@@ -1250,6 +1453,62 @@ def test_the_amendment_lets_the_next_stage_run(
     # The amendment survives the re-run: it records what the study once
     # held, so a later write must not quietly drop it.
     assert len(after.amendments) == 1
+
+
+def test_the_amendment_clears_every_verdict_over_dropped_evidence(
+    study_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verdict computed over dropped runs goes with the runs.
+
+    ``leakage_check`` is L6's mechanical pass over the run artifacts the
+    amendment is dropping. Leaving it behind would let a regenerated
+    report inherit a pass that was established over evidence the study no
+    longer holds -- which reads exactly like a study whose leakage checks
+    were run against its current runs and passed.
+    """
+    monkeypatch.delenv(OPENROUTER_API_KEY_ENV, raising=False)
+    for stage in (StageId.STAGE0, StageId.STAGE1):
+        assert _run_stage(study_dir, stage.value, FAKE_TRANSPORT) == EXIT_OK
+    ran = read_study_manifest(study_dir)
+    assert ran.arms[0].runs
+
+    # A passing L6 over the runs that are about to be dropped, and the
+    # paid relabelling that makes this a cross-transport amendment.
+    passing_leakage = LeakageCheckRecord(
+        passed=True,
+        checks=(
+            LeakageCheckEntry(
+                check_id="L1",
+                passed=True,
+                detail="every optimizer evaluation ran on the internal split",
+            ),
+        ),
+    )
+    write_study_manifest(
+        study_dir,
+        ran.model_copy(
+            update={
+                "leakage_check": passing_leakage,
+                "stages": tuple(
+                    entry.model_copy(
+                        update={"transport": OPENROUTER_TRANSPORT}
+                    )
+                    for entry in ran.stages
+                ),
+            }
+        ),
+        replace=True,
+    )
+
+    assert _replace_design_on(study_dir, FAKE_TRANSPORT) == EXIT_OK
+    after = read_study_manifest(study_dir)
+
+    # The evidence L6 was computed over is gone, so the verdict is too.
+    assert all(arm.runs == () for arm in after.arms)
+    assert after.leakage_check is None
+    # And the report reads an absent block as not-checked rather than as a
+    # pass, which is what makes the clearing sufficient.
+    assert study_leakage_failed(after)
 
 
 # --------------------------------------------------------------------------

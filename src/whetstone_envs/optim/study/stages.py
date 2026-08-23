@@ -399,6 +399,46 @@ def _stages_with(
     return (*others, record)
 
 
+def _arm_stage_record(
+    manifest: StudyManifest, record: StageRecord
+) -> tuple[StageRecord, ...]:
+    """``manifest.stages`` with an arm stage's record merged in, not over.
+
+    An arm stage's spend is carried by the runs *this invocation*
+    executed, which is what keeps a run Stage 1 paid for from being billed
+    again on Stage 2's row. That accounting has one gap, and it is the
+    expensive one: a stage that crashed after its manifest write has
+    already paid for every run and already recorded what they cost, so
+    resuming it executes nothing, projects to an empty spend, and -- under
+    a plain replacement -- overwrote a measured bill with silence. The
+    ledger then rendered a fully paid stage as UNLEDGERED, which is the
+    one claim about spend a study must never make falsely.
+
+    So the two are summed rather than swapped. The existing row is what an
+    earlier invocation paid, the new record is what this one paid, and
+    :func:`~whetstone_envs.optim.study.spend.run_spend_records` folds them
+    per role while re-applying its own honesty rules -- most importantly,
+    an unknown ``usd`` on either side keeps the total unknown rather than
+    letting the priced half stand in for the whole.
+
+    A stage row never shrinks: this is the only writer of an arm stage's
+    spend, and it can only add. The transport comes from the new record,
+    because it is a property of the invocation that just ran and
+    ``require_matching_transport`` has already refused a stage whose
+    transport disagrees with the study's.
+    """
+    existing = next(
+        (entry for entry in manifest.stages if entry.stage == record.stage),
+        None,
+    )
+    if existing is None or not existing.spend:
+        return _stages_with(manifest, record)
+    merged = record.model_copy(
+        update={"spend": run_spend_records((*existing.spend, *record.spend))}
+    )
+    return _stages_with(manifest, merged)
+
+
 def _stage_record(
     *,
     stage: StageId,
@@ -681,6 +721,12 @@ def _transport_change_amendment(
         to_transport=environment.transport,
         dropped_stages=dropped_stages,
         dropped_run_ids=tuple(run.run_id for run in dropped_runs),
+        # Where those runs still are. The manifest drops them; the disk
+        # keeps them, and the next stage to compute one of these names
+        # will refuse to reuse what it finds there.
+        dropped_run_directories=tuple(
+            dict.fromkeys(run.artifact_dir for run in dropped_runs)
+        ),
         dropped_selections=len(manifest.selection),
         dropped_held_out_claims=len(manifest.held_out_claims),
         dropped_held_out_rows=len(manifest.held_out),
@@ -699,6 +745,23 @@ def _without_amended_evidence(
     everything measured -- the arm stages' records, their runs, the
     selections over those runs, the held-out claims and rows those
     selections produced, and the pilot's call-count verdict.
+
+    **A verdict computed over dropped evidence goes with it.**
+    ``leakage_check`` is L6's mechanical pass over the very run artifacts
+    being dropped, so keeping it would leave the manifest asserting a
+    clean result about runs the study no longer holds --
+    indistinguishable, to a regenerated report, from a study whose
+    leakage rules passed over its current runs.
+    :func:`~whetstone_envs.reporting.study_report.study_leakage_failed`
+    reads an absent block as not-established, so clearing it is what makes
+    the report's claim honest rather than merely unstated.
+
+    The other verdicts are deliberately left alone, because they are not
+    measurements of these runs: ``gepa_sizing`` and ``fanout_check`` are
+    pre-Stage-1 measurements of the optimizer's own mechanics, ``balance``
+    is the key's balance at each spend gate rather than a claim about any
+    run, and ``c18`` carries its own separate run list which is not among
+    the dropped ones.
 
     The amendment is appended in the same operation, so there is no state
     in which the evidence is gone and the record of its going is not yet
@@ -720,6 +783,7 @@ def _without_amended_evidence(
             "held_out_claims": (),
             "held_out": (),
             "call_count_gate": None,
+            "leakage_check": None,
         }
     )
 
@@ -1050,7 +1114,13 @@ def run_arm_stage(
                 # and Stage 2 selects over it without re-buying it, so
                 # counting it again would make the ledger's rows sum to
                 # more than the study spent.
-                "stages": _stages_with(
+                #
+                # Merged onto any spend this stage's row already carries
+                # rather than replacing it: a resume of a stage that
+                # crashed after its manifest write executes nothing, and a
+                # plain replacement would discard the bill it already
+                # paid. See :func:`_arm_stage_record`.
+                "stages": _arm_stage_record(
                     manifest,
                     _stage_record(
                         stage=stage,

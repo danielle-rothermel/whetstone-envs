@@ -189,6 +189,7 @@ def bound_stage_environment(
     *,
     transport: str = FAKE_TRANSPORT,
     allow_real_codex: bool = False,
+    discard_stale_runs: bool = False,
 ) -> Iterator[StageEnvironment]:
     """Open a study's store and bind one engine per evaluation role.
 
@@ -208,6 +209,11 @@ def bound_stage_environment(
     does, and it is a property of *this invocation* rather than of the
     study: it reaches the runner and the harness's early refusal, and never
     the manifest or the pre-registration hash.
+
+    ``discard_stale_runs`` is the third of the same kind: the operator's
+    authorization to discard a run directory whose own artifacts say it is
+    not this invocation's run, rather than refusing. It defaults off
+    because such a directory may be paid evidence.
     """
     require_transport_credentials(transport)
     # Imported inside the binder, not at module scope. ``arms`` reaches the
@@ -355,6 +361,7 @@ def bound_stage_environment(
             naive_template=family.probes.naive_template,
             store_path=study_dir / STUDY_STORE_NAME,
             allow_real_codex=allow_real_codex,
+            discard_stale_runs=discard_stale_runs,
         )
         yield StageEnvironment(
             bind_engine=bind_engine,

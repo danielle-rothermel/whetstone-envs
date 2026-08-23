@@ -314,16 +314,32 @@ beneath it do not.
 
 `stage0 --replace-design` onto a *different* transport than the recorded
 Stage 0 drops the Stage 1 and Stage 2 records, their arm runs, the
-selections over those runs, the held-out claims and rows, and the pilot's
-call-count gate: the design changed and the evidence came from another
-experiment. Nothing is deleted silently — the drop is recorded as an
-`amendments` entry naming every run id it removed, and the report surfaces
-it. The arms themselves survive with empty run lists, because an arm is
-part of the design rather than evidence for it. **Paid evidence is never
-discarded automatically**: if any dropped run was measured on a billed
-transport the command refuses instead, before the calibration spends, and
-names the recovery (archive the study directory and calibrate the new
-transport in a fresh one).
+selections over those runs, the held-out claims and rows, the pilot's
+call-count gate, and the `leakage_check` verdict computed over those runs:
+the design changed and the evidence came from another experiment. Nothing
+is deleted silently — the drop is recorded as an `amendments` entry naming
+every run id it removed and every run directory it orphaned, and the report
+surfaces it. The arms themselves survive with empty run lists, because an
+arm is part of the design rather than evidence for it. **Paid evidence is
+never discarded automatically**: if any dropped run was measured on a
+billed transport the command refuses instead, before the calibration
+spends, and names the recovery (archive the study directory and calibrate
+the new transport in a fresh one).
+
+The drop clears the manifest; it does not clear the disk. Run directories
+are named deterministically from arm and seed — which is what makes a
+crashed stage resumable — so the dropped runs' directories remain under
+exactly the names the replacement stage will compute. **An arm stage
+therefore reuses a run directory only when the directory's own artifacts
+say it is the run this invocation would produce**: the transport, family,
+model, and run id recorded in its trajectory report. Otherwise the stage
+refuses, naming the directory and the recovery, rather than skipping
+`run_optimizer` and recording an old free run as this stage's paid one. A
+directory that records no readable identity is refused on the same grounds.
+`whetstone-study run --discard-stale-runs` authorizes discarding such a
+directory instead; it is off by default, because the directory it would
+remove may be paid evidence, and a matching directory is still reused
+either way.
 
 Each stage record also carries what the stage spent, one entry per provider
 role, in the same shape a run reports. The two kinds of stage measure it by
@@ -331,7 +347,11 @@ the route they spend by: Stage 0's anchors evaluate through the engine, so
 their spend is re-derived from the persisted output rows the evaluations
 left behind; an arm stage spends through optimizer runs, so its total is
 the fold of the per-run records those runs already carry. Both are
-measured, never accumulated while the stage ran. `whetstone-study plan`
+measured, never accumulated while the stage ran. An arm stage's row is
+merged rather than replaced when it re-runs: a stage that crashed after its
+manifest write executes nothing on resume, so replacing its row would
+discard the bill it already paid, and the fold of the existing spend with
+this invocation's keeps a stage row from ever shrinking. `whetstone-study plan`
 prints that ledger beneath its estimated budget, `run` echoes it, and the
 report prints it beside each stage's transport. A role with any unpriced
 call reports no USD total at all rather than a partial sum that would look

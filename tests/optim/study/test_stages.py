@@ -1677,6 +1677,134 @@ def test_refolding_the_reporting_bill_restates_it_rather_than_doubling_it(
     assert [entry.calls for entry in twice.report_spend] == [4]
 
 
+def test_the_reporting_pass_refreshes_the_attempts_of_an_existing_row(
+    tmp_path: Path,
+) -> None:
+    """**A paid stage's row exists before the reporting pass ever runs.**
+
+    **Fails-before: 0 attempts, no outcomes.** The attempt counters were
+    read off the transport only in ``_record_report_spend``'s ``existing
+    is None`` branch. Stage 0 takes that branch -- it writes its row once,
+    at the end -- so the bug was invisible there. Stage 1 and Stage 2 do
+    not: the run pass records the stage long before the reporting pass
+    folds its bill onto the same row, so the ``else`` branch is the only
+    one a paid arm stage ever reaches, and it carried the run pass's
+    counters through untouched. Every retry the reporting pass fought --
+    the official scoring and held-out evaluation that every efficacy claim
+    is made against -- was dropped on the floor.
+
+    **Folded, never assigned.** The row's counters belong to the
+    invocations that already ran and the reporter's to this one, and a
+    resumed stage's second process starts its transport's tally at zero.
+    Assigning would report the resume's retries as the stage's whole
+    history and silently drop the original run's, so a stage that fought
+    the provider hard, crashed, and resumed cleanly would read as one that
+    never retried at all -- which is the crash shape this asserts.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    stage1 = StageId.STAGE1.value
+    manifest = read_study_manifest(study_dir)
+    priced = RunSpendRecord(
+        role=CostRole.TASK_MODEL.value,
+        calls=4,
+        cached_calls=0,
+        input_tokens=100,
+        output_tokens=20,
+        priced_calls=4,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+    # The row the *run* pass left behind, carrying the attempts that pass
+    # made. This is the state a paid Stage 1 is always in by the time its
+    # reporting pass starts.
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "report_spend": (
+                    ReportSpendEntry(
+                        evidence_schema="whetstone.eval.outputs",
+                        evidence_content_hash="a" * 64,
+                        purpose="official",
+                        candidate_name="copro",
+                        stage=stage1,
+                        transport=TransportName.OPENROUTER.value,
+                        spend=(priced,),
+                    ),
+                ),
+                "stages": (
+                    StageRecord(
+                        stage=stage1,
+                        transport=TransportName.OPENROUTER.value,
+                        provider_attempts=7,
+                        provider_transient_outcomes=("rate_limited",),
+                    ),
+                ),
+            }
+        ),
+        replace=True,
+    )
+    environment = _Harness(study_dir, scores={}).environment()
+    reporting = replace(
+        environment,
+        transport=TransportName.OPENROUTER.value,
+        # This process's transport, whose tally starts at zero and counts
+        # only what the reporting pass itself fought.
+        provider_attempts=_StubAttemptReporter(
+            attempts=4, transient_outcomes=("server_error", "rate_limited")
+        ),
+    )
+
+    _record_report_spend(
+        study_dir=study_dir, stage=StageId.STAGE1, environment=reporting
+    )
+    row = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == stage1
+    )
+    assert row.provider_attempts == 11, (
+        "the reporting pass's attempts did not reach the existing row"
+    )
+    # In order, run pass first: the sequence is what tells a rate-limit
+    # storm apart from a run of transient 5xx.
+    assert row.provider_transient_outcomes == (
+        "rate_limited",
+        "server_error",
+        "rate_limited",
+    )
+    # The reporting bill still landed, and the run-side row is untouched.
+    assert [entry.usd for entry in row.report_spend] == [0.5]
+
+
+def test_a_fake_reporting_pass_leaves_an_existing_rows_attempts_alone(
+    tmp_path: Path,
+) -> None:
+    """Nothing to add is not the same as zero to add.
+
+    A pass that bound no retrying transport reached no provider, so it
+    contributes nothing rather than a measured zero -- and must not reset
+    a row whose counters an earlier paid invocation wrote. Asserted at the
+    fold helper because ``_record_report_spend`` returns early on a
+    fake-transport environment, which is a different guard for a different
+    reason.
+    """
+    from whetstone_envs.optim.study.stages import _folded_attempts
+
+    existing = StageRecord(
+        stage=StageId.STAGE1.value,
+        transport=TransportName.OPENROUTER.value,
+        provider_attempts=7,
+        provider_transient_outcomes=("rate_limited",),
+    )
+    environment = _Harness(
+        _calibrated_study(tmp_path), scores={}
+    ).environment()
+    assert environment.provider_attempts is None
+    assert _folded_attempts(existing, environment) == {}
+
+
 def test_a_priced_reporting_evaluation_is_durable_before_the_pass_ends(
     tmp_path: Path,
 ) -> None:

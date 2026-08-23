@@ -316,6 +316,88 @@ def test_the_opt_in_is_not_forwarded_to_another_arm(tmp_path: Path) -> None:
     assert spec.allow_real_codex is False
 
 
+# --------------------------------------------------------------------------
+# The operator's provider width reaches every in-search evaluation
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "arm",
+    [
+        pytest.param(_arm(), id="miprov2"),
+        pytest.param(_codex_arm(), id="codex"),
+    ],
+)
+def test_the_operators_width_reaches_every_arms_run_spec(
+    tmp_path: Path, arm: ArmSpec
+) -> None:
+    """``--provider-concurrency`` has to reach the search, not just the report.
+
+    **Fails-before: 5 on every arm.** The flag reached the stage's scoring
+    engines and the stage record, but ``_spec_for`` built each arm's
+    ``RunSpec`` without a width -- so the in-search evaluations, which are
+    the large majority of a paid Stage 1 or Stage 2's calls, all ran at
+    ``RunSpec``'s default 5 while the manifest recorded the width the
+    operator asked for. One stage ran at two widths and was recorded as
+    one.
+
+    Unconditional across arms, unlike the Codex-scoped settings above:
+    every optimizer evaluates, so a width forwarded to only some of them
+    would make the arms incomparable on wall time for a reason that has
+    nothing to do with what they compute.
+    """
+    from dataclasses import replace
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    spec = runner._spec_for(arm, seed=arm.seeds[0], run_dir=tmp_path / "run")
+    assert spec.provider_concurrency == 9
+
+
+def test_the_width_reaches_the_codex_arms_runtime_config(
+    tmp_path: Path,
+) -> None:
+    """The Codex server rebuilds its own engine, from the spec alone.
+
+    **Fails-before: 5.** ``build_codex_runtime_config`` already forwarded
+    ``spec.provider_concurrency`` faithfully, so this half was never
+    broken -- but it reads the width off the ``RunSpec`` the runner
+    builds, which means the Codex arm inherited the default along with
+    everyone else. Asserting the end of the chain rather than only
+    ``_spec_for`` is what makes the two halves one test: the arm that
+    evaluates inside a subprocess is the one whose width is easiest to
+    lose and hardest to notice.
+    """
+    from dataclasses import replace
+
+    from whetstone_envs.optim.run import (
+        _validate_spec,
+        build_codex_runtime_config,
+    )
+
+    runner = replace(_runner(tmp_path), provider_concurrency=9)
+    spec = runner._spec_for(_codex_arm(), seed=4000, run_dir=tmp_path / "run")
+    config = build_codex_runtime_config(
+        spec=spec, validated=_validate_spec(spec)
+    )
+    assert config.provider_concurrency == 9
+
+
+def test_the_width_is_not_an_arm_field() -> None:
+    """An execution property must not enter the pre-registration hash.
+
+    The width changes how long a stage takes and never what it measures,
+    so it belongs to the invocation exactly like the transport and the
+    real-Codex authorization. On ``ArmSpec`` it would reach the manifest's
+    design and the pre-registration hash, making two runs of one design at
+    two widths pre-register as two different designs.
+    """
+    from dataclasses import fields
+
+    assert "provider_concurrency" not in {
+        field.name for field in fields(ArmSpec)
+    }
+
+
 def test_the_authorization_is_not_an_arm_field() -> None:
     """The design and the permission to spend stay separate types.
 

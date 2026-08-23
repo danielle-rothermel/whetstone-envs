@@ -660,6 +660,12 @@ def bound_stage_environment(
             codex_capacity=CODEX_EVALUATE_CALL_CAP,
             allow_real_codex=allow_real_codex,
             discard_stale_runs=discard_stale_runs,
+            # The same width the engines above were bound with. The runner
+            # builds its own ``RunSpec`` per arm, so an unforwarded width
+            # left every in-search evaluation at the ``RunSpec`` default
+            # while the reporting pass ran at the operator's -- one stage
+            # running at two widths, recorded as one.
+            provider_concurrency=provider_concurrency,
         )
         yield StageEnvironment(
             bind_engine=bind_engine,

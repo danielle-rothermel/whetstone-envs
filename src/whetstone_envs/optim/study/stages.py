@@ -541,6 +541,37 @@ def _attempt_fields(environment: StageEnvironment) -> _AttemptFields:
     }
 
 
+def _folded_attempts(
+    existing: StageRecord, environment: StageEnvironment
+) -> _AttemptFields:
+    """This invocation's attempt counters, added onto a row that has some.
+
+    Added rather than assigned, and that is the whole point. The counters
+    on the row belong to the invocations that already ran; the reporter's
+    belong to this one. A resumed stage's second process starts its
+    transport's tally at zero, so assigning would report the resume's
+    retries as the stage's whole retry history and silently drop the
+    original run's -- and a stage that fought the provider hard, crashed,
+    and resumed cleanly would read as a stage that never retried at all.
+
+    Empty on a stage that bound no retrying transport, which leaves the
+    row's existing counters untouched: a fake-transport pass reached no
+    provider and has nothing to contribute, not a zero to add.
+    """
+    fields = _attempt_fields(environment)
+    if not fields:
+        return {}
+    return {
+        "provider_attempts": (
+            existing.provider_attempts + fields["provider_attempts"]
+        ),
+        "provider_transient_outcomes": (
+            *existing.provider_transient_outcomes,
+            *fields["provider_transient_outcomes"],
+        ),
+    }
+
+
 def _stage_record(
     *,
     stage: StageId,
@@ -1599,7 +1630,19 @@ def _record_report_spend(
         # Set, never added: ``folded`` is already the whole pass, so the
         # run-side row is carried through untouched and the reporting side
         # is replaced with the total the durable records now describe.
-        else existing.model_copy(update={"report_spend": folded})
+        #
+        # The attempt counters go the opposite way, and are folded on both
+        # branches for it. ``folded`` is read back off durable records, so
+        # re-reading it restates the same total; a transient attempt
+        # persists no row, so the transport's in-process tally is the only
+        # record it ever had and nothing can restate it. Refreshing only
+        # the ``existing is None`` branch meant a paid Stage 1/2 -- where
+        # the run pass writes the row long before the reporting pass runs
+        # -- reported the reporting pass's retries as zero.
+        else existing.model_copy(
+            update=_folded_attempts(existing, environment)
+            | {"report_spend": folded}
+        )
     )
     if existing == updated:
         return

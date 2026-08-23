@@ -84,6 +84,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   stage reports nothing rather than a measured zero.
 
 ### Fixed
+- **The operator's provider width reaches in-search evaluation, not just
+  the report.** `--provider-concurrency N` reached the stage's scoring
+  engines and the stage record, but `StudyOptimizerRunner._spec_for` built
+  each arm's `RunSpec` without a width -- so every in-search evaluation,
+  which is the large majority of a paid Stage 1 or Stage 2's calls, ran at
+  the default 5 while the manifest recorded the width the operator asked
+  for. One stage ran at two widths and was recorded as one. The runner now
+  carries the width and forwards it onto every arm's `RunSpec`,
+  unconditionally rather than per-arm: every optimizer evaluates, and the
+  Codex arm's separate-process runtime config rebuilds from
+  `spec.provider_concurrency` alone, so this is that arm's only route to
+  it. Stage 0 was unaffected -- it evaluates through the engines directly
+  and never builds a `RunSpec`.
+- **A paid arm stage records the retries its reporting pass fought.**
+  `_record_report_spend` read the transport's attempt counters back only
+  on its `existing is None` branch. Stage 0 takes that branch, so the gap
+  was invisible there; a paid Stage 1 or Stage 2 never does -- its run
+  pass writes the stage row long before the reporting pass folds a bill
+  onto it -- so `provider_attempts` and `provider_transient_outcomes` kept
+  whatever the run pass recorded and the official-scoring and held-out
+  evaluations' retries were dropped. The counters are now folded on the
+  existing-record branch too. Folded rather than assigned: a resumed
+  stage's second process starts its transport's tally at zero, so
+  overwriting would report the resume's retries as the stage's whole
+  history and drop the original run's. Unlike `report_spend` -- re-read
+  whole from durable records every time -- a transient attempt persists no
+  row, so the in-process tally is the only record it ever had. A pass that
+  bound no retrying transport contributes nothing rather than a zero.
 - The release workflow's validate jobs allow 30 minutes: the 3.13 and 3.14 legs
   take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
   before it could publish (v0.2.3 is tagged but not on PyPI).

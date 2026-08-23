@@ -315,6 +315,17 @@ def test_standalone_eval_refuses_a_fully_lost_task(
     helper at all. Whether the helper classifies correctly is settled in
     ``tests/optim/study/test_arms.py``; duplicating that here would test
     the helper twice and the wiring not at all.
+
+    **The two paths the floor guards are the two that report:** this one
+    and ``RoleScorer.evidence_for``. Evaluations *inside* a search are
+    deliberately exempt, which is a design decision rather than an
+    oversight -- see the CHANGELOG's "``whetstone-eval`` applies the
+    per-task completeness floor" entry. Under whetstone-ai 0.1.13 a lost
+    task reports ``None`` per-task and the optimizer's own reward policy
+    governs what a candidate is worth mid-search, so applying the floor
+    there would make it a stopping rule rather than a reporting one. An
+    in-search mean is a search signal; only these two paths publish a
+    number a claim is made from.
     """
     from whetstone_envs.optim.completeness import TaskCompletenessError
 

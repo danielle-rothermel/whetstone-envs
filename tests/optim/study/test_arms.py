@@ -674,7 +674,9 @@ def test_a_fully_lost_task_refuses_the_evaluation() -> None:
     evidence = _evidence_with_lost_tasks(tasks=76, lost=1)
     # The aggregate really does read as a clean 1.0 while a task is gone.
     assert evidence.aggregate_value == 1.0
-    assert sum(evidence.per_task_values) / 76 == pytest.approx(0.98684, abs=1e-5)
+    assert sum(evidence.per_task_values) / 76 == pytest.approx(
+        0.98684, abs=1e-5
+    )
 
     with pytest.raises(StageError, match="lost every"):
         _require_task_completeness(evidence, purpose="official:cand")

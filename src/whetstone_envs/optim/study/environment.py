@@ -321,9 +321,7 @@ def _is_hardened(policy: ProviderExecutionPolicy) -> bool:
     the only thing distinguishing a hardened policy from a fake-route one
     that happens to allow a single attempt.
     """
-    return (
-        policy.transport_policy.timeout_seconds == TASK_CALL_TIMEOUT_SECONDS
-    )
+    return policy.transport_policy.timeout_seconds == TASK_CALL_TIMEOUT_SECONDS
 
 
 def _retry_backoff_text(policy: ProviderExecutionPolicy) -> str:

@@ -39,7 +39,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from dr_store.sync import open_sqlite
 from whetstone.core.roles import EvalRole
@@ -316,7 +316,33 @@ def _mean_of(evidence: EvalEvidence) -> float:
     return sum(values) / len(values)
 
 
-def _require_task_completeness(evidence: EvalEvidence, *, purpose: str) -> None:
+class _TaskCompletenessEvidence(Protocol):
+    """Exactly the evidence fields the completeness check reads.
+
+    Narrower than ``EvalEvidence`` on purpose. This check is pure
+    arithmetic over the two means and the planned task list, so naming
+    that surface keeps the dependency auditable -- a future field it
+    started relying on would have to be added here first -- and lets the
+    tests exercise it without standing up a store, a graph, and a
+    persisted aggregate to reach a function that touches none of them.
+    """
+
+    @property
+    def per_task_values(self) -> tuple[float, ...]: ...
+
+    @property
+    def aggregate_value(self) -> float | None: ...
+
+    @property
+    def aggregate_status(self) -> str: ...
+
+    @property
+    def task_hashes(self) -> tuple[str, ...]: ...
+
+
+def _require_task_completeness(
+    evidence: _TaskCompletenessEvidence, *, purpose: str
+) -> None:
     """Refuse an evaluation that lost whole tasks, not merely rows.
 
     **The row tolerance cannot see this.** ``missing_data="skip"`` with a
@@ -382,7 +408,7 @@ def _require_task_completeness(evidence: EvalEvidence, *, purpose: str) -> None:
         )
 
 
-def _fully_lost_task_count(evidence: EvalEvidence) -> int:
+def _fully_lost_task_count(evidence: _TaskCompletenessEvidence) -> int:
     """How many tasks produced no present row at all.
 
     Derived from the two means the evidence already carries rather than

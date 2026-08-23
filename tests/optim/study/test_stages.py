@@ -17,7 +17,6 @@ from whetstone.core.roles import EvalRole
 
 pytest.importorskip("whetstone.experiment.env")
 
-from whetstone.core.roles import EvalRole
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.optim.cost import CostRole
 

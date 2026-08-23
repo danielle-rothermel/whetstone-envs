@@ -359,7 +359,7 @@ def test_the_bound_openrouter_transport_retries() -> None:
 # --------------------------------------------------------------------------
 
 
-def _live_request(policy):
+def _live_request():
     """One real ``ProviderCallRequest`` the driver will accept.
 
     Built rather than stubbed because the driver checks the evidence's
@@ -378,9 +378,7 @@ def _live_request(policy):
     return ProviderCallRequest(
         config=openrouter_seeded_call_config(model="openai/gpt-4.1-nano"),
         transcript=Transcript(
-            messages=(
-                PromptMessage(role=MessageRole.USER, content="hi"),
-            )
+            messages=(PromptMessage(role=MessageRole.USER, content="hi"),)
         ),
     )
 
@@ -461,7 +459,7 @@ def test_the_two_retry_loops_do_not_multiply(failures: int) -> None:
         ).execution_policy
     )
     inner, invocations = _rate_limited_transport(policy, failures=failures)
-    request = _live_request(policy)
+    request = _live_request()
 
     result = run_provider_call(
         request=request,

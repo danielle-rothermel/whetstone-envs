@@ -135,15 +135,20 @@ class LeakageReport:
 class OptimizerEvalObservation:
     """One evaluation an optimizer run caused, as L1 reads it.
 
-    ``eval_role`` is the role recorded on the persisted ``EvalEvidence``
-    and ``resolved_eval_config_hash`` is the ``config_hash`` of the Eval
-    Config that evaluation resolved against -- read from the resolution
-    on the intent path, and from the cited evidence on the tool path.
+    ``eval_role`` is the role recorded on the persisted ``EvalEvidence``,
+    ``task_hashes`` are that evidence's own content-addressed task
+    identities, and ``resolved_eval_config_hash`` is the ``config_hash``
+    of the Eval Config the evaluation resolved against.
 
-    L1 needs both: matching the config alone would pass an
-    evaluation that reached the right config under the wrong role, and
-    matching the role alone would pass one that reached a second internal
-    config the run never declared.
+    L1 reads the first two. The registered rule is that an optimizer saw
+    the internal split and nothing else, so what it must establish is
+    *which tasks* were evaluated: the evaluated set must lie inside the
+    internal split, under the internal role. The config hash is carried
+    for the observation L1 records alongside its verdict -- how many
+    evaluations used the study's full internal config and how many used a
+    config derived from it -- because an optimizer that minibatches the
+    internal split necessarily mints derived configs, and that is design,
+    not leakage.
     """
 
     run_id: str
@@ -151,12 +156,22 @@ class OptimizerEvalObservation:
     resolution_index: int
     eval_role: str
     resolved_eval_config_hash: str
+    task_hashes: tuple[str, ...] = ()
+    surface: str = "resolution"
 
     @property
     def location(self) -> str:
+        """Where this evaluation sits, uniquely within its run.
+
+        The surface is part of the coordinate because the three paths
+        index independently: a step's first intent resolution and its
+        first ``search_evidence`` entry are both index 0, and an offender
+        list that could not tell them apart would point at the wrong
+        record.
+        """
         return (
             f"{self.run_id}:step{self.step_index}:"
-            f"resolution{self.resolution_index}"
+            f"{self.surface}{self.resolution_index}"
         )
 
 
@@ -186,8 +201,30 @@ def check_l1_optimizer_internal_only(
     observations: Iterable[OptimizerEvalObservation],
     *,
     internal_eval_config_hash: str,
+    internal_task_hashes: Iterable[str],
+    excluded_eval_config_hashes: Iterable[str] = (),
 ) -> LeakageFinding:
     """L1: an optimizer sees the internal split and nothing else.
+
+    The registered rule is about *which tasks an optimizer saw*, so this
+    checks task-set containment: every evaluation reachable from a run
+    must evaluate a subset of the internal split's task hashes, under the
+    internal role, against a config that is neither the official nor the
+    held-out one.
+
+    Containment rather than equality is the whole point. MIPROv2
+    minibatches the internal split and GEPA scores single tasks and
+    Pareto subsets; each such evaluation mints its own derived Eval
+    Config, so an exact-hash predicate reports thousands of honest
+    evaluations as leaks while establishing nothing extra. A derived
+    config cannot smuggle in a foreign task -- the task hashes are
+    content-addressed and checked here directly -- so containment is both
+    the weaker predicate and the one that actually matches the rule.
+
+    ``excluded_eval_config_hashes`` are the official and held-out config
+    identities. An optimizer evaluation naming one of them is a leak even
+    if its task set somehow looked internal, which is the case the role
+    check alone would miss.
 
     Upstream already refuses a non-internal role inside ``CoproControl`` and
     the runner passes ``EvalRole.INTERNAL`` explicitly, so this check is
@@ -198,9 +235,10 @@ def check_l1_optimizer_internal_only(
     seen = tuple(observations)
     if not seen:
         # Vacuously true, which is not a check. L1's evidence is each
-        # run's own evaluations -- intent resolutions, and for a
-        # TOOL_USING run its tool evidence -- so a caller holding none
-        # has not verified the rule and must not be told it passed.
+        # run's own evaluations -- intent resolutions, search evidence,
+        # and for a TOOL_USING run its tool evidence -- so a caller
+        # holding none has not verified the rule and must not be told it
+        # passed.
         return LeakageFinding(
             rule=LeakageRule.L1_OPTIMIZER_INTERNAL_ONLY,
             passed=False,
@@ -210,23 +248,49 @@ def check_l1_optimizer_internal_only(
             ),
             checked=False,
         )
-    offenders = tuple(
-        observation.location
+    internal = frozenset(internal_task_hashes)
+    excluded = frozenset(excluded_eval_config_hashes)
+    offenders: list[str] = []
+    for observation in seen:
+        if observation.eval_role != INTERNAL_ROLE:
+            offenders.append(
+                f"{observation.location} ran under role "
+                f"{observation.eval_role}"
+            )
+            continue
+        if observation.resolved_eval_config_hash in excluded:
+            offenders.append(
+                f"{observation.location} resolved a non-internal Eval Config"
+            )
+            continue
+        escaped = frozenset(observation.task_hashes) - internal
+        if escaped:
+            offenders.append(
+                f"{observation.location} evaluated {len(escaped)} tasks "
+                "outside the internal split"
+            )
+    # Recorded, not enforced: an optimizer that derives a per-evaluation
+    # config from the internal split is behaving as designed, so the split
+    # between full-config and derived-config evaluations is an observation
+    # about search shape rather than a verdict.
+    exact = sum(
+        1
         for observation in seen
-        if observation.eval_role != INTERNAL_ROLE
-        or observation.resolved_eval_config_hash != internal_eval_config_hash
+        if observation.resolved_eval_config_hash == internal_eval_config_hash
     )
+    derived = len(seen) - exact
     return LeakageFinding(
         rule=LeakageRule.L1_OPTIMIZER_INTERNAL_ONLY,
         passed=not offenders,
         detail=(
-            f"all {len(seen)} optimizer evaluations resolved the internal "
-            "Eval Config under the internal role"
+            f"all {len(seen)} optimizer evaluations stayed inside the "
+            f"internal split under the internal role ({exact} on the full "
+            f"internal Eval Config, {derived} on a derived subset)"
             if not offenders
             else f"{len(offenders)} optimizer evaluations left the internal "
             "split"
         ),
-        offenders=offenders,
+        offenders=tuple(offenders),
     )
 
 
@@ -415,6 +479,8 @@ def study_leakage_check(  # noqa: PLR0913
     *,
     optimizer_observations: Iterable[OptimizerEvalObservation],
     internal_eval_config_hash: str,
+    internal_task_hashes: Iterable[str],
+    excluded_eval_config_hashes: Iterable[str] = (),
     selected_arm_ids: Sequence[str],
     expected_arm_ids: Iterable[str],
     held_out_candidate_names: Iterable[str],
@@ -433,6 +499,8 @@ def study_leakage_check(  # noqa: PLR0913
         check_l1_optimizer_internal_only(
             optimizer_observations,
             internal_eval_config_hash=internal_eval_config_hash,
+            internal_task_hashes=internal_task_hashes,
+            excluded_eval_config_hashes=excluded_eval_config_hashes,
         ),
         check_l2_selection_once_per_arm(
             selected_arm_ids=selected_arm_ids,
@@ -489,21 +557,29 @@ def optimizer_observations_from_run(
     writes no eval evidence for one; demanding evidence there would make an
     honest refusal look like a leak.
 
-    **A tool-mediated evaluation is evidence too.** A ``TOOL_USING`` run --
-    Codex is the only one -- resolves no intent and mints no search
-    evidence *by design*: its paid evaluations are cited from
-    ``tool_evidence`` instead. Reading only the intent path therefore
-    yields nothing for such a run, and L1 reports itself unchecked rather
-    than passed, which fails ``leakage-check`` and blocks the whole study
-    from reporting. That is not a conservative default here -- it is a
-    rule with evidence in front of it declining to look. So both paths
-    are read, and each is resolved the same way: the same reasoning as
+    **All three evaluation surfaces are read**, because which one an
+    optimizer uses is an implementation detail of the optimizer and L1 is
+    a rule about the study:
+
+    - ``resolved_intents`` -- COPRO, MIPROv2, and the nulls.
+    - ``search_evidence`` -- GEPA, which resolves *no* intent at all and
+      records every one of its evaluations here. Reading only the intent
+      path yields nothing for a GEPA run, so L1 would report itself as
+      having checked a rule against a run whose evidence it never opened.
+    - ``tool_evidence`` -- a ``TOOL_USING`` run, Codex being the only
+      one, which resolves no intent and mints no search evidence *by
+      design* and cites its paid evaluations here instead.
+
+    A run yielding nothing on all three surfaces contributes nothing, and
+    L1 reports itself unchecked rather than passed. Each path resolves
+    the cited evidence the same way: the same reasoning as
     ``reported_numbers_resolve`` in ``optim/audit/registry.py``.
     """
     evidence = load_run_evidence(run_dir)
     observations: list[OptimizerEvalObservation] = []
     for step in evidence.steps:
         observations.extend(_tool_observations(evidence, step))
+        observations.extend(_search_observations(evidence, step))
         for index, resolution in enumerate(step.resolved_intents):
             if resolution.outcome is not IntentOutcome.COMPLETED:
                 continue
@@ -527,8 +603,48 @@ def optimizer_observations_from_run(
                     resolved_eval_config_hash=str(
                         resolution.resolved_eval_config.config_hash
                     ),
+                    task_hashes=tuple(str(item) for item in found.task_hashes),
                 )
             )
+    return tuple(observations)
+
+
+def _search_observations(
+    evidence: RunEvidence, step: StepEvidence
+) -> tuple[OptimizerEvalObservation, ...]:
+    """L1's evidence from one step's ``search_evidence`` entries.
+
+    GEPA is the arm this exists for: it records every evaluation it
+    performs here and resolves no intent, so without this path a GEPA run
+    contributes no observations at all.
+
+    ``resolution_index`` is the entry's position within the step, which
+    is the only stable coordinate an entry has; the ``search`` prefix on
+    the location keeps it from colliding with an intent at the same
+    index. An entry citing no eval evidence contributes nothing, the same
+    treatment a rejected intent gets.
+    """
+    observations: list[OptimizerEvalObservation] = []
+    for index, entry in enumerate(step.search_evidence):
+        reference = entry.eval_result_ref
+        if reference is None:
+            continue
+        found = evidence.eval_evidence(reference)
+        if found is None:
+            continue
+        observations.append(
+            OptimizerEvalObservation(
+                run_id=evidence.run_id,
+                step_index=step.index,
+                resolution_index=index,
+                eval_role=str(found.eval_role.value),
+                resolved_eval_config_hash=str(
+                    found.eval_config_ref.config_hash
+                ),
+                task_hashes=tuple(str(item) for item in found.task_hashes),
+                surface="search",
+            )
+        )
     return tuple(observations)
 
 
@@ -569,6 +685,8 @@ def _tool_observations(
                     resolved_eval_config_hash=str(
                         found.eval_config_ref.config_hash
                     ),
+                    task_hashes=tuple(str(item) for item in found.task_hashes),
+                    surface="tool",
                 )
             )
     return tuple(observations)

@@ -26,6 +26,12 @@ carries both tuples for the audits to read.
 
 COPRO, the null arms, and Codex-direct have no train/val concept and are
 deliberately not routed through here.
+
+This module also owns :data:`COPRO_SHAPED_OPTIMIZERS`, the other piece of
+per-optimizer shape membership that both the runner and the study spec have
+to agree on. It lives beside the train/val tuple because it answers the same
+kind of question -- which optimizers a given control field applies to -- and
+because both callers must reach it without importing whetstone.
 """
 
 from __future__ import annotations
@@ -41,6 +47,24 @@ MIPROV2_OPTIMIZER = "miprov2"
 #: the nulls, and Codex-direct have no such concept, so supplying a split
 #: for them is refused rather than ignored.
 TRAIN_VAL_OPTIMIZERS = (GEPA_OPTIMIZER, MIPROV2_OPTIMIZER)
+
+#: COPRO itself, and the control whose search *is* COPRO's.
+COPRO_OPTIMIZER = "copro"
+NULL_RANDOM_OPTIMIZER_NAME = "null-random"
+
+#: The optimizers configured by ``breadth`` and ``depth``. ``null-random``
+#: is COPRO's search with an uninformative proposer, so it takes COPRO's
+#: shape: a control that searched a different shape would control for a
+#: search the study never ran. Named once, here, so the runner and the
+#: study spec cannot drift apart on which arms the shape applies to.
+COPRO_SHAPED_OPTIMIZERS = (COPRO_OPTIMIZER, NULL_RANDOM_OPTIMIZER_NAME)
+
+#: The smallest breadth upstream ``CoproControl`` accepts. A single draft
+#: per step leaves nothing to select between, so upstream refuses it.
+MIN_COPRO_BREADTH = 2
+
+#: The smallest depth a search can have: one round of proposals.
+MIN_COPRO_DEPTH = 1
 
 
 def partition_internal_split(
@@ -109,8 +133,13 @@ def require_disjoint_split(
 
 
 __all__ = [
+    "COPRO_OPTIMIZER",
+    "COPRO_SHAPED_OPTIMIZERS",
     "GEPA_OPTIMIZER",
+    "MIN_COPRO_BREADTH",
+    "MIN_COPRO_DEPTH",
     "MIPROV2_OPTIMIZER",
+    "NULL_RANDOM_OPTIMIZER_NAME",
     "TRAIN_VAL_OPTIMIZERS",
     "partition_internal_split",
     "require_disjoint_split",

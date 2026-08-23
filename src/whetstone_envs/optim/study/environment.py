@@ -54,6 +54,7 @@ from whetstone_envs.optim.study.manifest import (
     read_study_manifest,
     write_study_manifest,
 )
+from whetstone_envs.optim.study.spec import CODEX_EVALUATE_CALL_CAP
 from whetstone_envs.optim.study.stages import StageEnvironment
 from whetstone_envs.reporting.schema import SPLIT_ROLE_BY_REPORT_ROLE
 
@@ -474,6 +475,14 @@ def bound_stage_environment(
             num_seeds=k_repeat,
             naive_template=family.probes.naive_template,
             store_path=study_dir / STUDY_STORE_NAME,
+            # The protocol's pinned admission cap, passed rather than
+            # left to the runner's own default. The two constants agree
+            # today, which is exactly the problem: the cap is design --
+            # it is what equalizes the Codex arm's eval budget against
+            # the others (D12) -- so it has to *reach* the RunSpec from
+            # the design rather than be reconstructed by a default that
+            # happens to match.
+            codex_capacity=CODEX_EVALUATE_CALL_CAP,
             allow_real_codex=allow_real_codex,
             discard_stale_runs=discard_stale_runs,
         )

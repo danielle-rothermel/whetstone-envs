@@ -79,8 +79,10 @@ from whetstone_envs.optim.study.power import (
     minimum_detectable_effect,
 )
 from whetstone_envs.optim.study.protocols import (
+    PROTOCOL_IDS,
     SIZED_FIELDS,
     STEP10_C19_ID,
+    StudyProtocol,
     study_protocol,
     without_codex,
 )
@@ -132,6 +134,9 @@ class StudySpecLike(Protocol):
 
     @property
     def optimizer_by_arm(self) -> Mapping[str, str]: ...
+
+    @property
+    def copro_shape_by_arm(self) -> Mapping[str, tuple[int, int] | None]: ...
 
     @property
     def k_repeat(self) -> int: ...
@@ -405,8 +410,10 @@ def _optimizer_budget_lines(
     total_low = 0
     total_high = 0
     optimizers = spec.optimizer_by_arm
+    shapes = spec.copro_shape_by_arm
     for arm_id in spec.arm_ids:
         k_run = spec.k_run_by_arm[arm_id]
+        shape = shapes[arm_id]
         try:
             estimate = estimate_optimizer_calls(
                 optimizers[arm_id],
@@ -414,6 +421,19 @@ def _optimizer_budget_lines(
                 k_repeat=k_repeat,
                 official_size=official_size,
                 held_out_size=held_out_size,
+                # The arm's own pinned shape, not the estimator's
+                # default. COPRO's whole per-run cost is
+                # ``breadth x depth x T_int x K_REPEAT``, so an estimate
+                # taken at a shape the arm does not run prices a search
+                # the study never performs.
+                **(
+                    {}
+                    if shape is None
+                    else {
+                        "copro_breadth": shape[0],
+                        "copro_depth": shape[1],
+                    }
+                ),
             )
         except ValueError:
             lines.append(f"{arm_id:<24}{k_run:>8}{NO_ESTIMATE:>20}{'':>22}")
@@ -579,6 +599,53 @@ def _emit(lines: Iterable[str]) -> None:
         print(line)
 
 
+def _require_honest_study_id(
+    study_id: str | None,
+    *,
+    protocol: StudyProtocol,
+    toy: bool,
+    without_codex_arm: bool,
+) -> None:
+    """Refuse a study id that claims a design this invocation is not.
+
+    ``--study-id`` exists so a rehearsal can name itself. Nothing stopped
+    it naming itself *the study*: a toy or a ``--without-codex``
+    projection could be initialised as ``step10-c19``, and every artifact,
+    every report headline, and every directory downstream would then cite
+    the pre-registration by name while holding a smaller design.
+
+    A protocol id is therefore only allowed on the invocation that is
+    actually that protocol -- the full design, at full size, with no
+    projection in effect -- where it is also the default and passing it
+    changes nothing.
+    """
+    if study_id is None or study_id not in PROTOCOL_IDS:
+        return
+    reduced = [
+        reason
+        for reason, active in (
+            ("--toy", toy),
+            ("--without-codex", without_codex_arm),
+        )
+        if active
+    ]
+    if not reduced and study_id == protocol.study_id:
+        return
+    detail = (
+        f"this invocation is reduced by {' and '.join(reduced)}"
+        if reduced
+        else f"that id belongs to protocol {study_id!r}, not to "
+        f"{protocol.protocol_id!r}"
+    )
+    raise SystemExit(
+        f"refusing --study-id {study_id!r}: it names a registered "
+        f"protocol, and {detail}. A study id that claims the "
+        "pre-registration while holding a smaller design would make every "
+        "artifact downstream cite a design this run is not. Choose an id "
+        f"outside {PROTOCOL_IDS}."
+    )
+
+
 def _run_init(  # noqa: PLR0913
     *,
     study_dir: Path,
@@ -598,6 +665,12 @@ def _run_init(  # noqa: PLR0913
     protocol = study_protocol(protocol_id, toy=toy)
     if without_codex_arm:
         protocol = without_codex(protocol)
+    _require_honest_study_id(
+        study_id,
+        protocol=protocol,
+        toy=toy,
+        without_codex_arm=without_codex_arm,
+    )
     path = init_study(
         study_dir,
         protocol=protocol,

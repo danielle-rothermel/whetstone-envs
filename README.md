@@ -311,17 +311,34 @@ uv run --extra optim whetstone-study report \
 `init` regenerates the pinned population and records each split's task
 hashes, the pool manifest's content hash, and the sha256 of the protocol
 document itself, so the manifest names the revision of the
-pre-registration that was actually in force. `--protocol-doc` points at a
+pre-registration that was actually in force. **The registered text ships
+in the package**, at
+`src/whetstone_envs/optim/study/protocol_docs/step10-c19-protocol.md`,
+byte-identical to the durable authoring copy and pinned by a golden
+digest -- so the digest a manifest records is checkable from any checkout
+rather than naming a file on one machine. `--protocol-doc` points at a
 different copy of that document; the digest always comes from the file
-read. `init` refuses to overwrite an existing `study.json`, because a
+read.
+
+The manifest records no separate assignment digest: Step 10's authorising
+assignment *is* the protocol document, so `assignment_doc_sha256` is
+absent and the report says so, rather than carrying the digest of a fixed
+marker string that would verify nothing. `init` refuses to overwrite an existing `study.json`, because a
 second initialisation over a study that already holds evidence would reset
 a design that evidence refers to.
 
 `--toy` authors the sized-down variant of the same protocol. Only the
 sized fields differ -- the splits, the per-arm train/val partition, the
-population size and seed, and the MIPROv2 minibatch -- and a golden test
-asserts every other field matches the real design, so a toy cannot
-rehearse a study the real one does not run.
+population size and seed, the MIPROv2 minibatch, and COPRO's breadth and
+depth -- and a golden test asserts every other field matches the real
+design, so a toy cannot rehearse a study the real one does not run.
+
+`--study-id` names a rehearsal so its artifacts cannot be mistaken for the
+study's. It is refused when it names a *registered protocol* on an
+invocation that is not that protocol at full size with no projection in
+effect: a toy or a `--without-codex` run initialised as `step10-c19` would
+leave every artifact downstream citing the pre-registration by name while
+holding a smaller design.
 
 The opt-ins each stage needs, by name:
 
@@ -349,7 +366,22 @@ it is marked invalid.
 for fake-transport rehearsals: the Codex guard fires on the *design*
 whatever transport the task model is on, so a rehearsal of the rest of the
 study drops the arm rather than stubbing it. What it produces is a
-strictly smaller design, not the pre-registration.
+strictly smaller design, not the pre-registration, and it says so on every
+axis a reader checks: its `study_id` gains a `-without-codex` suffix, its
+`models.codex_agent_model` records the omission instead of naming an agent
+no arm will reach, the manifest carries
+`design_projection: "without-codex"`, and the report's headline is
+prefixed with the projection so its numbers cannot be read as the study's.
+
+#### Storage the study needs
+
+Budget roughly **4.6 KB of `runtime.sqlite` per evaluated row**, dominated
+by `eval_outputs` and `eval_component_traces`. At the eight-arm design's
+row count that is **≈0.4-0.5 GB** for the study's own store, before the
+per-run directories the arms leave beside it. This is an operator note,
+not a gate: the number that has actually bitten is GEPA's, whose
+unpinned `auto` budget produced a 1.73 GB store from a single run --
+which is why `gepa_max_metric_calls` is pinned at 200.
 
 ### Study transports and the per-stage ledger
 

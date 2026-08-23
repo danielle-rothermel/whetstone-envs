@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 from enum import UNIQUE, StrEnum, auto, verify
 from typing import TYPE_CHECKING
 
-from whetstone_envs.optim.split import TRAIN_VAL_OPTIMIZERS
+from whetstone_envs.optim.split import (
+    COPRO_SHAPED_OPTIMIZERS,
+    MIN_COPRO_BREADTH,
+    MIN_COPRO_DEPTH,
+    TRAIN_VAL_OPTIMIZERS,
+)
 from whetstone_envs.optim.study.manifest import (
     PreRegistrationViolationError,
     read_study_manifest,
@@ -256,6 +261,18 @@ class ArmSpec:
     k_run: int
     seeds: tuple[int, ...]
     demo_mode: str | None = None
+    #: COPRO's search shape: ``breadth`` candidates per step over
+    #: ``depth + 1`` steps. Required on every arm whose search *is* COPRO's
+    #: -- COPRO itself and ``null-random`` -- and refused on the others.
+    #:
+    #: Required rather than optional, unlike the MIPROv2 settings, because
+    #: the runner's own default is a smoke-run shape two thirds smaller
+    #: than the registered one and an unset arm would silently take it: the
+    #: study would run a 1,056-row search under a design that priced 4,752.
+    #: The whole COPRO budget is ``breadth x depth x T_int x K_REPEAT``, so
+    #: an arm that does not state its shape has not stated its cost.
+    copro_breadth: int | None = None
+    copro_depth: int | None = None
     #: MIPROv2 search shape and split, when this arm sets them. ``None``
     #: keeps the runner's own default, which is what every arm the study
     #: builds today does; they are here so an arm can request the
@@ -344,10 +361,61 @@ class ArmSpec:
                 "least 1"
             )
 
+    def _validate_copro(self) -> None:
+        """Refuse a COPRO shape this arm could not honestly claim.
+
+        The mirror of :meth:`_validate_miprov2`, and refused for the same
+        reason: a breadth or depth set on an optimizer that reads neither
+        looks honoured and is not.
+
+        The two halves travel together, as MIPROv2's minibatch and size do.
+        An arm may leave both unset -- a smoke run has no design to state
+        -- but an arm that states one and not the other would run half a
+        shape it chose and half the runner's default. What guarantees the
+        *study's* arms carry the pinned shape is the protocol that builds
+        them and the ``search_by_arm`` block that hashes it, not a rule
+        forbidding every unshaped COPRO arm everywhere.
+        """
+        shape = (self.copro_breadth, self.copro_depth)
+        if self.optimizer in COPRO_SHAPED_OPTIMIZERS:
+            if (self.copro_breadth is None) != (self.copro_depth is None):
+                # Half a shape is worse than none: the unset half silently
+                # takes the runner's default, so the arm would run a shape
+                # nobody chose.
+                raise ValueError(
+                    f"arm {self.arm_id!r} declares half a COPRO search "
+                    "shape; state copro_breadth and copro_depth together "
+                    "or neither"
+                )
+            if (
+                self.copro_breadth is not None
+                and self.copro_breadth < MIN_COPRO_BREADTH
+            ):
+                # A single draft per step leaves nothing to select
+                # between, which is upstream ``CoproControl``'s own floor.
+                raise ValueError(
+                    f"arm {self.arm_id!r} copro_breadth must be at least "
+                    f"{MIN_COPRO_BREADTH}"
+                )
+            if (
+                self.copro_depth is not None
+                and self.copro_depth < MIN_COPRO_DEPTH
+            ):
+                raise ValueError(
+                    f"arm {self.arm_id!r} copro_depth must be at least "
+                    f"{MIN_COPRO_DEPTH}"
+                )
+        elif any(value is not None for value in shape):
+            raise ValueError(
+                f"arm {self.arm_id!r} sets a COPRO search shape but runs "
+                f"optimizer {self.optimizer!r}"
+            )
+
     def __post_init__(self) -> None:
         if not self.arm_id.strip():
             raise ValueError("arm ids must be nonblank")
         self._validate_miprov2()
+        self._validate_copro()
         split_supplied = (
             self.train_size is not None or self.val_size is not None
         )
@@ -572,6 +640,24 @@ class StudySpec:
         return {arm.arm_id: arm.optimizer for arm in self.arms}
 
     @property
+    def copro_shape_by_arm(self) -> dict[str, tuple[int, int] | None]:
+        """Each arm's pinned ``(breadth, depth)``, or ``None``.
+
+        A caller pricing a COPRO-shaped arm needs the shape, because the
+        arm's whole per-run cost is ``breadth x depth x T_int x K_REPEAT``:
+        an estimate taken at the estimator's default rather than the arm's
+        own prices a search the study does not run.
+        """
+        return {
+            arm.arm_id: (
+                None
+                if arm.copro_breadth is None or arm.copro_depth is None
+                else (arm.copro_breadth, arm.copro_depth)
+            )
+            for arm in self.arms
+        }
+
+    @property
     def real_arms(self) -> tuple[ArmSpec, ...]:
         """The hypotheses, in Holm-family order."""
         return tuple(arm for arm in self.arms if arm.kind is ArmKind.REAL)
@@ -665,6 +751,16 @@ def spec_from_manifest(
             # that says it batched.
             miprov2_minibatch=arm.minibatch,
             miprov2_minibatch_size=arm.minibatch_size,
+            # Read back for the minibatch's reason, and with the largest
+            # budget consequence of the three: COPRO's whole per-run cost
+            # is ``breadth x depth x T_int x K_REPEAT``, and MIPROv2's
+            # trials set its own. A spec rebuilt without them took the
+            # runner's smoke-run defaults under a design hash pinning the
+            # registered shape.
+            copro_breadth=arm.copro_breadth,
+            copro_depth=arm.copro_depth,
+            miprov2_num_trials=arm.miprov2_num_trials,
+            miprov2_num_candidates=arm.miprov2_num_candidates,
         )
         for arm in manifest.arms
     )
@@ -756,6 +852,42 @@ def _require_pinned_split(manifest: StudyManifest) -> None:
             "minibatch_by_arm, so the spec they rebuild is not the design "
             "this study registered: " + "; ".join(batched)
         )
+    searched = [
+        f"{arm.arm_id}: records {_recorded_search(arm)}, pre-registered "
+        f"{dict(pinned.search_by_arm[arm.arm_id])}"
+        for arm in manifest.arms
+        if arm.arm_id in pinned.search_by_arm
+        and _recorded_search(arm) != dict(pinned.search_by_arm[arm.arm_id])
+    ]
+    if searched:
+        # The same class of error again, and the one with the largest
+        # budget consequence: COPRO's whole per-run cost follows from
+        # breadth and depth, so an arm that ran a shape the block did not
+        # pin both searched something else and spent something else.
+        raise PreRegistrationViolationError(
+            "these arm records disagree with the pre-registered "
+            "search_by_arm, so the spec they rebuild is not the design "
+            "this study registered: " + "; ".join(searched)
+        )
+
+
+def _recorded_search(arm: ArmRecord) -> dict[str, int]:
+    """One arm record's search shape, in ``search_by_arm``'s own shape.
+
+    Only the fields the record actually carries appear, so a record with
+    no shape projects to an empty mapping and compares equal to the empty
+    mapping the block pins for an arm whose optimizer reads neither.
+    """
+    shape: dict[str, int] = {}
+    if arm.copro_breadth is not None:
+        shape["breadth"] = arm.copro_breadth
+    if arm.copro_depth is not None:
+        shape["depth"] = arm.copro_depth
+    if arm.miprov2_num_trials is not None:
+        shape["num_trials"] = arm.miprov2_num_trials
+    if arm.miprov2_num_candidates is not None:
+        shape["num_candidates"] = arm.miprov2_num_candidates
+    return shape
 
 
 def require_pinned_arms(manifest: StudyManifest) -> None:

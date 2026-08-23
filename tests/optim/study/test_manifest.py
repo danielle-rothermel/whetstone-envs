@@ -341,8 +341,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 9
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v9"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 10
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v10"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -361,6 +361,7 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "protocol_doc_path",
         "protocol_doc_sha256",
         "assignment_doc_sha256",
+        "design_projection",
         "population",
         "splits",
         "models",
@@ -490,6 +491,10 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "val_size",
         "minibatch",
         "minibatch_size",
+        "copro_breadth",
+        "copro_depth",
+        "miprov2_num_trials",
+        "miprov2_num_candidates",
         "control_identity_hash",
         "seed_note",
         "runs",
@@ -597,7 +602,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v10"
+    payload["schema"] = "whetstone_envs.step10_study/v9"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 
@@ -966,11 +971,18 @@ def _pre_registration(
     # No arm in this fixture minibatches; the block still names every arm,
     # because "this arm does not minibatch" is itself pre-registered.
     minibatch: dict[str, int | None] = dict.fromkeys(_PINNED_K_RUN_BY_ARM)
+    # Nor does any arm in this fixture pin a search shape; the block names
+    # every arm for the same reason, with an empty mapping meaning "this
+    # arm's optimizer has no shape to pin".
+    search: dict[str, dict[str, int]] = {
+        arm_id: {} for arm_id in _PINNED_K_RUN_BY_ARM
+    }
     return PreRegistrationRecord(
         k_repeat=k_repeat,
         k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
         split_by_arm=splits,
         minibatch_by_arm=minibatch,
+        search_by_arm=search,
         ci_level=0.95,
         resamples=10_000,
         bootstrap_seed=0,
@@ -982,6 +994,7 @@ def _pre_registration(
             k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
             split_by_arm=splits,
             minibatch_by_arm=minibatch,
+            search_by_arm=search,
             ci_level=0.95,
             resamples=10_000,
             bootstrap_seed=0,
@@ -1021,6 +1034,7 @@ def test_the_hashed_payload_keys_are_pinned() -> None:
         "k_run_by_arm",
         "split_by_arm",
         "minibatch_by_arm",
+        "search_by_arm",
         "ci_level",
         "resamples",
         "bootstrap_seed",

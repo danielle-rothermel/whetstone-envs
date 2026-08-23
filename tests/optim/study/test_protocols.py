@@ -9,15 +9,14 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import fields, replace
-from typing import TYPE_CHECKING
 
 import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
+from whetstone_envs.optim.study.manifest import CODEX_AGENT_OMITTED
 from whetstone_envs.optim.study.protocols import (
     CODEX_AGENT_MODEL,
     GEPA_MAX_METRIC_CALLS,
@@ -26,6 +25,8 @@ from whetstone_envs.optim.study.protocols import (
     MIPROV2_NUM_TRIALS,
     PROPOSER_MODEL,
     PROTOCOL_DOC_PATH,
+    PROTOCOL_DOC_SHA256,
+    PROTOCOL_IDS,
     SIZED_FIELDS,
     STEP10_C19,
     STEP10_C19_TOY,
@@ -263,14 +264,40 @@ def test_a_missing_protocol_document_is_refused(tmp_path: Path) -> None:
         protocol_doc_sha256(tmp_path / "absent.md")
 
 
-def test_the_protocol_names_the_durable_document() -> None:
+def test_the_protocol_names_the_document_it_ships() -> None:
+    """The registered text is in the package, and it is readable here.
+
+    A default pointing into one machine's durable notes made ``init``
+    unusable from any other checkout, because ``init`` hashes this file and
+    refuses to author a study without it. The document ships in the
+    package, so the digest a manifest records is checkable by whoever reads
+    the manifest.
+    """
     assert STEP10_C19.protocol_doc_path == PROTOCOL_DOC_PATH
-    assert PROTOCOL_DOC_PATH.endswith("0430-step10-validation-protocol.md")
+    assert PROTOCOL_DOC_PATH.endswith("step10-c19-protocol.md")
+    assert Path(PROTOCOL_DOC_PATH).is_file()
+
+
+def test_the_shipped_document_still_hashes_to_the_registered_digest() -> None:
+    """The golden that makes the in-repo copy a pre-registration.
+
+    ``PROTOCOL_DOC_SHA256`` is the digest of the text the study was
+    registered on, byte-identical to the durable authoring copy. A
+    pre-registration whose text could change without anything failing
+    would pre-register nothing.
+    """
+    assert protocol_doc_sha256(Path(PROTOCOL_DOC_PATH)) == PROTOCOL_DOC_SHA256
 
 
 # --------------------------------------------------------------------------
 # The codex-free projection
 # --------------------------------------------------------------------------
+
+
+#: What a projection is permitted to differ from the design on: its arm
+#: list, and the two fields that exist so it cannot be mistaken for the
+#: design it projects.
+_PROJECTION_FIELDS = frozenset({"arms", "study_id", "codex_agent_model"})
 
 
 def test_without_codex_drops_exactly_the_codex_arm() -> None:
@@ -279,10 +306,25 @@ def test_without_codex_drops_exactly_the_codex_arm() -> None:
     assert all(arm.optimizer != "codex" for arm in rehearsal.arms)
     assert len(rehearsal.arms) == len(STEP10_C19.arms) - 1
     for field in fields(StudyProtocol):
-        if field.name != "arms":
+        if field.name not in _PROJECTION_FIELDS:
             assert getattr(rehearsal, field.name) == getattr(
                 STEP10_C19, field.name
             ), field.name
+
+
+def test_the_projection_cannot_be_mistaken_for_the_design() -> None:
+    """A rehearsal names itself, on every axis a reader checks.
+
+    A ``--without-codex`` manifest was byte-indistinguishable from the
+    pre-registration on ``study_id`` and on the ``models`` block, so its
+    artifacts could land in the study's directory and its numbers could be
+    cited as the study's. Both now say what they are.
+    """
+    rehearsal = without_codex(STEP10_C19)
+    assert rehearsal.study_id == f"{STEP10_C19.study_id}-without-codex"
+    assert rehearsal.study_id not in PROTOCOL_IDS
+    assert rehearsal.codex_agent_model == CODEX_AGENT_OMITTED
+    assert rehearsal.codex_agent_model != STEP10_C19.codex_agent_model
 
 
 # --------------------------------------------------------------------------

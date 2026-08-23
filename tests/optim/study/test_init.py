@@ -272,3 +272,90 @@ def test_a_codex_free_design_pins_no_codex_agent(
     spec = load_study_spec(study_dir)
     assert spec.codex_agent_model is None
     assert read_study_manifest(study_dir).models.codex_agent_model
+
+
+def test_the_search_shape_design_reaches_the_arm_record(
+    toy: StudyProtocol, protocol_doc: Path
+) -> None:
+    """The rest of the pinned shape rides the record too (schema v10).
+
+    Fails-before: v9 gave ``ArmRecord`` the minibatch but nowhere to carry
+    COPRO's breadth/depth or MIPROv2's trials/candidates, so
+    ``spec_from_manifest`` rebuilt all four as ``None`` and every
+    manifest-driven run took ``RunSpec``'s smoke-run defaults instead.
+    """
+    manifest = study_manifest_for(toy, protocol_doc=protocol_doc)
+    by_id = {arm.arm_id: arm for arm in manifest.arms}
+    for arm in toy.arms:
+        recorded = by_id[arm.arm_id]
+        assert recorded.copro_breadth == arm.copro_breadth, arm.arm_id
+        assert recorded.copro_depth == arm.copro_depth, arm.arm_id
+        assert recorded.miprov2_num_trials == arm.miprov2_num_trials, (
+            arm.arm_id
+        )
+        assert recorded.miprov2_num_candidates == arm.miprov2_num_candidates, (
+            arm.arm_id
+        )
+    # Only the COPRO-shaped arms carry a breadth and depth; only the
+    # MIPROv2 arms carry trials and candidates.
+    assert by_id["copro"].copro_breadth == toy.copro_breadth
+    assert by_id["null-random"].copro_depth == toy.copro_depth
+    assert by_id["gepa"].copro_breadth is None
+    assert by_id["miprov2"].miprov2_num_trials == toy.miprov2_num_trials
+    assert by_id["copro"].miprov2_num_trials is None
+
+
+def test_the_written_manifest_rebuilds_the_search_shape(
+    tmp_path: Path, toy: StudyProtocol, protocol_doc: Path
+) -> None:
+    """What init writes is the shape the stage that runs COPRO reads back."""
+    study_dir = tmp_path / "study"
+    init_study(study_dir, protocol=toy, protocol_doc=protocol_doc)
+    spec = load_study_spec(study_dir, stage=StageId.STAGE2)
+    by_id = {arm.arm_id: arm for arm in spec.arms}
+    assert by_id["copro"].copro_breadth == toy.copro_breadth
+    assert by_id["copro"].copro_depth == toy.copro_depth
+    assert by_id["miprov2"].miprov2_num_trials == toy.miprov2_num_trials
+
+
+def test_the_manifest_records_no_fabricated_assignment_digest(
+    toy: StudyProtocol, protocol_doc: Path
+) -> None:
+    """Step 10's authorising assignment is the protocol document itself.
+
+    Fails-before: the field held ``sha256("assignment-is-protocol-doc")``
+    -- the digest of a fixed marker string, which read like provenance and
+    verified nothing. An absent assignment is stated as absent.
+    """
+    manifest = study_manifest_for(toy, protocol_doc=protocol_doc)
+    assert manifest.assignment_doc_sha256 is None
+
+
+def test_a_projection_records_that_it_is_one(
+    tmp_path: Path, toy: StudyProtocol, protocol_doc: Path
+) -> None:
+    """A ``--without-codex`` manifest says so, and names itself apart.
+
+    Fails-before: the projection's manifest was indistinguishable from the
+    full design -- same ``study_id``, same ``models`` block, and no field
+    recording that an arm had been dropped -- so a fake-transport
+    rehearsal could be read, and reported, as the study.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        CODEX_AGENT_OMITTED,
+        DESIGN_PROJECTION_FULL,
+        DESIGN_PROJECTION_WITHOUT_CODEX,
+    )
+
+    full = study_manifest_for(toy, protocol_doc=protocol_doc)
+    assert full.design_projection == DESIGN_PROJECTION_FULL
+
+    study_dir = tmp_path / "projection"
+    init_study(
+        study_dir, protocol=without_codex(toy), protocol_doc=protocol_doc
+    )
+    projected = read_study_manifest(study_dir)
+    assert projected.design_projection == DESIGN_PROJECTION_WITHOUT_CODEX
+    assert projected.study_id != full.study_id
+    assert projected.study_id.endswith("-without-codex")
+    assert projected.models.codex_agent_model == CODEX_AGENT_OMITTED

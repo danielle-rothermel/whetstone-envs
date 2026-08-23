@@ -12,7 +12,8 @@ sizes. :data:`STEP10_C19` is the real study; :data:`STEP10_C19_TOY` is the
 sized-down variant the tests and the dry runs use. Both are built by
 :func:`_step10_c19` from one body of pinned values, so the only fields that
 can differ between them are the sized ones -- splits, per-arm train/val,
-the pool's ``n_per_stratum`` and seed, and the MIPROv2 minibatch size.
+the pool's ``n_per_stratum`` and seed, the MIPROv2 minibatch size, and
+COPRO's breadth and depth.
 :data:`SIZED_FIELDS` names exactly those, and a golden test asserts nothing
 else drifts. A toy that could disagree with the real design on ``K_REPEAT``,
 on the arm list, or on the correction rule would be a toy that tests a
@@ -30,9 +31,12 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, replace
+from importlib.resources import files
 from typing import TYPE_CHECKING
 
 from whetstone_envs.optim.families import FamilyId
+from whetstone_envs.optim.study.manifest import CODEX_AGENT_OMITTED
+from whetstone_envs.optim.study.protocol_docs import STEP10_C19_PROTOCOL_DOC
 from whetstone_envs.optim.study.spec import (
     CODEX_EVALUATE_CALL_CAP,
     PROTOCOL_SPLIT_SIZES,
@@ -49,14 +53,21 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
+#: Where the registered documents live, as an importable package name.
+_PROTOCOL_DOC_PACKAGE = "whetstone_envs.optim.study.protocol_docs"
+
 __all__ = [
     "CODEX_AGENT_MODEL",
+    "COPRO_BREADTH",
+    "COPRO_DEPTH",
     "GEPA_MAX_METRIC_CALLS",
+    "GEPA_REFLECTION_MINIBATCH_SIZE",
     "MIPROV2_MINIBATCH_SIZE",
     "MIPROV2_NUM_CANDIDATES",
     "MIPROV2_NUM_TRIALS",
     "PROPOSER_MODEL",
     "PROTOCOL_DOC_PATH",
+    "PROTOCOL_DOC_SHA256",
     "PROTOCOL_IDS",
     "SIZED_FIELDS",
     "STEP10_C19",
@@ -64,12 +75,15 @@ __all__ = [
     "STEP10_C19_TOY",
     "STEP10_C19_TOY_ID",
     "TASK_MODEL",
+    "TOY_COPRO_BREADTH",
+    "TOY_COPRO_DEPTH",
     "TOY_MIPROV2_MINIBATCH_SIZE",
     "TOY_N_PER_STRATUM",
     "TOY_POOL_SEED_START",
     "TOY_SPLIT_SIZES",
     "TOY_TRAIN_SIZE",
     "TOY_VAL_SIZE",
+    "WITHOUT_CODEX_SUFFIX",
     "ArmDesign",
     "StudyProtocol",
     "protocol_doc_sha256",
@@ -86,13 +100,37 @@ STEP10_C19_ID = "step10-c19"
 STEP10_C19_TOY_ID = "step10-c19-toy"
 PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 
+#: The digest of the registered pre-registration text, pinned as a golden.
+#:
+#: ``init`` computes the digest from the file it actually reads, so this is
+#: not what a manifest records -- it is what a test asserts the shipped
+#: document still hashes to. A pre-registration whose text could change
+#: without anything failing would pre-register nothing.
+PROTOCOL_DOC_SHA256 = (
+    "a311de47411412c7a02b7e83c46874f927f17eb9c173c0b53b207499c6d0e85e"
+)
+
+
+def _protocol_doc_path() -> str:
+    """The registered pre-registration document, inside this package.
+
+    Resolved from the package rather than from a home directory. ``init``
+    hashes this file and refuses to author a study without it, so a default
+    pointing into one machine's durable notes made every other checkout --
+    and every installed copy of this package -- unable to initialise a
+    study at all. The document ships in the wheel, which is what makes the
+    digest a manifest records checkable by whoever reads the manifest.
+
+    ``--protocol-doc`` still overrides it, and the digest always comes from
+    whichever file is actually read.
+    """
+    return str(files(_PROTOCOL_DOC_PACKAGE).joinpath(STEP10_C19_PROTOCOL_DOC))
+
+
 #: The pre-registration document itself. ``init`` hashes the file at this
 #: path and records the digest, so a manifest names a *specific* revision of
 #: the protocol rather than a filename that could be rewritten afterwards.
-PROTOCOL_DOC_PATH = (
-    "~/drotherm/data/.claude/whetstone-ai/2026-08-22/"
-    "0430-step10-validation-protocol.md"
-)
+PROTOCOL_DOC_PATH = _protocol_doc_path()
 
 # --------------------------------------------------------------------------
 # Models (D14, and note 26 for the agent)
@@ -103,6 +141,10 @@ PROTOCOL_DOC_PATH = (
 #: run-time evidence, not design, so it is not pinned here.
 TASK_MODEL = "openai/gpt-5-nano"
 PROPOSER_MODEL = "openai/gpt-5.4-nano"
+
+#: What a projection with no Codex arm appends to the study id, so a
+#: rehearsal's artifacts can never be mistaken for the study's.
+WITHOUT_CODEX_SUFFIX = "-without-codex"
 
 #: The Codex arm's agent, pinned as design (Phase E item 6). The runner's
 #: own ``CODEX_DEFAULT_AGENT_MODEL`` is a *run* default; a study that let it
@@ -138,10 +180,38 @@ POOL_SEED_START = 1_000_000
 # Per-optimizer control pins
 # --------------------------------------------------------------------------
 
+#: COPRO's search shape (protocol section 5.1). The runner's own defaults
+#: are 2 and 1 -- a smoke-run shape -- and the protocol pins 6 and 3, from
+#: which the whole COPRO budget follows:
+#: ``breadth x depth x T_int x K_REPEAT = 6 x 3 x 88 x 3 = 4,752`` rows per
+#: run. Pinned here rather than left to the runner because the runner's
+#: default and the estimator's default agreed with each other and with
+#: nothing else: a study that never forwarded the shape would have run a
+#: 1,056-row search under a design that priced 4,752.
+#:
+#: ``null-random`` takes the same shape. It is COPRO's search with an
+#: uninformative proposer, so a control at a different breadth or depth
+#: would control for a search the study never ran.
+COPRO_BREADTH = 6
+COPRO_DEPTH = 3
+
 #: GEPA's metric-call ceiling (D3, note 14). ``auto="light"`` resolves to
 #: 732, which ran for 22 minutes and produced a 1.73 GB store; 200 is the
 #: pinned budget the power design and the Stage-1 gate are both built on.
+#:
+#: This module is the single owner. ``gates`` imports it rather than
+#: restating it: two constants that happen to agree are one edit away from
+#: a gate that judges a run against a ceiling the run never had.
 GEPA_MAX_METRIC_CALLS = 200
+
+#: The traces GEPA's reflection proposer consumes per reflection round
+#: (protocol section 5.1). ``build_gepa_control`` hardcoded 1, which is a
+#: single-trace reflection -- a different proposer input than the three the
+#: protocol registered, and one that changes what the reflection step can
+#: see. Pinned here and plumbed to the control so the audit invariant can
+#: check the run against the design rather than against the run's own
+#: hardcoded value.
+GEPA_REFLECTION_MINIBATCH_SIZE = 3
 
 #: MIPROv2's search shape. ``num_candidates`` is at the minibatch floor
 #: rather than below it: two candidates with minibatching exhausts the
@@ -178,6 +248,12 @@ TOY_VAL_SIZE = 2
 TOY_N_PER_STRATUM = 1
 TOY_POOL_SEED_START = 765_432
 TOY_MIPROV2_MINIBATCH_SIZE = 2
+#: The toy's COPRO shape: the runner's own smoke-run defaults. Sized down
+#: for the same reason the splits are -- a 6x3 search over a four-task
+#: internal split is 216 rows of test time to establish nothing the real
+#: design does not already pin.
+TOY_COPRO_BREADTH = 2
+TOY_COPRO_DEPTH = 1
 
 #: Exactly the fields :data:`STEP10_C19` and :data:`STEP10_C19_TOY` are
 #: permitted to differ on. The golden test reads this tuple, so adding a
@@ -192,6 +268,8 @@ SIZED_FIELDS: tuple[str, ...] = (
     "train_size",
     "val_size",
     "miprov2_minibatch_size",
+    "copro_breadth",
+    "copro_depth",
 )
 
 
@@ -211,6 +289,11 @@ class ArmDesign:
     demo_mode: str | None = None
     train_size: int | None = None
     val_size: int | None = None
+    #: The COPRO search shape this arm runs, on the arms whose search *is*
+    #: COPRO's -- COPRO itself and ``null-random``. ``None`` on every other
+    #: arm, whose optimizer has no breadth or depth to set.
+    copro_breadth: int | None = None
+    copro_depth: int | None = None
     miprov2_num_trials: int | None = None
     miprov2_num_candidates: int | None = None
     miprov2_minibatch: bool = False
@@ -233,6 +316,8 @@ class ArmDesign:
             k_run=k_run_for(self.arm_id, stage=stage),
             seeds=arm_seeds(self.arm_id, stage=stage),
             demo_mode=self.demo_mode,
+            copro_breadth=self.copro_breadth,
+            copro_depth=self.copro_depth,
             miprov2_num_trials=self.miprov2_num_trials,
             miprov2_num_candidates=self.miprov2_num_candidates,
             miprov2_minibatch=self.miprov2_minibatch,
@@ -267,7 +352,10 @@ class StudyProtocol:
     provider: str
     seed_control: str
     protocol_doc_path: str
+    copro_breadth: int
+    copro_depth: int
     gepa_max_metric_calls: int
+    gepa_reflection_minibatch_size: int
     codex_evaluate_call_cap: int
     miprov2_num_trials: int
     miprov2_num_candidates: int
@@ -339,6 +427,8 @@ def _arms(
     train_size: int,
     val_size: int,
     minibatch_size: int,
+    copro_breadth: int,
+    copro_depth: int,
 ) -> tuple[ArmDesign, ...]:
     """The study's arms, in report order: four real, then the two nulls.
 
@@ -365,7 +455,13 @@ def _arms(
         )
 
     return (
-        ArmDesign(arm_id="copro", optimizer="copro", kind=ArmKind.REAL),
+        ArmDesign(
+            arm_id="copro",
+            optimizer="copro",
+            kind=ArmKind.REAL,
+            copro_breadth=copro_breadth,
+            copro_depth=copro_depth,
+        ),
         miprov2(MIPROV2_EFFICACY_DEMO_MODE),
         *(miprov2(mode) for mode in MIPROV2_FIDELITY_DEMO_MODES),
         ArmDesign(
@@ -376,8 +472,15 @@ def _arms(
             val_size=val_size,
         ),
         ArmDesign(arm_id="codex", optimizer="codex", kind=ArmKind.REAL),
+        # null-A takes COPRO's shape, because it is COPRO's search with an
+        # uninformative proposer. A control at a different breadth or depth
+        # would control for a search the study never ran.
         ArmDesign(
-            arm_id="null-random", optimizer="null-random", kind=ArmKind.NULL
+            arm_id="null-random",
+            optimizer="null-random",
+            kind=ArmKind.NULL,
+            copro_breadth=copro_breadth,
+            copro_depth=copro_depth,
         ),
         ArmDesign(
             arm_id="null-identity",
@@ -397,6 +500,8 @@ def _step10_c19(  # noqa: PLR0913
     train_size: int,
     val_size: int,
     miprov2_minibatch_size: int,
+    copro_breadth: int,
+    copro_depth: int,
 ) -> StudyProtocol:
     """Build one size of the Step 10 c19 design.
 
@@ -421,7 +526,10 @@ def _step10_c19(  # noqa: PLR0913
         provider=PROVIDER_NOTE,
         seed_control=SEED_CONTROL_NOTE,
         protocol_doc_path=PROTOCOL_DOC_PATH,
+        copro_breadth=copro_breadth,
+        copro_depth=copro_depth,
         gepa_max_metric_calls=GEPA_MAX_METRIC_CALLS,
+        gepa_reflection_minibatch_size=GEPA_REFLECTION_MINIBATCH_SIZE,
         codex_evaluate_call_cap=CODEX_EVALUATE_CALL_CAP,
         miprov2_num_trials=MIPROV2_NUM_TRIALS,
         miprov2_num_candidates=MIPROV2_NUM_CANDIDATES,
@@ -430,6 +538,8 @@ def _step10_c19(  # noqa: PLR0913
             train_size=train_size,
             val_size=val_size,
             minibatch_size=miprov2_minibatch_size,
+            copro_breadth=copro_breadth,
+            copro_depth=copro_depth,
         ),
     )
 
@@ -444,6 +554,8 @@ STEP10_C19 = _step10_c19(
     train_size=PROTOCOL_TRAIN_SIZE,
     val_size=PROTOCOL_VAL_SIZE,
     miprov2_minibatch_size=MIPROV2_MINIBATCH_SIZE,
+    copro_breadth=COPRO_BREADTH,
+    copro_depth=COPRO_DEPTH,
 )
 
 #: The same design at test size.
@@ -456,6 +568,8 @@ STEP10_C19_TOY = _step10_c19(
     train_size=TOY_TRAIN_SIZE,
     val_size=TOY_VAL_SIZE,
     miprov2_minibatch_size=TOY_MIPROV2_MINIBATCH_SIZE,
+    copro_breadth=TOY_COPRO_BREADTH,
+    copro_depth=TOY_COPRO_DEPTH,
 )
 
 _BY_ID: dict[str, StudyProtocol] = {
@@ -516,9 +630,17 @@ def without_codex(protocol: StudyProtocol) -> StudyProtocol:
     real protocol instead of a second hand-written one.
 
     The result is not the pre-registration: it is a strictly smaller
-    design, and a study initialised from it records its own arm list.
+    design, and a study initialised from it says so on every axis a reader
+    checks. Its ``study_id`` is the protocol's own with
+    :data:`WITHOUT_CODEX_SUFFIX` appended, so its artifacts cannot land in
+    the study's directory or be cited as the study's; and its
+    ``codex_agent_model`` records the omission rather than naming an agent
+    no arm will reach. ``init`` additionally stamps the manifest's
+    ``design_projection``, which is what the report prints.
     """
     return replace(
         protocol,
+        study_id=f"{protocol.study_id}{WITHOUT_CODEX_SUFFIX}",
+        codex_agent_model=CODEX_AGENT_OMITTED,
         arms=tuple(arm for arm in protocol.arms if arm.optimizer != "codex"),
     )

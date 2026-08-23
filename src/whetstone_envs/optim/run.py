@@ -111,7 +111,9 @@ from whetstone_envs.optim.provider import (
 )
 from whetstone_envs.optim.run_cost import project_run_cost, write_run_cost
 from whetstone_envs.optim.split import (
+    COPRO_SHAPED_OPTIMIZERS,
     GEPA_OPTIMIZER,
+    MIN_COPRO_BREADTH,
     TRAIN_VAL_OPTIMIZERS,
     partition_internal_split,
 )
@@ -158,19 +160,11 @@ DEFAULT_OUTPUT_ROOT = (
 #: at spec validation.
 OPTIMIZERS = ("codex", "copro", "gepa", "miprov2", NULL_RANDOM_OPTIMIZER)
 
-#: The optimizers whose search shape is COPRO's: COPRO itself and the
-#: control that stands in for it. Named once so the two cannot drift apart
-#: -- a null that searched a different shape would control for the wrong
-#: thing.
-COPRO_SHAPED_OPTIMIZERS = ("copro", NULL_RANDOM_OPTIMIZER)
 TRANSPORTS = ("fake", "openrouter")
 
 #: Retained COPRO search shape: two drafts per step, one step of depth.
 DEFAULT_COPRO_BREADTH = 2
 DEFAULT_COPRO_DEPTH = 1
-#: The smallest breadth ``CoproControl`` accepts. A single draft per step
-#: leaves nothing to select between, so upstream refuses it.
-MIN_COPRO_BREADTH = 2
 #: Each optimizer's own seed default, used when a spec names none. These
 #: mirror the values ``configure_gepa`` and ``configure_miprov2`` already
 #: default to, so an unseeded run keeps the control identity it always had.
@@ -249,6 +243,11 @@ class RunSpec:
     #: GEPA's paid metric-call ceiling. ``None`` keeps the family default of
     #: one full pass over the trainset plus one reflection minibatch.
     gepa_max_metric_calls: int | None = None
+    #: Traces GEPA's reflection proposer consumes per reflection round.
+    #: ``None`` keeps the family's own single-trace default. A study pins
+    #: this, because how many traces the reflection step sees is part of
+    #: the proposer's input rather than a runtime detail.
+    gepa_reflection_minibatch_size: int | None = None
     #: Whether MIPROv2 evaluates each trial on a sampled minibatch rather
     #: than the whole validation split. Off by default, which is the
     #: schedule this runner has always produced; the protocol's auto-light
@@ -619,6 +618,31 @@ class _ValidatedSpec:
     pool_seed_start: int
 
 
+def _validate_gepa_settings(spec: RunSpec) -> None:
+    """Reject GEPA controls a non-GEPA run could not honour.
+
+    Refused rather than ignored, for ``_validate_miprov2_settings``'s
+    reason: a control that looks honoured and is not is how a run comes to
+    misdescribe itself. Both settings are refused here, at spec validation,
+    rather than inside the durable run boundary where the failure would
+    leave a run directory behind.
+    """
+    settings = (
+        ("gepa_max_metric_calls", spec.gepa_max_metric_calls),
+        (
+            "gepa_reflection_minibatch_size",
+            spec.gepa_reflection_minibatch_size,
+        ),
+    )
+    for name, value in settings:
+        if value is None:
+            continue
+        if spec.optimizer != GEPA_OPTIMIZER:
+            raise ValueError(f"{name} applies only to --optimizer gepa")
+        if value < 1:
+            raise ValueError(f"{name} must be at least 1")
+
+
 def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
     """Reject an unrunnable spec before any durable effect happens."""
     if spec.optimizer not in set(OPTIMIZERS):
@@ -634,13 +658,7 @@ def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
         raise ValueError(f"copro_breadth must be at least {MIN_COPRO_BREADTH}")
     if spec.copro_depth < 0:
         raise ValueError("copro_depth must be non-negative")
-    if spec.gepa_max_metric_calls is not None:
-        if spec.optimizer != "gepa":
-            raise ValueError(
-                "gepa_max_metric_calls applies only to --optimizer gepa"
-            )
-        if spec.gepa_max_metric_calls < 1:
-            raise ValueError("gepa_max_metric_calls must be at least 1")
+    _validate_gepa_settings(spec)
     _validate_miprov2_settings(spec)
     _validate_train_val_split(spec)
     if spec.extra_proposal_bodies and spec.transport != "fake":
@@ -811,6 +829,7 @@ def _bind_optimizer(  # noqa: PLR0913
             run_id=run_id,
             proposer_transport=proposer_transport,
             max_metric_calls=spec.gepa_max_metric_calls,
+            reflection_minibatch_size=spec.gepa_reflection_minibatch_size,
             seed=GEPA_DEFAULT_SEED if spec.seed is None else spec.seed,
             trainset_task_hashes=trainset_task_hashes,
             valset_task_hashes=valset_task_hashes,

@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.rows import task_rows_from_instances
 from whetstone_envs.optim.study.manifest import (
+    DESIGN_PROJECTION_FULL,
+    DESIGN_PROJECTION_WITHOUT_CODEX,
     ArmRecord,
     ModelsRecord,
     PopulationRecord,
@@ -72,11 +74,6 @@ __all__ = [
 #: be silently replaced.
 PENDING_EVAL_CONFIG_HASH = "pending-stage0"
 
-#: The assignment that authorised the study, hashed like the protocol doc.
-#: The Step 10 study's authority is the protocol document itself, so the
-#: two digests coincide unless a caller names a separate assignment.
-_ASSIGNMENT_IS_PROTOCOL = "assignment-is-protocol-doc"
-
 
 def _task_hashes(instances: Iterable[Instance]) -> tuple[str, ...]:
     return tuple(row.task_hash for row in task_rows_from_instances(instances))
@@ -109,12 +106,19 @@ def _control_identity_hash(protocol: StudyProtocol, arm: ArmDesign) -> str:
         "demo_mode": arm.demo_mode,
         "train_size": arm.train_size,
         "val_size": arm.val_size,
+        "copro_breadth": arm.copro_breadth,
+        "copro_depth": arm.copro_depth,
         "miprov2_num_trials": arm.miprov2_num_trials,
         "miprov2_num_candidates": arm.miprov2_num_candidates,
         "miprov2_minibatch": arm.miprov2_minibatch,
         "miprov2_minibatch_size": arm.miprov2_minibatch_size,
         "gepa_max_metric_calls": (
             protocol.gepa_max_metric_calls if arm.optimizer == "gepa" else None
+        ),
+        "gepa_reflection_minibatch_size": (
+            protocol.gepa_reflection_minibatch_size
+            if arm.optimizer == "gepa"
+            else None
         ),
         "codex_evaluate_call_cap": (
             protocol.codex_evaluate_call_cap
@@ -156,6 +160,15 @@ def _arm_records(protocol: StudyProtocol) -> tuple[ArmRecord, ...]:
             # under a design hash claiming otherwise.
             minibatch=arm.miprov2_minibatch,
             minibatch_size=arm.miprov2_minibatch_size,
+            # The rest of the pinned search shape, on the record for the
+            # minibatch's reason (schema v10). Without these four the
+            # rebuilt spec fell back to the runner's smoke-run defaults:
+            # a 2x1 COPRO search where the design pinned 6x3, and 2
+            # MIPROv2 trials where it pinned 10.
+            copro_breadth=arm.copro_breadth,
+            copro_depth=arm.copro_depth,
+            miprov2_num_trials=arm.miprov2_num_trials,
+            miprov2_num_candidates=arm.miprov2_num_candidates,
             control_identity_hash=_control_identity_hash(protocol, arm),
             seed_note=_seed_note(arm),
             runs=(),
@@ -256,11 +269,16 @@ def study_manifest_for(
         protocol_doc_path=recorded_doc_path,
         protocol_doc_sha256=digest,
         # The Step 10 study's authorising assignment *is* the protocol
-        # document, so the field records that rather than restating the
-        # same digest under a second name as if it were a second source.
-        assignment_doc_sha256=hashlib.sha256(
-            _ASSIGNMENT_IS_PROTOCOL.encode()
-        ).hexdigest(),
+        # document, so there is no second document to digest. Recorded as
+        # absent rather than as the sha256 of a fixed marker string --
+        # that was a digest of nothing, which read like provenance and
+        # verified nothing at all.
+        assignment_doc_sha256=None,
+        design_projection=(
+            DESIGN_PROJECTION_WITHOUT_CODEX
+            if not any(arm.optimizer == "codex" for arm in protocol.arms)
+            else DESIGN_PROJECTION_FULL
+        ),
         population=_population_record(protocol),
         splits=_splits_record(protocol),
         models=ModelsRecord(

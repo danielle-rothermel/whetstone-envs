@@ -43,6 +43,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from whetstone_envs.optim.study.protocols import (
+    COPRO_BREADTH,
+    COPRO_DEPTH,
+    GEPA_MAX_METRIC_CALLS,
+)
 from whetstone_envs.optim.study.spec import CODEX_EVALUATE_CALL_CAP
 
 __all__ = [
@@ -95,9 +100,15 @@ __all__ = [
 # COPRO
 # --------------------------------------------------------------------------
 
-#: The study's COPRO search shape, matching the runner's own defaults.
-COPRO_DEFAULT_BREADTH = 2
-COPRO_DEFAULT_DEPTH = 1
+#: The study's COPRO search shape, read from the protocol that pins it.
+#:
+#: These were the *runner's* defaults -- 2 and 1 -- which made the estimate
+#: agree with a run that never received the pinned shape, and disagree with
+#: the design both were supposed to describe. The estimator now defaults to
+#: what the study registered, so an estimate taken without an explicit
+#: shape prices the search the study actually runs.
+COPRO_DEFAULT_BREADTH = COPRO_BREADTH
+COPRO_DEFAULT_DEPTH = COPRO_DEPTH
 
 # --------------------------------------------------------------------------
 # MIPROv2 -- the F10 correction
@@ -505,7 +516,15 @@ MEASURED_GEPA_SEARCH_EVIDENCE_ENTRIES = 155_956
 #: This is the value the protocol registered *before* seeing the
 #: measurement, which is what keeps it a pre-registration rather than a
 #: number chosen to fit.
-GEPA_MAX_METRIC_CALLS_PINNED = 200
+#:
+#: **Read from the protocol, not restated here.**
+#: :mod:`whetstone_envs.optim.study.protocols` is the single owner of every
+#: pinned design value; this name is the gate's own alias for it, kept
+#: because the derivations below read better against a local name. Two
+#: independent literals that happened to agree is what this replaces --
+#: the arm forwarded one and the estimator divided by the other, so a
+#: single edit could have judged a run against a ceiling it never had.
+GEPA_MAX_METRIC_CALLS_PINNED = GEPA_MAX_METRIC_CALLS
 
 #: Why the pin was taken, recorded beside it so the manifest can state the
 #: reason rather than just the number.

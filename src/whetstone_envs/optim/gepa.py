@@ -39,6 +39,12 @@ GEPA_COMPONENT_NAME = "generate"
 INLINE_EXECUTOR_SCHEMA_SUFFIX = "inline_proposal_executor"
 COMPONENT_SCHEMA_SUFFIX = "gepa_component"
 
+#: Traces the reflection proposer consumes per round when a caller pins
+#: none. One is the smoke-run shape: enough to exercise the reflection
+#: path, small enough to keep an unparameterised run cheap. The study pins
+#: its own through ``RunSpec.gepa_reflection_minibatch_size``.
+DEFAULT_REFLECTION_MINIBATCH_SIZE = 1
+
 
 def gepa_prompt_services(family: FamilySpec) -> GepaPromptServices:
     """Reflection prompt services bound to one family's placeholders.
@@ -98,6 +104,7 @@ def build_gepa_control(  # noqa: PLR0913
     policy_identity_hash: str,
     seed: int = 0,
     max_metric_calls: int | None = None,
+    reflection_minibatch_size: int | None = None,
     trainset_task_hashes: tuple[str, ...],
     valset_task_hashes: tuple[str, ...],
 ):
@@ -107,6 +114,13 @@ def build_gepa_control(  # noqa: PLR0913
     control. ``max_metric_calls`` pins the paid metric-call ceiling; ``None``
     keeps the default of one full pass over the trainset plus one reflection
     minibatch, which is what a smoke run needs.
+
+    ``reflection_minibatch_size`` is how many traces the reflection
+    proposer consumes per round. ``None`` keeps the single-trace default a
+    smoke run wants; a study pins it, because the number of traces the
+    reflection step sees is part of the proposer's input rather than a
+    runtime detail, and a hardcoded value cannot be audited against a
+    design.
 
     ``trainset_task_hashes`` and ``valset_task_hashes`` are required and
     must be disjoint subsets of the internal split. GEPA reflects over the
@@ -156,7 +170,11 @@ def build_gepa_control(  # noqa: PLR0913
             if max_metric_calls is None
             else max_metric_calls
         ),
-        reflection_minibatch_size=1,
+        reflection_minibatch_size=(
+            DEFAULT_REFLECTION_MINIBATCH_SIZE
+            if reflection_minibatch_size is None
+            else reflection_minibatch_size
+        ),
         seed=seed,
     ).model_copy(update={"mutation_field": family.mutation_field})
 
@@ -180,6 +198,7 @@ def build_gepa_adapter(  # noqa: PLR0913
     proposer_transport: ProposerTransport | None,
     seed: int = 0,
     max_metric_calls: int | None = None,
+    reflection_minibatch_size: int | None = None,
     trainset_task_hashes: tuple[str, ...],
     valset_task_hashes: tuple[str, ...],
 ) -> GepaHarnessAdapter:
@@ -195,6 +214,7 @@ def build_gepa_adapter(  # noqa: PLR0913
         policy_identity_hash=policy_identity_hash,
         seed=seed,
         max_metric_calls=max_metric_calls,
+        reflection_minibatch_size=reflection_minibatch_size,
         trainset_task_hashes=trainset_task_hashes,
         valset_task_hashes=valset_task_hashes,
     )
@@ -220,6 +240,7 @@ def build_gepa_adapter(  # noqa: PLR0913
 
 __all__ = [
     "COMPONENT_SCHEMA_SUFFIX",
+    "DEFAULT_REFLECTION_MINIBATCH_SIZE",
     "GEPA_COMPONENT_NAME",
     "INLINE_EXECUTOR_SCHEMA_SUFFIX",
     "build_gepa_adapter",

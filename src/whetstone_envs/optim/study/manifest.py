@@ -1584,7 +1584,7 @@ class BalanceRecord(_StrictModel):
 
 
 class LeakageCheckEntry(_StrictModel):
-    """One of L1-L5, with its verdict and one sentence of detail."""
+    """One of L1-L5 or L7, with its verdict and one sentence of detail."""
 
     check_id: StrictStr
     passed: StrictBool
@@ -1598,7 +1598,7 @@ class LeakageCheckEntry(_StrictModel):
 
 
 class LeakageCheckRecord(_StrictModel):
-    """L6: the mechanical run of L1-L5 over every run artifact."""
+    """L6: the mechanical run of L1-L5 and L7 over every run artifact."""
 
     passed: StrictBool
     checks: tuple[LeakageCheckEntry, ...]

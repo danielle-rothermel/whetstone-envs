@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
   before it could publish (v0.2.3 is tagged but not on PyPI).
 
+### Added
+
+- **Each run records the repeat count its search actually ran at, and the
+  study refuses one that disagrees with `K_REPEAT`.** The per-optimizer
+  `mipro_repeats_as_recorded` / `gepa_repeats_as_recorded` audits hold a
+  run's evaluations to the count that run *itself* recorded, which is a
+  within-run check: a run that consistently recorded and searched at one
+  repeat passed cleanly under a design registering three, having bought a
+  third of the evidence the pre-registration priced. Nothing diffed the two
+  numbers, because the run's own count was never on the record to diff.
+  Manifest schema v11 adds `RunRecord.search_num_seeds`, read off the run's
+  own artifacts rather than taken from the runner that asked for the run --
+  MIPROv2's `StudyTranscript.validation_num_seeds` and GEPA's
+  `GepaDetailedResult.validation_num_seeds` where those exist, and the
+  evaluations' own `EvalEvidence.num_seeds` for COPRO, null-A, and Codex,
+  which record no such scalar and inherit the bound engine's sampling
+  whole. `None` on null-identity, which runs no optimizer.
+- **The arm stage refuses on both sides of the dispatch.** Before any arm
+  runs it refuses a stage whose bound engine would not sample at the
+  design's `K_REPEAT` -- structural, and free, because binding issues no
+  evaluation -- and after each run it refuses to record one whose
+  `search_num_seeds` disagrees, naming both numbers. The check covers every
+  run the arm will carry rather than only the fresh ones, since a run an
+  earlier invocation recorded is evidence the stage is about to select and
+  report over.
+- **Leakage rule L7 checks the recorded repeat counts against the
+  pre-registered `K_REPEAT`.** L4 establishes that the *held-out*
+  evaluations shared one procedure, which an arm that searched cheaply and
+  was then measured like everyone else satisfies perfectly; only a diff
+  against the pre-registered number catches it. L7 is appended after L6
+  rather than renumbering the rules, which would silently redefine what an
+  already-recorded `leakage_check` block claims, and its verdict is
+  recorded in the manifest and printed by the report.
+
 ## [0.2.3] - 2026-08-23
 
 ### Added

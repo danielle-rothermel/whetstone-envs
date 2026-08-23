@@ -34,7 +34,7 @@ __all__ = [
 #: by resembling a label.
 NON_EVIDENCE_PATTERNS: tuple[tuple[str, str], ...] = (
     (
-        r"\bL[1-6]\b",
+        r"\bL[1-7]\b",
         "leakage rule names",
     ),
     (

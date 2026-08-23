@@ -808,7 +808,7 @@ def _report_generator_for(
 
 
 def _run_leakage_check(*, study_dir: Path) -> int:
-    """Run L1-L6 over the study's manifest and report every rule's verdict.
+    """Run L1-L7 over the study's manifest and report every rule's verdict.
 
     The check reads the manifest rather than re-walking run stores: the
     manifest is where the study records what it selected, what it measured
@@ -1269,7 +1269,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     leakage = commands.add_parser(
         "leakage-check",
-        help="Run L1-L6 over a study directory before it reports.",
+        help="Run L1-L7 over a study directory before it reports.",
     )
     leakage.add_argument("--study-dir", type=Path, required=True)
 

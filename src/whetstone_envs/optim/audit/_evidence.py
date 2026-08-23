@@ -291,18 +291,15 @@ class RunEvidence:
         if self.optimizer == MIPROV2_OPTIMIZER:
             for entry in reversed(self.steps):
                 state = entry.miprov2_state()
-                if state is not None:
-                    return int(state.study_transcript.validation_num_seeds)
+                transcript = None if state is None else state.study_transcript
+                if transcript is not None:
+                    return int(transcript.validation_num_seeds)
             return None
         if self.optimizer == GEPA_OPTIMIZER:
             if self.gepa_terminal is None:
                 return None
-            return int(
-                self.gepa_terminal.detailed_result.validation_num_seeds
-            )
-        counts = {
-            found.num_seeds for _ref, found in self.all_eval_evidence()
-        }
+            return int(self.gepa_terminal.detailed_result.validation_num_seeds)
+        counts = {found.num_seeds for _ref, found in self.all_eval_evidence()}
         if len(counts) != 1:
             return None
         return int(next(iter(counts)))

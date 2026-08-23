@@ -127,6 +127,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whatever just ran.
 
 ### Fixed
+- **The pinned search shape reaches the runs it describes** (manifest
+  schema v10). Four registered control values never arrived.
+  `StudyOptimizerRunner._spec_for` forwarded neither `copro_breadth` nor
+  `copro_depth`, so every COPRO and null-A run took `RunSpec`'s smoke-run
+  defaults of 2 and 1 where the protocol pins 6 and 3 — and the estimator
+  defaulted to the same two values, so the estimate and the run agreed
+  with each other while disagreeing with the design both described.
+  `ArmRecord` likewise had nowhere to carry COPRO's breadth/depth or
+  MIPROv2's trials/candidates, so `spec_from_manifest` rebuilt all four as
+  `None` and a manifest-driven MIPROv2 arm ran 2 trials against a
+  registered 10. And `build_gepa_control` hardcoded
+  `reflection_minibatch_size=1` against the protocol's 3, with no spec
+  field able to carry the pin. All four are now pinned in `protocols.py`,
+  carried through `ArmDesign`/`ArmSpec`/`ArmRecord`, hashed into the
+  pre-registration's new `search_by_arm`, and forwarded to the run; an arm
+  record disagreeing with the pinned block is refused as a
+  `PreRegistrationViolationError`, as the split and minibatch already were.
+- **COPRO's estimate counts evaluating rounds, not its finalizing step.**
+  The row estimate multiplied by `depth + 1`, overstating COPRO and null-A
+  by a whole round — 6,336 rows per run at the pinned shape against the
+  protocol's own 4,752. A run does record `depth + 1` *steps*, but the
+  extra one is finalization, which consumes no budget and issues no
+  intents. The estimator and the protocol now agree, pinned by a golden.
+- **The Codex admission cap reaches the run from the design.**
+  `bound_stage_environment` built the runner without `codex_capacity`, so
+  the pinned cap arrived only because `RunSpec`'s own default happened to
+  equal it.
+- **One owner for the GEPA metric-call pin.** `protocols.py` and `gates.py`
+  each held their own `200` and the arm forwarded the gates copy; `gates`
+  now imports the protocol's, with an equality golden.
+- **A `--without-codex` projection can no longer be mistaken for the
+  study.** Its manifest was byte-indistinguishable from the
+  pre-registration — same `study_id`, same `models` block, nothing
+  recording that an arm had been dropped. The projection now takes a
+  `-without-codex` study id, records `design_projection`, marks
+  `codex_agent_model` as omitted, and the report prefixes its headline;
+  an arm stage refuses a projection carrying a registered protocol id.
+- **`--study-id` may not claim a design the invocation is not.** A toy or a
+  projection could be initialised as `step10-c19`, leaving every artifact
+  downstream citing the pre-registration while holding a smaller design.
+- **The manifest records no fabricated assignment digest.**
+  `assignment_doc_sha256` held the sha256 of a fixed marker string — a
+  digest of nothing that read like provenance. Step 10's authorising
+  assignment is the protocol document itself, so the field is now absent
+  and the report says so.
+- **The registered protocol document ships in the package.** The default
+  path pointed into one machine's `~/drotherm/data` tree, and `init`
+  refuses to author a study without reading it, so `whetstone-study init`
+  could not run from any other checkout. The text now lives at
+  `optim/study/protocol_docs/step10-c19-protocol.md`, byte-identical to the
+  durable copy and pinned by a golden digest.
 - **A cross-transport amendment takes the measurements its dropped evidence
   bought.** `stage0 --replace-design` onto another transport dropped the
   arm stages, their runs, the selections, and the held-out claims, but left

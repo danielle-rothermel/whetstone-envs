@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import rmtree
 from typing import TYPE_CHECKING
 
 from dr_store.sync import open_sqlite
@@ -51,6 +52,7 @@ from whetstone_envs.optim.study.anchors import EngineBinder
 from whetstone_envs.optim.study.fanout import planned_rows_in_directory
 from whetstone_envs.optim.study.gates import GEPA_MAX_METRIC_CALLS_PINNED
 from whetstone_envs.optim.study.manifest import (
+    DISCARD_STALE_RUNS_FLAG,
     EvidencePointer,
     RunRecord,
 )
@@ -60,6 +62,7 @@ from whetstone_envs.optim.study.selection import (
     RunCandidate,
 )
 from whetstone_envs.optim.study.stages import ArmRunResult, StageError
+from whetstone_envs.reporting.publication import TRAJECTORY_REPORT_NAME
 
 if TYPE_CHECKING:
     from pydantic import JsonValue
@@ -341,6 +344,18 @@ class StudyOptimizerRunner:
     #: :data:`~whetstone_envs.optim.codex.ALLOW_REAL_CODEX_ENV` must also
     #: name the opt-in in the process environment.
     allow_real_codex: bool = False
+    #: Whether this invocation may delete a run directory it cannot claim.
+    #:
+    #: Off by default, and deliberately: the directory being discarded may
+    #: be paid evidence, so removing it is the operator's decision rather
+    #: than a recovery the harness performs to keep itself running. Carried
+    #: from ``whetstone-study run --discard-stale-runs``, and -- like the
+    #: real-Codex authorization -- it is a property of the invocation, not
+    #: of the design, so it never enters the pre-registration hash.
+    #:
+    #: A *matching* directory is still reused rather than discarded: this
+    #: authorizes discarding the stale, not re-running the paid.
+    discard_stale_runs: bool = False
 
     def __call__(
         self, *, arm: ArmSpec, seed: int, study_dir: Path
@@ -356,9 +371,90 @@ class StudyOptimizerRunner:
                 f"which is neither a study optimizer {known} nor a null; "
                 "refusing rather than guessing how to run it"
             )
+        if run_dir.exists() and not self._is_reusable(
+            arm=arm, run_id=run_id, run_dir=run_dir
+        ):
+            # Authorized by --discard-stale-runs and only reached through
+            # it: the directory is not this invocation's run, so it is
+            # moved out of the way and the run is made properly rather
+            # than written over in place.
+            rmtree(run_dir)
         if not run_dir.exists():
             run_optimizer(self._spec_for(arm, seed=seed, run_dir=run_dir))
         return self._result_from(arm=arm, seed=seed, run_dir=run_dir)
+
+    def _is_reusable(
+        self, *, arm: ArmSpec, run_id: str, run_dir: Path
+    ) -> bool:
+        """Whether a run directory is this invocation's own run to reuse.
+
+        A run id is deterministic on arm and seed, which is what makes a
+        stage resumable: the directory is how a stage recognises a run it
+        already paid for. It is also how a stage can silently inherit a run
+        it never paid for. ``stage0 --replace-design`` onto another
+        transport drops the stale runs from the *manifest*, but their
+        directories stay on disk under exactly the names the replacement
+        stage will compute -- so the replacement found the directory,
+        skipped ``run_optimizer``, and recorded a fake run as a paid one.
+        The manifest then read as a paid study whose numbers were measured
+        on the free transport, which is the one confusion the whole
+        transport block exists to prevent.
+
+        So a directory is reusable only when its **own artifacts** say it
+        is the run this invocation would produce. Identity is read back out
+        of the run's trajectory report rather than taken from the manifest
+        or from the caller, because the caller's belief about the directory
+        is exactly what is in question.
+
+        Neither failure is resolved silently. Re-running would overwrite
+        artifacts that may be paid evidence; reusing would attribute
+        someone else's run to this stage. Both are refusals that name the
+        directory and the two recoveries, so the operator decides which of
+        their runs is the real one.
+        """
+        identity = _run_directory_identity(run_dir)
+        if identity is None:
+            if self.discard_stale_runs:
+                return False
+            raise StageError(
+                f"the run directory {run_dir} for arm {arm.arm_id!r} "
+                f"exists but records no readable identity, so it cannot "
+                f"be shown to be a run of this arm on transport "
+                f"{self.transport!r}. Reusing it would attribute an "
+                f"unidentified run to this stage and re-running would "
+                f"overwrite artifacts that may be paid evidence. Move it "
+                f"aside, or pass {DISCARD_STALE_RUNS_FLAG} to discard "
+                f"directories this invocation cannot claim"
+            )
+        mismatches = tuple(
+            f"{name} {sorted(found)} != {expected!r}"
+            for name, found, expected in (
+                ("transport", identity.transports, self.transport),
+                ("family", identity.families, self.family_id),
+                ("model", identity.models, self.task_model),
+                (
+                    "run id",
+                    frozenset({identity.run_id}),
+                    run_id,
+                ),
+            )
+            if found != frozenset({expected})
+        )
+        if mismatches:
+            if self.discard_stale_runs:
+                return False
+            raise StageError(
+                f"the run directory {run_dir} for arm {arm.arm_id!r} "
+                f"holds a run this invocation would not have produced: "
+                f"{'; '.join(mismatches)}. This is what a cross-transport "
+                f"--replace-design leaves behind: the manifest dropped the "
+                f"run, its directory did not go with it. Reusing it would "
+                f"record that run as this stage's, and re-running would "
+                f"overwrite it. Move the directory aside, or pass "
+                f"{DISCARD_STALE_RUNS_FLAG} to discard directories this "
+                f"invocation cannot claim"
+            )
+        return True
 
     def load_recorded_run(
         self, *, arm: ArmSpec, run: RunRecord
@@ -483,6 +579,11 @@ class StudyOptimizerRunner:
                 cost_ref=pointers["cost"],
                 audit_passed=report.passed,
                 spend=(() if cost is None else tuple(cost.spend)),
+                # The run's own transport, not the stage's. A resumed
+                # stage keeps runs an earlier invocation paid for, so the
+                # stage row and its runs can disagree -- and the
+                # cross-transport refusal checks the runs.
+                transport=self.transport,
             ),
             observed_task_calls=_observed_task_calls(result, run_dir=run_dir),
         )
@@ -535,6 +636,7 @@ class StudyOptimizerRunner:
                 cost_ref=pointer,
                 audit_passed=True,
                 spend=(),
+                transport=self.transport,
             ),
             observed_task_calls=0,
         )
@@ -596,6 +698,81 @@ OPTIM_RESULT_COPY_SCHEMA = "whetstone_envs.study_run_result/v1"
 #: ``OptimResult`` to copy, and pretending otherwise would put a fabricated
 #: optimizer result in the study's store.
 NULL_RUN_SCHEMA = "whetstone_envs.study_null_run/v1"
+
+
+@dataclass(frozen=True, slots=True)
+class RunDirectoryIdentity:
+    """What a run directory's own artifacts say the run was.
+
+    Read back rather than assumed. A directory is reusable only when this
+    matches what the invocation looking at it would produce, and every
+    field here is one an amendment can change underneath a directory whose
+    name -- deterministic on arm and seed -- stays the same.
+    """
+
+    run_id: str
+    transports: frozenset[str]
+    families: frozenset[str]
+    models: frozenset[str]
+
+
+def _run_directory_identity(run_dir: Path) -> RunDirectoryIdentity | None:
+    """The identity a run directory records, or ``None`` if it cannot say.
+
+    ``None`` means the directory holds no readable identity -- a run that
+    crashed before publishing its trajectory report, or one whose report
+    is unparseable. That is not the same as a mismatch, and the caller
+    distinguishes them: a directory that cannot vouch for itself is not
+    evidence that it matches.
+    """
+    # The trajectory report, addressed through the constant the publisher
+    # writes it under rather than a second spelling of the same filename.
+    #
+    # ``result.json`` and ``cost.json`` record what a run produced and what
+    # it cost, but neither says which transport produced it. This does:
+    # every resolution embeds the eval report for the evaluation that
+    # resolved it, and that report's ``run`` block names the transport,
+    # family, and model the evaluation actually ran on -- the run's own
+    # evidence rather than the caller's belief about it, which is the whole
+    # point, since the caller's belief is what the check exists to verify.
+    path = run_dir / TRAJECTORY_REPORT_NAME
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    runs: list[dict[str, object]] = []
+    resolutions = payload.get("resolutions")
+    for resolution in resolutions if isinstance(resolutions, list) else []:
+        if not isinstance(resolution, dict):
+            continue
+        report = resolution.get("eval_report")
+        if not isinstance(report, dict):
+            continue
+        run = report.get("run")
+        if isinstance(run, dict):
+            runs.append(run)
+    if not runs:
+        return None
+
+    def values(key: str) -> frozenset[str]:
+        found: set[str] = set()
+        for run in runs:
+            value = run.get(key)
+            if isinstance(value, str):
+                found.add(value)
+        return frozenset(found)
+
+    run_id = payload.get("run_id")
+    return RunDirectoryIdentity(
+        run_id=run_id if type(run_id) is str else "",
+        transports=values("transport"),
+        families=values("family"),
+        models=values("model"),
+    )
 
 
 def _read_optim_result(run_dir: Path) -> OptimResult:

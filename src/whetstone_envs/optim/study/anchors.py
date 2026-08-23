@@ -91,7 +91,15 @@ class EngineBinder(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class RoleCalibration:
-    """One role's calibrated anchor pair and the vectors it produced."""
+    """One role's calibrated anchor pair and the vectors it produced.
+
+    ``evidence`` keeps both anchors' persisted records, in the order they
+    were evaluated. The scores are already projected out of them, but the
+    records are what the stage prices its own spend from: the provider's
+    per-row token counts and prices live in the output rows these evidence
+    records reference, and re-deriving the bill from them is what makes a
+    Stage-0 total a measurement rather than an estimate.
+    """
 
     role: EvalRole
     calibration: AnchorCalibrationResult
@@ -99,6 +107,7 @@ class RoleCalibration:
     ceiling_per_task: tuple[float, ...]
     eval_config_hash: str
     task_hashes: tuple[str, ...]
+    evidence: tuple[EvalEvidence, ...] = ()
 
     @property
     def naive_mean(self) -> float:
@@ -163,6 +172,7 @@ def calibrate_role(  # noqa: PLR0913
         ceiling_per_task=ceiling_evidence.per_task_values,
         eval_config_hash=calibration.eval_config_ref.config_hash,
         task_hashes=naive_evidence.task_hashes,
+        evidence=(naive_evidence, ceiling_evidence),
     )
 
 
@@ -195,6 +205,20 @@ class Stage0Result:
     @property
     def passed(self) -> bool:
         return self.gate.passed
+
+    @property
+    def evidence(self) -> tuple[EvalEvidence, ...]:
+        """Every anchor evaluation this stage produced, in role order.
+
+        The stage prices itself from these, so the accessor exists rather
+        than leaving each caller to flatten the calibrations itself and
+        risk pricing a subset of what was paid for.
+        """
+        return tuple(
+            record
+            for calibration in self.calibrations
+            for record in calibration.evidence
+        )
 
     def mde_at(self, *, n_tasks: int, num_seeds: int) -> float:
         """Re-invert the MDE at another design point.

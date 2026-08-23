@@ -35,7 +35,12 @@ from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
 )
-from whetstone_envs.optim.study.environment import bound_stage_environment
+from whetstone_envs.optim.study.environment import (
+    FAKE_TRANSPORT,
+    OPENROUTER_API_KEY_ENV,
+    OPENROUTER_TRANSPORT,
+    bound_stage_environment,
+)
 from whetstone_envs.optim.study.gates import (
     GEPA_MAX_METRIC_CALLS_PINNED,
     GEPA_MEASURED_TASK_CALLS_AT_PIN,
@@ -52,12 +57,17 @@ from whetstone_envs.optim.study.leakage import (
     study_leakage_check,
 )
 from whetstone_envs.optim.study.manifest import (
+    DISCARD_STALE_RUNS_FLAG,
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
+    TRANSPORT_NAMES,
     LeakageCheckEntry,
     LeakageCheckRecord,
+    RunSpendRecord,
     SplitName,
     StageId,
+    StageRecord,
+    TransportName,
     check_manifest_pointers,
     format_pointer_report,
     read_study_manifest,
@@ -125,6 +135,35 @@ class StudySpecLoader(Protocol):
     def __call__(self, study_dir: Path) -> StudySpecLike: ...
 
 
+class StageLedgerLoader(Protocol):
+    """Load the stage records ``plan`` prints its measured ledger from.
+
+    Separate from :class:`StudySpecLoader` because the two read different
+    things for different reasons: the spec is the *design*, from which the
+    budget is derived, and the stage records are what has actually been
+    bought so far. A caller that stubs one is not thereby asserting
+    anything about the other, and ``plan`` must not require a manifest on
+    disk merely to print a matrix a caller handed it directly.
+    """
+
+    def __call__(self, study_dir: Path) -> tuple[StageRecord, ...]: ...
+
+
+def default_stage_ledger(study_dir: Path) -> tuple[StageRecord, ...]:
+    """The study's own recorded stages, or none when it has not run.
+
+    A study directory with no manifest has bought nothing, which is a
+    truthful empty ledger rather than an error: ``plan`` is the command an
+    operator runs *before* the first stage, and failing it on the absence
+    of a file that the first stage creates would make it unusable exactly
+    when it is most useful.
+    """
+    try:
+        return read_study_manifest(study_dir).stages
+    except (OSError, ValueError, DocumentFileError):
+        return ()
+
+
 class StageRunner(Protocol):
     """Run one stage of the study and return its updated manifest.
 
@@ -141,15 +180,23 @@ class StageRunner(Protocol):
     part of the study's design: it never reaches the manifest and never
     enters the pre-registration hash, so two studies that differ only in
     whether the operator authorized Codex spend pre-register identically.
+
+    ``transport`` is the same kind of thing and is treated differently in
+    exactly one respect. It is likewise an invocation property and likewise
+    outside the pre-registration hash -- but the stage *records* it, because
+    a stage run on the fake transport and a stage run against a provider
+    are different evidence for whatever the stage measured.
     """
 
-    def __call__(
+    def __call__(  # noqa: PLR0913
         self,
         *,
         study_dir: Path,
         stage: str,
         replace_design: bool = False,
         allow_real_codex: bool = False,
+        discard_stale_runs: bool = False,
+        transport: str = FAKE_TRANSPORT,
     ) -> StudyManifest: ...
 
 
@@ -391,6 +438,133 @@ def _range(low: int, high: int) -> str:
 
 
 # --------------------------------------------------------------------------
+# what each stage actually spent
+# --------------------------------------------------------------------------
+
+#: How the per-stage ledger is headed. It is a *measurement* -- every
+#: number is read back out of persisted evidence -- which is what
+#: distinguishes it from the estimated budget above it.
+STAGE_SPEND_HEADING = "recorded spend, per stage (MEASURED from evidence):"
+
+#: What a **fake-transport** stage with no spend records reports. It
+#: reached no provider, so there is no bill to measure, and a zero would
+#: claim the stage measured its bill and found it free -- a different and
+#: untrue statement.
+NO_RECORDED_SPEND = "no provider reached (fake transport)"
+
+#: What a **paid** stage with no spend records reports.
+#:
+#: This is the one case the ledger must not soften. A stage bound to a
+#: billed transport called the provider; if nothing came back to record,
+#: the study is holding an unknown bill, not a zero one and certainly not
+#: a stage that reached no provider. The label is loud on purpose: it is a
+#: defect report, and an operator reading the ledger before authorizing
+#: the next stage has to see that this row cannot be trusted.
+UNLEDGERED_SPEND = (
+    "UNLEDGERED -- ran on a paid transport and recorded no spend; "
+    "this stage's bill is unknown, not zero"
+)
+
+#: What the ledger prints when no stage has run yet.
+NO_STAGES_RUN = "no stage has run yet"
+
+#: Which of a stage's provider calls the ledger does *not* yet cover.
+#:
+#: Official-selection scoring and held-out evaluation happen through the
+#: evaluation engine outside any optimizer run, so no ``RunRecord`` and no
+#: anchor evidence carries them and this ledger cannot see them. Full
+#: ledgering of those calls is Phase E. Until then the omission is stated
+#: on every rendering of the ledger rather than left for a reader to infer
+#: from a total that looks complete.
+UNLEDGERED_SCORING_NOTE = (
+    "note: official-selection scoring and held-out evaluation calls are "
+    "not yet ledgered; every total below excludes them."
+)
+
+
+def _stage_usd(spend: tuple[RunSpendRecord, ...]) -> str:
+    """One stage's total USD, or the honest reason there is none.
+
+    A single unpriced role withholds the whole total, matching the rule
+    ``RunSpendRecord`` enforces per role: a sum over the priced roles alone
+    would look authoritative while understating what the stage cost.
+    """
+    if any(entry.usd is None for entry in spend):
+        unpriced = sum(entry.unpriced_calls for entry in spend)
+        calls = sum(entry.calls for entry in spend)
+        return f"unpriced ({unpriced}/{calls} calls)"
+    return f"${sum(entry.usd or 0.0 for entry in spend):.6f}"
+
+
+def _no_spend_label(record: StageRecord) -> str:
+    """Why a stage carrying no spend records carries none.
+
+    Three cases share an empty ``spend`` tuple and must never share a
+    label, because they call for three different actions:
+
+    * a **fake-transport** stage reached no provider, so there is no bill;
+    * a **paid** stage with no records ran against a provider and lost
+      track of what it bought, which is a defect an operator must see
+      before authorizing the next stage;
+    * a stage with records prints them, and does not reach here.
+
+    Collapsing the middle case into the first is the failure this function
+    exists to prevent: it would report a fully billed stage as one that
+    never called anybody.
+    """
+    if record.transport == TransportName.FAKE.value:
+        return NO_RECORDED_SPEND
+    return UNLEDGERED_SPEND
+
+
+def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
+    """Each recorded stage's transport, rows, calls, and USD.
+
+    Read straight off the manifest's stage records, so ``plan`` before a
+    run and ``plan`` after one print the same shape and differ only in
+    whether anything has been measured yet. The transport is in every row
+    because the spend and the transport answer one question together: what
+    did this stage buy, and from whom -- and because it is the transport
+    that says whether an empty row means "reached no provider" or
+    "reached one and lost the bill".
+
+    The ledger states what it does not cover. Official-selection and
+    held-out scoring calls are not ledgered yet, so every total is a
+    lower bound and says so, rather than presenting itself as the whole
+    bill.
+    """
+    lines = ["", STAGE_SPEND_HEADING, f"  {UNLEDGERED_SCORING_NOTE}"]
+    if not stages:
+        lines.extend((f"  {NO_STAGES_RUN}", ""))
+        return tuple(lines)
+    lines.append(
+        f"  {'stage':<10}{'transport':<14}{'calls':>10}{'tokens':>14}"
+        f"  {'usd':>22}"
+    )
+    by_stage = {entry.stage: entry for entry in stages}
+    for stage in STAGE_IDS:
+        record = by_stage.get(stage)
+        if record is None:
+            continue
+        if not record.spend:
+            lines.append(
+                f"  {record.stage:<10}{record.transport:<14}"
+                f"  {_no_spend_label(record)}"
+            )
+            continue
+        calls = sum(entry.calls for entry in record.spend)
+        tokens = sum(
+            entry.input_tokens + entry.output_tokens for entry in record.spend
+        )
+        lines.append(
+            f"  {record.stage:<10}{record.transport:<14}{calls:>10,}"
+            f"{tokens:>14,}  {_stage_usd(record.spend):>22}"
+        )
+    lines.append("")
+    return tuple(lines)
+
+
+# --------------------------------------------------------------------------
 # subcommand bodies
 # --------------------------------------------------------------------------
 
@@ -400,7 +574,12 @@ def _emit(lines: Iterable[str]) -> None:
         print(line)
 
 
-def _run_plan(*, study_dir: Path, load_spec: StudySpecLoader | None) -> int:
+def _run_plan(
+    *,
+    study_dir: Path,
+    load_spec: StudySpecLoader | None,
+    load_stages: StageLedgerLoader,
+) -> int:
     if load_spec is None:
         print(
             "plan needs a study spec loader; the study harness is not "
@@ -409,16 +588,22 @@ def _run_plan(*, study_dir: Path, load_spec: StudySpecLoader | None) -> int:
         )
         return EXIT_ERROR
     _emit(plan_lines(load_spec(study_dir)))
+    # The estimated budget above, then what has actually been bought. The
+    # two are printed together because that is the comparison an operator
+    # authorizing the next stage is making.
+    _emit(stage_spend_lines(load_stages(study_dir)))
     return EXIT_OK
 
 
-def _run_stage(
+def _run_stage(  # noqa: PLR0913
     *,
     study_dir: Path,
     stage: str,
     run_stage: StageRunner | None,
     replace_design: bool = False,
     allow_real_codex: bool = False,
+    discard_stale_runs: bool = False,
+    transport: str = FAKE_TRANSPORT,
 ) -> int:
     if run_stage is None:
         print(
@@ -432,8 +617,15 @@ def _run_stage(
         stage=stage,
         replace_design=replace_design,
         allow_real_codex=allow_real_codex,
+        discard_stale_runs=discard_stale_runs,
+        transport=transport,
     )
     print(f"{stage} complete for study {manifest.study_id}")
+    # The transport is echoed because it decides what the stage's numbers
+    # are evidence of, and an operator scripting three stages should see
+    # which one each ran on without opening the manifest.
+    print(f"transport: {transport}")
+    _emit(stage_spend_lines(manifest.stages))
     print(study_dir / STUDY_MANIFEST_NAME)
     return EXIT_OK
 
@@ -797,6 +989,35 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        "--transport",
+        choices=TRANSPORT_NAMES,
+        default=FAKE_TRANSPORT,
+        help=(
+            "Which transport this stage's evaluations run on. "
+            f"{FAKE_TRANSPORT!r} (the default) answers from the "
+            "experiment's own gold and spends nothing; "
+            f"{OPENROUTER_TRANSPORT!r} spends against the provider and "
+            f"requires {OPENROUTER_API_KEY_ENV} in the environment. "
+            "Recorded per stage: a study whose anchors were calibrated on "
+            "one transport refuses to run its arms on the other, because "
+            "every held-out delta is paired against those anchors."
+        ),
+    )
+    run.add_argument(
+        DISCARD_STALE_RUNS_FLAG,
+        action="store_true",
+        help=(
+            "Discard a run directory whose own artifacts say it is not "
+            "this invocation's run, instead of refusing. Run directories "
+            "are named deterministically from the arm and seed, so a "
+            "cross-transport 'stage0 --replace-design' -- which drops the "
+            "stale runs from the manifest but leaves their directories on "
+            "disk -- would otherwise leave this stage refusing to reuse "
+            "them. Off by default because such a directory may be paid "
+            "evidence; a matching directory is still reused either way."
+        ),
+    )
+    run.add_argument(
         "--replace-design",
         action="store_true",
         help=(
@@ -841,12 +1062,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def default_stage_runner(
+def default_stage_runner(  # noqa: PLR0913
     *,
     study_dir: Path,
     stage: str,
     replace_design: bool = False,
     allow_real_codex: bool = False,
+    discard_stale_runs: bool = False,
+    transport: str = FAKE_TRANSPORT,
 ) -> StudyManifest:
     """Run one stage on the fake transport, over the study's own directory.
 
@@ -858,7 +1081,9 @@ def default_stage_runner(
 
     Fake transport is the default because spend authorization attaches at a
     Stage gate and not at a CLI invocation. A paid stage is a deliberate
-    act, so it is not reachable by running this command with no flags.
+    act, so it is not reachable by running this command with no flags: it
+    takes ``--transport openrouter`` *and* a key in the environment, and
+    the binder refuses before it opens anything if either is missing.
 
     ``allow_real_codex`` is forwarded into the bound environment, where it
     reaches both the study's optimizer runner and the harness's early
@@ -866,7 +1091,10 @@ def default_stage_runner(
     design, and an authorization to spend is not one.
     """
     with bound_stage_environment(
-        study_dir, allow_real_codex=allow_real_codex
+        study_dir,
+        transport=transport,
+        allow_real_codex=allow_real_codex,
+        discard_stale_runs=discard_stale_runs,
     ) as environment:
         return _run_stage_harness(
             study_dir=study_dir,
@@ -896,6 +1124,7 @@ def _dispatch(
     arguments: argparse.Namespace,
     *,
     load_spec: StudySpecLoader,
+    load_stages: StageLedgerLoader,
     run_stage: StageRunner,
     generate_report: ReportGenerator,
 ) -> int:
@@ -906,7 +1135,11 @@ def _dispatch(
     ``main`` knows what each failure means to a caller's exit code.
     """
     if arguments.command == "plan":
-        return _run_plan(study_dir=arguments.study_dir, load_spec=load_spec)
+        return _run_plan(
+            study_dir=arguments.study_dir,
+            load_spec=load_spec,
+            load_stages=load_stages,
+        )
     if arguments.command == "run":
         return _run_stage(
             study_dir=arguments.study_dir,
@@ -914,6 +1147,8 @@ def _dispatch(
             run_stage=run_stage,
             replace_design=arguments.replace_design,
             allow_real_codex=arguments.allow_real_codex,
+            discard_stale_runs=arguments.discard_stale_runs,
+            transport=arguments.transport,
         )
     if arguments.command == "report":
         return _run_report(
@@ -932,6 +1167,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     load_spec: StudySpecLoader | None = None,
+    load_stages: StageLedgerLoader | None = None,
     run_stage: StageRunner | None = None,
     generate_report: ReportGenerator | None = None,
 ) -> int:
@@ -955,6 +1191,7 @@ def main(
         return _dispatch(
             arguments,
             load_spec=load_spec or load_study_spec,
+            load_stages=load_stages or default_stage_ledger,
             run_stage=run_stage or default_stage_runner,
             generate_report=generate_report or default_report_generator,
         )
@@ -992,15 +1229,23 @@ __all__ = [
     "MEASURED_LABEL",
     "MEASURED_TASK_CALLS_BY_ARM",
     "NOT_CHECKED",
+    "NO_RECORDED_SPEND",
+    "NO_STAGES_RUN",
     "OPTIMIZER_BUDGET_HEADING",
     "PROGRAM_NAME",
+    "STAGE_SPEND_HEADING",
+    "UNLEDGERED_SCORING_NOTE",
+    "UNLEDGERED_SPEND",
     "ReportGenerator",
+    "StageLedgerLoader",
     "StageRunner",
     "StudySpecLike",
     "StudySpecLoader",
     "build_parser",
     "default_report_generator",
+    "default_stage_ledger",
     "default_stage_runner",
     "main",
     "plan_lines",
+    "stage_spend_lines",
 ]

@@ -6,10 +6,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The study harness runs on the real OpenRouter transport.**
+  `whetstone-study run --transport openrouter` binds the same provider
+  route the single-run path already used — the seeded OpenRouter call
+  config, `ProviderKind.OPENROUTER`, and `OPENROUTER_API_KEY` — for every
+  role engine and for the arms' optimizer runner, so Stage 0, Stage 1, and
+  Stage 2 can spend. One live transport is bound per stage rather than per
+  engine binding, because a stage rebinds an engine on every scored
+  candidate and a per-binding client would open a connection pool per
+  evaluation. Models still come from the manifest's `models` block; the
+  transport selects a route, not a model. `--transport fake` remains the
+  default and the fake path is unchanged: its prepared experiment carries
+  no provider call config, so every Eval Config hash it derives is what it
+  was before a paid path existed.
+- **A paid stage with no key is refused before anything is opened.**
+  `--transport openrouter` without a non-blank `OPENROUTER_API_KEY` fails
+  ahead of the store, the pool, and every engine, so an unauthorized run
+  leaves no half-initialized study directory and exits non-zero. The key is
+  checked for presence only and never reaches an error message; a wrong key
+  is the provider's refusal to make.
+- **Each stage and each run records the transport it ran on, and a study
+  will not mix them.** The manifest gains a `stages` block with one
+  `StageRecord` per stage naming its transport and its spend, and every
+  `RunRecord` carries its own `transport` (schema `v7`). Like the
+  real-Codex authorization the transport is an invocation property and
+  stays out of the pre-registration hash, so two studies differing only in
+  it pre-register identically — but it is recorded, because a stage run on
+  the fake transport and a stage run against a provider are different
+  evidence for the same claim. An arm stage is refused **before any arm
+  runs** unless three things agree with the requested transport: Stage 0's
+  anchors, the stage's own recorded transport, and every surviving arm run.
+  A run's transport is its own evidence rather than its stage's — a resumed
+  stage keeps runs an earlier invocation paid for, so a stage row can agree
+  while the runs beneath it do not, and checking only Stage 0 let a paid
+  arg-max run over free runs. A toy re-runs Stage 0 under
+  `--replace-design`. A re-run replaces its stage record rather than
+  appending a second one, and the manifest refuses two records for one
+  stage.
+- **`stage0 --replace-design` across transports drops the stale evidence
+  and records the drop.** Re-calibrating onto a transport other than the
+  recorded Stage 0 invalidates the arm stages twice over — the design they
+  ran against is being replaced, and their evidence was measured somewhere
+  else — but v6 left the `stage1`/`stage2` records and every arm run in
+  place, so a Stage 2 on the paid transport reused fake runs against
+  freshly bought anchors. Those records, their runs, the selections over
+  them, the held-out claims and rows, and the pilot's call-count gate are
+  now dropped, and what was dropped is recorded in a new `amendments`
+  block the report surfaces rather than deleted silently. The arms survive
+  with empty run lists, because an arm is design rather than evidence.
+  **Paid evidence is never discarded automatically**: a drop that would
+  remove any run measured on a billed transport is refused instead, before
+  the calibration spends, naming the runs and the recovery.
+- **Stage 0's anchors produce a spend record, and every stage total is
+  printed.** Anchor evaluations reach the provider through the evaluation
+  engine rather than through an optimizer run, so they had no
+  `OptimResult.cost` and no total. `optim/study/spend.py` re-derives one
+  from the persisted `EvalOutputRow` usage fields behind each anchor's
+  evidence, aggregated through whetstone's own `aggregate_role_cost` so the
+  honesty split — cached, priced, unpriced, missing token breakdown — and
+  the rule that an absent `usd` is "not knowable" rather than "zero" are
+  the shared aggregator's rather than a restatement. Evidence is
+  de-duplicated by reference, matching how a run's aggregation counts one
+  evaluation once. `whetstone-study plan` prints the measured ledger
+  beneath its estimated budget, `run` echoes the stage's transport and
+  ledger, and the report prints each stage's transport and spend in its
+  stage history.
+- **An arm stage records what its runs spent.** An arm stage spends through
+  optimizer runs rather than through the engine, and each run already
+  re-derived its own per-role bill — but the stage record ignored them, so
+  a fully paid Stage 1 or Stage 2 recorded an empty `spend` and the ledger
+  rendered it, under a MEASURED heading, as a stage that reached no
+  provider. The stage total is now the fold of the per-role records the
+  runs *this invocation executed* reported; a run an earlier stage paid for
+  stays billed on that stage's row, so the ledger's rows do not sum to more
+  than the study spent. The fold re-applies the honesty rule rather than
+  carrying it: one unpriced run withholds the whole role's total.
+- **The ledger never calls a paid stage a free one.** An empty spend record
+  means one of two opposite things and now reads as two: a fake-transport
+  stage reports `no provider reached (fake transport)`, because its rows
+  are real rows the shared row rule counts as billable-and-unpriced — right
+  for a provider row, and a bill nobody owes for a stage that called
+  nobody. A **paid** stage with no records reports a loud `UNLEDGERED`,
+  because it reached a provider and lost track of what it bought: its bill
+  is unknown, not zero.
+- **The ledger states what it does not cover.** Official-selection scoring
+  and held-out evaluation reach the provider through the evaluation engine
+  outside any optimizer run, so no run record and no anchor evidence
+  carries them and no stage total includes them. `plan`, `run`, the report,
+  and the README now say so explicitly, so a printed total reads as the
+  lower bound it is rather than as the whole bill. Full ledgering of those
+  calls is Phase E.
+- **The fake path's Eval Config hashes are pinned.** A golden test fixes
+  the three role config hashes the fake toy study binds, so a change that
+  let provider call configuration leak onto the fake path — the way the
+  paid path seeds one — would fail the pin rather than silently rebase
+  every recorded config and turn L1 into a check that always agrees with
+  whatever just ran.
+
 ### Fixed
 - `stage0 --replace-design` that records an amendment discards the previous
   Stage-1 call-count verdict: a pilot gate describes the design it was
   computed against, so Stage 2 owes the amended study a fresh pilot.
+
+- **An arm stage refuses to reuse a run directory it cannot claim.** Run
+  directories are named deterministically from arm and seed, which is what
+  makes a crashed stage resumable — and also what let a cross-transport
+  `--replace-design` leak a run across the amendment. The amendment drops
+  the stale runs from the manifest, but their directories stay on disk
+  under exactly the names the replacement stage computes, so that stage
+  found a directory, skipped `run_optimizer`, and recorded the old fake run
+  as a paid one: a manifest that reads as a paid study whose numbers came
+  from the free transport. A directory is now reusable only when its **own
+  artifacts** — the transport, family, model, and run id its trajectory
+  report records — say it is the run this invocation would produce.
+  Otherwise the stage refuses, naming the directory and both recoveries;
+  it never silently re-runs over artifacts that may be paid evidence and
+  never silently reuses someone else's run. A directory that records no
+  readable identity is refused on the same grounds, because a run that
+  cannot vouch for itself is not evidence that it matches. The new
+  `whetstone-study run --discard-stale-runs` authorizes discarding such a
+  directory instead; it is off by default and, like the other invocation
+  authorizations, stays out of the pre-registration hash. The amendment
+  record gains `dropped_run_directories`, so an operator resolving a
+  refusal can see which directories the drop orphaned without
+  reconstructing the naming rule by hand.
+- **A cross-transport amendment clears the leakage verdict it invalidated.**
+  `manifest.leakage_check` is L6's mechanical pass over the very run
+  artifacts the amendment drops, and it was left in place — so a report
+  regenerated after the amendment inherited a *passing* leakage result
+  established over evidence the study no longer holds, which reads exactly
+  like a study whose leakage rules passed over its current runs. It is now
+  cleared in the same update that drops the evidence, and the report
+  already treats an absent block as not-established. The other verdicts are
+  deliberately untouched: `gepa_sizing` and `fanout_check` measure the
+  optimizer's own mechanics before Stage 1, `balance` is the key's balance
+  at each spend gate, and `c18` carries its own separate run list.
+- **A resumed arm stage keeps the spend it already measured.** A stage that
+  crashed after its manifest write has already paid for its runs and
+  already recorded what they cost; resuming it re-runs nothing, so the
+  replacement stage record was built from an empty set of executed runs and
+  overwrote the measured bill with silence — the ledger then rendered a
+  fully paid stage as `UNLEDGERED`. An arm stage's spend is now merged onto
+  whatever its row already carries rather than replacing it, folded per
+  role so a partial resume bills both halves and an unknown `usd` on either
+  side keeps the total unknown. A stage's row can only grow. A first run of
+  a stage has nothing to merge and still records exactly the runs it
+  executed, so the ledger's rows continue not to sum to more than the study
+  spent.
 
 - **Stage 2 requires a Stage 1 whose call-count gate passed.** The gate
   catches a fan-out bug — an optimizer whose minibatch intents silently

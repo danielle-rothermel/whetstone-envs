@@ -47,6 +47,7 @@ from whetstone_envs.optim.study.manifest import (
     RunRecord,
     RunSpendRecord,
     StudyManifest,
+    TransportName,
     read_study_manifest,
     study_manifest_path,
     write_study_manifest,
@@ -221,17 +222,24 @@ def test_plan_on_a_missing_manifest_fails_cleanly(
 def test_run_dispatches_each_stage(tmp_path: Path, capsys, stage: str) -> None:
     seen: list[tuple[Path, str]] = []
 
-    def run_stage(
+    def run_stage(  # noqa: PLR0913
         *,
         study_dir: Path,
         stage: str,
         replace_design: bool = False,
         allow_real_codex: bool = False,
+        discard_stale_runs: bool = False,
+        transport: str = "fake",
     ) -> StudyManifest:
         assert replace_design is False
         # An unflagged invocation authorizes no spend. Asserted rather than
-        # ignored: the default is what stops an accidental Codex bill.
+        # ignored: the default is what stops an accidental Codex bill, and
+        # the fake transport is what stops an accidental provider bill.
         assert allow_real_codex is False
+        # Nor does it authorize discarding a run directory it cannot
+        # claim: that directory may be paid evidence.
+        assert discard_stale_runs is False
+        assert transport == "fake"
         seen.append((study_dir, stage))
         return _minimal_manifest()
 
@@ -461,6 +469,7 @@ def _manifest_citing(pointers: tuple[EvidencePointer, ...]) -> StudyManifest:
                             audit_ref=audit_ref,
                             cost_ref=cost_ref,
                             audit_passed=True,
+                            transport=TransportName.FAKE.value,
                             spend=(
                                 RunSpendRecord(
                                     role="task_model",

@@ -26,22 +26,27 @@ including the failures a stage re-raises.
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
 
+from dr_providers import ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.core.roles import EvalRole
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.provider import (
+    bind_openrouter_transport,
     fake_gold_by_prompt,
     fake_transport_factory,
+    openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.rows import task_rows_from_instances
 from whetstone_envs.optim.study.manifest import (
     STUDY_STORE_NAME,
     SplitsRecord,
+    TransportName,
     read_study_manifest,
 )
 from whetstone_envs.optim.study.stages import StageEnvironment
@@ -59,15 +64,29 @@ if TYPE_CHECKING:
 
 __all__ = [
     "FAKE_TRANSPORT",
+    "OPENROUTER_API_KEY_ENV",
+    "OPENROUTER_TRANSPORT",
     "SPLIT_ROLE_BY_EVAL_ROLE",
     "STUDY_STORE_NAME",
+    "TOY_API_KEY_ENV",
     "anchor_candidates",
     "bound_stage_environment",
+    "require_transport_credentials",
 ]
 
-#: The only transport the study harness binds today. Named rather than
-#: inline so the refusal below and the default above cannot drift apart.
-FAKE_TRANSPORT = "fake"
+#: The default transport: offline, answering from the experiment's own
+#: gold. Named rather than inline so the default and every comparison
+#: against it cannot drift apart.
+FAKE_TRANSPORT = TransportName.FAKE.value
+
+#: The billed transport, the one a paid stage names explicitly.
+OPENROUTER_TRANSPORT = TransportName.OPENROUTER.value
+
+#: Where each transport reads its key from. The fake transport still needs
+#: a named variable because the reference runtime always asks for one; it
+#: is never read, which is why the toy name is not a credential.
+OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
+TOY_API_KEY_ENV = "WHETSTONE_TOY_API_KEY"
 
 #: Re-exported from the manifest, which owns a study directory's layout.
 #: Anchor evaluations are the study's own records, not a run's, so they live
@@ -135,12 +154,42 @@ def _require_recorded_population(
             )
 
 
+def require_transport_credentials(transport: str) -> None:
+    """Refuse an unknown transport, or a paid one with no key, up front.
+
+    Both refusals are ``ValueError`` and both happen before any store is
+    opened, any pool is generated, and any provider is reached. That
+    ordering is the point: a stage that cannot legitimately spend must fail
+    without having written anything into the study directory, because a
+    partially-initialized study is harder to reason about than one that
+    never started.
+
+    The key is checked for *presence*, never read into a message. A wrong
+    key is the provider's refusal to make, and an error that echoed a
+    credential would be worse than the missing one it described.
+    """
+    if transport not in {FAKE_TRANSPORT, OPENROUTER_TRANSPORT}:
+        raise ValueError(
+            f"unsupported transport {transport!r}; the study harness runs "
+            f"on {FAKE_TRANSPORT!r} or {OPENROUTER_TRANSPORT!r}"
+        )
+    if transport != OPENROUTER_TRANSPORT:
+        return
+    if not os.environ.get(OPENROUTER_API_KEY_ENV, "").strip():
+        raise ValueError(
+            f"transport {OPENROUTER_TRANSPORT!r} needs "
+            f"{OPENROUTER_API_KEY_ENV} in the environment; nothing was "
+            "written and no provider was called"
+        )
+
+
 @contextmanager
 def bound_stage_environment(
     study_dir: Path,
     *,
     transport: str = FAKE_TRANSPORT,
     allow_real_codex: bool = False,
+    discard_stale_runs: bool = False,
 ) -> Iterator[StageEnvironment]:
     """Open a study's store and bind one engine per evaluation role.
 
@@ -148,21 +197,25 @@ def bound_stage_environment(
     is exercised without provider calls; a paid stage names ``openrouter``
     explicitly, so no code path reaches a provider by omission.
 
+    **The credential check happens first, before anything is opened.**
+    ``openrouter`` without a key in the environment is refused here, ahead
+    of the store, the pool, and every engine -- so an unauthorized paid run
+    cannot leave a half-written study directory behind, and the operator
+    learns what is missing rather than watching the first evaluation fail.
+
     ``allow_real_codex`` is the run-time authorization to spend on a real,
     billed Codex session, carried from ``whetstone-study run
     --allow-real-codex``. It defaults off for the same reason the transport
     does, and it is a property of *this invocation* rather than of the
     study: it reaches the runner and the harness's early refusal, and never
     the manifest or the pre-registration hash.
+
+    ``discard_stale_runs`` is the third of the same kind: the operator's
+    authorization to discard a run directory whose own artifacts say it is
+    not this invocation's run, rather than refusing. It defaults off
+    because such a directory may be paid evidence.
     """
-    if transport != FAKE_TRANSPORT:
-        # The provider-backed binder belongs with the stage that spends, and
-        # spending is authorized at a gate rather than by a default. Naming
-        # the gap beats a partially-wired live path that looks ready.
-        raise ValueError(
-            f"transport {transport!r} is not wired into the study harness; "
-            "only fake-transport stages run today"
-        )
+    require_transport_credentials(transport)
     # Imported inside the binder, not at module scope. ``arms`` reaches the
     # shared optimizer runner, which reaches ``optim.run_cost``, which reads
     # this package's ``RunSpendRecord`` -- so a module-level import here
@@ -188,6 +241,16 @@ def bound_stage_environment(
         manifest.splits.held_out.size,
     )
     naive, ceiling = anchor_candidates(population.family)
+    paid = transport == OPENROUTER_TRANSPORT
+    # The route every task evaluation takes. ``None`` on the fake
+    # transport, so the fake path's prepared experiment -- and therefore
+    # every Eval Config hash it derives -- is byte-for-byte what it was
+    # before a paid path existed.
+    provider_call_config = (
+        openrouter_seeded_call_config(model=manifest.models.task_model)
+        if paid
+        else None
+    )
     # The split is a deterministic function of the pool and the sizes, so
     # one reference preparation names every role's tasks whatever repeat
     # count a later engine binds at.
@@ -195,10 +258,32 @@ def bound_stage_environment(
         pool,
         split_sizes=split_sizes,
         num_seeds=1,
-        provider_call_config=None,
+        provider_call_config=provider_call_config,
     ).split
     _require_recorded_population(split, manifest.splits)
     with open_sqlite(str(study_dir / STUDY_STORE_NAME)) as store:
+        runtime_config_for_role = {
+            role: ReferenceEvalRuntimeConfig(
+                split_role=SPLIT_ROLE_BY_EVAL_ROLE[role],
+                transport_api_key_env=(
+                    OPENROUTER_API_KEY_ENV if paid else TOY_API_KEY_ENV
+                ),
+                **({"provider_kind": ProviderKind.OPENROUTER} if paid else {}),
+            )
+            for role in SPLIT_ROLE_BY_EVAL_ROLE
+        }
+        # One live transport for the whole stage, not one per engine
+        # binding. A stage binds an engine per (role, repeat count) and
+        # rebinds on every scored candidate, so a factory that built a
+        # fresh HTTP client each time would open one connection pool per
+        # evaluation against a provider the study is rate-limited by.
+        openrouter_factory = (
+            bind_openrouter_transport(
+                runtime_config_for_role[EvalRole.INTERNAL].execution_policy
+            )[1]
+            if paid
+            else None
+        )
 
         def bind_engine(*, role: EvalRole, num_seeds: int) -> EvalEngine:
             # One prepared experiment per (role, repeat count): the only
@@ -209,11 +294,19 @@ def bound_stage_environment(
                 pool,
                 split_sizes=split_sizes,
                 num_seeds=num_seeds,
-                provider_call_config=None,
+                provider_call_config=provider_call_config,
             )
-            config = ReferenceEvalRuntimeConfig(
-                split_role=SPLIT_ROLE_BY_EVAL_ROLE[role],
-                transport_api_key_env="WHETSTONE_TOY_API_KEY",
+            config = runtime_config_for_role[role]
+            transport_factory = (
+                openrouter_factory
+                if openrouter_factory is not None
+                else fake_transport_factory(
+                    gold_by_prompt=fake_gold_by_prompt(
+                        prepared.experiment,
+                        render_contract=family.render_contract(),
+                        ceiling_template=family.probes.ceiling_template,
+                    )
+                )
             )
             return config.build_engine(
                 cast("ObjectStore", store),
@@ -221,13 +314,7 @@ def bound_stage_environment(
                 eval_runner=family.eval_runner(),
                 mutation_field=family.mutation_field,
                 render_contract=family.render_contract(),
-                transport_factory=fake_transport_factory(
-                    gold_by_prompt=fake_gold_by_prompt(
-                        prepared.experiment,
-                        render_contract=family.render_contract(),
-                        ceiling_template=family.probes.ceiling_template,
-                    )
-                ),
+                transport_factory=transport_factory,
             )
 
         task_ids_by_role = {
@@ -274,6 +361,7 @@ def bound_stage_environment(
             naive_template=family.probes.naive_template,
             store_path=study_dir / STUDY_STORE_NAME,
             allow_real_codex=allow_real_codex,
+            discard_stale_runs=discard_stale_runs,
         )
         yield StageEnvironment(
             bind_engine=bind_engine,
@@ -286,4 +374,10 @@ def bound_stage_environment(
             evaluate_held_out=held_out.evaluate_held_out,
             load_recorded_run=runner.load_recorded_run,
             real_codex_authorized=allow_real_codex,
+            transport=transport,
+            # The stage's own store, so a stage that evaluates through the
+            # engine can price what it evaluated. It is the same connection
+            # every engine writes into, which is what makes reading the
+            # rows back a read of this stage's own evidence.
+            store=cast("ObjectStore", store),
         )

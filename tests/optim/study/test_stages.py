@@ -28,6 +28,7 @@ from whetstone_envs.optim.study.manifest import (
     CallCountGateRecord,
     EvidencePointer,
     RunRecord,
+    TransportName,
     read_study_manifest,
     write_study_manifest,
 )
@@ -200,6 +201,7 @@ class _Harness:
                 audit_ref=_pointer("2"),
                 cost_ref=_pointer("3"),
                 audit_passed=True,
+                transport=TransportName.FAKE.value,
                 spend=(),
             ),
             observed_task_calls=self.task_calls,

@@ -192,6 +192,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `total_metric_calls`. Each invariant ships a negative fixture that FAILs
   it alone.
 
+- **A fake-transport COPRO arm can fill the breadth the protocol pins.**
+  A family scripts exactly two proposal bodies -- the ceiling draft and the
+  naive seed -- and the seed fills a slot COPRO never requests, so an
+  unaided fake round lands one draft. Pinning the arms to the registered
+  6x3 shape therefore made every fake COPRO run die inside the durable run
+  boundary with `copro_proposal_cardinality` ("expected 6, actual 2"),
+  before it evaluated anything: Stage 1 of a `--without-codex` rehearsal
+  aborted on its first arm. The previous rehearsal missed this because the
+  arms had not yet been forwarded their shape and ran COPRO at the
+  runner's 2x1 default.
+
+  `FamilySpec.rehearsal_proposal_bodies` derives `breadth - 1` further
+  distinct drafts from the family's own ceiling template, and the study
+  runner hands them to a fake COPRO arm. They are refused on a paid
+  transport, where the proposer writes its own bodies, and `null-random`
+  is deliberately excluded: it binds its own generative transport and
+  would never read them.
+
 - **Fidelity arms no longer produce efficacy verdicts.** MIPROv2's
   `zeroshot` and `ground_only` modes run once each as evidence for two
   audit invariants. They pass their audits and are measured on held-out,

@@ -254,6 +254,41 @@ class FamilySpec:
             self.probes.naive_template,
         )
 
+    def rehearsal_proposal_bodies(self, breadth: int) -> tuple[str, ...]:
+        """Enough distinct drafts to fill a fake round of ``breadth``.
+
+        A family scripts exactly two bodies -- the ceiling draft and the
+        naive seed -- so a fake COPRO round wider than that cannot be
+        filled: the proposer runs out of distinct drafts and the run dies
+        inside the durable boundary with ``copro_proposal_cardinality``.
+        The real transport has no such limit, because a proposer writes its
+        own bodies, so this exists only to let a fake-transport *rehearsal*
+        run the pinned search shape.
+
+        The drafts are the family's own ceiling template with a numbered
+        marker prepended, which keeps two properties that matter. Each
+        still satisfies the render contract -- it carries every placeholder
+        untouched -- so the proposal path admits it rather than rejecting a
+        malformed draft. And each is textually distinct, so COPRO sees a
+        genuinely multi-draft round rather than re-offering one body under
+        different slots.
+
+        These are rehearsal scaffolding and score identically to the
+        ceiling probe, which is the correct behaviour on a transport that
+        answers from the experiment's own gold: a fake rehearsal is
+        evidence about plumbing, never about search efficacy.
+        """
+        if breadth < 1:
+            raise ValueError("breadth must be at least 1")
+        # ``proposal_bodies`` already contributes the ceiling draft, and
+        # the naive seed occupies a slot the optimizer never requests, so
+        # a round of ``breadth`` needs ``breadth - 1`` further drafts.
+        return tuple(
+            f"Variant {index}: apply the procedure below exactly.\n\n"
+            f"{self.probes.ceiling_template}"
+            for index in range(1, breadth)
+        )
+
 
 _C19_SPEC = FamilySpec(
     family_id=FamilyId.C19.value,

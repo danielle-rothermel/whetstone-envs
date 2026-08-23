@@ -17,6 +17,7 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
@@ -119,6 +120,74 @@ def _codex_arm() -> ArmSpec:
         k_run=1,
         seeds=(4000,),
     )
+
+
+def _shaped_copro_arm(*, breadth: int, depth: int = 3) -> ArmSpec:
+    return ArmSpec(
+        arm_id="copro",
+        optimizer="copro",
+        kind=ArmKind.REAL,
+        k_run=1,
+        seeds=(1000,),
+        copro_breadth=breadth,
+        copro_depth=depth,
+    )
+
+
+def test_a_fake_copro_arm_is_handed_drafts_enough_for_its_breadth(
+    tmp_path: Path,
+) -> None:
+    """The pinned breadth 6 needs more drafts than the family scripts.
+
+    A family scripts two bodies -- the ceiling draft and the naive seed --
+    and the naive one fills a slot COPRO never requests, so an unaided fake
+    round can land exactly one draft. At the protocol's breadth the round
+    cannot be filled and the run dies inside the durable boundary with
+    ``copro_proposal_cardinality``, before it evaluates anything. That made
+    a fake-transport rehearsal of the registered search shape impossible.
+    """
+    spec = _runner(tmp_path)._spec_for(
+        _shaped_copro_arm(breadth=6), seed=1000, run_dir=tmp_path / "run"
+    )
+    # One is the family's own ceiling draft, so the arm supplies the rest.
+    assert len(spec.extra_proposal_bodies) == 5
+    assert len(set(spec.extra_proposal_bodies)) == 5
+    contract = family_spec("c19").render_contract()
+    for body in spec.extra_proposal_bodies:
+        contract.validate_template(body)
+
+
+def test_a_real_transport_copro_arm_is_handed_no_drafts(
+    tmp_path: Path,
+) -> None:
+    """On a paid transport the proposer writes its own bodies.
+
+    ``run_optimizer`` refuses ``extra_proposal_bodies`` outside the fake
+    transport, so forwarding them unconditionally would make every paid
+    COPRO arm unrunnable.
+    """
+    runner = replace(_runner(tmp_path), transport="openrouter")
+    spec = runner._spec_for(
+        _shaped_copro_arm(breadth=6), seed=1000, run_dir=tmp_path / "run"
+    )
+    assert spec.extra_proposal_bodies == ()
+
+
+def test_a_null_random_arm_is_handed_no_drafts(tmp_path: Path) -> None:
+    """null-A generates its own drafts, so scripted bodies would go unread.
+
+    It shares COPRO's search shape and its breadth, but binds a
+    ``NullRandomTransport`` that mints a fresh draft per slot.
+    """
+    arm = replace(
+        _shaped_copro_arm(breadth=6),
+        arm_id="null-random",
+        optimizer="null-random",
+    )
+    spec = _runner(tmp_path)._spec_for(
+        arm, seed=1000, run_dir=tmp_path / "run"
+    )
+    assert spec.extra_proposal_bodies == ()
 
 
 def test_the_codex_arm_runs_through_the_shared_runner(

@@ -231,6 +231,20 @@ class ArmSpec:
     #: honoured but is not is how a study comes to misdescribe its own arm.
     miprov2_num_trials: int | None = None
     miprov2_num_candidates: int | None = None
+    #: Whether this arm minibatches, and at what size.
+    #:
+    #: Design, not a runtime knob, and pinned like the train/val split: an
+    #: arm that evaluated every trial on the whole valset and an arm that
+    #: evaluated on a sampled batch of it bought different evidence for
+    #: the same claim, so a batch size chosen after a result is the
+    #: post-hoc adjustment the pre-registration exists to forbid.
+    #:
+    #: The two travel together. ``miprov2_minibatch`` on without a size
+    #: resolves the batch to the whole valset -- minibatching in name only
+    #: -- so an arm that turns it on states the size, and an arm that
+    #: leaves it off states neither.
+    miprov2_minibatch: bool = False
+    miprov2_minibatch_size: int | None = None
     #: The arm's explicit train/val partition of the internal split,
     #: required for every optimizer with a train/val concept and refused on
     #: the others. Design fields, not runtime knobs: they enter the
@@ -239,17 +253,22 @@ class ArmSpec:
     train_size: int | None = None
     val_size: int | None = None
 
-    def __post_init__(self) -> None:
-        if not self.arm_id.strip():
-            raise ValueError("arm ids must be nonblank")
+    def _validate_miprov2(self) -> None:
+        """Refuse MIPROv2 settings this arm could not honestly claim.
+
+        Refused on another optimizer rather than silently ignored, for the
+        runner's reason: a setting that looks honoured but is not is how a
+        study comes to misdescribe its own arm.
+        """
         miprov2_settings = (
             self.miprov2_num_trials,
             self.miprov2_num_candidates,
+            self.miprov2_minibatch_size,
         )
         if (
             any(value is not None for value in miprov2_settings)
-            and self.optimizer != "miprov2"
-        ):
+            or self.miprov2_minibatch
+        ) and self.optimizer != "miprov2":
             raise ValueError(
                 f"arm {self.arm_id!r} sets MIPROv2 settings but runs "
                 f"optimizer {self.optimizer!r}"
@@ -266,6 +285,36 @@ class ArmSpec:
                 f"arm {self.arm_id!r} miprov2_num_candidates must be at "
                 "least 1"
             )
+        if self.miprov2_minibatch and self.miprov2_minibatch_size is None:
+            # The runner's refusal, restated at the design level: an arm
+            # that pre-registered "minibatch on" and no size registered a
+            # shape whose batch is the whole valset.
+            raise ValueError(
+                f"arm {self.arm_id!r} sets miprov2_minibatch and must "
+                "declare miprov2_minibatch_size; left unset the batch is "
+                "the whole validation split"
+            )
+        if (
+            not self.miprov2_minibatch
+            and self.miprov2_minibatch_size is not None
+        ):
+            raise ValueError(
+                f"arm {self.arm_id!r} declares a miprov2_minibatch_size "
+                "without turning miprov2_minibatch on"
+            )
+        if (
+            self.miprov2_minibatch_size is not None
+            and self.miprov2_minibatch_size < 1
+        ):
+            raise ValueError(
+                f"arm {self.arm_id!r} miprov2_minibatch_size must be at "
+                "least 1"
+            )
+
+    def __post_init__(self) -> None:
+        if not self.arm_id.strip():
+            raise ValueError("arm ids must be nonblank")
+        self._validate_miprov2()
         split_supplied = (
             self.train_size is not None or self.val_size is not None
         )

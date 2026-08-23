@@ -8,7 +8,9 @@ import pytest
 
 from whetstone_envs.optim.codex import CODEX_DEFAULT_AGENT_MODEL
 from whetstone_envs.optim.study.spec import (
+    CI_LEVEL,
     CODEX_EVALUATE_CALL_CAP,
+    CORRECTION_RULE,
     HOLM_FAMILY_SIZE,
     K_CAL_CAP,
     K_CAL_INITIAL,
@@ -17,6 +19,7 @@ from whetstone_envs.optim.study.spec import (
     PROTOCOL_TRAIN_SIZE,
     PROTOCOL_VAL_SIZE,
     REAL_OPTIMIZER_ARM_IDS,
+    RESAMPLES,
     SEED_RANGE_BY_OPTIMIZER,
     ArmKind,
     ArmSpec,
@@ -600,3 +603,128 @@ def test_the_runner_default_is_a_runner_default_not_the_study_default() -> (
     assert CODEX_DEFAULT_AGENT_MODEL == "gpt-5.6-sol"
     with pytest.raises(ValueError, match="pre-registers its"):
         _spec(codex_agent_model=None)
+
+
+# --------------------------------------------------------------------------
+# The MIPROv2 minibatch size is design (Phase E item 3)
+# --------------------------------------------------------------------------
+
+
+def _miprov2_arm(**overrides: object) -> ArmSpec:
+    fields: dict[str, object] = {
+        "arm_id": "miprov2",
+        "optimizer": "miprov2",
+        "kind": ArmKind.REAL,
+        "k_run": 1,
+        "seeds": (2000,),
+        "train_size": PROTOCOL_TRAIN_SIZE,
+        "val_size": PROTOCOL_VAL_SIZE,
+    }
+    fields.update(overrides)
+    return ArmSpec(**fields)  # ty: ignore[invalid-argument-type]
+
+
+def test_a_minibatching_arm_pre_registers_its_batch_size() -> None:
+    """Design, not a runtime knob, and pinned like the train/val split.
+
+    Fails-before: ``ArmSpec`` had no minibatch fields at all, so an arm
+    could only minibatch by taking the runner's default -- and left unset
+    that default is the whole valset, which is minibatching in name only.
+    Nothing pre-registered the batch a trial was scored on, so an arm rerun
+    at a different one measured different evidence under an unchanged
+    design hash.
+    """
+    _miprov2_arm(miprov2_minibatch=True, miprov2_minibatch_size=20)
+    with pytest.raises(ValueError, match="miprov2_minibatch_size"):
+        _miprov2_arm(miprov2_minibatch=True)
+
+
+def test_a_batch_size_without_minibatching_is_refused() -> None:
+    """A size nothing honours is an arm misdescribing itself."""
+    with pytest.raises(ValueError, match="without turning"):
+        _miprov2_arm(miprov2_minibatch_size=20)
+
+
+def test_minibatch_settings_are_refused_on_another_optimizer() -> None:
+    """Scoped like every other MIPROv2 setting."""
+    with pytest.raises(ValueError, match="but runs optimizer"):
+        ArmSpec(
+            arm_id="copro",
+            optimizer="copro",
+            kind=ArmKind.REAL,
+            k_run=1,
+            seeds=(1000,),
+            miprov2_minibatch=True,
+            miprov2_minibatch_size=20,
+        )
+
+
+def test_a_non_positive_batch_size_is_refused() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        _miprov2_arm(miprov2_minibatch=True, miprov2_minibatch_size=0)
+
+
+def test_the_batch_size_enters_the_pre_registered_payload() -> None:
+    """Hashed with the design, exactly like ``split_by_arm``.
+
+    Two designs differing only in the batch size must pin differently, or
+    the block that exists to forbid post-hoc adjustment would not notice
+    one.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        pre_registration_design_hash,
+    )
+
+    common = {
+        "k_repeat": 3,
+        "k_run_by_arm": {"miprov2": 5},
+        "split_by_arm": {"miprov2": (44, 44)},
+        "ci_level": CI_LEVEL,
+        "resamples": RESAMPLES,
+        "bootstrap_seed": 0,
+        "correction": CORRECTION_RULE,
+        "m": HOLM_FAMILY_SIZE,
+        "completeness_backstop": 0.9,
+    }
+    at_20 = pre_registration_design_hash(
+        minibatch_by_arm={"miprov2": 20}, **common
+    )
+    at_35 = pre_registration_design_hash(
+        minibatch_by_arm={"miprov2": 35}, **common
+    )
+    unset = pre_registration_design_hash(
+        minibatch_by_arm={"miprov2": None}, **common
+    )
+    assert len({at_20, at_35, unset}) == 3
+
+
+def test_the_batch_size_reaches_the_runner_spec(tmp_path: Path) -> None:
+    """A design field that never reached the run would be a fiction."""
+    from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+
+    runner = StudyOptimizerRunner(
+        study_dir=tmp_path,
+        family_id="c19",
+        transport="fake",
+        split_sizes=(88, 132, 220),
+        n_per_stratum=1,
+        pool_seed_start=1,
+        task_model="openai/gpt-4.1-nano",
+        proposer_model="openai/gpt-4.1-nano",
+        num_seeds=1,
+        naive_template="naive {input}",
+        store_path=tmp_path / "store.sqlite",
+    )
+    spec = runner._spec_for(
+        _miprov2_arm(miprov2_minibatch=True, miprov2_minibatch_size=20),
+        seed=2000,
+        run_dir=tmp_path / "run",
+    )
+    assert spec.miprov2_minibatch is True
+    assert spec.miprov2_minibatch_size == 20
+
+    # An arm that does not minibatch keeps the runner's own default rather
+    # than pinning the same false twice.
+    off = runner._spec_for(_miprov2_arm(), seed=2000, run_dir=tmp_path / "run")
+    assert off.miprov2_minibatch is False
+    assert off.miprov2_minibatch_size is None

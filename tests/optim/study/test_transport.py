@@ -54,6 +54,7 @@ from whetstone_envs.optim.study.environment import (
 from whetstone_envs.optim.study.manifest import (
     AMENDMENT_REASON_TRANSPORT_CHANGE,
     DISCARD_STALE_RUNS_FLAG,
+    PROVIDER_CONTROL_UNSET,
     STUDY_MANIFEST_NAME,
     STUDY_STORE_NAME,
     ArmRecord,
@@ -1745,3 +1746,69 @@ def test_a_ledger_with_no_store_collects_nothing() -> None:
     )
     assert ledger.records() == ()
     assert ledger.folded() == ()
+
+
+# --------------------------------------------------------------------------
+# The effective provider call config is recorded (Phase E item 4)
+# --------------------------------------------------------------------------
+
+
+def test_binding_a_stage_records_what_the_transport_bound(
+    study_dir: Path,
+) -> None:
+    """The manifest gains the config the transport actually resolved.
+
+    Fails-before: `models` named which model the study meant to run and
+    `stages` named which transport it ran on, but nothing recorded the
+    *effective* call config -- the resolved route and the request controls
+    -- so neither the spend model nor the claim that two stages ran "the
+    same experiment" could be checked against the manifest.
+    """
+    with bound_stage_environment(study_dir):
+        pass
+
+    (record,) = read_study_manifest(study_dir).models.provider_calls
+    assert record.transport == FAKE_TRANSPORT
+    assert record.protocol
+    assert record.model_route
+    # Every control is stated, set or not: an omitted control would read
+    # as one the study chose, and "provider default" is the state that
+    # explains this study's per-call bill.
+    assert record.reasoning == PROVIDER_CONTROL_UNSET
+    assert record.temperature == PROVIDER_CONTROL_UNSET
+    assert record.seed == PROVIDER_CONTROL_UNSET
+
+
+def test_rebinding_the_same_transport_rewrites_no_manifest(
+    study_dir: Path,
+) -> None:
+    """An ordinary resume does not touch the block it would restate."""
+    with bound_stage_environment(study_dir):
+        pass
+    first = read_study_manifest(study_dir)
+    with bound_stage_environment(study_dir):
+        pass
+    assert read_study_manifest(study_dir) == first
+
+
+def test_the_paid_route_records_the_route_it_would_bind() -> None:
+    """The paid config's route is the manifest's task model, not a default.
+
+    Asserted on the projection rather than through a bound stage: binding
+    the paid transport needs a key, and what is under test here is that
+    the recorded route is the one the study named.
+    """
+    from whetstone_envs.optim.provider import openrouter_seeded_call_config
+    from whetstone_envs.optim.study.environment import _provider_call_record
+
+    record = _provider_call_record(
+        transport=OPENROUTER_TRANSPORT,
+        config=openrouter_seeded_call_config(model="openai/gpt-5-nano"),
+    )
+    assert record.transport == OPENROUTER_TRANSPORT
+    assert record.provider == "openrouter"
+    assert record.model_route == "openai/gpt-5-nano"
+    # Recorded verbatim and never set from here: whether the design pins a
+    # task-model reasoning effort is an open decision, and this block
+    # states what was bound rather than choosing it.
+    assert record.reasoning == PROVIDER_CONTROL_UNSET

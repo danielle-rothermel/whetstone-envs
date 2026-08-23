@@ -305,6 +305,15 @@ Models come from the manifest's own `models` block — `task_model` for the
 evaluations and `proposer_model` for the optimizers' proposal route — so
 selecting a transport does not select a model.
 
+**What the transport bound is recorded too.** `models.provider_calls` holds
+one record per transport a stage has bound, naming the route it resolved
+and every request control — temperature, top-p, token limit, reasoning,
+seed — set or not. A control the study did not set reads `provider
+default` rather than being omitted, because "left to the provider" is a
+real state with a real bill: it is why the toy Stage 0 spent thousands of
+reasoning tokens per call. It is recorded, not hashed, like the transport
+itself, and the report prints it in the design section.
+
 **The transport is an invocation property that the manifest records.** Like
 `--allow-real-codex` it stays out of the pre-registration hash, so two
 studies differing only in it pre-register identically. Unlike it, every

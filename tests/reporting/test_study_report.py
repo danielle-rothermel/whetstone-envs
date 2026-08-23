@@ -1203,10 +1203,12 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
     design = manifest.design
     assert design is not None
     split_by_arm = _split_by_arm_of(manifest)
+    minibatch_by_arm: dict[str, int | None] = dict.fromkeys(split_by_arm)
     prior = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1221,6 +1223,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
         k_repeat=amended_k_repeat,
         k_run_by_arm=design.k_run_by_arm,
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1235,6 +1238,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
                 k_repeat=amended_k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
                 split_by_arm=split_by_arm,
+                minibatch_by_arm=minibatch_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,
@@ -1287,10 +1291,12 @@ def test_an_original_pre_registration_renders_without_an_amendment(
     design = reported_manifest.design
     assert design is not None
     split_by_arm = _split_by_arm_of(reported_manifest)
+    minibatch_by_arm: dict[str, int | None] = dict.fromkeys(split_by_arm)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1305,6 +1311,7 @@ def test_an_original_pre_registration_renders_without_an_amendment(
                 k_repeat=design.k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
                 split_by_arm=split_by_arm,
+                minibatch_by_arm=minibatch_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,

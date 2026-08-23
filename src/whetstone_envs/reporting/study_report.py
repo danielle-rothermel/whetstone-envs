@@ -73,6 +73,7 @@ if TYPE_CHECKING:
         ArmRecord,
         EvidenceStore,
         HeldOutRecord,
+        ProviderCallRecord,
         RunRecord,
         StageRecord,
     )
@@ -1173,6 +1174,24 @@ def _design_section(manifest: StudyManifest) -> Section:
                 Cell(text=models.codex_agent_model),
             )
         ),
+        # What each transport actually bound, which is a different fact
+        # from which model the study meant to run: the route it resolved
+        # and the request controls it did or did not set are what explain
+        # the bill and what "the same experiment" means.
+        *(
+            Row(
+                cells=(
+                    Cell(text=f"provider call ({entry.transport})"),
+                    Cell(
+                        figure=_manifest_figure(
+                            _provider_call_text(entry),
+                            "models.provider_calls",
+                        )
+                    ),
+                )
+            )
+            for entry in models.provider_calls
+        ),
     )
     paragraphs = [
         (
@@ -2054,6 +2073,29 @@ def _total_usd(run: RunRecord) -> float | None:
     if any(entry.usd is None for entry in run.spend):
         return None
     return sum(entry.usd or 0.0 for entry in run.spend)
+
+
+def _provider_call_text(entry: ProviderCallRecord) -> str:
+    """One transport's effective provider call config, as one line.
+
+    Every control appears, set or not: an omitted control would read as
+    one the study chose, and "left to the provider's default" is the state
+    that explains this study's per-call bill.
+    """
+    controls = ", ".join(
+        f"{name} {value}"
+        for name, value in (
+            ("temperature", entry.temperature),
+            ("top_p", entry.top_p),
+            ("token limit", entry.token_limit),
+            ("reasoning", entry.reasoning),
+            ("seed", entry.seed),
+        )
+    )
+    return (
+        f"{entry.provider}/{entry.protocol} route {entry.model_route}; "
+        f"{controls}; extensions {entry.extensions}"
+    )
 
 
 def _threats_section(manifest: StudyManifest) -> Section:

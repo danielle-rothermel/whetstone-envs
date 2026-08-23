@@ -112,7 +112,15 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #:   could reuse fake runs against freshly bought anchors. Dropping them
 #:   silently would leave a manifest indistinguishable from one whose arm
 #:   stages simply never ran, so what was dropped is recorded.
-STUDY_MANIFEST_SCHEMA_VERSION = 7
+#: v8 adds ``models.provider_calls``: the task model's *effective* provider
+#: call config, one record per transport a stage has bound. v7 recorded
+#: which model a study meant to run and which transport it ran on, but not
+#: what the transport actually bound -- the resolved route and the request
+#: controls -- so neither the spend model nor the claim that two stages ran
+#: "the same experiment" was auditable from the manifest. Recorded rather
+#: than hashed, like the transport itself: it is a property of the
+#: invocation, so two studies of one design still pre-register identically.
+STUDY_MANIFEST_SCHEMA_VERSION = 8
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -402,6 +410,76 @@ class SplitsRecord(_StrictModel):
         return self
 
 
+#: What a recorded provider control says when the study set none.
+#:
+#: A persisted-format literal: "the provider's own default" is a real
+#: state with real consequences, and spelling it out is what stops it
+#: from reading as an omission or, worse, as a zero.
+PROVIDER_CONTROL_UNSET = "provider default"
+
+
+class ProviderCallRecord(_StrictModel):
+    """The task model's *effective* provider call config, as bound.
+
+    The manifest's ``models`` block names which model a study meant to run.
+    This block names what the transport actually bound: the route it
+    resolved, and the request controls the study did or did not set. The
+    two are different facts, and only the second explains what a call
+    cost and what "the same experiment" means -- a route the study never
+    named, or a reasoning control it never asked for, changes both the
+    bill and the treatment while leaving ``task_model`` unchanged.
+
+    Recorded, not hashed. The config is a property of the transport the
+    invocation bound, like the transport itself, so two studies of one
+    design pre-register identically and this block tells them apart.
+
+    Every field is a string, and an unset control is the literal
+    :data:`PROVIDER_CONTROL_UNSET` rather than an omission or a zero.
+    "Left to the provider's default" is a real and consequential state --
+    it is why the toy Stage 0 billed thousands of reasoning tokens per
+    call -- so it is stated rather than left to be inferred from a missing
+    key.
+    """
+
+    transport: StrictStr
+    provider: StrictStr
+    protocol: StrictStr
+    model_route: StrictStr
+    temperature: StrictStr
+    top_p: StrictStr
+    token_limit: StrictStr
+    #: Whatever reasoning control the bound config carries, verbatim.
+    #:
+    #: Recorded because it is the single largest term in this study's
+    #: per-call bill, and **not** settable from here: whether the design
+    #: pins a task-model reasoning effort is an open decision, and a
+    #: manifest field that looked like a knob would answer it by accident.
+    reasoning: StrictStr
+    seed: StrictStr
+    extensions: StrictStr
+
+    @model_validator(mode="after")
+    def _validate_provider_call(self) -> ProviderCallRecord:
+        values = (
+            self.transport,
+            self.provider,
+            self.protocol,
+            self.model_route,
+            self.temperature,
+            self.top_p,
+            self.token_limit,
+            self.reasoning,
+            self.seed,
+            self.extensions,
+        )
+        if any(not value.strip() for value in values):
+            raise ValueError(
+                "every provider call field is a nonblank statement; an "
+                f"unset control is {PROVIDER_CONTROL_UNSET!r}"
+            )
+        return self
+
+
 class ModelsRecord(_StrictModel):
     """Which models ran, and what the study could and could not control.
 
@@ -418,6 +496,15 @@ class ModelsRecord(_StrictModel):
     provider: StrictStr
     seed_control: StrictStr
     codex_agent_model: StrictStr
+    #: The task model's effective provider call config, one record per
+    #: transport this study has bound.
+    #:
+    #: Empty until a stage runs. Keyed by transport in the record itself
+    #: rather than by a dict key, so the block stays a tuple like every
+    #: other repeated record here and a reader sees the transport beside
+    #: the config it produced. A stage re-run on a transport already
+    #: recorded replaces its entry rather than appending a second.
+    provider_calls: tuple[ProviderCallRecord, ...] = ()
 
     @model_validator(mode="after")
     def _validate_models(self) -> ModelsRecord:
@@ -431,6 +518,14 @@ class ModelsRecord(_StrictModel):
         )
         if any(not value.strip() for value in values):
             raise ValueError("every model field is a nonblank statement")
+        transports = [entry.transport for entry in self.provider_calls]
+        if len(set(transports)) != len(transports):
+            # One effective config per transport. Two would leave the
+            # study unable to say which one its numbers came from, which
+            # is the whole reason this block exists.
+            raise ValueError(
+                "each transport records its provider call config once"
+            )
         return self
 
 
@@ -483,6 +578,16 @@ class PreRegistrationRecord(_StrictModel):
     #: partition chosen after a result is the same post-hoc adjustment the
     #: rest of this block exists to forbid.
     split_by_arm: dict[StrictStr, tuple[StrictInt, StrictInt] | None]
+    #: Each arm's pre-registered MIPROv2 minibatch size, as
+    #: ``{arm_id: size}``, with ``None`` for an arm that does not
+    #: minibatch.
+    #:
+    #: Hashed with the rest of the design for ``split_by_arm``'s reason:
+    #: an arm that evaluated every trial on the whole valset and an arm
+    #: that evaluated on a sampled batch of it bought different evidence
+    #: for the same claim, so a batch size chosen after a result is the
+    #: post-hoc adjustment this block exists to forbid.
+    minibatch_by_arm: dict[StrictStr, StrictInt | None]
     ci_level: StrictFloat
     resamples: StrictInt
     bootstrap_seed: StrictInt
@@ -503,6 +608,10 @@ class PreRegistrationRecord(_StrictModel):
             raise ValueError("every arm's K_RUN is at least 1")
         _require_valid_split_by_arm(
             split_by_arm=self.split_by_arm, k_run_by_arm=self.k_run_by_arm
+        )
+        _require_valid_minibatch_by_arm(
+            minibatch_by_arm=self.minibatch_by_arm,
+            k_run_by_arm=self.k_run_by_arm,
         )
         if not 0.0 < self.ci_level < 1.0:
             raise ValueError("the CI level is a proportion in (0, 1)")
@@ -532,6 +641,7 @@ class PreRegistrationRecord(_StrictModel):
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
             split_by_arm=self.split_by_arm,
+            minibatch_by_arm=self.minibatch_by_arm,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -552,6 +662,7 @@ class PreRegistrationRecord(_StrictModel):
             k_repeat=self.k_repeat,
             k_run_by_arm=self.k_run_by_arm,
             split_by_arm=self.split_by_arm,
+            minibatch_by_arm=self.minibatch_by_arm,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -587,11 +698,34 @@ def _require_valid_split_by_arm(
         raise ValueError("a pre-registered split size is at least 1")
 
 
+def _require_valid_minibatch_by_arm(
+    *,
+    minibatch_by_arm: Mapping[str, int | None],
+    k_run_by_arm: Mapping[str, int],
+) -> None:
+    """The per-arm minibatch names every arm, at positive sizes.
+
+    Named for every arm rather than only the minibatching ones, for
+    ``split_by_arm``'s reason: a block that named some arms and not others
+    would leave the rest's shape unpinned, and "this arm does not
+    minibatch" is itself a pre-registered fact.
+    """
+    if set(minibatch_by_arm) != set(k_run_by_arm):
+        raise ValueError(
+            "the pre-registered minibatch names exactly the arms K_RUN does"
+        )
+    if any(
+        size is not None and size < 1 for size in minibatch_by_arm.values()
+    ):
+        raise ValueError("a pre-registered minibatch size is at least 1")
+
+
 def _pre_registration_payload(  # noqa: PLR0913
     *,
     k_repeat: int,
     k_run_by_arm: dict[str, int],
     split_by_arm: Mapping[str, tuple[int, int] | None],
+    minibatch_by_arm: Mapping[str, int | None],
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -621,6 +755,7 @@ def _pre_registration_payload(  # noqa: PLR0913
             arm_id: (None if split is None else [split[0], split[1]])
             for arm_id, split in sorted(split_by_arm.items())
         },
+        "minibatch_by_arm": dict(sorted(minibatch_by_arm.items())),
         "ci_level": ci_level,
         "resamples": resamples,
         "bootstrap_seed": bootstrap_seed,
@@ -635,6 +770,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
     k_repeat: int,
     k_run_by_arm: dict[str, int],
     split_by_arm: Mapping[str, tuple[int, int] | None],
+    minibatch_by_arm: Mapping[str, int | None],
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -648,6 +784,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
             k_repeat=k_repeat,
             k_run_by_arm=k_run_by_arm,
             split_by_arm=split_by_arm,
+            minibatch_by_arm=minibatch_by_arm,
             ci_level=ci_level,
             resamples=resamples,
             bootstrap_seed=bootstrap_seed,
@@ -1890,6 +2027,7 @@ __all__ = [
     "PROVENANCE_AMENDED",
     "PROVENANCE_ORIGINAL",
     "PROVENANCE_VALUES",
+    "PROVIDER_CONTROL_UNSET",
     "SELECTION_RULE_ARGMAX_OFFICIAL",
     "STAGE_IDS",
     "STUDY_MANIFEST_NAME",
@@ -1921,6 +2059,7 @@ __all__ = [
     "PopulationRecord",
     "PreRegistrationRecord",
     "PreRegistrationViolationError",
+    "ProviderCallRecord",
     "RunRecord",
     "RunSpendRecord",
     "SelectionRecord",

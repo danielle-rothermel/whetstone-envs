@@ -351,6 +351,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The manifest records the effective provider call config** (schema `v8`).
+  `models` named which model a study meant to run and `stages` named which
+  transport it ran on, but nothing recorded what the transport actually
+  bound — the resolved route and the request controls — so neither the
+  spend model nor the claim that two stages ran "the same experiment" was
+  auditable from the manifest. `models.provider_calls` now carries one
+  `ProviderCallRecord` per transport a stage has bound, read off the
+  prepared experiment rather than off the argument (on the fake transport
+  that argument is `None` and the effective config is the reference default
+  the experiment builds for itself), and the report's design section prints
+  it. Recorded, not hashed: it is a property of the invocation like the
+  transport, so two studies of one design still pre-register identically.
+  Every control appears whether or not the study set one —
+  `"provider default"` is a real and consequential state, and it is why the
+  toy Stage 0 billed thousands of reasoning tokens per call. **No
+  reasoning-effort knob is added**: whether the design pins one is an open
+  decision, and a settable field would answer it by accident.
+- **A MIPROv2 arm's minibatch size is a pre-registered design field.**
+  `ArmSpec` gains `miprov2_minibatch`/`miprov2_minibatch_size`, which
+  travel together — on without a size is refused at the design level for
+  the reason the runner refuses it — and the size enters the
+  pre-registration's hashed payload as `minibatch_by_arm`, alongside
+  `split_by_arm`. An arm that scored every trial on the whole valset and
+  one that scored on a sampled batch bought different evidence for the same
+  claim, so two designs differing only in the batch size now pin
+  differently.
+
+### Added
+
 - **A Stage-1 MIPROv2 arm cannot silently take the shape that crashed.**
   `num_candidates < 3` with minibatching is refused at spec validation,
   pointing at whetstone-ai #137, **unless** the installed whetstone-ai is

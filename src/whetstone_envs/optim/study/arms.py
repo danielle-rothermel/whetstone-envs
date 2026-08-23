@@ -527,6 +527,10 @@ class StudyOptimizerRunner:
                 if arm.demo_mode is not None
                 else {}
             ),
+            # Forwarded only when the arm turns it on, so an arm that does
+            # not keeps the runner's own default rather than pinning the
+            # same false here twice.
+            **({"miprov2_minibatch": True} if arm.miprov2_minibatch else {}),
             # Only forwarded when the arm sets them, so an unset arm keeps
             # the runner's own default rather than pinning it here twice.
             **{
@@ -534,6 +538,10 @@ class StudyOptimizerRunner:
                 for field, value in (
                     ("miprov2_num_trials", arm.miprov2_num_trials),
                     ("miprov2_num_candidates", arm.miprov2_num_candidates),
+                    (
+                        "miprov2_minibatch_size",
+                        arm.miprov2_minibatch_size,
+                    ),
                     ("train_size", arm.train_size),
                     ("val_size", arm.val_size),
                 )

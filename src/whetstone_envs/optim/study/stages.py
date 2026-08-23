@@ -865,6 +865,16 @@ def _split_by_arm(spec: StudySpec) -> dict[str, tuple[int, int] | None]:
     }
 
 
+def _minibatch_by_arm(spec: StudySpec) -> dict[str, int | None]:
+    """Each arm's pre-registered MIPROv2 minibatch size, or ``None``.
+
+    ``ArmSpec`` already refuses a size on an arm that does not minibatch
+    and requires one on an arm that does, so this is a projection rather
+    than a second rule.
+    """
+    return {arm.arm_id: arm.miprov2_minibatch_size for arm in spec.arms}
+
+
 def _pre_registration_record(
     design: DesignRecord,
     *,
@@ -877,16 +887,19 @@ def _pre_registration_record(
     so a design and its pinning cannot disagree at the moment they are
     written.
 
-    ``spec`` supplies the per-arm train/val partition, which the design
-    block does not carry: the partition is per arm and ``DesignRecord``
-    records study-wide numbers. It is pinned all the same, because an arm
-    rerun at a different split is measuring a different thing.
+    ``spec`` supplies the per-arm train/val partition and MIPROv2
+    minibatch size, which the design block does not carry: both are per
+    arm and ``DesignRecord`` records study-wide numbers. They are pinned
+    all the same, because an arm rerun at a different split -- or at a
+    different batch size -- is measuring a different thing.
     """
     split_by_arm = _split_by_arm(spec)
+    minibatch_by_arm = _minibatch_by_arm(spec)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -903,6 +916,7 @@ def _pre_registration_record(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,

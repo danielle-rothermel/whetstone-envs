@@ -34,6 +34,7 @@ from whetstone.optim.contracts import (
 )
 from whetstone.optim.cost import RoleCost, RunCostReport
 
+from whetstone_envs.optim.study.spend import stage_spend_records
 from whetstone_envs.probes import normalize
 from whetstone_envs.reporting.schema import (
     EVAL_REPORT_SCHEMA,
@@ -46,6 +47,7 @@ from whetstone_envs.reporting.schema import (
     EvalReport,
     EvalRoleName,
     EvalRun,
+    EvalSpend,
     EvalSuccess,
     EvaluationResult,
     FamilyName,
@@ -528,6 +530,9 @@ def project_eval_report(  # noqa: PLR0913
         tasks=report_tasks,
         observations=tuple(report_observations),
         results=tuple(projected_results),
+        # Projected here rather than by the caller, so an evaluation cannot
+        # be published without its bill having been looked for.
+        spend=project_eval_spend(store=store, results=results),
     )
 
 
@@ -909,6 +914,54 @@ def project_run_spend(result: OptimResult) -> RunSpend | None:
         schema_version=SPEND_SCHEMA_VERSION,
         task_model=_role_spend("task_model", cost.task_model),
         proposer=_role_spend("proposer", cost.proposer),
+    )
+
+
+def project_eval_spend(
+    *, store: ObjectStore, results: tuple[EvalResult, ...]
+) -> EvalSpend | None:
+    """What a standalone evaluation's provider calls cost, or ``None``.
+
+    An optimizer run reports its bill through ``OptimResult.cost``, which
+    whetstone aggregates from the evidence each Step cites. A standalone
+    evaluation has no ``OptimResult`` and no Step: it reaches the provider
+    straight through the engine, so the same rows exist and nothing
+    collects them. This closes that gap the way the study's Stage 0 route
+    does -- by re-deriving every number from the persisted output rows
+    through whetstone's own aggregator, so an evaluation's bill and a run's
+    bill are the same kind of fact under the same honesty rules.
+
+    Only the task model appears: an evaluation runs no proposer, and an
+    all-zero proposer row would claim it measured one and found it free.
+
+    ``None`` when the rows evidence no provider call at all -- which is the
+    fake transport's honest answer, and a paid evaluation's honest answer
+    when its rows carried no usage telemetry. An all-zero block would say
+    the evaluation was measured and cost nothing.
+    """
+    evidence = tuple(
+        result.evidence
+        for result in results
+        if not isinstance(result, WhetstoneEvalRejected)
+        and isinstance(result.evidence, EvalEvidence)
+    )
+    records = stage_spend_records(store=store, evidence=evidence)
+    if not records:
+        return None
+    (record,) = records
+    return EvalSpend(
+        schema_version=SPEND_SCHEMA_VERSION,
+        task_model=RoleSpend(
+            role="task_model",
+            calls=record.calls,
+            cached_calls=record.cached_calls,
+            input_tokens=record.input_tokens,
+            output_tokens=record.output_tokens,
+            priced_calls=record.priced_calls,
+            unpriced_calls=record.unpriced_calls,
+            rows_missing_token_breakdown=(record.rows_missing_token_breakdown),
+            usd=record.usd,
+        ),
     )
 
 

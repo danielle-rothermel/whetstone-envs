@@ -25,7 +25,9 @@ from whetstone_envs.optim.provider import (
     openrouter_seeded_call_config,
 )
 from whetstone_envs.optim.run import DEFAULT_OUTPUT_ROOT
+from whetstone_envs.optim.run_cost import RunCostDocument, write_run_cost
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
+from whetstone_envs.optim.study.manifest import RunSpendRecord
 from whetstone_envs.reporting.projection import project_eval_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
@@ -41,6 +43,7 @@ from whetstone_envs.reporting.schema import (
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
+    from dr_store.sync import BlockingObjectStore
 
     from whetstone_envs.optim.experiment import (
         PreparedSplitExperiment,
@@ -211,7 +214,57 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                 results=results,
             )
             publish_eval_report(output, report)
+            _publish_eval_cost(output, report, store=store)
     return EvalRunOutput(directory=output, report=report)
+
+
+def _publish_eval_cost(
+    output: Path,
+    report: EvalReport,
+    *,
+    store: BlockingObjectStore,
+) -> None:
+    """Write ``cost.json`` beside the report, when there was a bill.
+
+    Optimizer runs publish one of these and the standalone eval path did
+    not, so held-out evaluation -- the role every efficacy claim is finally
+    made against -- spent real money that no artifact recorded. A study's
+    reported cost understated its true spend by the whole reporting pass.
+
+    Projected from the report rather than re-read from the rows: the report
+    already re-derived the bill from the persisted evidence, and a second
+    reading could disagree with the number the report publishes.
+
+    A run that evidenced no provider call writes nothing. An all-zero
+    document would claim the evaluation was measured and found free, which
+    is the same untrue claim ``project_run_cost`` declines to make.
+    """
+    if report.spend is None:
+        return
+    task_model = report.spend.task_model
+    write_run_cost(
+        output,
+        RunCostDocument(
+            run_id=report.run.run_id,
+            cost_report_schema_version=report.spend.schema_version,
+            spend=(
+                RunSpendRecord(
+                    role=task_model.role,
+                    calls=task_model.calls,
+                    cached_calls=task_model.cached_calls,
+                    input_tokens=task_model.input_tokens,
+                    output_tokens=task_model.output_tokens,
+                    priced_calls=task_model.priced_calls,
+                    unpriced_calls=task_model.unpriced_calls,
+                    rows_missing_token_breakdown=(
+                        task_model.rows_missing_token_breakdown
+                    ),
+                    usd=task_model.usd,
+                ),
+            ),
+        ),
+        store=store,
+    )
 
 
 __all__ = [

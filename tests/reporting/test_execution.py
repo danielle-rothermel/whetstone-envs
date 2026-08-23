@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -12,6 +12,9 @@ from whetstone_envs.reporting.execution import (
 )
 from whetstone_envs.reporting.publication import load_eval_report
 from whetstone_envs.reporting.schema import EvalRoleName, EvalSuccess
+
+if TYPE_CHECKING:
+    from dr_store import ObjectStore
 
 
 def test_fake_naive_ceiling_e2e_and_reload(fake_eval_output) -> None:
@@ -193,3 +196,95 @@ def test_unsupported_role_is_refused_by_name() -> None:
                 split_sizes=(1, 1, 1),
             )
         )
+
+
+# --------------------------------------------------------------------------
+# The standalone eval path ledgers what it spent (D3 defect (c))
+# --------------------------------------------------------------------------
+
+
+def test_the_eval_report_carries_a_spend_block(tmp_path) -> None:
+    """Every efficacy claim's own evaluation now reports its bill.
+
+    Fails-before: `EvalReport` had no `spend` field at all. Optimizer runs
+    projected `cost.json` and a spend block; the standalone eval path --
+    the one held-out evaluation every claim is finally made against --
+    published `eval-report.json` and `runtime.sqlite` and nothing else, so
+    a study's reported cost understated true spend by the whole reporting
+    pass.
+    """
+    output = run_c19_evaluation(
+        C19EvalSpec(
+            transport="fake",
+            role="official",
+            candidates=(
+                CandidateInput("ceiling", "ceiling", PROBES.ceiling_template),
+            ),
+            split_sizes=(1, 1, 0),
+            output_dir=tmp_path / "spend",
+            run_id="spend-test",
+        )
+    )
+    spend = output.report.spend
+    assert spend is not None
+    # One role only: an evaluation runs no proposer, and an all-zero
+    # proposer row would claim it measured one and found it free.
+    assert spend.task_model.role == "task_model"
+    assert spend.task_model.calls == 1
+    # The fake transport reports no price, so the honesty rule withholds
+    # the total rather than printing a zero that looks authoritative.
+    assert spend.task_model.usd is None
+    assert spend.task_model.unpriced_calls == spend.task_model.calls
+
+
+def test_the_eval_path_writes_a_cost_document(tmp_path) -> None:
+    """`cost.json` beside the report, in the same shape runs publish.
+
+    Fails-before: `run_c19_evaluation` wrote no cost document at all, so
+    there was nothing for a study manifest to cite or a reader to open.
+    """
+    from whetstone_envs.optim.run_cost import RUN_COST_NAME, read_run_cost
+
+    output = run_c19_evaluation(
+        C19EvalSpec(
+            transport="fake",
+            role="official",
+            candidates=(
+                CandidateInput("ceiling", "ceiling", PROBES.ceiling_template),
+            ),
+            split_sizes=(1, 1, 0),
+            output_dir=tmp_path / "cost",
+            run_id="cost-test",
+        )
+    )
+    assert (output.directory / RUN_COST_NAME).is_file()
+    document = read_run_cost(output.directory)
+    assert document.run_id == "cost-test"
+    (record,) = document.spend
+    assert record.role == "task_model"
+    # The document and the report agree, because the document is projected
+    # from the report rather than from a second reading of the rows.
+    assert output.report.spend is not None
+    assert record.calls == output.report.spend.task_model.calls
+    assert record.usd == output.report.spend.task_model.usd
+
+
+def test_a_report_with_no_provider_rows_publishes_no_cost() -> None:
+    """An evaluation that evidenced no call reports nothing, not zero.
+
+    Asserted on the projection directly, because every transport this
+    package can run in a test does reach the row-producing path -- and the
+    rule that matters is that "no evidence" and "free" stay distinct.
+    """
+    from whetstone_envs.reporting.projection import project_eval_spend
+
+    class _EmptyStore:
+        def get(self, _reference):  # pragma: no cover - never reached
+            raise AssertionError("no evidence to dereference")
+
+    assert (
+        project_eval_spend(
+            store=cast("ObjectStore", _EmptyStore()), results=()
+        )
+        is None
+    )

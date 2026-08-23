@@ -10,6 +10,8 @@ the second family exercises.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
@@ -179,6 +181,25 @@ MIPROV2_DEFAULT_SEED = 9
 #: drawn at that arm's first seed.
 NULL_RANDOM_DEFAULT_SEED = 5000
 
+#: The MIPROv2 candidate count below which minibatching exhausted the
+#: search space and raised inside the durable run boundary (D3's defect
+#: (d), whetstone-ai #137). Two candidates and a minibatch let consecutive
+#: full-eval steps promote every observed combination, and
+#: ``select_promotion`` fell out of its ranked loop into a bare
+#: ``ValueError: No valid program found in param_score_dict``.
+MIPROV2_MINIBATCH_MIN_CANDIDATES = 3
+
+#: The first whetstone-ai release whose ``select_promotion`` degrades to
+#: DSPy's own behaviour rather than raising. At or above it the shape is
+#: runnable and the refusal below lifts; below it the refusal is the only
+#: thing standing between a study arm and a run that dies mid-flight.
+MIPROV2_SPENT_COMBINATION_FIX_VERSION = (0, 1, 9)
+
+#: Where the refusal points a reader who wants the upstream story.
+MIPROV2_SPENT_COMBINATION_ISSUE = (
+    "https://github.com/danielle-rothermel/whetstone-ai/pull/137"
+)
+
 #: The default split, kept small so an unparameterised run stays a smoke run.
 DEFAULT_SPLIT_SIZES = (2, 2, 0)
 
@@ -306,6 +327,63 @@ SEED_DISPOSITION_CONTROL_FIELD = "control-seed-field"
 SEED_DISPOSITION_PROVIDER_ONLY = "provider-seed-control-only"
 
 
+def installed_whetstone_ai_version() -> str | None:
+    """The installed whetstone-ai version string, or ``None`` if absent.
+
+    Absent is a real state on this repo's base install: the ``optim``
+    extra installs whetstone-ai only on Python 3.13+, and this module is
+    reachable from a spec-validation test that never builds a run.
+    """
+    try:
+        return package_version("whetstone-ai")
+    except PackageNotFoundError:
+        return None
+
+
+def _version_text(parts: tuple[int, ...]) -> str:
+    return ".".join(str(part) for part in parts)
+
+
+def _release_tuple(text: str) -> tuple[int, ...]:
+    """The leading numeric release of a version string.
+
+    Only the release segment is compared, so a pre-release or local
+    version of the fixed release still reads as the fixed release. A
+    segment that is not an integer stops the parse rather than raising:
+    the caller's fallback -- refuse -- is the safe answer for a version
+    this function cannot rank.
+    """
+    parts: list[int] = []
+    for segment in text.split("."):
+        digits = ""
+        for character in segment:
+            if not character.isdigit():
+                break
+            digits += character
+        if not digits:
+            break
+        parts.append(int(digits))
+        if len(digits) != len(segment):
+            break
+    return tuple(parts)
+
+
+def _miprov2_spent_combination_fixed() -> bool:
+    """Whether the installed whetstone-ai carries the #137 fallback.
+
+    An unreadable or absent version reads as *not fixed*: the refusal is
+    what stops a study arm from dying inside a durable run boundary, so
+    the uncertain case keeps it rather than lifting it on a guess.
+    """
+    installed = installed_whetstone_ai_version()
+    if installed is None:
+        return False
+    release = _release_tuple(installed)
+    if not release:
+        return False
+    return release >= MIPROV2_SPENT_COMBINATION_FIX_VERSION
+
+
 def _validate_miprov2_settings(spec: RunSpec) -> None:
     """Refuse MIPROv2 minibatch settings the run cannot honour.
 
@@ -329,6 +407,36 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
         and spec.miprov2_minibatch_size < 1
     ):
         raise ValueError("miprov2_minibatch_size must be at least 1")
+    if spec.miprov2_minibatch and spec.miprov2_minibatch_size is None:
+        # D3's defect (e). Left unset, ``configure_miprov2`` resolves the
+        # batch to the whole valset, so "minibatch on" silently means "no
+        # minibatch" -- and the F16 fan-out invariant then correctly FAILs
+        # the audit of a run that already spent. Refusing the combination
+        # here turns a paid audit failure into a free validation error.
+        raise ValueError(
+            "--miprov2-minibatch requires --miprov2-minibatch-size: left "
+            "unset the batch is the whole validation split, so "
+            "minibatching is on in name only and the run's "
+            "mipro_minibatch_sizing invariant fails after it has spent"
+        )
+    if (
+        spec.miprov2_minibatch
+        and spec.miprov2_num_candidates < MIPROV2_MINIBATCH_MIN_CANDIDATES
+        and not _miprov2_spent_combination_fixed()
+    ):
+        raise ValueError(
+            f"miprov2_num_candidates {spec.miprov2_num_candidates} with "
+            f"minibatching requires whetstone-ai "
+            f"{_version_text(MIPROV2_SPENT_COMBINATION_FIX_VERSION)} or "
+            f"newer; the installed "
+            f"{installed_whetstone_ai_version() or 'whetstone-ai'} raises "
+            f"'No valid program found in param_score_dict' inside the "
+            f"durable run boundary once consecutive full-eval steps have "
+            f"promoted every observed combination. Use at least "
+            f"{MIPROV2_MINIBATCH_MIN_CANDIDATES} candidates, turn "
+            f"minibatching off, or upgrade -- see "
+            f"{MIPROV2_SPENT_COMBINATION_ISSUE}"
+        )
     if spec.miprov2_minibatch_full_eval_steps < 1:
         raise ValueError(
             "miprov2_minibatch_full_eval_steps must be at least 1"
@@ -1180,6 +1288,9 @@ __all__ = [
     "GEPA_DEFAULT_SEED",
     "KNOWN_FAMILY_IDS",
     "MIPROV2_DEFAULT_SEED",
+    "MIPROV2_MINIBATCH_MIN_CANDIDATES",
+    "MIPROV2_SPENT_COMBINATION_FIX_VERSION",
+    "MIPROV2_SPENT_COMBINATION_ISSUE",
     "OPTIMIZERS",
     "SEED_DISPOSITION_CONTROL_FIELD",
     "SEED_DISPOSITION_PROVIDER_ONLY",
@@ -1190,6 +1301,7 @@ __all__ = [
     "RealCodexRefusedError",
     "RunSpec",
     "default_output_dir",
+    "installed_whetstone_ai_version",
     "registered_family_ids",
     "run_optimizer",
     "seed_disposition",

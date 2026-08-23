@@ -64,6 +64,7 @@ __all__ = [
     "load_study_spec",
     "next_k_cal",
     "require_pinned_arms",
+    "require_pinned_codex_agent_model",
     "spec_from_manifest",
 ]
 
@@ -230,6 +231,20 @@ class ArmSpec:
     #: honoured but is not is how a study comes to misdescribe its own arm.
     miprov2_num_trials: int | None = None
     miprov2_num_candidates: int | None = None
+    #: Whether this arm minibatches, and at what size.
+    #:
+    #: Design, not a runtime knob, and pinned like the train/val split: an
+    #: arm that evaluated every trial on the whole valset and an arm that
+    #: evaluated on a sampled batch of it bought different evidence for
+    #: the same claim, so a batch size chosen after a result is the
+    #: post-hoc adjustment the pre-registration exists to forbid.
+    #:
+    #: The two travel together. ``miprov2_minibatch`` on without a size
+    #: resolves the batch to the whole valset -- minibatching in name only
+    #: -- so an arm that turns it on states the size, and an arm that
+    #: leaves it off states neither.
+    miprov2_minibatch: bool = False
+    miprov2_minibatch_size: int | None = None
     #: The arm's explicit train/val partition of the internal split,
     #: required for every optimizer with a train/val concept and refused on
     #: the others. Design fields, not runtime knobs: they enter the
@@ -238,17 +253,22 @@ class ArmSpec:
     train_size: int | None = None
     val_size: int | None = None
 
-    def __post_init__(self) -> None:
-        if not self.arm_id.strip():
-            raise ValueError("arm ids must be nonblank")
+    def _validate_miprov2(self) -> None:
+        """Refuse MIPROv2 settings this arm could not honestly claim.
+
+        Refused on another optimizer rather than silently ignored, for the
+        runner's reason: a setting that looks honoured but is not is how a
+        study comes to misdescribe its own arm.
+        """
         miprov2_settings = (
             self.miprov2_num_trials,
             self.miprov2_num_candidates,
+            self.miprov2_minibatch_size,
         )
         if (
             any(value is not None for value in miprov2_settings)
-            and self.optimizer != "miprov2"
-        ):
+            or self.miprov2_minibatch
+        ) and self.optimizer != "miprov2":
             raise ValueError(
                 f"arm {self.arm_id!r} sets MIPROv2 settings but runs "
                 f"optimizer {self.optimizer!r}"
@@ -265,6 +285,36 @@ class ArmSpec:
                 f"arm {self.arm_id!r} miprov2_num_candidates must be at "
                 "least 1"
             )
+        if self.miprov2_minibatch and self.miprov2_minibatch_size is None:
+            # The runner's refusal, restated at the design level: an arm
+            # that pre-registered "minibatch on" and no size registered a
+            # shape whose batch is the whole valset.
+            raise ValueError(
+                f"arm {self.arm_id!r} sets miprov2_minibatch and must "
+                "declare miprov2_minibatch_size; left unset the batch is "
+                "the whole validation split"
+            )
+        if (
+            not self.miprov2_minibatch
+            and self.miprov2_minibatch_size is not None
+        ):
+            raise ValueError(
+                f"arm {self.arm_id!r} declares a miprov2_minibatch_size "
+                "without turning miprov2_minibatch on"
+            )
+        if (
+            self.miprov2_minibatch_size is not None
+            and self.miprov2_minibatch_size < 1
+        ):
+            raise ValueError(
+                f"arm {self.arm_id!r} miprov2_minibatch_size must be at "
+                "least 1"
+            )
+
+    def __post_init__(self) -> None:
+        if not self.arm_id.strip():
+            raise ValueError("arm ids must be nonblank")
+        self._validate_miprov2()
         split_supplied = (
             self.train_size is not None or self.val_size is not None
         )
@@ -387,6 +437,21 @@ class StudySpec:
     held_out: SplitSpec
     task_model: str
     proposer_model: str
+    #: The Codex agent's own model, pre-registered rather than defaulted.
+    #:
+    #: This is **design**: the agent model decides what the Codex arm's
+    #: proposer *is*, so a study that reported one agent and ran another
+    #: would be comparing a different treatment against its own anchors.
+    #: The manifest's hand-authored ``models`` block names it, this field
+    #: carries it, and :func:`require_pinned_codex_agent_model` refuses a
+    #: stage whose resolved control disagrees.
+    #:
+    #: ``None`` on a study that declares no Codex arm -- there is no agent
+    #: to pin -- and required on one that does.
+    #: :data:`~whetstone_envs.optim.codex.CODEX_DEFAULT_AGENT_MODEL` stays
+    #: what it always was: the *runner's* default for a single run nobody
+    #: pre-registered, never the study's.
+    codex_agent_model: str | None = None
     k_cal: int = K_CAL_INITIAL
     k_repeat: int = 3
     bootstrap_seed: int = 0
@@ -418,6 +483,26 @@ class StudySpec:
         arm_ids = tuple(arm.arm_id for arm in self.arms)
         if len(set(arm_ids)) != len(arm_ids):
             raise ValueError("study arms must be unique by arm_id")
+        declares_codex = any(
+            arm.optimizer == CODEX_ARM_ID for arm in self.arms
+        )
+        if declares_codex and not (self.codex_agent_model or "").strip():
+            # A Codex arm whose agent model the design never named would
+            # take the runner's default, and the study would then report a
+            # proposer it never pre-registered.
+            raise ValueError(
+                "a study declaring the Codex arm pre-registers its "
+                "codex_agent_model; the runner's default is a run default, "
+                "not a design"
+            )
+        if not declares_codex and self.codex_agent_model is not None:
+            # A pinned agent for an arm that does not run is a design field
+            # nothing honours, which is how a manifest comes to describe a
+            # study it did not perform.
+            raise ValueError(
+                "this study declares no Codex arm, so it pre-registers no "
+                "codex_agent_model"
+            )
 
     @property
     def split_sizes(self) -> tuple[int, int, int]:
@@ -528,6 +613,12 @@ def spec_from_manifest(
             # would let a rerun quietly measure a different design.
             train_size=arm.train_size,
             val_size=arm.val_size,
+            # Read back for the split's reason: minibatching is design,
+            # it is hashed into the pre-registration, and a spec rebuilt
+            # without it would run an arm unbatched under a design hash
+            # that says it batched.
+            miprov2_minibatch=arm.minibatch,
+            miprov2_minibatch_size=arm.minibatch_size,
         )
         for arm in manifest.arms
     )
@@ -541,6 +632,15 @@ def spec_from_manifest(
         held_out=_split_spec("held_out", manifest.splits.held_out),
         task_model=manifest.models.task_model,
         proposer_model=manifest.models.proposer_model,
+        # Read off the hand-authored ``models`` block, which is where the
+        # study pre-registers it. Carried only when a Codex arm exists,
+        # because the spec refuses a pin nothing honours -- and every
+        # manifest records the field, Codex arm or not.
+        codex_agent_model=(
+            manifest.models.codex_agent_model
+            if any(arm.optimizer == CODEX_ARM_ID for arm in manifest.arms)
+            else None
+        ),
         k_cal=K_CAL_INITIAL if design is None else design.k_cal,
         k_repeat=3 if design is None else design.k_repeat,
         bootstrap_seed=0 if design is None else design.bootstrap_seed,
@@ -592,6 +692,24 @@ def _require_pinned_split(manifest: StudyManifest) -> None:
             "split_by_arm, so the spec they rebuild is not the design this "
             "study registered: " + "; ".join(disagreements)
         )
+    batched = [
+        f"{arm.arm_id}: records {arm.minibatch_size}, pre-registered "
+        f"{pinned.minibatch_by_arm[arm.arm_id]}"
+        for arm in manifest.arms
+        if arm.arm_id in pinned.minibatch_by_arm
+        and arm.minibatch_size != pinned.minibatch_by_arm[arm.arm_id]
+    ]
+    if batched:
+        # The same class of error as the split, for the same reason: an
+        # arm that evaluated each trial on a sampled batch bought
+        # different evidence for the same claim than one that evaluated
+        # on the whole valset, and ``minibatch_by_arm`` is hashed while
+        # the arm record is not.
+        raise PreRegistrationViolationError(
+            "these arm records disagree with the pre-registered "
+            "minibatch_by_arm, so the spec they rebuild is not the design "
+            "this study registered: " + "; ".join(batched)
+        )
 
 
 def require_pinned_arms(manifest: StudyManifest) -> None:
@@ -623,6 +741,42 @@ def require_pinned_arms(manifest: StudyManifest) -> None:
             "They were declared after the design was pinned, so running "
             "them would spend on a design this study never registered; "
             "re-pin with stage0 --replace-design to record the amendment"
+        )
+
+
+def require_pinned_codex_agent_model(
+    spec: StudySpec, *, resolved: str
+) -> None:
+    """Refuse a Codex arm whose resolved agent differs from the design.
+
+    The agent model is what the Codex arm's *proposer* is, so it is
+    pre-registered like the splits and the run matrix rather than taken
+    from whatever the runner happens to default to. The runner's
+    :data:`~whetstone_envs.optim.codex.CODEX_DEFAULT_AGENT_MODEL` remains a
+    run default -- the right answer for a single run nobody registered --
+    and this check is what stops it from silently becoming the study's.
+
+    ``resolved`` is what the arm's control will actually carry, resolved
+    through the runner's own helper rather than assumed, so the two cannot
+    drift apart if an arm ever gains an override.
+
+    Refused as a
+    :class:`~whetstone_envs.optim.study.manifest.PreRegistrationViolationError`
+    rather than a generic value error: running a proposer the design never
+    named is the same class of error as running an unregistered split.
+
+    A study with no Codex arm pins nothing and is left alone.
+    """
+    pinned = spec.codex_agent_model
+    if pinned is None:
+        return
+    if resolved != pinned:
+        raise PreRegistrationViolationError(
+            f"the Codex arm would run agent model {resolved!r}, but this "
+            f"study pre-registered {pinned!r} in models.codex_agent_model. "
+            "The agent model is the arm's proposer, so running another one "
+            "measures a treatment this study never registered; re-pin the "
+            "manifest, or run the agent the design names"
         )
 
 

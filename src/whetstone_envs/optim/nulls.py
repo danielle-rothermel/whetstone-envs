@@ -18,6 +18,14 @@ skipped slots would be a control for a different thing.
 proposes the seed unchanged, so any measured movement is pipeline noise rather
 than optimization.
 
+Layout is the other hard constraint. A perturbation edits *wording*, so
+the template's whitespace -- every newline, blank line, and indent -- is
+carried through untouched. The real c19 seed is six newlines holding a
+grid, an action list, and a question apart; a perturber that rejoined its
+tokens on single spaces would hand the control a structurally degraded
+prompt that no real arm ever ran, and a null-A delta would then measure
+formatting damage rather than selection on noise.
+
 Placeholders are the hard constraint on null-A. ``TemplateRenderContract
 .validate_template`` rejects a template that drops a required field, and
 ``candidate_from_draft`` turns that rejection into a failed proposal, so a
@@ -79,47 +87,86 @@ _MAX_PERTURBATION_ATTEMPTS = 8
 _PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
 
 
-def _tokens_and_placeholders(template: str) -> tuple[list[str], set[int]]:
-    """Split ``template`` into tokens, naming which are untouchable.
+#: A run of whitespace. The template is split on this so the *layout* --
+#: every newline, blank line, and indent -- is carried through the
+#: perturbation untouched rather than rebuilt from single spaces.
+_WHITESPACE = re.compile(r"(\s+)")
 
-    Whitespace-delimited tokens carry the text; any token containing a
-    placeholder is frozen, so a perturbation can neither drop it, duplicate
-    it, nor swap it out of the template.
+
+def _split_layout(template: str) -> tuple[list[str], list[str]]:
+    """Separate ``template`` into its words and the whitespace between them.
+
+    Returns the word tokens and the whitespace runs that separate them,
+    with ``len(gaps) == len(words) + 1``: a leading gap, one between each
+    adjacent pair, and a trailing gap, any of which may be empty.
+
+    Splitting layout away from content is what makes null-A a control for
+    *wording*. The real c19 template is six newlines and two blank lines
+    holding a grid, an action list, and a question apart, and a perturber
+    that rejoined its tokens with single spaces would hand the control a
+    structurally degraded prompt -- a different and much worse template
+    than any real arm was ever given, which would make a null-A delta
+    measure formatting damage rather than selection on noise.
     """
-    tokens = template.split()
-    frozen = {
-        index
-        for index, token in enumerate(tokens)
-        if _PLACEHOLDER.search(token)
+    parts = _WHITESPACE.split(template)
+    # ``re.split`` with one capture group alternates text, separator, text,
+    # ... and always starts and ends with a (possibly empty) text part.
+    words = parts[0::2]
+    gaps = parts[1::2]
+    return list(words), ["", *gaps]
+
+
+def _join_layout(words: list[str], gaps: list[str]) -> str:
+    """Rebuild a template from its words and its original whitespace runs.
+
+    The gaps are laid back down in order and are never invented: a word
+    added or removed by a perturbation shifts which words the existing
+    gaps separate, but the multiset of whitespace runs is exactly the one
+    :func:`_split_layout` produced.
+    """
+    pieces = [gaps[0]]
+    for index, word in enumerate(words):
+        pieces.append(word)
+        pieces.append(gaps[index + 1] if index + 1 < len(gaps) else "")
+    return "".join(pieces)
+
+
+def _frozen_words(words: list[str]) -> set[int]:
+    """Which word positions carry a placeholder and are therefore atomic.
+
+    Any word containing a placeholder is frozen, so a perturbation can
+    neither drop it, duplicate it, nor swap it out of the template.
+    """
+    return {
+        index for index, word in enumerate(words) if _PLACEHOLDER.search(word)
     }
-    return tokens, frozen
 
 
 def _perturb_once(rng: random.Random, template: str) -> str:
-    """Apply one round of token swaps, deletions, and duplications.
+    """Apply one round of word swaps, deletions, and duplications.
 
-    Every operation is drawn against the *eligible* tokens only -- those
+    Every operation is drawn against the *eligible* words only -- those
     carrying no placeholder -- so the render contract's required fields are
-    structurally preserved rather than checked for afterwards.
+    structurally preserved rather than checked for afterwards. The
+    whitespace runs are held aside and laid back down unchanged, so the
+    perturbation edits wording and never layout.
     """
-    tokens, frozen = _tokens_and_placeholders(template)
-    eligible = [index for index in range(len(tokens)) if index not in frozen]
+    words, gaps = _split_layout(template)
+    frozen = _frozen_words(words)
+    eligible = [index for index in range(len(words)) if index not in frozen]
     if not eligible:
         return template
     count = max(1, round(len(eligible) * NULL_PERTURBATION_RATE))
-    result = list(tokens)
+    result = list(words)
     for _ in range(count):
         # Recompute eligibility each round: deletions and duplications shift
         # indices, and a stale index could otherwise land on a placeholder.
-        tokens_now, frozen_now = _tokens_and_placeholders(" ".join(result))
+        frozen_now = _frozen_words(result)
         eligible_now = [
-            index
-            for index in range(len(tokens_now))
-            if index not in frozen_now
+            index for index in range(len(result)) if index not in frozen_now
         ]
         if not eligible_now:
             break
-        result = list(tokens_now)
         operation = rng.choice(("swap", "delete", "duplicate"))
         target = rng.choice(eligible_now)
         if operation == "swap" and len(eligible_now) > 1:
@@ -129,7 +176,7 @@ def _perturb_once(rng: random.Random, template: str) -> str:
             del result[target]
         else:
             result.insert(target, result[target])
-    return " ".join(result)
+    return _join_layout(result, gaps)
 
 
 def perturb_template(

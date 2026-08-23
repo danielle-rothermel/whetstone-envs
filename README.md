@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.8`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.10`.
 
 ## Installation
 
@@ -56,7 +56,7 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
-Codex against a task family. The extra pins published `whetstone-ai==0.1.8`
+Codex against a task family. The extra pins published `whetstone-ai==0.1.10`
 from PyPI:
 
 ```bash
@@ -190,6 +190,15 @@ null-B (`null-identity`) is deliberately *not* a runner optimizer: it
 proposes nothing, so it has no search to drive and no fidelity invariant to
 audit. The study harness records it directly.
 
+**The study's two null arms run the same way this section describes.** A
+study's null-A arm dispatches `run_optimizer(optimizer="null-random", …)`
+like any other arm — same internal split, same proposal budget, same
+result, audit, and cost evidence — so its number is the product of a real
+selection over real evaluations and the arm controls for
+selection-on-noise. `whetstone-study plan` therefore prices it at COPRO's
+search shape. Null-B stays the seed measured through the report harness,
+and `plan` prices it at one official pass plus one held-out pass.
+
 ### Real transport smoke rungs
 
 Before any multi-run spend, one rung per optimizer arm runs end to end on
@@ -296,6 +305,15 @@ Models come from the manifest's own `models` block — `task_model` for the
 evaluations and `proposer_model` for the optimizers' proposal route — so
 selecting a transport does not select a model.
 
+**What the transport bound is recorded too.** `models.provider_calls` holds
+one record per transport a stage has bound, naming the route it resolved
+and every request control — temperature, top-p, token limit, reasoning,
+seed — set or not. A control the study did not set reads `provider
+default` rather than being omitted, because "left to the provider" is a
+real state with a real bill: it is why the toy Stage 0 spent thousands of
+reasoning tokens per call. It is recorded, not hashed, like the transport
+itself, and the report prints it in the design section.
+
 **The transport is an invocation property that the manifest records.** Like
 `--allow-real-codex` it stays out of the pre-registration hash, so two
 studies differing only in it pre-register identically. Unlike it, every
@@ -371,12 +389,16 @@ spend reports `UNLEDGERED` — it reached a provider and lost track of what
 it bought, so its bill is unknown rather than zero, and that is a defect to
 act on rather than a free stage.
 
-**What the ledger does not yet cover.** Official-selection scoring and
-held-out evaluation calls are not ledgered: they reach the provider through
-the evaluation engine outside any optimizer run, so no `RunRecord` and no
-anchor evidence carries them and no stage total includes them. Every
-printed total is therefore a lower bound, and `plan`, `run`, and the report
-each say so. Full ledgering of those calls is Phase E.
+**What the ledger covers.** A stage spends by two routes and its row is
+the sum of both. Its arms spend through optimizer runs, each of which
+projected its own per-role bill, and the stage total is the fold of those
+records. Its **reporting pass** — official-selection scoring, the held-out
+evaluations, and the anchors' re-measurement — reaches the provider through
+the evaluation engine outside any run, so those evaluations are priced one
+record per role per evaluation from their own persisted rows and folded
+onto the same stage row. Both routes read the numbers back out of evidence
+rather than accumulating them, so a stage total and a run total are the
+same kind of fact under the same honesty rules.
 
 ### Reading the ledger before authorizing a paid stage
 
@@ -421,15 +443,16 @@ reached the table with a PASSED verdict and the table holds as many rungs as
 the ladder collects, and otherwise reports `ladder not fully observed` and
 exits 1.
 
-A rung can still live-skip for one known reason: an agent that decides the
-seed template is best may say so by *selecting* a call whose template equals
-the seed, which whetstone-ai 0.1.8 refuses as a selection-contract
-violation. That is the agent's taste rather than a harness defect, so the
-rung skips instead of failing. whetstone-ai 0.1.9 ([#138]) treats a
-seed-identical selection as `seed_retained`, so the skip disappears once the
-envs pin moves to 0.1.9/0.1.10.
+No rung live-skips. An agent that decides the seed template is best may say
+so either by returning no selection or by *selecting* a call whose template
+equals the seed; whetstone-ai 0.1.9 ([#138]) records both as
+`seed_retained`, so agent taste no longer decides whether a rung is
+observed. The pinned 0.1.10 also runs the agent against a per-run scratch
+`HOME` and quotes the CLI's own error items when a session fails ([#140]),
+so a failure names its cause rather than the first symptom.
 
 [#138]: https://github.com/danielle-rothermel/whetstone-ai/pull/138
+[#140]: https://github.com/danielle-rothermel/whetstone-ai/pull/140
 
 ```bash
 scripts/check-real-codex.sh              # whole ladder, stop at first break

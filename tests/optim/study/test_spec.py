@@ -6,8 +6,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from whetstone_envs.optim.codex import CODEX_DEFAULT_AGENT_MODEL
 from whetstone_envs.optim.study.spec import (
+    CI_LEVEL,
     CODEX_EVALUATE_CALL_CAP,
+    CORRECTION_RULE,
     HOLM_FAMILY_SIZE,
     K_CAL_CAP,
     K_CAL_INITIAL,
@@ -16,6 +19,7 @@ from whetstone_envs.optim.study.spec import (
     PROTOCOL_TRAIN_SIZE,
     PROTOCOL_VAL_SIZE,
     REAL_OPTIMIZER_ARM_IDS,
+    RESAMPLES,
     SEED_RANGE_BY_OPTIMIZER,
     ArmKind,
     ArmSpec,
@@ -26,6 +30,7 @@ from whetstone_envs.optim.study.spec import (
     default_arms,
     k_run_for,
     next_k_cal,
+    require_pinned_codex_agent_model,
     spec_from_manifest,
 )
 
@@ -38,6 +43,7 @@ def _spec(
     k_cal: int = K_CAL_INITIAL,
     held_out: SplitSpec | None = None,
     arms: tuple[ArmSpec, ...] | None = None,
+    codex_agent_model: str | None = CODEX_DEFAULT_AGENT_MODEL,
 ) -> StudySpec:
     """The study's real design, with one field optionally mutated."""
     return StudySpec(
@@ -51,6 +57,7 @@ def _spec(
         task_model="openai/gpt-5-nano",
         proposer_model="openai/gpt-5.4-nano",
         k_cal=k_cal,
+        codex_agent_model=codex_agent_model,
         arms=default_arms(stage=StageId.STAGE2) if arms is None else arms,
     )
 
@@ -522,3 +529,320 @@ def test_a_manifest_agreeing_with_its_pinned_split_still_loads(
 
     manifest = read_study_manifest(_pinned_study(tmp_path))
     assert spec_from_manifest(manifest).arms
+
+
+# --------------------------------------------------------------------------
+# The Codex agent model is design, not a runner default
+# --------------------------------------------------------------------------
+
+
+def test_a_codex_arm_requires_a_pre_registered_agent_model() -> None:
+    """The agent model is the Codex arm's proposer, so the design names it.
+
+    Fails-before: ``StudySpec`` had no ``codex_agent_model`` at all. The
+    stage guard resolved the agent through the *runner's*
+    ``CODEX_DEFAULT_AGENT_MODEL``, so whatever that constant said became
+    the study's proposer -- an unregistered treatment measured against
+    registered anchors, and ``manifest.models.codex_agent_model`` had no
+    production writer to disagree with.
+    """
+    with pytest.raises(ValueError, match="pre-registers its"):
+        _spec(codex_agent_model=None)
+
+
+def test_a_study_without_a_codex_arm_pins_no_agent_model() -> None:
+    """A pin nothing honours is a design field describing another study."""
+    without_codex = tuple(
+        arm
+        for arm in default_arms(stage=StageId.STAGE2)
+        if arm.optimizer != "codex"
+    )
+    _spec(arms=without_codex, codex_agent_model=None)
+    with pytest.raises(ValueError, match="declares no Codex arm"):
+        _spec(arms=without_codex, codex_agent_model="gpt-5.6-sol")
+
+
+def test_the_resolved_agent_must_equal_the_pinned_one() -> None:
+    """The runner's resolution is checked against the design, not assumed."""
+    from whetstone_envs.optim.study.manifest import (
+        PreRegistrationViolationError,
+    )
+
+    spec = _spec(codex_agent_model=CODEX_DEFAULT_AGENT_MODEL)
+    require_pinned_codex_agent_model(spec, resolved=CODEX_DEFAULT_AGENT_MODEL)
+    with pytest.raises(PreRegistrationViolationError) as error:
+        require_pinned_codex_agent_model(spec, resolved="gpt-4o-mini")
+    message = str(error.value)
+    assert "gpt-4o-mini" in message
+    assert CODEX_DEFAULT_AGENT_MODEL in message
+    assert "models.codex_agent_model" in message
+
+
+def test_a_study_with_no_codex_arm_is_left_alone_by_the_check() -> None:
+    """No arm, no pin, nothing to refuse -- whatever the runner resolves."""
+    without_codex = tuple(
+        arm
+        for arm in default_arms(stage=StageId.STAGE2)
+        if arm.optimizer != "codex"
+    )
+    require_pinned_codex_agent_model(
+        _spec(arms=without_codex, codex_agent_model=None),
+        resolved="anything-at-all",
+    )
+
+
+def test_the_runner_default_is_a_runner_default_not_the_study_default() -> (
+    None
+):
+    """The two are separate facts, and the golden pins the literal.
+
+    The runner's constant is what a single unregistered run gets. A study
+    reaches the same string only by *naming* it, which is what makes the
+    manifest's ``models`` block the design record it claims to be.
+    """
+    assert CODEX_DEFAULT_AGENT_MODEL == "gpt-5.6-sol"
+    with pytest.raises(ValueError, match="pre-registers its"):
+        _spec(codex_agent_model=None)
+
+
+# --------------------------------------------------------------------------
+# The MIPROv2 minibatch size is design (Phase E item 3)
+# --------------------------------------------------------------------------
+
+
+def _miprov2_arm(**overrides: object) -> ArmSpec:
+    fields: dict[str, object] = {
+        "arm_id": "miprov2",
+        "optimizer": "miprov2",
+        "kind": ArmKind.REAL,
+        "k_run": 1,
+        "seeds": (2000,),
+        "train_size": PROTOCOL_TRAIN_SIZE,
+        "val_size": PROTOCOL_VAL_SIZE,
+    }
+    fields.update(overrides)
+    return ArmSpec(**fields)  # ty: ignore[invalid-argument-type]
+
+
+def test_a_minibatching_arm_pre_registers_its_batch_size() -> None:
+    """Design, not a runtime knob, and pinned like the train/val split.
+
+    Fails-before: ``ArmSpec`` had no minibatch fields at all, so an arm
+    could only minibatch by taking the runner's default -- and left unset
+    that default is the whole valset, which is minibatching in name only.
+    Nothing pre-registered the batch a trial was scored on, so an arm rerun
+    at a different one measured different evidence under an unchanged
+    design hash.
+    """
+    _miprov2_arm(miprov2_minibatch=True, miprov2_minibatch_size=20)
+    with pytest.raises(ValueError, match="miprov2_minibatch_size"):
+        _miprov2_arm(miprov2_minibatch=True)
+
+
+def test_a_batch_size_without_minibatching_is_refused() -> None:
+    """A size nothing honours is an arm misdescribing itself."""
+    with pytest.raises(ValueError, match="without turning"):
+        _miprov2_arm(miprov2_minibatch_size=20)
+
+
+def test_minibatch_settings_are_refused_on_another_optimizer() -> None:
+    """Scoped like every other MIPROv2 setting."""
+    with pytest.raises(ValueError, match="but runs optimizer"):
+        ArmSpec(
+            arm_id="copro",
+            optimizer="copro",
+            kind=ArmKind.REAL,
+            k_run=1,
+            seeds=(1000,),
+            miprov2_minibatch=True,
+            miprov2_minibatch_size=20,
+        )
+
+
+def test_a_non_positive_batch_size_is_refused() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        _miprov2_arm(miprov2_minibatch=True, miprov2_minibatch_size=0)
+
+
+def test_the_batch_size_enters_the_pre_registered_payload() -> None:
+    """Hashed with the design, exactly like ``split_by_arm``.
+
+    Two designs differing only in the batch size must pin differently, or
+    the block that exists to forbid post-hoc adjustment would not notice
+    one.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        pre_registration_design_hash,
+    )
+
+    common = {
+        "k_repeat": 3,
+        "k_run_by_arm": {"miprov2": 5},
+        "split_by_arm": {"miprov2": (44, 44)},
+        "ci_level": CI_LEVEL,
+        "resamples": RESAMPLES,
+        "bootstrap_seed": 0,
+        "correction": CORRECTION_RULE,
+        "m": HOLM_FAMILY_SIZE,
+        "completeness_backstop": 0.9,
+    }
+    at_20 = pre_registration_design_hash(
+        minibatch_by_arm={"miprov2": 20}, **common
+    )
+    at_35 = pre_registration_design_hash(
+        minibatch_by_arm={"miprov2": 35}, **common
+    )
+    unset = pre_registration_design_hash(
+        minibatch_by_arm={"miprov2": None}, **common
+    )
+    assert len({at_20, at_35, unset}) == 3
+
+
+def test_the_batch_size_reaches_the_runner_spec(tmp_path: Path) -> None:
+    """A design field that never reached the run would be a fiction."""
+    from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+
+    runner = StudyOptimizerRunner(
+        study_dir=tmp_path,
+        family_id="c19",
+        transport="fake",
+        split_sizes=(88, 132, 220),
+        n_per_stratum=1,
+        pool_seed_start=1,
+        task_model="openai/gpt-4.1-nano",
+        proposer_model="openai/gpt-4.1-nano",
+        num_seeds=1,
+        naive_template="naive {input}",
+        store_path=tmp_path / "store.sqlite",
+    )
+    spec = runner._spec_for(
+        _miprov2_arm(miprov2_minibatch=True, miprov2_minibatch_size=20),
+        seed=2000,
+        run_dir=tmp_path / "run",
+    )
+    assert spec.miprov2_minibatch is True
+    assert spec.miprov2_minibatch_size == 20
+
+    # An arm that does not minibatch keeps the runner's own default rather
+    # than pinning the same false twice.
+    off = runner._spec_for(_miprov2_arm(), seed=2000, run_dir=tmp_path / "run")
+    assert off.miprov2_minibatch is False
+    assert off.miprov2_minibatch_size is None
+
+
+def test_a_recorded_minibatch_reaches_the_rebuilt_spec(
+    tmp_path: Path,
+) -> None:
+    """A manifest-driven MIPROv2 arm runs the batch size it recorded.
+
+    Fails-before: ``ArmRecord`` had no minibatch fields at all, so
+    ``spec_from_manifest`` rebuilt every arm unbatched. The
+    pre-registration still hashed ``minibatch_by_arm``, so a study could
+    pin a batch size, validate its own design hash, and then run every
+    trial on the whole valset -- buying different evidence from the design
+    it registered, with nothing in the manifest to show it.
+    """
+    from whetstone_envs.optim.study.manifest import read_study_manifest
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    pinned = manifest.pre_registration
+    assert pinned is not None
+    batched = tuple(
+        arm.model_copy(update={"minibatch": True, "minibatch_size": 8})
+        if arm.arm_id == "miprov2"
+        else arm
+        for arm in manifest.arms
+    )
+    repinned = pinned.model_copy(
+        update={"minibatch_by_arm": {**pinned.minibatch_by_arm, "miprov2": 8}}
+    )
+    spec = spec_from_manifest(
+        manifest.model_copy(
+            update={"arms": batched, "pre_registration": repinned}
+        )
+    )
+    arm = next(entry for entry in spec.arms if entry.arm_id == "miprov2")
+    assert arm.miprov2_minibatch is True
+    assert arm.miprov2_minibatch_size == 8
+
+
+def test_arm_records_disagreeing_with_the_pinned_minibatch_are_refused(
+    tmp_path: Path,
+) -> None:
+    """The pinned batch size is the truth; the arm record is not protected.
+
+    The same class of drift as the split, and refused the same way: an arm
+    that evaluated each trial on a sampled batch bought different evidence
+    for the same claim than one that evaluated on the whole valset, and
+    ``minibatch_by_arm`` is immutable and hashed while the arm record is
+    rewritten every time a stage merges runs.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        PreRegistrationViolationError,
+        read_study_manifest,
+    )
+
+    manifest = read_study_manifest(_pinned_study(tmp_path))
+    pinned = manifest.pre_registration
+    assert pinned is not None
+    # The pinned design does not minibatch; the record claims it did.
+    assert pinned.minibatch_by_arm["miprov2"] is None
+    edited = tuple(
+        arm.model_copy(update={"minibatch": True, "minibatch_size": 8})
+        if arm.arm_id == "miprov2"
+        else arm
+        for arm in manifest.arms
+    )
+    with pytest.raises(
+        PreRegistrationViolationError, match="minibatch_by_arm"
+    ):
+        spec_from_manifest(manifest.model_copy(update={"arms": edited}))
+
+
+def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
+    """The design hash is stored identity, so its value is pinned.
+
+    Every other test of this hash checks that two designs differ, which a
+    hash of the *wrong document* would satisfy just as well. This one pins
+    the actual digest over a fixed design, so a change to the payload's
+    field names, key order, or value spelling is caught rather than
+    silently re-hashing every study ever recorded.
+
+    ``minibatch_by_arm`` carries a real size rather than all-``None``,
+    because an all-``None`` mapping is exactly the shape a payload that
+    dropped the key entirely would produce.
+    """
+    from whetstone_envs.optim.study.manifest import (
+        pre_registration_design_hash,
+    )
+
+    assert (
+        pre_registration_design_hash(
+            k_repeat=3,
+            k_run_by_arm={
+                "copro": 5,
+                "gepa": 5,
+                "miprov2": 5,
+                "null-identity": 1,
+            },
+            split_by_arm={
+                "copro": None,
+                "gepa": (2, 2),
+                "miprov2": (2, 2),
+                "null-identity": None,
+            },
+            minibatch_by_arm={
+                "copro": None,
+                "gepa": None,
+                "miprov2": 8,
+                "null-identity": None,
+            },
+            ci_level=CI_LEVEL,
+            resamples=RESAMPLES,
+            bootstrap_seed=0,
+            correction=CORRECTION_RULE,
+            m=HOLM_FAMILY_SIZE,
+            completeness_backstop=0.9,
+        )
+        == "abd85e49230ac497fada56682074b4312ce6281ff6a951bea09ecc9fbaa23a11"
+    )

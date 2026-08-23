@@ -22,7 +22,7 @@ from whetstone_envs.reporting.schema import (
 
 
 def test_persisted_schema_literals_are_pinned() -> None:
-    assert EVAL_REPORT_SCHEMA == "whetstone_envs.eval_report/v1"
+    assert EVAL_REPORT_SCHEMA == "whetstone_envs.eval_report/v2"
     assert TRAJECTORY_REPORT_SCHEMA == "whetstone_envs.trajectory_report/v1"
 
 
@@ -374,6 +374,34 @@ def test_run_spend_rejects_a_role_filed_under_the_wrong_name() -> None:
     )
     with pytest.raises(ValidationError, match="task_model role"):
         RunSpend(schema_version=1, task_model=role, proposer=role)
+
+
+def test_eval_spend_rejects_a_role_filed_under_the_wrong_name() -> None:
+    """A standalone evaluation's one row must be the task model's.
+
+    ``EvalSpend`` carries a single ``RoleSpend`` and no proposer, because a
+    standalone evaluation runs no optimizer. Nothing in the field's own
+    type stops a *proposer* row from being filed there -- the annotation
+    admits either literal -- so the validator is what keeps the field's
+    name and its contents in agreement. Without this test the check was
+    unexercised, and a proposer row filed as the task model would have
+    been reported as task-model spend.
+    """
+    from whetstone_envs.reporting.schema import EvalSpend, RoleSpend
+
+    proposer = RoleSpend(
+        role="proposer",
+        calls=1,
+        cached_calls=0,
+        input_tokens=8,
+        output_tokens=2,
+        priced_calls=1,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+    with pytest.raises(ValidationError, match="task_model role"):
+        EvalSpend(schema_version=1, task_model=proposer)
 
 
 def test_run_spend_schema_version_is_pinned_to_the_supported_value() -> None:

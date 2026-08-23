@@ -99,8 +99,13 @@ CODEX_EVALUATE_CALL_CAP = 8
 #: staying explicit: ``CodexControl.model`` is identity-bearing and
 #: refuses an empty string, so the arm cannot express "whatever the CLI
 #: picks" by omission -- it has to say which model it measured. The §6
-#: run pins its own through ``--codex-model``, and the manifest records
-#: the agent model as uncontrolled either way (OQ1).
+#: run pins its own through ``--codex-model``.
+#:
+#: This is the **runner's** default: the right answer for a single run
+#: nobody pre-registered. A study never takes it by default -- it names
+#: its agent in ``manifest.models.codex_agent_model`` and
+#: :func:`~whetstone_envs.optim.study.spec.require_pinned_codex_agent_model`
+#: refuses a stage whose resolved control disagrees.
 CODEX_DEFAULT_AGENT_MODEL = "gpt-5.6-sol"
 
 

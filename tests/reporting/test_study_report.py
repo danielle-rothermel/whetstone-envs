@@ -72,8 +72,8 @@ from whetstone_envs.reporting.study_report import (
     NO_PROVIDER_STAGE_DETAIL,
     REPORT_HTML_NAME,
     REPORT_MARKDOWN_NAME,
+    STAGE_SPEND_COVERAGE_NOTE,
     STUDY_MANIFEST_COPY,
-    UNLEDGERED_SCORING_NOTE_REPORT,
     UNLEDGERED_STAGE_DETAIL,
     UNPRICED,
     VALIDATION_CHECKLIST,
@@ -714,7 +714,7 @@ def test_the_report_names_the_threats_the_assignment_requires(
 ) -> None:
     markdown = render_markdown(build_study_report(reported_manifest))
     for phrase in (
-        "agent model is uncontrolled",
+        "agent model is pinned but unpriced",
         "whole-split evaluations",
         "under-cover at small task counts",
         "does not reach a small true",
@@ -1203,10 +1203,12 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
     design = manifest.design
     assert design is not None
     split_by_arm = _split_by_arm_of(manifest)
+    minibatch_by_arm: dict[str, int | None] = dict.fromkeys(split_by_arm)
     prior = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1221,6 +1223,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
         k_repeat=amended_k_repeat,
         k_run_by_arm=design.k_run_by_arm,
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1235,6 +1238,7 @@ def _amended(manifest: StudyManifest) -> StudyManifest:
                 k_repeat=amended_k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
                 split_by_arm=split_by_arm,
+                minibatch_by_arm=minibatch_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,
@@ -1287,10 +1291,12 @@ def test_an_original_pre_registration_renders_without_an_amendment(
     design = reported_manifest.design
     assert design is not None
     split_by_arm = _split_by_arm_of(reported_manifest)
+    minibatch_by_arm: dict[str, int | None] = dict.fromkeys(split_by_arm)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=design.k_run_by_arm,
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1305,6 +1311,7 @@ def test_an_original_pre_registration_renders_without_an_amendment(
                 k_repeat=design.k_repeat,
                 k_run_by_arm=design.k_run_by_arm,
                 split_by_arm=split_by_arm,
+                minibatch_by_arm=minibatch_by_arm,
                 ci_level=design.ci_level,
                 resamples=design.resamples,
                 bootstrap_seed=design.bootstrap_seed,
@@ -1334,15 +1341,17 @@ def _rendered(manifest: StudyManifest, tmp_path: Path, monkeypatch) -> str:
     return (packet / REPORT_MARKDOWN_NAME).read_text(encoding="utf-8")
 
 
-def test_the_report_says_which_calls_the_ledger_omits(
+def test_the_report_says_what_the_stage_spend_covers(
     reported_manifest: StudyManifest, tmp_path: Path, monkeypatch
 ) -> None:
-    """Official-selection and held-out spend is not ledgered yet.
+    """A stage's row states that it is the whole bill, and by what route.
 
-    Those calls reach the provider through the evaluation engine outside
-    any optimizer run, so no stage total includes them. Full ledgering is
-    Phase E; until then the report states the omission rather than
-    presenting a partial total as the whole bill.
+    Official-selection scoring and the held-out evaluations reach the
+    provider through the evaluation engine outside any optimizer run, so
+    a reader has no way to tell from the number alone whether they are in
+    it. They are: the row folds the arms' runs and the reporting pass
+    together, and the note says so rather than leaving the coverage of the
+    study's most consequential calls to be inferred.
     """
     manifest = reported_manifest.model_copy(
         update={
@@ -1354,7 +1363,7 @@ def test_the_report_says_which_calls_the_ledger_omits(
             )
         }
     )
-    assert UNLEDGERED_SCORING_NOTE_REPORT in _rendered(
+    assert STAGE_SPEND_COVERAGE_NOTE in _rendered(
         manifest, tmp_path, monkeypatch
     )
 

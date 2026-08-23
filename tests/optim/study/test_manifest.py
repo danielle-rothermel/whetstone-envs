@@ -25,6 +25,7 @@ from whetstone_envs.optim.study.manifest import (
     CORRECTION_HOLM_BONFERRONI,
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
+    PROVIDER_CONTROL_UNSET,
     SELECTION_RULE_ARGMAX_OFFICIAL,
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
@@ -49,9 +50,12 @@ from whetstone_envs.optim.study.manifest import (
     ManifestExistsError,
     ManifestKey,
     ModelsRecord,
+    OfficialScoreEntry,
     PopulationRecord,
     PreRegistrationRecord,
     PreRegistrationViolationError,
+    ProviderCallRecord,
+    ReportSpendEntry,
     RunRecord,
     RunSpendRecord,
     SelectionRecord,
@@ -209,6 +213,8 @@ def _full_manifest() -> StudyManifest:
                     dropped_held_out_claims=2,
                     dropped_held_out_rows=1,
                     dropped_call_count_gate=True,
+                    dropped_official_scores=1,
+                    dropped_report_spend=1,
                 ),
             ),
             "gepa_sizing": GepaSizingRecord(
@@ -233,6 +239,41 @@ def _full_manifest() -> StudyManifest:
                     control_identity_hash=_hash("d"),
                     seed_note="provider-seed-control-only",
                     runs=(_run("copro-1", result="5", audit="6", cost="e"),),
+                ),
+            ),
+            "report_spend": (
+                ReportSpendEntry(
+                    evidence_schema=EVIDENCE_SCHEMA,
+                    evidence_content_hash=_hash("f"),
+                    purpose="official",
+                    candidate_name="copro-1",
+                    stage="stage1",
+                    transport="openrouter",
+                    spend=(
+                        RunSpendRecord(
+                            role="task_model",
+                            calls=4,
+                            cached_calls=0,
+                            input_tokens=100,
+                            output_tokens=20,
+                            priced_calls=4,
+                            unpriced_calls=0,
+                            rows_missing_token_breakdown=0,
+                            usd=0.25,
+                        ),
+                    ),
+                ),
+            ),
+            "official_scores": (
+                OfficialScoreEntry(
+                    run_id="copro-1",
+                    arm_id="copro",
+                    stage="stage1",
+                    transport="openrouter",
+                    score=0.42,
+                    eval_config_hash="official-config",
+                    completeness=1.0,
+                    per_task=(0.42,),
                 ),
             ),
             "selection": (
@@ -300,8 +341,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 7
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v7"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 9
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v9"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -327,6 +368,8 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "amendments",
         "design",
         "stages",
+        "report_spend",
+        "official_scores",
         "gepa_sizing",
         "fanout_check",
         "call_count_gate",
@@ -388,6 +431,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "provider",
         "seed_control",
         "codex_agent_model",
+        "provider_calls",
     ]
     assert list(payload["design"]) == [
         "k_cal",
@@ -429,6 +473,8 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "dropped_held_out_claims",
         "dropped_held_out_rows",
         "dropped_call_count_gate",
+        "dropped_official_scores",
+        "dropped_report_spend",
     ]
     assert list(payload["call_count_gate"]) == [
         "stage",
@@ -442,6 +488,8 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "demo_mode",
         "train_size",
         "val_size",
+        "minibatch",
+        "minibatch_size",
         "control_identity_hash",
         "seed_note",
         "runs",
@@ -467,6 +515,25 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "unpriced_calls",
         "rows_missing_token_breakdown",
         "usd",
+    ]
+    assert list(payload["report_spend"][0]) == [
+        "evidence_schema",
+        "evidence_content_hash",
+        "purpose",
+        "candidate_name",
+        "stage",
+        "transport",
+        "spend",
+    ]
+    assert list(payload["official_scores"][0]) == [
+        "run_id",
+        "arm_id",
+        "stage",
+        "transport",
+        "score",
+        "eval_config_hash",
+        "completeness",
+        "per_task",
     ]
     assert list(payload["selection"][0]) == [
         "arm_id",
@@ -530,7 +597,7 @@ def test_manifest_forbids_unknown_fields() -> None:
 
 def test_manifest_rejects_a_foreign_schema() -> None:
     payload = _minimal_manifest().model_dump(mode="json", by_alias=True)
-    payload["schema"] = "whetstone_envs.step10_study/v8"
+    payload["schema"] = "whetstone_envs.step10_study/v10"
     with pytest.raises(ValidationError, match="expected schema"):
         StudyManifest.model_validate_json(json.dumps(payload))
 
@@ -896,10 +963,14 @@ def _pre_registration(
     splits = dict(
         _PINNED_SPLIT_BY_ARM if split_by_arm is None else split_by_arm
     )
+    # No arm in this fixture minibatches; the block still names every arm,
+    # because "this arm does not minibatch" is itself pre-registered.
+    minibatch: dict[str, int | None] = dict.fromkeys(_PINNED_K_RUN_BY_ARM)
     return PreRegistrationRecord(
         k_repeat=k_repeat,
         k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
         split_by_arm=splits,
+        minibatch_by_arm=minibatch,
         ci_level=0.95,
         resamples=10_000,
         bootstrap_seed=0,
@@ -910,6 +981,7 @@ def _pre_registration(
             k_repeat=k_repeat,
             k_run_by_arm=dict(_PINNED_K_RUN_BY_ARM),
             split_by_arm=splits,
+            minibatch_by_arm=minibatch,
             ci_level=0.95,
             resamples=10_000,
             bootstrap_seed=0,
@@ -938,8 +1010,9 @@ def test_a_pre_registration_hash_covers_its_own_fields() -> None:
 def test_the_hashed_payload_keys_are_pinned() -> None:
     """The hashed document is stored identity, so its keys are literals.
 
-    ``split_by_arm`` is in the list and an authorization to spend is not:
-    the partition an arm was measured at is design, and whether the
+    ``split_by_arm`` and ``minibatch_by_arm`` are in the list and an
+    authorization to spend is not: the partition an arm was measured at
+    and the batch each trial was scored on are design, and whether the
     operator was allowed to bill a Codex session for this invocation is
     not.
     """
@@ -947,6 +1020,7 @@ def test_the_hashed_payload_keys_are_pinned() -> None:
         "k_repeat",
         "k_run_by_arm",
         "split_by_arm",
+        "minibatch_by_arm",
         "ci_level",
         "resamples",
         "bootstrap_seed",
@@ -1126,3 +1200,98 @@ def test_a_design_contradicting_the_pre_registration_is_refused() -> None:
     payload["design"] = design.model_dump(mode="json")
     with pytest.raises(ValidationError, match="contradicts the pinned"):
         StudyManifest.model_validate_json(json.dumps(payload))
+
+
+# --------------------------------------------------------------------------
+# The effective provider call config (Phase E item 4)
+# --------------------------------------------------------------------------
+
+
+def _provider_call(**overrides: str) -> ProviderCallRecord:
+    fields: dict[str, str] = {
+        "transport": "openrouter",
+        "provider": "openrouter",
+        "protocol": "chat_completions",
+        "model_route": "openai/gpt-5-nano",
+        "temperature": PROVIDER_CONTROL_UNSET,
+        "top_p": PROVIDER_CONTROL_UNSET,
+        "token_limit": PROVIDER_CONTROL_UNSET,
+        "reasoning": PROVIDER_CONTROL_UNSET,
+        "seed": "7",
+        "extensions": "{}",
+    }
+    fields.update(overrides)
+    return ProviderCallRecord(**fields)
+
+
+def test_provider_call_wire_keys_are_pinned() -> None:
+    """Persisted-format keys, pinned rather than derived from field names."""
+    assert list(_provider_call().model_dump(mode="json")) == [
+        "transport",
+        "provider",
+        "protocol",
+        "model_route",
+        "temperature",
+        "top_p",
+        "token_limit",
+        "reasoning",
+        "seed",
+        "extensions",
+    ]
+
+
+def test_an_unset_control_is_named_not_omitted() -> None:
+    """ "Provider default" is a state, and a consequential one.
+
+    It is why the toy Stage 0 billed thousands of reasoning tokens per
+    call, so it is stated rather than left to be inferred from a blank or
+    a zero -- both of which read as "the study set this".
+    """
+    assert PROVIDER_CONTROL_UNSET == "provider default"
+    with pytest.raises(ValidationError, match="nonblank statement"):
+        _provider_call(reasoning="  ")
+
+
+def test_each_transport_records_its_config_once() -> None:
+    """Two configs for one transport leaves the study unable to say which.
+
+    Fails-before: there was no such block at all -- the manifest named the
+    model a study meant to run and the transport it ran on, but never what
+    the transport actually bound, so neither the spend model nor the "same
+    experiment" claim was auditable from the manifest.
+    """
+    payload = _full_manifest().models.model_dump(mode="json")
+
+    def _with(*calls: ProviderCallRecord) -> str:
+        # Via JSON, like every other round trip here: strict mode reads a
+        # JSON array as a tuple but refuses a Python list.
+        return json.dumps(
+            payload
+            | {
+                "provider_calls": [
+                    call.model_dump(mode="json") for call in calls
+                ]
+            }
+        )
+
+    # Two transports, two configs: the ordinary state of a study that
+    # calibrated free and then ran paid.
+    ModelsRecord.model_validate_json(
+        _with(
+            _provider_call(),
+            _provider_call(transport="fake", provider="openai"),
+        )
+    )
+
+    with pytest.raises(ValidationError, match="records its provider call"):
+        ModelsRecord.model_validate_json(
+            _with(
+                _provider_call(),
+                _provider_call(model_route="openai/gpt-4.1-nano"),
+            )
+        )
+
+
+def test_models_default_to_no_recorded_provider_call() -> None:
+    """Empty until a stage binds one, rather than a fabricated default."""
+    assert _full_manifest().models.provider_calls == ()

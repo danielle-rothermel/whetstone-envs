@@ -26,6 +26,7 @@ including the failures a stage re-raises.
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
@@ -44,10 +45,14 @@ from whetstone_envs.optim.provider import (
 )
 from whetstone_envs.optim.rows import task_rows_from_instances
 from whetstone_envs.optim.study.manifest import (
+    PROVIDER_CONTROL_UNSET,
+    PROVIDER_SEED_DERIVED_PER_CALL,
     STUDY_STORE_NAME,
+    ProviderCallRecord,
     SplitsRecord,
     TransportName,
     read_study_manifest,
+    write_study_manifest,
 )
 from whetstone_envs.optim.study.stages import StageEnvironment
 from whetstone_envs.reporting.schema import SPLIT_ROLE_BY_REPORT_ROLE
@@ -56,6 +61,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from dr_providers.modeling.call import ProviderCallConfig
     from dr_store import ObjectStore
     from whetstone.eval.protocol import EvalEngine
     from whetstone.experiment.candidate import Candidate
@@ -183,6 +189,92 @@ def require_transport_credentials(transport: str) -> None:
         )
 
 
+def _control_text(value: object) -> str:
+    """One request control as the manifest states it.
+
+    An unset control is :data:`PROVIDER_CONTROL_UNSET` rather than an
+    omission or a zero: "left to the provider's default" is a real state
+    with real consequences -- it is why the toy Stage 0 billed thousands
+    of reasoning tokens per call -- so it is said out loud.
+    """
+    if value is None:
+        return PROVIDER_CONTROL_UNSET
+    return str(value)
+
+
+def _provider_call_record(
+    *, transport: str, config: ProviderCallConfig
+) -> ProviderCallRecord:
+    """The bound config, flattened into the manifest's own record.
+
+    Every field is a string because this block is a *statement of what was
+    bound*, not a typed re-declaration of the provider's own model: the
+    controls are heterogeneous, an unset one is meaningful, and a reader
+    comparing two stages compares text.
+    """
+    route = config.route
+    controls = config.controls
+    return ProviderCallRecord(
+        transport=transport,
+        provider=str(route.provider.value),
+        protocol=str(route.protocol.value),
+        model_route=str(route.model),
+        temperature=_control_text(controls.temperature),
+        top_p=_control_text(controls.top_p),
+        token_limit=_control_text(controls.token_limit),
+        # Recorded verbatim, never set from here: whether the design pins a
+        # task-model reasoning effort is an open decision, and a field that
+        # looked like a knob would answer it by accident.
+        reasoning=_control_text(controls.reasoning),
+        # Not the statically bound control, which is unset here and would
+        # read as "the provider chose the seed". Every eval call goes out
+        # seeded: whetstone's ``provider_call_config_with_parameters``
+        # sets ``seed`` unconditionally from ``derive_rng_seed``, and
+        # refuses a definition that cannot transport it. What is bound at
+        # this point is therefore not what reaches the wire.
+        seed=PROVIDER_SEED_DERIVED_PER_CALL,
+        # Serialized rather than repr'd: an extension carries provider
+        # request body the study did not otherwise name, and a reader
+        # comparing two stages needs to read it, not a container's repr.
+        extensions=json.dumps(
+            config.extensions.model_dump(mode="json"), sort_keys=True
+        ),
+    )
+
+
+def _record_provider_call_config(
+    study_dir: Path, *, transport: str, config: ProviderCallConfig
+) -> None:
+    """Record what this transport actually bound, replacing its entry.
+
+    Replaced rather than appended: one effective config per transport, so
+    a re-run on a transport already recorded restates it instead of
+    leaving the study unable to say which of two configs its numbers came
+    from. A rebind that produced the identical record writes nothing, so
+    an ordinary resume does not touch the manifest.
+    """
+    manifest = read_study_manifest(study_dir)
+    record = _provider_call_record(transport=transport, config=config)
+    existing = manifest.models.provider_calls
+    if record in existing:
+        return
+    updated = (
+        *(entry for entry in existing if entry.transport != transport),
+        record,
+    )
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "models": manifest.models.model_copy(
+                    update={"provider_calls": updated}
+                )
+            }
+        ),
+        replace=True,
+    )
+
+
 @contextmanager
 def bound_stage_environment(
     study_dir: Path,
@@ -227,6 +319,9 @@ def bound_stage_environment(
         RoleScorer,
         StudyOptimizerRunner,
     )
+    from whetstone_envs.optim.study.spend import (  # noqa: PLC0415
+        ReportSpendLedger,
+    )
 
     manifest = read_study_manifest(study_dir)
     population = manifest.population
@@ -254,13 +349,24 @@ def bound_stage_environment(
     # The split is a deterministic function of the pool and the sizes, so
     # one reference preparation names every role's tasks whatever repeat
     # count a later engine binds at.
-    split = family.build_experiment(
+    reference = family.build_experiment(
         pool,
         split_sizes=split_sizes,
         num_seeds=1,
         provider_call_config=provider_call_config,
-    ).split
+    )
+    split = reference.split
     _require_recorded_population(split, manifest.splits)
+    # Read off the prepared experiment rather than off the argument above:
+    # on the fake transport that argument is ``None`` and the effective
+    # config is the reference default the experiment builds for itself, so
+    # recording the argument would record "nothing" for a path that does
+    # in fact bind one.
+    _record_provider_call_config(
+        study_dir,
+        transport=transport,
+        config=reference.experiment.rollout_graph.provider_call_config,
+    )
     with open_sqlite(str(study_dir / STUDY_STORE_NAME)) as store:
         runtime_config_for_role = {
             role: ReferenceEvalRuntimeConfig(
@@ -334,12 +440,19 @@ def bound_stage_environment(
         # falling back to one repeat only affects Stage 0's own bind.
         k_repeat = 1 if manifest.design is None else manifest.design.k_repeat
         build_candidate = BuildCandidate(population.family)
+        # One ledger for both scorers, because the reporting pass is one
+        # bill: official-selection scoring and held-out evaluation reach
+        # the same provider on the same invocation, and splitting them
+        # would make the stage fold two partial totals that must then be
+        # kept in step.
+        report_spend = ReportSpendLedger(cast("ObjectStore", store))
         official = RoleScorer(
             bind_engine=bind_engine,
             role=EvalRole.OFFICIAL,
             task_ids=task_ids_by_role[EvalRole.OFFICIAL],
             num_seeds=k_repeat,
             build_candidate=build_candidate,
+            spend_ledger=report_spend,
         )
         held_out = RoleScorer(
             bind_engine=bind_engine,
@@ -347,6 +460,7 @@ def bound_stage_environment(
             task_ids=task_ids_by_role[EvalRole.HELD_OUT],
             num_seeds=k_repeat,
             build_candidate=build_candidate,
+            spend_ledger=report_spend,
         )
         runner = StudyOptimizerRunner(
             study_dir=study_dir,
@@ -380,4 +494,5 @@ def bound_stage_environment(
             # every engine writes into, which is what makes reading the
             # rows back a read of this stage's own evidence.
             store=cast("ObjectStore", store),
+            report_spend=report_spend,
         )

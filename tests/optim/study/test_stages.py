@@ -16,6 +16,8 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from whetstone.optim.cost import CostRole
+
 from whetstone_envs.optim.study.analysis import (
     CEILING_CANDIDATE_NAME,
     NAIVE_CANDIDATE_NAME,
@@ -27,7 +29,12 @@ from whetstone_envs.optim.study.manifest import (
     ArmRecord,
     CallCountGateRecord,
     EvidencePointer,
+    OfficialScoreEntry,
+    ReportSpendEntry,
     RunRecord,
+    RunSpendRecord,
+    StageRecord,
+    StudyManifest,
     TransportName,
     read_study_manifest,
     write_study_manifest,
@@ -41,6 +48,10 @@ from whetstone_envs.optim.study.selection import (
     SelectionRecord,
 )
 from whetstone_envs.optim.study.spec import StageId, spec_from_manifest
+from whetstone_envs.optim.study.spend import (
+    ReportSpendLedger,
+    ReportSpendRecord,
+)
 from whetstone_envs.optim.study.stages import (
     SEED_NOTE_CONTROL_FIELD,
     SEED_NOTE_PROVIDER_ONLY,
@@ -48,6 +59,10 @@ from whetstone_envs.optim.study.stages import (
     ArmRunResult,
     StageEnvironment,
     StageError,
+    _persist_report_spend_to,
+    _record_report_spend,
+    _transport_change_amendment,
+    _without_amended_evidence,
     run_arm_stage,
     run_stage,
     run_stage0_into_manifest,
@@ -456,7 +471,19 @@ def _codex_study(tmp_path: Path) -> Path:
         seed_note="control-seed-field",
         runs=(),
     )
-    write_study_manifest(study_dir, toy_manifest(arms=(*toy_arms(), codex)))
+    from whetstone_envs.optim.codex import (
+        CODEX_DEFAULT_AGENT_MODEL,
+    )
+
+    # A study declaring the Codex arm pre-registers the agent it will run,
+    # and the stage guard refuses a resolved control that disagrees.
+    write_study_manifest(
+        study_dir,
+        toy_manifest(
+            arms=(*toy_arms(), codex),
+            codex_agent_model=CODEX_DEFAULT_AGENT_MODEL,
+        ),
+    )
     with bound_stage_environment(study_dir) as environment:
         run_stage0_into_manifest(study_dir=study_dir, environment=environment)
     return study_dir
@@ -777,7 +804,11 @@ def test_a_second_selection_for_an_arm_is_refused_on_disk(
     )
     # A fresh ledger over the same directory sees the persisted selections,
     # and refuses a second one for an arm that already has one.
-    log = ManifestSelectionLog(study_dir, stage=StageId.STAGE1.value)
+    log = ManifestSelectionLog(
+        study_dir,
+        stage=StageId.STAGE1.value,
+        transport=TransportName.FAKE.value,
+    )
     assert log.selection_for("copro") is not None
     with pytest.raises(SelectionError, match="already selected"):
         log.record_selection(
@@ -831,7 +862,7 @@ def test_the_ledger_refuses_a_selection_naming_a_run_the_arm_did_not_run(
 ) -> None:
     """The manifest's own rule, surfaced as the protocol violation it is."""
     study_dir = _calibrated_study(tmp_path)
-    log = ManifestSelectionLog(study_dir)
+    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
     with pytest.raises(SelectionError):
         log.record_selection(
             SelectionRecord(
@@ -844,7 +875,7 @@ def test_the_ledger_refuses_a_selection_naming_a_run_the_arm_did_not_run(
 
 def test_reading_back_before_any_selection_refuses(tmp_path: Path) -> None:
     study_dir = _calibrated_study(tmp_path)
-    log = ManifestSelectionLog(study_dir)
+    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
     with pytest.raises(SelectionError, match="no persisted selection"):
         log.require_selection("copro")
 
@@ -857,14 +888,16 @@ def test_a_held_out_claim_survives_a_lost_process(tmp_path: Path) -> None:
     has -- refuses to measure that candidate again.
     """
     study_dir = _calibrated_study(tmp_path)
-    first = ManifestSelectionLog(study_dir)
+    first = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
     first.claim_held_out("naive")
     # Nothing completed the claim: this is the crashed-mid-evaluation state.
     manifest = read_study_manifest(study_dir)
     assert len(manifest.held_out_claims) == 1
     assert not manifest.held_out_claims[0].completed
 
-    resumed = ManifestSelectionLog(study_dir)
+    resumed = ManifestSelectionLog(
+        study_dir, transport=TransportName.FAKE.value
+    )
     assert resumed.held_out_count("naive") == 1
     with pytest.raises(SelectionError, match="already evaluated on held-out"):
         resumed.claim_held_out("naive")
@@ -874,7 +907,7 @@ def test_a_completed_claim_records_what_the_evaluation_returned(
     tmp_path: Path,
 ) -> None:
     study_dir = _calibrated_study(tmp_path)
-    log = ManifestSelectionLog(study_dir)
+    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
     log.claim_held_out("naive")
     log.complete_held_out(
         HeldOutMeasurement(
@@ -897,7 +930,7 @@ def test_completing_an_unclaimed_evaluation_is_refused(
     tmp_path: Path,
 ) -> None:
     study_dir = _calibrated_study(tmp_path)
-    log = ManifestSelectionLog(study_dir)
+    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
     with pytest.raises(SelectionError, match="never claimed"):
         log.complete_held_out(
             HeldOutMeasurement(
@@ -1452,4 +1485,462 @@ def test_a_stage_that_crashed_between_arms_resumes(tmp_path: Path) -> None:
     ]
     assert len(stage1_selections) == len(
         {entry.arm_id for entry in stage1_selections}
+    )
+
+
+def test_a_resumed_arm_rescores_nothing_it_already_paid_to_score(
+    tmp_path: Path,
+) -> None:
+    """**Resume of a fully reported arm re-buys nothing at all.**
+
+    Official-selection scoring is a provider call per run, and it used to
+    run unconditionally on every invocation: a resumed stage re-scored
+    every run of every already-reported arm purely to rebuild a report the
+    manifest could already answer. That is a second charge for a number
+    the study had already bought, and it is invisible in the result --
+    the rebuilt report looks identical either way.
+
+    So the assertion is on the calls, not on the report: the arm that
+    completed before the crash issues **zero** official scorings on
+    resume, and its rebuilt scores equal the ones it recorded.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    scores = {
+        f"{arm.arm_id}-{seed}": 0.5 + index / 100
+        for arm in spec.arms
+        for index, seed in enumerate(arm.seeds)
+    }
+    crashing = _CrashingHarness(study_dir, scores=scores, crash_after=1)
+    with pytest.raises(_InjectedCrashError):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=crashing.environment(),
+        )
+    stage1 = StageId.STAGE1.value
+    crashed = read_study_manifest(study_dir)
+    first_arm = next(
+        entry.candidate_name
+        for entry in crashed.held_out_claims
+        if entry.stage == stage1 and entry.completed
+    )
+    # The scores that arm bought are durable, which is what a rebuild
+    # reads instead of re-issuing.
+    recorded = {
+        entry.run_id: entry
+        for entry in crashed.official_scores
+        if entry.stage == stage1 and entry.arm_id == first_arm
+    }
+    assert recorded, "a reported arm records the scores it paid for"
+
+    resumed = _Harness(study_dir, scores=scores)
+
+    def _load_recorded_run(
+        *, arm: ArmSpec, run: RunRecord
+    ) -> ArmRunResult | None:
+        del arm
+        assert run.seed is not None
+        return ArmRunResult(
+            candidate=RunCandidate(
+                run_id=run.run_id,
+                seed=run.seed,
+                candidate_name=run.run_id,
+                template="{grid} {command} {question}",
+            ),
+            record=run,
+            observed_task_calls=resumed.task_calls,
+        )
+
+    environment = resumed.environment()
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=replace(environment, load_recorded_run=_load_recorded_run),
+    )
+
+    # Zero scorer calls for the runs the crashed invocation already scored.
+    rescored = {
+        event.removeprefix("official:")
+        for event in resumed.events
+        if event.startswith("official:")
+    }
+    assert not (rescored & set(recorded)), (
+        "a resumed stage re-bought official scores it had already paid for: "
+        f"{sorted(rescored & set(recorded))}"
+    )
+    # And the rebuilt report carries the recorded numbers, not new ones.
+    rebuilt = next(
+        report for report in result.arms if report.arm_id == first_arm
+    )
+    for score in rebuilt.official_scores:
+        assert score.score == recorded[score.run_id].score
+        assert score.per_task == recorded[score.run_id].per_task
+
+
+def test_refolding_the_reporting_bill_restates_it_rather_than_doubling_it(
+    tmp_path: Path,
+) -> None:
+    """**The reporting fold is safe to repeat, because a resume repeats it.**
+
+    A stage's row is *merged* rather than replaced, so a resume cannot
+    erase what an earlier invocation paid. That rule and an additive
+    reporting fold are incompatible: each invocation added the whole pass
+    again, so a stage whose reporting ran twice claimed to have spent
+    twice -- and the reporting pass is exactly the set of calls every
+    efficacy claim is finally made against.
+
+    The fold now reads the manifest's own durable per-evaluation records,
+    so it is a function of what is on disk rather than of what this
+    process bought. Folding again restates the same total.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    stage1 = StageId.STAGE1.value
+    manifest = read_study_manifest(study_dir)
+    priced = RunSpendRecord(
+        role=CostRole.TASK_MODEL.value,
+        calls=4,
+        cached_calls=0,
+        input_tokens=100,
+        output_tokens=20,
+        priced_calls=4,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "report_spend": (
+                    ReportSpendEntry(
+                        evidence_schema="whetstone.eval.outputs",
+                        evidence_content_hash="a" * 64,
+                        purpose="official",
+                        candidate_name="copro",
+                        stage=stage1,
+                        transport=TransportName.OPENROUTER.value,
+                        spend=(priced,),
+                    ),
+                )
+            }
+        ),
+        replace=True,
+    )
+    environment = _Harness(study_dir, scores={}).environment()
+    paid = replace(environment, transport=TransportName.OPENROUTER.value)
+
+    _record_report_spend(
+        study_dir=study_dir, stage=StageId.STAGE1, environment=paid
+    )
+    once = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == stage1
+    )
+    assert [entry.usd for entry in once.report_spend] == [0.5]
+
+    # The resume: the same durable records, folded a second time.
+    _record_report_spend(
+        study_dir=study_dir, stage=StageId.STAGE1, environment=paid
+    )
+    twice = next(
+        entry
+        for entry in read_study_manifest(study_dir).stages
+        if entry.stage == stage1
+    )
+    assert twice.report_spend == once.report_spend, (
+        "re-folding the reporting pass billed its evaluations a second time"
+    )
+    assert [entry.calls for entry in twice.report_spend] == [4]
+
+
+def test_a_priced_reporting_evaluation_is_durable_before_the_pass_ends(
+    tmp_path: Path,
+) -> None:
+    """**The spend is on disk the moment it is paid, not at the end.**
+
+    The reporting pass buys an official score per run, a held-out
+    measurement per arm, and the anchors, and it writes the stage's row
+    only once all of them are done. Spend held in memory across that
+    window is lost by a crash inside it -- and lost reporting spend is
+    invisible afterwards, because the resume rebuilds its claims without
+    re-evaluating and never learns what the crashed invocation bought.
+
+    So the sink is installed before the pass rather than after: each
+    priced evaluation appends its own entry, and an evaluation whose
+    evidence is already recorded for this stage is a no-op, because one
+    evaluation cited twice was paid for once.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    stage = StageId.STAGE1
+    environment = _Harness(study_dir, scores={}).environment()
+    ledger = ReportSpendLedger(None)
+    _persist_report_spend_to(
+        study_dir=study_dir,
+        stage=stage,
+        environment=replace(environment, report_spend=ledger),
+    )
+    priced = RunSpendRecord(
+        role=CostRole.TASK_MODEL.value,
+        calls=2,
+        cached_calls=0,
+        input_tokens=10,
+        output_tokens=3,
+        priced_calls=2,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.25,
+    )
+    record = ReportSpendRecord(
+        purpose="official",
+        candidate_name="copro",
+        evidence_key=("whetstone.eval.outputs", "a" * 64),
+        spend=(priced,),
+    )
+    # The ledger calls its sink the moment an evaluation is priced.
+    assert ledger._persist is not None
+    ledger._persist(record)
+
+    entries = [
+        entry
+        for entry in read_study_manifest(study_dir).report_spend
+        if entry.stage == stage.value
+    ]
+    assert len(entries) == 1
+    assert entries[0].evidence_key == record.evidence_key
+    assert entries[0].purpose == "official"
+    assert entries[0].candidate_name == "copro"
+    assert [item.usd for item in entries[0].spend] == [0.25]
+
+    # The same evaluation, cited again, is one purchase and not two.
+    ledger._persist(record)
+    assert (
+        len(
+            [
+                entry
+                for entry in read_study_manifest(study_dir).report_spend
+                if entry.stage == stage.value
+            ]
+        )
+        == 1
+    )
+
+
+# --------------------------------------------------------------------------
+# What a cross-transport amendment takes with it
+# --------------------------------------------------------------------------
+
+
+def _reporting_spend() -> RunSpendRecord:
+    return RunSpendRecord(
+        role=CostRole.TASK_MODEL.value,
+        calls=4,
+        cached_calls=0,
+        input_tokens=100,
+        output_tokens=20,
+        priced_calls=4,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+
+
+def _study_with_a_reported_stage1(tmp_path: Path) -> Path:
+    """A fake-transport study whose Stage 1 ran, scored, and was billed.
+
+    Exactly the state a cross-transport ``--replace-design`` invalidates:
+    a Stage-1 row, a run under an arm, the official score that run bought,
+    and the reporting evaluation that was paid for to produce it.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    stage1 = StageId.STAGE1.value
+    manifest = read_study_manifest(study_dir)
+    run = RunRecord(
+        run_id="copro-0",
+        seed=0,
+        artifact_dir="/tmp/runs/copro-0",  # noqa: S108
+        result_ref=_pointer("1"),
+        audit_ref=_pointer("2"),
+        cost_ref=_pointer("3"),
+        audit_passed=True,
+        transport=TransportName.FAKE.value,
+        spend=(),
+    )
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "stages": (
+                    *manifest.stages,
+                    StageRecord(
+                        stage=stage1, transport=TransportName.FAKE.value
+                    ),
+                ),
+                "arms": tuple(
+                    arm.model_copy(update={"runs": (run,)})
+                    if arm.arm_id == "copro"
+                    else arm
+                    for arm in manifest.arms
+                ),
+                "official_scores": (
+                    OfficialScoreEntry(
+                        run_id=run.run_id,
+                        arm_id="copro",
+                        stage=stage1,
+                        transport=TransportName.FAKE.value,
+                        score=0.5,
+                        eval_config_hash=OFFICIAL_CONFIG,
+                        completeness=1.0,
+                        per_task=(0.5,),
+                    ),
+                ),
+                "report_spend": (
+                    ReportSpendEntry(
+                        evidence_schema="whetstone.eval.outputs",
+                        evidence_content_hash="a" * 64,
+                        purpose="official",
+                        candidate_name="copro",
+                        stage=stage1,
+                        transport=TransportName.FAKE.value,
+                        spend=(_reporting_spend(),),
+                    ),
+                ),
+            }
+        ),
+        replace=True,
+    )
+    return study_dir
+
+
+def _replaced_across_transports(study_dir: Path) -> StudyManifest:
+    """``study_dir``'s manifest after a fake-to-paid re-calibration.
+
+    Driven through the amendment path itself rather than hand-written, so
+    what these tests assert is what the stage really produces.
+    """
+    manifest = read_study_manifest(study_dir)
+    paid = replace(
+        _Harness(study_dir, scores={}).environment(),
+        transport=TransportName.OPENROUTER.value,
+    )
+    amendment = _transport_change_amendment(
+        manifest, environment=paid, replace_design=True
+    )
+    assert amendment is not None, "the fixture has evidence to drop"
+    return _without_amended_evidence(manifest, amendment=amendment)
+
+
+def test_an_amendment_drops_the_scores_its_dropped_runs_bought(
+    tmp_path: Path,
+) -> None:
+    """An official score is a measurement of the run that bought it.
+
+    Run ids are deterministic, so the replacement stage recomputes the
+    very names the amendment just dropped. A score left behind is read
+    back by ``official_score_for`` and reused -- a number measured on the
+    *previous* transport, presented as this study's selection evidence and
+    never re-bought on the transport the study now runs on.
+    """
+    study_dir = _study_with_a_reported_stage1(tmp_path)
+
+    amended = _replaced_across_transports(study_dir)
+
+    assert amended.official_scores == (), (
+        "a score measured on the previous transport survived its run"
+    )
+    record = amended.amendments[-1]
+    assert record.dropped_official_scores == 1, (
+        "the amendment records what it dropped, not merely drops it"
+    )
+
+
+def test_a_score_bought_on_another_transport_is_not_read_back(
+    tmp_path: Path,
+) -> None:
+    """Belt and braces: the read-back checks what the score was measured on.
+
+    The drop is the fix; this is the guard that holds if a score ever
+    reaches the manifest by another route. Reusing another transport's
+    measurement is the failure, whatever put it there.
+    """
+    study_dir = _study_with_a_reported_stage1(tmp_path)
+    entry = read_study_manifest(study_dir).official_scores[0]
+
+    same = ManifestSelectionLog(
+        study_dir,
+        stage=StageId.STAGE1.value,
+        transport=TransportName.FAKE.value,
+    )
+    assert same.official_score_for(entry.run_id) is not None, (
+        "the stage's own measurement is still what a resume reads back"
+    )
+
+    other = ManifestSelectionLog(
+        study_dir,
+        stage=StageId.STAGE1.value,
+        transport=TransportName.OPENROUTER.value,
+    )
+    assert other.official_score_for(entry.run_id) is None, (
+        "a score bought on another transport is not this stage's evidence"
+    )
+
+
+def test_an_amendment_drops_the_reporting_spend_it_invalidated(
+    tmp_path: Path,
+) -> None:
+    """Reporting spend belongs to the invocation that bought it.
+
+    The amendment removes the Stage-1 row but the fold is computed from
+    the durable per-evaluation records, not from the row. Entries left
+    behind are folded by the *next* Stage 1 -- so a paid stage bills
+    itself for a fake-transport invocation's evaluations, which is a total
+    nobody owes.
+    """
+    study_dir = _study_with_a_reported_stage1(tmp_path)
+
+    amended = _replaced_across_transports(study_dir)
+
+    assert amended.report_spend == (), (
+        "the dropped stage's reporting purchases survived its row"
+    )
+    record = amended.amendments[-1]
+    assert record.dropped_report_spend == 1, (
+        "the amendment records what it dropped, not merely drops it"
+    )
+
+
+def test_the_reporting_fold_ignores_another_transports_purchase(
+    tmp_path: Path,
+) -> None:
+    """Belt and braces: the fold keys on ``(stage, transport)``.
+
+    An evaluation bought on one transport is not part of what a stage
+    running on another transport spent, so it can never reach that
+    stage's row.
+    """
+    study_dir = _study_with_a_reported_stage1(tmp_path)
+    stale = read_study_manifest(study_dir).report_spend[0]
+    assert stale.transport == TransportName.FAKE.value
+
+    _record_report_spend(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=replace(
+            _Harness(study_dir, scores={}).environment(),
+            transport=TransportName.OPENROUTER.value,
+        ),
+    )
+
+    row = next(
+        (
+            entry
+            for entry in read_study_manifest(study_dir).stages
+            if entry.stage == StageId.STAGE1.value
+        ),
+        None,
+    )
+    assert row is not None
+    assert row.report_spend == (), (
+        "a fake-transport purchase was folded into a paid stage's bill"
     )

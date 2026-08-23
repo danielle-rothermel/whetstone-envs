@@ -73,6 +73,7 @@ if TYPE_CHECKING:
         ArmRecord,
         EvidenceStore,
         HeldOutRecord,
+        ProviderCallRecord,
         RunRecord,
         StageRecord,
     )
@@ -84,8 +85,8 @@ __all__ = [
     "NULL_ARM_PREFIX",
     "REPORT_HTML_NAME",
     "REPORT_MARKDOWN_NAME",
+    "STAGE_SPEND_COVERAGE_NOTE",
     "STUDY_MANIFEST_COPY",
-    "UNLEDGERED_SCORING_NOTE_REPORT",
     "UNLEDGERED_STAGE_DETAIL",
     "UNPRICED",
     "VALIDATION_CHECKLIST",
@@ -167,8 +168,9 @@ VALIDATION_CHECKLIST: tuple[str, ...] = (
         "overfitting to the internal split's phrasing?"
     ),
     (
-        "Is the Codex arm's uncontrolled agent model a fair comparison against"
-        " the arms whose proposer this study pinned?"
+        "Is the Codex arm's pre-registered agent model a fair comparison "
+        "against the arms whose proposer this study pinned, given that its "
+        "own calls are never priced?"
     ),
     (
         "Does the null-A result look like selection-on-noise -- a positive "
@@ -1172,6 +1174,24 @@ def _design_section(manifest: StudyManifest) -> Section:
                 Cell(text=models.codex_agent_model),
             )
         ),
+        # What each transport actually bound, which is a different fact
+        # from which model the study meant to run: the route it resolved
+        # and the request controls it did or did not set are what explain
+        # the bill and what "the same experiment" means.
+        *(
+            Row(
+                cells=(
+                    Cell(text=f"provider call ({entry.transport})"),
+                    Cell(
+                        figure=_manifest_figure(
+                            _provider_call_text(entry),
+                            "models.provider_calls",
+                        )
+                    ),
+                )
+            )
+            for entry in models.provider_calls
+        ),
     )
     paragraphs = [
         (
@@ -1389,7 +1409,7 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 "were calibrated on, because every held-out delta is paired "
                 "against those anchors."
             ),
-            (UNLEDGERED_SCORING_NOTE_REPORT),
+            (STAGE_SPEND_COVERAGE_NOTE),
         ),
         tables=(
             Table(
@@ -1448,19 +1468,22 @@ def _stage_label(stage: str) -> str:
     return f"Stage {stage.removeprefix('stage')}"
 
 
-#: What the report says the per-stage ledger does not yet cover.
+#: What the report says the per-stage ledger covers.
 #:
-#: Official-selection scoring and held-out evaluation reach the provider
-#: through the evaluation engine outside any optimizer run, so no run
-#: record and no anchor evidence carries them and no stage total includes
-#: them. Full ledgering of those calls is Phase E; until then the report
-#: states the omission rather than presenting a partial total as the whole
-#: bill.
-UNLEDGERED_SCORING_NOTE_REPORT = (
-    "The per-stage spend below is a lower bound. Official-selection "
-    "scoring and held-out evaluation calls are not yet ledgered: they "
-    "reach the provider through the evaluation engine outside any "
-    "optimizer run, so no stage total includes them."
+#: A stage spends by two routes and the row is the sum of both: its arms'
+#: optimizer runs, each of which projected its own bill, and the reporting
+#: pass -- official-selection scoring, the held-out evaluations, and the
+#: anchors' re-measurement -- which reaches the provider through the
+#: evaluation engine outside any run and is priced from its own persisted
+#: rows. Saying so is what stops a reader from taking the run-side number
+#: for the whole bill, which is what it used to be.
+STAGE_SPEND_COVERAGE_NOTE = (
+    "The per-stage spend below is the whole of what each stage bought: "
+    "its arms' optimizer runs, plus the reporting pass -- "
+    "official-selection scoring, the held-out evaluations, and the "
+    "anchors' re-measurement -- folded onto the same row. Both routes are "
+    "priced from the persisted output rows rather than accumulated while "
+    "the stage ran."
 )
 
 #: What a paid stage that recorded no spend reports. Never the
@@ -1478,26 +1501,31 @@ NO_PROVIDER_STAGE_DETAIL = "no provider reached (fake transport)"
 def _stage_spend_detail(record: StageRecord) -> str:
     """What one stage spent, or why there is nothing to report.
 
-    An empty ``spend`` tuple means one of two opposite things, and the
-    transport is what tells them apart. A fake-transport stage reached no
-    provider, so there is no bill. A **paid** stage that recorded nothing
-    called a provider and lost track of what it bought -- reporting that as
+    Read off ``total_spend``, which is the stage's runs *and* its
+    reporting pass. The two are stored apart because they accumulate by
+    opposite rules, but a reader asking what a stage cost is asking for
+    both, and the run-side figure alone would understate a paid stage by
+    the whole pass its efficacy claims are made against.
+
+    An empty total means one of two opposite things, and the transport is
+    what tells them apart. A fake-transport stage reached no provider, so
+    there is no bill. A **paid** stage that recorded nothing called a
+    provider and lost track of what it bought -- reporting that as
     "reached no provider" would describe a fully billed stage as a free
     one, which is the reading this branch exists to prevent.
     """
-    if not record.spend:
+    spend = record.total_spend
+    if not spend:
         if record.transport == TransportName.FAKE.value:
             return NO_PROVIDER_STAGE_DETAIL
         return UNLEDGERED_STAGE_DETAIL
-    calls = sum(entry.calls for entry in record.spend)
-    tokens = sum(
-        entry.input_tokens + entry.output_tokens for entry in record.spend
-    )
-    unpriced = sum(entry.unpriced_calls for entry in record.spend)
+    calls = sum(entry.calls for entry in spend)
+    tokens = sum(entry.input_tokens + entry.output_tokens for entry in spend)
+    unpriced = sum(entry.unpriced_calls for entry in spend)
     total = (
         None
-        if any(entry.usd is None for entry in record.spend)
-        else sum(entry.usd or 0.0 for entry in record.spend)
+        if any(entry.usd is None for entry in spend)
+        else sum(entry.usd or 0.0 for entry in spend)
     )
     return (
         f"{calls:,} calls, {tokens:,} tokens, {_usd(total, unpriced, calls)}"
@@ -2052,20 +2080,44 @@ def _total_usd(run: RunRecord) -> float | None:
     return sum(entry.usd or 0.0 for entry in run.spend)
 
 
+def _provider_call_text(entry: ProviderCallRecord) -> str:
+    """One transport's effective provider call config, as one line.
+
+    Every control appears, set or not: an omitted control would read as
+    one the study chose, and "left to the provider's default" is the state
+    that explains this study's per-call bill.
+    """
+    controls = ", ".join(
+        f"{name} {value}"
+        for name, value in (
+            ("temperature", entry.temperature),
+            ("top_p", entry.top_p),
+            ("token limit", entry.token_limit),
+            ("reasoning", entry.reasoning),
+            ("seed", entry.seed),
+        )
+    )
+    return (
+        f"{entry.provider}/{entry.protocol} route {entry.model_route}; "
+        f"{controls}; extensions {entry.extensions}"
+    )
+
+
 def _threats_section(manifest: StudyManifest) -> Section:
     design = manifest.design
     held_out_size = manifest.splits.held_out.size
     threats = (
         (
-            "The Codex arm's agent model is uncontrolled",
+            "The Codex arm's agent model is pinned but unpriced",
             Cell(
                 figure=_manifest_figure(
-                    f"Recorded as {manifest.models.codex_agent_model}. Its "
-                    "own model calls run off this study's key entirely, so "
-                    "whetstone observes no usage evidence for them and the "
-                    "manifest carries no cost role for them. The arm's "
-                    "OpenRouter evaluation calls price normally; the "
-                    "agent's do not appear at all.",
+                    f"Pre-registered as {manifest.models.codex_agent_model}, "
+                    "and the arm refuses to run an agent that disagrees. "
+                    "Its own model calls still run off this study's key "
+                    "entirely, so whetstone observes no usage evidence for "
+                    "them and the manifest carries no cost role for them. "
+                    "The arm's OpenRouter evaluation calls price normally; "
+                    "the agent's do not appear at all.",
                     "models.codex_agent_model",
                 )
             ),

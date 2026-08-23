@@ -62,6 +62,7 @@ from whetstone_envs.optim.study.manifest import (
     CallCountGateRecord,
     DesignRecord,
     PreRegistrationRecord,
+    ReportSpendEntry,
     RunRecord,
     RunSpendRecord,
     SplitsRecord,
@@ -77,6 +78,7 @@ from whetstone_envs.optim.study.manifest import StageId as ManifestStageId
 from whetstone_envs.optim.study.power import COMPLETENESS_RULE, MDE_FORMULA
 from whetstone_envs.optim.study.selection import (
     ArmReport,
+    CandidateScore,
     HeldOutEvaluator,
     ManifestSelectionLog,
     OfficialScorer,
@@ -88,9 +90,12 @@ from whetstone_envs.optim.study.spec import (
     StageId,
     arm_seeds,
     require_pinned_arms,
+    require_pinned_codex_agent_model,
     spec_from_manifest,
 )
 from whetstone_envs.optim.study.spend import (
+    ReportSpendLedger,
+    ReportSpendRecord,
     run_spend_records,
     stage_spend_records,
 )
@@ -218,6 +223,16 @@ class StageEnvironment:
     #: thing that actually gates the spend, together with the opt-in
     #: environment variable.
     real_codex_authorized: bool = False
+    #: Where the reporting pass's own spend accumulates.
+    #:
+    #: Official-selection scoring and held-out evaluation reach the
+    #: provider outside any optimizer run, so the run fold cannot see them
+    #: and the stage's own evidence route -- which is Stage 0's -- does not
+    #: cover them either. The scorers append here as they go and
+    #: :func:`run_arm_stage` folds the result into the stage's row once the
+    #: pass is done. ``None`` on a caller that supplies its own
+    #: collaborators, which ledgers nothing rather than inventing a bill.
+    report_spend: ReportSpendLedger | None = None
     #: How a test points the harness's Codex preflight at the scripted
     #: fake CLI instead of a real session.
     #:
@@ -426,15 +441,29 @@ def _arm_stage_record(
     because it is a property of the invocation that just ran and
     ``require_matching_transport`` has already refused a stage whose
     transport disagrees with the study's.
+
+    Only the *run* side is summed here. The reporting pass accumulates by
+    the opposite rule -- it is folded whole from durable records every
+    time, so adding it would bill one evaluation once per resume -- and
+    :func:`_record_report_spend` owns it. It is carried through unchanged
+    rather than dropped, because this writer runs before that one and must
+    not erase a total an earlier invocation already recorded.
     """
     existing = next(
         (entry for entry in manifest.stages if entry.stage == record.stage),
         None,
     )
-    if existing is None or not existing.spend:
+    if existing is None:
         return _stages_with(manifest, record)
     merged = record.model_copy(
-        update={"spend": run_spend_records((*existing.spend, *record.spend))}
+        update={
+            "spend": (
+                run_spend_records((*existing.spend, *record.spend))
+                if existing.spend
+                else record.spend
+            ),
+            "report_spend": existing.report_spend,
+        }
     )
     return _stages_with(manifest, merged)
 
@@ -713,6 +742,8 @@ def _transport_change_amendment(
         # yet, so there is nothing to record as dropped. An amendment
         # naming no casualties would be noise in the report.
         return None
+    dropped = set(dropped_stages)
+    dropped_run_ids = {run.run_id for run in dropped_runs}
     return AmendmentRecord(
         at=datetime.now(UTC).isoformat(),
         amended_stage=StageId.STAGE0.value,
@@ -731,6 +762,17 @@ def _transport_change_amendment(
         dropped_held_out_claims=len(manifest.held_out_claims),
         dropped_held_out_rows=len(manifest.held_out),
         dropped_call_count_gate=manifest.call_count_gate is not None,
+        # Measured on the transport being left behind, and keyed by names
+        # the replacement stage recomputes: counted here so the record
+        # says what the study lost, and dropped below so nothing reads it.
+        dropped_official_scores=sum(
+            1
+            for entry in manifest.official_scores
+            if entry.run_id in dropped_run_ids or entry.stage in dropped
+        ),
+        dropped_report_spend=sum(
+            1 for entry in manifest.report_spend if entry.stage in dropped
+        ),
     )
 
 
@@ -745,6 +787,19 @@ def _without_amended_evidence(
     everything measured -- the arm stages' records, their runs, the
     selections over those runs, the held-out claims and rows those
     selections produced, and the pilot's call-count verdict.
+
+    **What those runs and stages bought goes with them.** Run ids are
+    deterministic, so the replacement stage recomputes the very names this
+    drops; an ``official_scores`` entry left behind would be read back by
+    :meth:`~whetstone_envs.optim.study.selection.ManifestSelectionLog.official_score_for`
+    and reused, presenting a score measured on the previous transport as
+    this study's selection evidence -- and never re-buying it on the
+    transport the study now runs on. ``report_spend`` is the same shape of
+    error in money: the stage's reporting row is folded from those durable
+    per-evaluation records rather than from the row, so entries surviving
+    their stage are folded by the *next* invocation of it, billing a paid
+    stage for evaluations a fake-transport invocation bought. Both are
+    counted on the amendment before they go.
 
     **A verdict computed over dropped evidence goes with it.**
     ``leakage_check`` is L6's mechanical pass over the very run artifacts
@@ -768,12 +823,24 @@ def _without_amended_evidence(
     written.
     """
     dropped = set(amendment.dropped_stages)
+    dropped_runs = set(amendment.dropped_run_ids)
     return manifest.model_copy(
         update={
             "amendments": (*manifest.amendments, amendment),
             "stages": tuple(
                 entry
                 for entry in manifest.stages
+                if entry.stage not in dropped
+            ),
+            "official_scores": tuple(
+                entry
+                for entry in manifest.official_scores
+                if entry.run_id not in dropped_runs
+                and entry.stage not in dropped
+            ),
+            "report_spend": tuple(
+                entry
+                for entry in manifest.report_spend
                 if entry.stage not in dropped
             ),
             "arms": tuple(
@@ -853,6 +920,16 @@ def _split_by_arm(spec: StudySpec) -> dict[str, tuple[int, int] | None]:
     }
 
 
+def _minibatch_by_arm(spec: StudySpec) -> dict[str, int | None]:
+    """Each arm's pre-registered MIPROv2 minibatch size, or ``None``.
+
+    ``ArmSpec`` already refuses a size on an arm that does not minibatch
+    and requires one on an arm that does, so this is a projection rather
+    than a second rule.
+    """
+    return {arm.arm_id: arm.miprov2_minibatch_size for arm in spec.arms}
+
+
 def _pre_registration_record(
     design: DesignRecord,
     *,
@@ -865,16 +942,19 @@ def _pre_registration_record(
     so a design and its pinning cannot disagree at the moment they are
     written.
 
-    ``spec`` supplies the per-arm train/val partition, which the design
-    block does not carry: the partition is per arm and ``DesignRecord``
-    records study-wide numbers. It is pinned all the same, because an arm
-    rerun at a different split is measuring a different thing.
+    ``spec`` supplies the per-arm train/val partition and MIPROv2
+    minibatch size, which the design block does not carry: both are per
+    arm and ``DesignRecord`` records study-wide numbers. They are pinned
+    all the same, because an arm rerun at a different split -- or at a
+    different batch size -- is measuring a different thing.
     """
     split_by_arm = _split_by_arm(spec)
+    minibatch_by_arm = _minibatch_by_arm(spec)
     design_hash = pre_registration_design_hash(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -891,6 +971,7 @@ def _pre_registration_record(
         k_repeat=design.k_repeat,
         k_run_by_arm=dict(design.k_run_by_arm),
         split_by_arm=split_by_arm,
+        minibatch_by_arm=minibatch_by_arm,
         ci_level=design.ci_level,
         resamples=design.resamples,
         bootstrap_seed=design.bootstrap_seed,
@@ -1008,6 +1089,12 @@ def _refuse_unauthorized_codex_arm(
             "codex_test_seam must be a CodexTestSeam; got "
             f"{type(seam).__name__}"
         )
+    agent_model = resolve_codex_agent_model(None)
+    # Before the probe, because a session opened on the wrong agent is a
+    # billed session the design never registered. The pin is design and the
+    # resolution is the runner's, so comparing them here is what keeps the
+    # arm's proposer the one the manifest names.
+    require_pinned_codex_agent_model(spec, resolved=agent_model)
     try:
         preflight_codex_session(
             scratch_root=study_dir / STAGE_PREFLIGHT_ROOT_NAME,
@@ -1024,7 +1111,7 @@ def _refuse_unauthorized_codex_arm(
             # for the Codex arm's turn -- after COPRO, MIPROv2, and GEPA
             # had been paid for, which is precisely what this preflight
             # exists to prevent.
-            model=resolve_codex_agent_model(None),
+            model=agent_model,
             allow_real_codex=environment.real_codex_authorized,
             test_seam=seam,
         )
@@ -1157,7 +1244,15 @@ def run_arm_stage(
 
     # One ledger per stage: the pilot's selection and the full design's are
     # each made once, over different run sets, and neither can be made twice.
-    log = ManifestSelectionLog(study_dir, stage=stage.value)
+    log = ManifestSelectionLog(
+        study_dir, stage=stage.value, transport=environment.transport
+    )
+    # Every reporting evaluation from here on writes its own spend before
+    # the pass returns, so a crash mid-pass leaves the bill for what was
+    # already bought on disk rather than in a process that is gone.
+    _persist_report_spend_to(
+        study_dir=study_dir, stage=stage, environment=environment
+    )
     reports = tuple(
         _report_or_rebuild_arm(
             arm_id=arm.arm_id,
@@ -1181,12 +1276,175 @@ def run_arm_stage(
         k_repeat=manifest.design.k_repeat,
         log=log,
     )
+    # The reporting pass's own bill, folded in only now. It cannot be
+    # written with the arms' row above: official-selection scoring, the
+    # held-out evaluations, and the anchors' re-measurement all happen
+    # after that write, and every one of them reaches the provider. A
+    # stage row that stopped at the run-side total would understate the
+    # study by the whole pass its efficacy claims are made against.
+    _record_report_spend(
+        study_dir=study_dir, stage=stage, environment=environment
+    )
     return StageResult(
         stage=stage,
         manifest=read_study_manifest(study_dir),
         arms=reports,
         analysis=analysis,
     )
+
+
+def _persist_report_spend_to(
+    *, study_dir: Path, stage: StageId, environment: StageEnvironment
+) -> None:
+    """Point this stage's ledger at the manifest, for the pass ahead.
+
+    Each priced evaluation is appended to ``report_spend`` the moment it
+    is priced, which is the moment after it was paid for. That ordering is
+    the guarantee: the reporting pass buys an official score per run, a
+    held-out measurement per arm, and the anchors, and it writes the
+    stage's row only once all of them are done -- so anything held only in
+    memory is lost by a crash in that window, and lost spend is the one
+    error the ledger cannot detect afterwards.
+
+    An entry whose evidence is already recorded for this stage is a no-op:
+    one evaluation cited twice was paid for once, and the manifest refuses
+    the duplicate structurally.
+    """
+    ledger = environment.report_spend
+    if ledger is None:
+        return
+
+    def persist(record: ReportSpendRecord) -> None:
+        manifest = read_study_manifest(study_dir)
+        if any(
+            entry.evidence_key == record.evidence_key
+            and entry.stage == stage.value
+            for entry in manifest.report_spend
+        ):
+            return
+        schema_name, content_hash = record.evidence_key
+        write_study_manifest(
+            study_dir,
+            manifest.model_copy(
+                update={
+                    "report_spend": (
+                        *manifest.report_spend,
+                        ReportSpendEntry(
+                            evidence_schema=schema_name,
+                            evidence_content_hash=content_hash,
+                            purpose=record.purpose,
+                            candidate_name=record.candidate_name,
+                            stage=stage.value,
+                            transport=environment.transport,
+                            spend=record.spend,
+                        ),
+                    )
+                }
+            ),
+            replace=True,
+        )
+
+    ledger.persist_to(persist)
+
+
+def _record_report_spend(
+    *, study_dir: Path, stage: StageId, environment: StageEnvironment
+) -> None:
+    """Merge the reporting pass's spend onto this stage's row.
+
+    Merged rather than replaced, for :func:`_arm_stage_record`'s reason:
+    the row already carries what the arms' runs cost, and the reporting
+    pass is a second bill on the same stage rather than a correction of
+    the first. The fold re-applies the honesty rules, so one unpriced
+    reporting evaluation withholds the role's whole ``usd``.
+
+    **Folded from the manifest, not from this process.** Each reporting
+    evaluation persisted its own spend as it was bought, and the fold
+    reads those records back. That is what makes this idempotent across a
+    resume: the row is a function of what is on disk rather than of what
+    this invocation happened to buy, so re-folding after a crash restates
+    the same total instead of adding a second copy of it -- and an
+    evaluation an earlier invocation paid for is still counted even though
+    this process never issued it.
+
+    **Keyed on the transport as well as the stage.** An evaluation bought
+    on one transport is not part of what a stage running on another spent,
+    so a surviving entry from an invalidated invocation -- a fake-transport
+    row, costing nothing anyone owes -- can never reach a paid stage's
+    bill. :func:`_without_amended_evidence` drops those entries; this is
+    what holds if one ever reaches the manifest by another route.
+
+    A fake-transport stage is skipped: its rows are real rows that would
+    total to a bill nobody owes, which is the judgement
+    :func:`_stage_record` keeps at the call site.
+    """
+    if environment.transport == TransportName.FAKE.value:
+        return
+    manifest = read_study_manifest(study_dir)
+    folded = run_spend_records(
+        entry
+        for record in manifest.report_spend
+        if record.stage == stage.value
+        and record.transport == environment.transport
+        for entry in record.spend
+    )
+    if not folded:
+        return
+    existing = next(
+        (entry for entry in manifest.stages if entry.stage == stage.value),
+        None,
+    )
+    updated = (
+        StageRecord(
+            stage=stage.value,
+            transport=environment.transport,
+            report_spend=folded,
+        )
+        if existing is None
+        # Set, never added: ``folded`` is already the whole pass, so the
+        # run-side row is carried through untouched and the reporting side
+        # is replaced with the total the durable records now describe.
+        else existing.model_copy(update={"report_spend": folded})
+    )
+    if existing == updated:
+        return
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={"stages": _stages_with(manifest, updated)}
+        ),
+        replace=True,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _DurableOfficialScorer:
+    """Score a run once per stage, ever, across every invocation.
+
+    Official scoring reaches the provider, so "score every run" and "score
+    every run *again* on resume" are the same code path with very
+    different bills. This wraps the real scorer in the manifest's own
+    record: a run already scored at this stage is answered from disk and
+    issues no call, and a run scored for the first time has its score
+    persisted before it is returned.
+
+    Persisted before returning, not after the pass: the arg-max that
+    consumes these scores is followed by a held-out evaluation and a
+    manifest write, and a crash anywhere in that window would otherwise
+    leave the study having paid for scores it kept no record of.
+    """
+
+    arm_id: str
+    log: ManifestSelectionLog
+    score_official: OfficialScorer
+
+    def __call__(self, candidate: RunCandidate) -> CandidateScore:
+        recorded = self.log.official_score_for(candidate.run_id)
+        if recorded is not None:
+            return recorded
+        score = self.score_official(candidate)
+        self.log.record_official_score(arm_id=self.arm_id, score=score)
+        return score
 
 
 def _report_or_rebuild_arm(  # noqa: PLR0913
@@ -1207,10 +1465,17 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     would be stranded behind a failure that never clears.
 
     An arm whose selection *and* completed held-out claim are both durable
-    has already been fully reported. Its report is rebuilt from those
-    records rather than re-derived, which is what makes resume cost nothing:
-    no second selection, and no second held-out evaluation of a candidate
-    that already spent its one shot.
+    has already been fully reported. Its report is rebuilt entirely from
+    persisted records -- the selection, each run's recorded official score,
+    and the completed claim -- so a resume of a fully reported arm re-buys
+    **nothing**: no second selection, no second official scoring of runs
+    the study already paid to score, and no second held-out evaluation of a
+    candidate that already spent its one shot.
+
+    Official scoring is durable for exactly that reason. It is a provider
+    call per run, and it previously ran unconditionally on every
+    invocation, so a resume silently re-bought the whole official pass for
+    every arm it was only rebuilding.
 
     An arm that selected but never claimed crashed in the window *between*
     the two writes, before any provider call. It continues from the
@@ -1223,12 +1488,15 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     would risk paying twice and skipping would report a number nobody
     measured -- and it is refused with the recovery named.
     """
+    durable_scorer = _DurableOfficialScorer(
+        arm_id=arm_id, log=log, score_official=score_official
+    )
     selection = log.selection_for(arm_id)
     if selection is None:
         return report_arm(
             arm_id=arm_id,
             runs=runs,
-            score_official=score_official,
+            score_official=durable_scorer,
             evaluate_held_out=evaluate_held_out,
             log=log,
             stage=stage.value,
@@ -1242,7 +1510,7 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
             f"{selection.selected_run_id!r} at {stage.value}, but that run "
             "is not among the runs this stage loaded"
         )
-    official_scores = tuple(score_official(run) for run in runs)
+    official_scores = tuple(durable_scorer(run) for run in runs)
     claim = log.completed_claim_for(arm_id)
     if claim is None:
         if log.held_out_count(arm_id) > 0:
@@ -1589,6 +1857,8 @@ def _arm_record(
         demo_mode=arm.demo_mode,
         train_size=arm.train_size,
         val_size=arm.val_size,
+        minibatch=arm.miprov2_minibatch,
+        minibatch_size=arm.miprov2_minibatch_size,
         control_identity_hash=control_identity_hash,
         seed_note=_seed_note(arm),
         runs=runs,

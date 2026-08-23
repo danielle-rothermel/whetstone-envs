@@ -91,13 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   nobody. A **paid** stage with no records reports a loud `UNLEDGERED`,
   because it reached a provider and lost track of what it bought: its bill
   is unknown, not zero.
-- **The ledger states what it does not cover.** Official-selection scoring
-  and held-out evaluation reach the provider through the evaluation engine
-  outside any optimizer run, so no run record and no anchor evidence
-  carries them and no stage total includes them. `plan`, `run`, the report,
-  and the README now say so explicitly, so a printed total reads as the
-  lower bound it is rather than as the whole bill. Full ledgering of those
-  calls is Phase E.
+- **The ledger states what it covers.** A stage row is the sum of both
+  routes it spends by — its arms' optimizer runs and its reporting pass —
+  and `plan`, `run`, the report, and the README say so, so a printed total
+  reads as the whole bill rather than as the run-side part of it.
 - **The fake path's Eval Config hashes are pinned.** A golden test fixes
   the three role config hashes the fake toy study binds, so a change that
   let provider call configuration leak onto the fake path — the way the
@@ -106,6 +103,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   whatever just ran.
 
 ### Fixed
+- **A cross-transport amendment takes the measurements its dropped evidence
+  bought.** `stage0 --replace-design` onto another transport dropped the
+  arm stages, their runs, the selections, and the held-out claims, but left
+  `official_scores` and `report_spend` behind. Run ids are deterministic,
+  so the replacement stage recomputed the very names that were dropped and
+  `official_score_for` read back a score measured on the transport the
+  study had just left — presenting it as this study's selection evidence
+  and never re-buying it on the transport now in use. `report_spend` was
+  the same error in money: the stage's reporting row is folded from the
+  durable per-evaluation records rather than from the row, so entries
+  surviving their stage were folded by the next invocation of it, billing a
+  paid stage for the fake-transport evaluations an invalidated invocation
+  bought. Both are now dropped in the same amendment and counted on it, as
+  `dropped_official_scores` and `dropped_report_spend`. Belt and braces on
+  each: an `OfficialScoreEntry` and a `ReportSpendEntry` each record the
+  transport they were bought on, the score read-back requires it to match
+  the stage's, and the reporting fold keys on `(stage, transport)` — so
+  neither a stale measurement nor a stale bill can be reused whatever put
+  it in the manifest.
+- **The reporting pass is durable, so a resume neither loses its spend nor
+  bills it twice.** Official-selection scoring, the held-out evaluations,
+  and the anchors each reach the provider before the stage's row is
+  written, and their cost lived only in an in-memory ledger until that
+  write. A crash in that window was wrong in both directions: the spend of
+  everything already bought was stranded in a process that was gone, and a
+  resume that re-folded the ledger onto a row already carrying it billed
+  the same evaluations a second time. Each evaluation now records its own
+  spend into the manifest's `report_spend` block the moment it is priced,
+  keyed by the evidence's `(schema, content_hash)`, and the stage's row is
+  folded from those durable records rather than from what this invocation
+  happened to buy — so the fold is a function of what is on disk and is
+  safe to repeat. `StageRecord` gains `report_spend` beside `spend`,
+  because the two accumulate by opposite rules; `total_spend` derives the
+  whole bill so the parts cannot drift from the total.
+- **A resumed arm no longer re-buys the official scores it already paid
+  for.** Official scoring is a provider call per run and ran
+  unconditionally on every invocation, so resuming a stage re-scored every
+  run of every already-reported arm purely to rebuild a report the
+  manifest could have answered — a second charge that was invisible in the
+  result, since the rebuilt report looked identical either way. Each run's
+  score is now recorded in `official_scores` the first time it is bought,
+  and a fully reported arm rebuilds from the manifest issuing zero scorer
+  calls.
+- **A study's minibatch design reaches the runs it describes.** The
+  pre-registration hashed `minibatch_by_arm`, but `ArmRecord` had nowhere
+  to carry it, so `spec_from_manifest` rebuilt every arm unbatched: a
+  manifest-driven MIPROv2 study could pin a batch size, validate its own
+  design hash, and then evaluate every trial on the whole valset. The arm
+  record now carries `minibatch`/`minibatch_size`, they round-trip through
+  the rebuilt spec, and an arm record disagreeing with the pinned
+  `minibatch_by_arm` is refused as a pre-registration violation — the same
+  class of check as the train/val split.
+- **The recorded `seed` says what is actually on the wire.** The manifest
+  recorded the statically bound seed control, which is unset, so
+  `provider_calls[].seed` read `provider default` — telling a reader the
+  provider chose the seed. The opposite is true: whetstone's eval contract
+  puts a derived seed on every call via `derive_rng_seed(task_hash,
+  seed_index)` and refuses a definition that cannot transport it. The
+  field now records `derived per call (eval contract)`. `reasoning`,
+  `temperature`, and `top_p` remain truthfully `provider default`.
+- **null-A no longer flattens the template it controls for.** The
+  perturber split the seed on whitespace and rejoined its tokens with
+  single spaces, so every draft it produced lost the template's entire
+  layout. On the real c19 seed that is six newlines and two blank lines
+  holding the grid, the action list, and the question apart — destroyed on
+  every seed, in every draft. The control was therefore running a
+  structurally degraded prompt no real arm ever ran, which would have made
+  a null-A delta partly a measurement of formatting damage rather than of
+  selection on noise. The perturber now holds the whitespace runs aside
+  and lays them back down unchanged, editing wording only: the output's
+  whitespace runs are exactly the input's, and character similarity to the
+  real seed rises from 0.854 to 0.910 on average (the collapsed layout put
+  a 0.85 ceiling on a template no token had yet moved in).
+
 - **A report's scores are checked by the family that produced them.** The
   `EvalReport` schema re-derives every scored observation to validate it,
   but re-derived it as normalized exact match — a c19 rule wearing a
@@ -160,8 +231,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reported as the known, accepted risk. It now additionally requires no
   accepted candidates, no retained candidate, and the mutation-diff message.
   whetstone-ai 0.1.9 (#138) treats a seed-identical selection as
-  `seed_retained`, so this skip becomes unnecessary once the envs pin moves
-  to 0.1.9/0.1.10.
+  `seed_retained`, so this skip became unnecessary when the envs pin moved
+  to 0.1.10, and it is deleted below.
 
 - **The ladder's tripwire exception is scoped to ladder-only sessions.** A
   mixed `-m ""` session that collected rungs alongside ordinary tests
@@ -280,6 +351,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   run count, or place in the correction family. Stage 0 stays permissive
   there, because adding an arm and re-pinning is exactly how
   `stage0 --replace-design` records an amendment.
+
+### Fixed
+
+- **The reporting pass's spend is ledgered, so a stage total is the whole
+  bill.** Official-selection scoring, the held-out evaluations, and the
+  anchors' re-measurement reach the provider through the evaluation engine
+  outside any optimizer run, so neither the run fold nor Stage 0's evidence
+  route could see them — and those are the calls every efficacy claim is
+  finally made against. `RoleScorer` now prices each evaluation from its
+  own persisted rows as it issues it, through `study/spend.py`'s row-derived
+  aggregation: one record per role per evaluation, each citing the evidence
+  it was derived from, collected by `ReportSpendLedger` and folded onto the
+  stage's `StageRecord.spend` once the pass is done. It is merged onto the
+  arms' row rather than replacing it — the two are separate bills for one
+  stage — and the fold re-applies the honesty rules, so one unpriced
+  reporting evaluation withholds the role's whole `usd`. A fake-transport
+  stage is skipped, as everywhere else: its rows would total to a bill
+  nobody owes.
+- **The standalone eval path publishes what it spent.** `run_c19_evaluation`
+  wrote `eval-report.json` and `runtime.sqlite` and no cost document at all,
+  so a held-out evaluation spent real money that no artifact recorded.
+  `EvalReport` gains a `spend` block (schema `v2`) projected from the
+  evaluation's own persisted rows, and `whetstone-eval` writes a `cost.json`
+  beside the report in the same shape optimizer runs publish. Only the task
+  model appears — an evaluation runs no proposer, and an all-zero proposer
+  row would claim it measured one and found it free — and an evaluation that
+  evidenced no provider call publishes neither block rather than a zero.
+  The read path is strict on the current version, so `eval_report/v1`
+  reports are not loadable by this release; existing ones remain on disk as
+  historical artifacts rather than being migrated or read.
+
+### Fixed
+
+- **The study's null-A arm runs a real optimizer, so the selection control
+  is real.** `StudyOptimizerRunner._run_null` handled both nulls and
+  bypassed the runner entirely: null-A evaluated nothing, recorded
+  `observed_task_calls=0` and `spend=()`, pointed all three of its evidence
+  refs at one synthesized record, and its "perturbation" was a
+  `(variant N)` suffix on the naive template rather than the protocol's
+  placeholder-preserving perturbation. An arm that never evaluated cannot
+  control for selection-on-noise, because no selection happened — so a
+  study's headline null-A comparison was against a stub. Null-A now
+  dispatches `run_optimizer(optimizer="null-random", …)` like every other
+  arm: COPRO's search shape with an uninformative proposer, evaluating on
+  the internal split, spending the same proposal budget, and leaving a run
+  directory, a result, a passing audit, and priced cost rows. Its arm-stage
+  spend folds into `StageRecord.spend` the way every other arm's does, and
+  a recorded null-A resumes by re-reading its run rather than by
+  re-synthesizing a template no evaluation ranked. `whetstone-study plan`
+  already priced it at COPRO's shape; that estimate is now what the arm
+  costs rather than a mis-estimate of a stub. Null-B is unchanged and still
+  runs no optimizer — it proposes nothing, so there is no search to drive —
+  and `null_random_template` is deleted with the path that used it.
+
+### Changed
+
+- **`--miprov2-minibatch` requires `--miprov2-minibatch-size`.** Left
+  unset the batch resolved to the whole validation split, so minibatching
+  was on in name only — and the run's `mipro_minibatch_sizing` invariant
+  then FAILed the audit of a run that had already spent. The combination is
+  refused at pure spec validation, in a message naming both flags, so the
+  same finding is free.
+- **The Codex agent model is pre-registered design, not a runner default.**
+  `manifest.models.codex_agent_model` had no production writer and nothing
+  read it: the stage guard resolved the agent through the *runner's*
+  `CODEX_DEFAULT_AGENT_MODEL`, so whatever that constant said silently
+  became the study's proposer. A study declaring the Codex arm now names
+  its agent in the hand-authored `models` block, `StudySpec` carries it,
+  and `require_pinned_codex_agent_model` refuses a stage whose resolved
+  control disagrees with a `PreRegistrationViolationError` — the same class
+  of refusal an unregistered split gets, because running an unregistered
+  proposer is the same error. `CODEX_DEFAULT_AGENT_MODEL` keeps its job:
+  the default for a single run nobody pre-registered. A study that declares
+  no Codex arm pins nothing, and a pin without an arm is refused too.
+
+### Added
+
+- **The manifest records the effective provider call config** (schema `v8`).
+  `models` named which model a study meant to run and `stages` named which
+  transport it ran on, but nothing recorded what the transport actually
+  bound — the resolved route and the request controls — so neither the
+  spend model nor the claim that two stages ran "the same experiment" was
+  auditable from the manifest. `models.provider_calls` now carries one
+  `ProviderCallRecord` per transport a stage has bound, read off the
+  prepared experiment rather than off the argument (on the fake transport
+  that argument is `None` and the effective config is the reference default
+  the experiment builds for itself), and the report's design section prints
+  it. Recorded, not hashed: it is a property of the invocation like the
+  transport, so two studies of one design still pre-register identically.
+  Every control appears whether or not the study set one —
+  `"provider default"` is a real and consequential state, and it is why the
+  toy Stage 0 billed thousands of reasoning tokens per call. **No
+  reasoning-effort knob is added**: whether the design pins one is an open
+  decision, and a settable field would answer it by accident.
+- **A MIPROv2 arm's minibatch size is a pre-registered design field.**
+  `ArmSpec` gains `miprov2_minibatch`/`miprov2_minibatch_size`, which
+  travel together — on without a size is refused at the design level for
+  the reason the runner refuses it — and the size enters the
+  pre-registration's hashed payload as `minibatch_by_arm`, alongside
+  `split_by_arm`. An arm that scored every trial on the whole valset and
+  one that scored on a sampled batch bought different evidence for the same
+  claim, so two designs differing only in the batch size now pin
+  differently.
+
+### Added
+
+- **A Stage-1 MIPROv2 arm cannot silently take the shape that crashed.**
+  `num_candidates < 3` with minibatching is refused at spec validation,
+  pointing at whetstone-ai #137, **unless** the installed whetstone-ai is
+  at least 0.1.9 — the release whose `select_promotion` degrades to DSPy's
+  own behaviour instead of raising `No valid program found in
+  param_score_dict` inside the durable run boundary. The gate is a floor,
+  not the pin: this repo pins 0.1.10, which is above it, so the refusal only
+  re-arms on a downgrade. An absent or unrankable version reads as unfixed
+  and keeps the refusal, because the uncertain case should cost a validation
+  error rather than a run that dies mid-flight.
+
+### Changed
+
+- **Pins published whetstone-ai 0.1.10.** Three upstream fixes matter here.
+  [#138] (0.1.9) records a seed-identical selection as `seed_retained`
+  rather than a `codex_selection_contract` violation, so the real-Codex
+  ladder's seed-preference live-skip is gone: an agent that decides the seed
+  wins no longer decides whether a rung is observed. [#137] (0.1.9) gives
+  MIPROv2 a spent-combination fallback, so `num_candidates=2` with
+  minibatching no longer raises `No valid program found in
+  param_score_dict` inside the durable run boundary. [#140] (0.1.10)
+  redirects the Codex agent's `HOME` to a per-run scratch directory and
+  quotes the CLI's own stdout error items in failure messages — the envs
+  rung-9 "skills" failure had hidden a 401 behind a message that named
+  neither.
+
+[#137]: https://github.com/danielle-rothermel/whetstone-ai/pull/137
+[#138]: https://github.com/danielle-rothermel/whetstone-ai/pull/138
+[#140]: https://github.com/danielle-rothermel/whetstone-ai/pull/140
 
 ### Security
 

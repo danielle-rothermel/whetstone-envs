@@ -18,12 +18,18 @@ optimizer runner:
 named transport and passes it straight to ``RunSpec``; nothing here reaches a
 provider by default, and the fake path is fully operational end to end.
 
-**Nulls run no optimizer.** ``null-identity`` returns the naive anchor
-unchanged and ``null-random`` perturbs it through the family's own render
-contract. Both still produce a real run record, a real audit verdict, and a
-real held-out measurement through the identical procedure -- that is the
-whole point of a control -- so they are built here beside the optimizers
-rather than special-cased inside the stage harness.
+**The two nulls are controls for different things, so they run
+differently.** ``null-random`` (null-A) controls for *selection*: it is
+COPRO's search shape with an uninformative proposer, so it goes through
+:func:`~whetstone_envs.optim.run.run_optimizer` like any other arm --
+evaluating candidates on the internal split, spending the same proposal
+budget, and leaving the same result, audit, and cost evidence. An arm that
+never evaluated could not control for selection-on-noise, because no
+selection would have happened. ``null-identity`` (null-B) controls for
+*pipeline overhead*: it proposes nothing, so there is no search to drive,
+and its whole evidence is the seed measured through the report harness.
+Both still produce a run record, an audit verdict, and a held-out number
+through the identical procedure -- that is the whole point of a control.
 """
 
 from __future__ import annotations
@@ -43,6 +49,10 @@ from whetstone.optim.contracts import OptimResult
 from whetstone_envs.optim.audit.registry import audit_run
 from whetstone_envs.optim.audit.schema import AUDIT_REPORT_SCHEMA
 from whetstone_envs.optim.families import family_spec
+from whetstone_envs.optim.nulls import (
+    NULL_IDENTITY_OPTIMIZER,
+    NULL_RANDOM_OPTIMIZER,
+)
 from whetstone_envs.optim.run import RunSpec, run_optimizer
 from whetstone_envs.optim.run_cost import (
     RUN_COST_SCHEMA_NAME,
@@ -61,6 +71,7 @@ from whetstone_envs.optim.study.selection import (
     HeldOutMeasurement,
     RunCandidate,
 )
+from whetstone_envs.optim.study.spend import ReportSpendLedger
 from whetstone_envs.optim.study.stages import ArmRunResult, StageError
 from whetstone_envs.reporting.publication import TRAJECTORY_REPORT_NAME
 
@@ -77,20 +88,30 @@ __all__ = [
     "RoleScorer",
     "StudyOptimizerRunner",
     "arm_run_directory",
-    "null_random_template",
 ]
 
-#: The two controls, named where they are dispatched on. They are arm ids
-#: and optimizer names at once, because a null is defined by what it does
-#: rather than by an optimizer that implements it.
-NULL_IDENTITY_OPTIMIZER = "null-identity"
-NULL_RANDOM_OPTIMIZER = "null-random"
+#: The two controls, re-exported from the transports that define them.
+#: They are arm ids and optimizer names at once, because a null is defined
+#: by what it does rather than by an optimizer that implements it -- so
+#: :mod:`whetstone_envs.optim.nulls` owns the names, and this module
+#: dispatches on them rather than restating them. Two copies of a
+#: persisted arm id is one rename away from a study that dispatches an arm
+#: it cannot then find.
 
 #: The arms whose runs go through the shared optimizer runner. Anything
-#: outside this set and the two nulls is refused rather than silently
-#: dispatched, so a new arm id cannot quietly run as a control.
+#: outside this set and null-B is refused rather than silently dispatched,
+#: so a new arm id cannot quietly run as a control.
+#:
+#: **Null-A is in here**, and that is the point of the control. It is
+#: COPRO's search shape with an uninformative proposer, so it evaluates
+#: candidates on the internal split, spends the same proposal budget,
+#: fills the same slots, and leaves the same evidence -- a result, an
+#: audit, priced cost rows -- as the arm it controls for. A null-A that
+#: synthesized its record instead would evaluate nothing, and
+#: selection-on-noise cannot be controlled for by an arm that never
+#: selects.
 OPTIMIZER_ARM_IDS: frozenset[str] = frozenset(
-    {"copro", "miprov2", "gepa", "codex"}
+    {"copro", "miprov2", "gepa", "codex", NULL_RANDOM_OPTIMIZER}
 )
 
 #: Where a study keeps the run directories its arms produce. One directory
@@ -144,6 +165,18 @@ class RoleScorer:
     task_ids: tuple[str, ...]
     num_seeds: int
     build_candidate: BuildCandidate
+    #: Where this scorer's evaluations are priced.
+    #:
+    #: A reporting evaluation reaches the provider outside any optimizer
+    #: run, so neither the run fold nor the stage's own evidence route can
+    #: see it -- and these are the calls every efficacy claim is finally
+    #: made against. Each evaluation appends one record per role, projected
+    #: from its own persisted rows, and the stage folds what accumulated
+    #: into its row once the reporting pass is done.
+    #:
+    #: ``None`` on a caller that supplies its own collaborators, which
+    #: collects nothing rather than pricing evidence it cannot read back.
+    spend_ledger: ReportSpendLedger | None = None
 
     def evidence_for(
         self, *, candidate_name: str, template: str, purpose: str
@@ -153,6 +186,10 @@ class RoleScorer:
         Returns the persisted evidence rather than a scalar, because every
         caller needs the per-task vector and the row accounting: a mean
         without its completeness cannot be judged against the backstop.
+
+        The evaluation is priced here, at the one place every reporting
+        evaluation passes through, so a new caller cannot reach the
+        provider without its call being ledgered.
         """
         engine = self.bind_engine(role=self.role, num_seeds=self.num_seeds)
         subset = engine.for_task_ids(self.task_ids)
@@ -172,6 +209,12 @@ class RoleScorer:
                 f"candidate {candidate_name!r} produced no successful "
                 f"evaluation on the {self.role.value} split: "
                 f"{type(evidence).__name__}"
+            )
+        if self.spend_ledger is not None:
+            self.spend_ledger.record(
+                evidence=evidence,
+                purpose=purpose,
+                candidate_name=candidate_name,
             )
         return evidence
 
@@ -287,21 +330,6 @@ class BuildCandidate:
         )
 
 
-def null_random_template(*, naive_template: str, seed: int) -> str:
-    """A null-A perturbation of the naive prompt, seeded and reproducible.
-
-    Null-A asks what best-on-official selection produces when the
-    "optimizer" contributes nothing but variation, so the perturbation must
-    change the prompt's surface without changing what it asks for. Reordering
-    nothing and appending a seeded, meaning-free suffix does exactly that,
-    and it keeps the family's placeholders untouched, so the render contract
-    still validates it.
-    """
-    # A deterministic, meaning-free suffix: the same seed always produces
-    # the same prompt, which is what makes a null run reproducible.
-    return f"{naive_template}\n\n(variant {seed})"
-
-
 @dataclass(frozen=True, slots=True)
 class StudyOptimizerRunner:
     """Run one arm at one seed and record what it produced.
@@ -362,7 +390,10 @@ class StudyOptimizerRunner:
     ) -> ArmRunResult:
         run_id = _run_id_for(arm, seed)
         run_dir = arm_run_directory(study_dir, run_id)
-        if arm.optimizer in {NULL_IDENTITY_OPTIMIZER, NULL_RANDOM_OPTIMIZER}:
+        if arm.optimizer == NULL_IDENTITY_OPTIMIZER:
+            # Null-B proposes nothing, so there is no search to drive and
+            # no optimizer-fidelity invariant to audit. Its whole evidence
+            # is the seed evaluated through the report harness.
             return self._run_null(arm=arm, seed=seed, run_id=run_id)
         if arm.optimizer not in OPTIMIZER_ARM_IDS:
             known = sorted(OPTIMIZER_ARM_IDS)
@@ -476,7 +507,7 @@ class StudyOptimizerRunner:
             # for, so a seedless record cannot be matched to one of this
             # stage's seeds. Reporting it as unloadable beats guessing.
             return None
-        if arm.optimizer in {NULL_IDENTITY_OPTIMIZER, NULL_RANDOM_OPTIMIZER}:
+        if arm.optimizer == NULL_IDENTITY_OPTIMIZER:
             return self._run_null(arm=arm, seed=run.seed, run_id=run.run_id)
         run_dir = Path(run.artifact_dir)
         if not (run_dir / "result.json").is_file():
@@ -502,6 +533,10 @@ class StudyOptimizerRunner:
                 if arm.demo_mode is not None
                 else {}
             ),
+            # Forwarded only when the arm turns it on, so an arm that does
+            # not keeps the runner's own default rather than pinning the
+            # same false here twice.
+            **({"miprov2_minibatch": True} if arm.miprov2_minibatch else {}),
             # Only forwarded when the arm sets them, so an unset arm keeps
             # the runner's own default rather than pinning it here twice.
             **{
@@ -509,6 +544,10 @@ class StudyOptimizerRunner:
                 for field, value in (
                     ("miprov2_num_trials", arm.miprov2_num_trials),
                     ("miprov2_num_candidates", arm.miprov2_num_candidates),
+                    (
+                        "miprov2_minibatch_size",
+                        arm.miprov2_minibatch_size,
+                    ),
                     ("train_size", arm.train_size),
                     ("val_size", arm.val_size),
                 )
@@ -591,22 +630,25 @@ class StudyOptimizerRunner:
     def _run_null(
         self, *, arm: ArmSpec, seed: int, run_id: str
     ) -> ArmRunResult:
-        """A control's run: a candidate, an honest record, no optimizer.
+        """Null-B's run: the seed candidate, an honest record, no optimizer.
 
-        A null runs no search, so there is no optimizer result to audit and
-        nothing an optimizer-fidelity invariant could be asked about. The
-        record says so rather than borrowing an optimizer's evidence: its
-        pointers address a purpose-built control record in the study's own
-        store, and ``audit_passed`` is true because the control did exactly
-        what a control is defined to do.
+        Null-B proposes nothing, so there is no search to drive, no
+        optimizer result to audit, and nothing an optimizer-fidelity
+        invariant could be asked about. The record says so rather than
+        borrowing an optimizer's evidence: its pointers address a
+        purpose-built control record in the study's own store, and
+        ``audit_passed`` is true because the control did exactly what a
+        control is defined to do. What null-B costs is the *report
+        harness*, which measures the seed on official and held-out like
+        every other arm.
+
+        **Null-A does not come here.** It is a real run through
+        :func:`~whetstone_envs.optim.run.run_optimizer` -- COPRO's search
+        shape with an uninformative proposer -- because the thing it
+        controls for is selection, and an arm that evaluates nothing
+        selects nothing.
         """
-        template = (
-            self.naive_template
-            if arm.optimizer == NULL_IDENTITY_OPTIMIZER
-            else null_random_template(
-                naive_template=self.naive_template, seed=seed
-            )
-        )
+        template = self.naive_template
         record = {
             "schema_version": 1,
             "run_id": run_id,

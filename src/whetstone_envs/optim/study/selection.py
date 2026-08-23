@@ -35,6 +35,7 @@ from whetstone.eval.analysis import bootstrap_paired_delta_ci, holm_adjust
 from whetstone_envs.optim.study.manifest import (
     CORRECTION_FAMILY_SIZE,
     SELECTION_RULE_ARGMAX_OFFICIAL,
+    OfficialScoreEntry,
     StageId,
     read_study_manifest,
     write_study_manifest,
@@ -656,10 +657,15 @@ class ManifestSelectionLog:
     """
 
     def __init__(
-        self, study_dir: Path, *, stage: str = DEFAULT_SELECTION_STAGE
+        self,
+        study_dir: Path,
+        *,
+        stage: str = DEFAULT_SELECTION_STAGE,
+        transport: str,
     ) -> None:
         self._study_dir = study_dir
         self._stage = stage
+        self._transport = transport
 
     @property
     def study_dir(self) -> Path:
@@ -670,6 +676,17 @@ class ManifestSelectionLog:
     def stage(self) -> str:
         """The stage whose selections and claims this ledger owns."""
         return self._stage
+
+    @property
+    def transport(self) -> str:
+        """The transport this stage's measurements are bought on.
+
+        Carried because a score is evidence about a run *on a transport*,
+        and run ids are deterministic: without it the read-back cannot
+        tell this stage's own measurement from one a re-calibrated study
+        made somewhere else under the same name.
+        """
+        return self._transport
 
     def _read(self) -> StudyManifest:
         return read_study_manifest(self._study_dir)
@@ -827,6 +844,101 @@ class ManifestSelectionLog:
             for entry in self._read().held_out_claims
             if entry.candidate_name == candidate_name
             and entry.stage == self._stage
+        )
+
+    def official_score_for(self, run_id: str) -> CandidateScore | None:
+        """The official score this run already bought, if it bought one.
+
+        Official scoring is a provider call per run, and it is the one
+        reporting cost that was previously re-paid on every resume: an
+        already-reported arm was re-scored in full purely to rebuild a
+        report the manifest could answer from. Reading the score back is
+        what makes a resume free.
+
+        **The transport is part of the match.** Run ids are deterministic,
+        so a study re-calibrated onto another transport recomputes the
+        same names; a score measured on the transport it left would
+        otherwise be read back here and presented as this stage's
+        selection evidence. The amendment drops those entries outright --
+        this is what holds if one ever reaches the manifest by another
+        route.
+        """
+        for entry in self._read().official_scores:
+            if (
+                entry.run_id == run_id
+                and entry.stage == self._stage
+                and entry.transport == self._transport
+            ):
+                return CandidateScore(
+                    run_id=entry.run_id,
+                    score=entry.score,
+                    per_task=entry.per_task,
+                    eval_config_hash=entry.eval_config_hash,
+                    completeness=entry.completeness,
+                )
+        return None
+
+    def record_official_score(
+        self, *, arm_id: str, score: CandidateScore
+    ) -> None:
+        """Persist one run's official score the first time it is bought.
+
+        Idempotent by ``(run_id, stage)``: a re-record of a score already
+        on disk is the resume path restating what it read, and rewriting
+        it would churn the manifest without changing it. A *disagreeing*
+        re-record is refused, because two different scores for one run
+        would leave the arg-max unable to say which one it selected on.
+
+        A score this stage cannot read back because it was measured on
+        another transport is refused rather than written beside: the
+        manifest scores a run once per stage, so the two cannot coexist,
+        and the stale entry is an amendment that did not take its evidence
+        with it.
+        """
+        manifest = self._read()
+        existing = self.official_score_for(score.run_id)
+        if existing is not None:
+            if existing != score:
+                raise SelectionError(
+                    f"run {score.run_id!r} already recorded a different "
+                    f"official score at {self._stage}; a run is scored "
+                    "once per stage"
+                )
+            return
+        stale = next(
+            (
+                entry
+                for entry in manifest.official_scores
+                if entry.run_id == score.run_id and entry.stage == self._stage
+            ),
+            None,
+        )
+        if stale is not None:
+            raise SelectionError(
+                f"run {score.run_id!r} already recorded an official score "
+                f"at {self._stage} measured on transport "
+                f"{stale.transport!r}, and this stage is running on "
+                f"{self._transport!r}; a run is scored once per stage, so "
+                "the stale measurement is removed before it is re-bought"
+            )
+        self._write(
+            manifest.model_copy(
+                update={
+                    "official_scores": (
+                        *manifest.official_scores,
+                        OfficialScoreEntry(
+                            run_id=score.run_id,
+                            arm_id=arm_id,
+                            stage=self._stage,
+                            transport=self._transport,
+                            score=score.score,
+                            eval_config_hash=score.eval_config_hash,
+                            completeness=score.completeness,
+                            per_task=score.per_task,
+                        ),
+                    )
+                }
+            )
         )
 
     def _claim_index(self, manifest: StudyManifest, name: str) -> int | None:

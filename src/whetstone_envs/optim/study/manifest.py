@@ -45,6 +45,10 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    validate_provider_concurrency,
+)
 from whetstone_envs.optim.split import MIN_COPRO_BREADTH, MIN_COPRO_DEPTH
 from whetstone_envs.reporting.publication import validate_output_root
 
@@ -545,6 +549,22 @@ class ProviderCallRecord(_StrictModel):
     reasoning: StrictStr
     seed: StrictStr
     extensions: StrictStr
+    #: The execution settings this transport was bound with, as text.
+    #:
+    #: Recorded for the same reason the controls above are: they are
+    #: properties of the invocation rather than of the design, they are
+    #: not hashed, and they are the difference between two stages whose
+    #: numbers look alike and whose runs did not. A stage that lost rows
+    #: to timeouts at 30 s and one that did not lose them at 300 s are
+    #: different evidence about the provider, and nothing else in the
+    #: manifest says which was in force.
+    #:
+    #: Defaulted so records written before these fields existed still
+    #: load; the defaults name whetstone's own values, which is what
+    #: those earlier records in fact ran under.
+    timeout_seconds: StrictStr = "30.0"
+    max_attempts: StrictStr = "3"
+    retry_backoff: StrictStr = PROVIDER_CONTROL_UNSET
 
     @model_validator(mode="after")
     def _validate_provider_call(self) -> ProviderCallRecord:
@@ -559,6 +579,9 @@ class ProviderCallRecord(_StrictModel):
             self.reasoning,
             self.seed,
             self.extensions,
+            self.timeout_seconds,
+            self.max_attempts,
+            self.retry_backoff,
         )
         if any(not value.strip() for value in values):
             raise ValueError(
@@ -1689,11 +1712,33 @@ class StageRecord(_StrictModel):
 
     stage: StrictStr
     transport: StrictStr
+    #: How many task evaluations this stage ran against the provider at
+    #: once.
+    #:
+    #: An invocation property of exactly the same kind as ``transport``:
+    #: it changes how long the stage took and how hard it leaned on the
+    #: provider, not what the stage was designed to measure, so it is
+    #: recorded here and never enters the pre-registration hash. Two
+    #: studies that differ only in it pre-register identically.
+    #:
+    #: It is recorded rather than merely used because a stage's wall time
+    #: and its rate-limit and timeout failures are only interpretable
+    #: against the width it ran at -- a stage that retried under load at
+    #: 64 and a clean stage at 5 are different evidence about the
+    #: provider, and nothing else in the manifest says which one happened.
+    #:
+    #: Defaulted rather than required so that stage records written before
+    #: this field existed still load, reporting the width they in fact ran
+    #: at: that historical default is the point of pinning
+    #: :data:`~whetstone_envs.optim.provider.DEFAULT_PROVIDER_CONCURRENCY`
+    #: as a literal instead of tracking the dependency's.
+    provider_concurrency: StrictInt = DEFAULT_PROVIDER_CONCURRENCY
     spend: tuple[RunSpendRecord, ...] = ()
     report_spend: tuple[RunSpendRecord, ...] = ()
 
     @model_validator(mode="after")
     def _validate_stage(self) -> StageRecord:
+        validate_provider_concurrency(self.provider_concurrency)
         if self.stage not in STAGE_IDS:
             raise ValueError(
                 f"a stage record names one of {list(STAGE_IDS)}, "

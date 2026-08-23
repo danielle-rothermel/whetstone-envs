@@ -56,6 +56,7 @@ revision 1 said something different.
 | 15 | null-A | bypassed the runner → **routed through the ordinary runner with COPRO's shape** | note 25b |
 | 16 | §6 Codex evidence | unbounded → **one real Codex-direct run**, artifacts historical evidence only | note 20 |
 | 17 | L1's mechanical form | "the internal Eval Config ref" → **the evaluated task set is contained in the internal split**, checked on all three evaluation surfaces | this revision (2026-08-23), §3.2 |
+| 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**: present rows are aggregated and the shortfall shows up as reduced completeness, backstopped at the same 90% §3.9 already pre-registers. Paid transports additionally retry transient failures (429/5xx/timeout, 5 attempts, 2–32 s exponential backoff with jitter, `Retry-After` honoured) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. | this revision (2026-08-23), §3.9 and O7 |
 
 **On item 8.** Revision 1 derived per-mode trial counts from DSPy's
 `_recommended_num_trials(component_count=1, searches_demos, n)` at `n = 6`
@@ -638,6 +639,25 @@ candidate.
   rate-limit exhaustion, executor crash) is re-run **at the same seed on a new
   `run_id`**, and both runs are recorded; the failed run's artifacts are kept.
   A run that fails on an algorithm error is a finding, not a retry.
+- **Row-level transient failures** are handled *below* the run-level rule
+  above, so an isolated provider hiccup never escalates into a re-run. On a
+  paid transport each task call is attempted up to **5 times**, with
+  exponential backoff of **2 s → 32 s** plus jitter, honouring the provider's
+  `Retry-After` where it gives one; 429s, transient 5xx, and timeouts are
+  retried, and permanent rejections are not. The per-call timeout is **300 s**,
+  set from the measured completion-token distribution (median ≈4.5k, max
+  ≈12.3k) rather than the 30 s default, which a reasoning-token call routinely
+  outruns.
+- **Rows that fail anyway reduce completeness; they do not void the
+  evaluation.** Aggregation runs with `missing_data="skip"` and
+  `max_skip_fraction = 0.10`: the present rows are averaged and the shortfall
+  is reported through the per-task achieved counts the analysis already weights
+  by (§8, O7). Beyond that fraction the aggregate returns to `None` and the
+  evaluation refuses to report a number, so the tolerance is a floor against
+  losing a whole evaluation to one bad row — not permission to average a
+  biased subset. The 10% bound is the complement of the 90% completeness
+  backstop this section already pre-registers, so there is one threshold
+  rather than two.
 - **Never resume a partial run.** Recorded memory: clean reruns over stale
   partials — never resume or repair pre-stabilization partial experiment runs.
 - **No mid-run design changes.** Per `1756`'s execution rules, the only

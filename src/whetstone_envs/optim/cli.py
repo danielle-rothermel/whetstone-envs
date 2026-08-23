@@ -5,6 +5,13 @@ import sys
 import traceback
 from pathlib import Path
 
+from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    MAX_UNFORCED_PROVIDER_CONCURRENCY,
+    PROVIDER_CONCURRENCY_FLAG,
+    PROVIDER_CONCURRENCY_FORCE_FLAG,
+    resolve_provider_concurrency,
+)
 from whetstone_envs.optim.run import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
@@ -121,6 +128,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--transport",
         choices=TRANSPORTS,
         default="fake",
+    )
+    parser.add_argument(
+        PROVIDER_CONCURRENCY_FLAG,
+        type=int,
+        default=DEFAULT_PROVIDER_CONCURRENCY,
+        metavar="N",
+        help=(
+            "How many task evaluations run against the provider at once. "
+            f"Defaults to {DEFAULT_PROVIDER_CONCURRENCY}. Sets both the "
+            "evaluation worker pool and the HTTP connection pool; it "
+            "changes how long the run takes, never what it computes. "
+            f"Above {MAX_UNFORCED_PROVIDER_CONCURRENCY} it is refused "
+            f"unless {PROVIDER_CONCURRENCY_FORCE_FLAG} is also passed."
+        ),
+    )
+    parser.add_argument(
+        PROVIDER_CONCURRENCY_FORCE_FLAG,
+        action="store_true",
+        help=(
+            "Authorize a provider concurrency above the sanity cap of "
+            f"{MAX_UNFORCED_PROVIDER_CONCURRENCY}."
+        ),
     )
     parser.add_argument(
         "--split-sizes",
@@ -331,6 +360,10 @@ def main(argv: list[str] | None = None) -> int:
             RunSpec(
                 optimizer=arguments.optimizer,
                 transport=arguments.transport,
+                provider_concurrency=resolve_provider_concurrency(
+                    arguments.provider_concurrency,
+                    force=arguments.force_provider_concurrency,
+                ),
                 family=arguments.family,
                 split_sizes=arguments.split_sizes,
                 output_dir=output,

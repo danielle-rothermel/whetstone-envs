@@ -6,12 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- The release workflow's validate jobs allow 30 minutes: the 3.13 and 3.14 legs
-  take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
-  before it could publish (v0.2.3 is tagged but not on PyPI).
-
 ### Added
+
+- **Provider concurrency is an explicit, recorded operator setting.**
+  `whetstone-study run --provider-concurrency N` (and the single-run CLI's
+  flag of the same name) sets how many task evaluations run against the
+  provider at once. It reaches both bounds that matter -- the evaluation
+  engine's worker pool and the HTTP client's connection pool, which is
+  widened to match so workers are not queued behind sockets -- and is
+  written onto the stage record. It is an invocation property like the
+  transport: it changes how long a stage takes, never what it measures, so
+  it does not enter the pre-registration hash. Previously nothing named
+  it and every stage ran at whetstone's default of 5 in-flight calls,
+  which at 20-30 s per reasoning-model call is 10-15 rows/minute.
+  `plan` and `run` print the width beside the transport. Values below 1
+  are refused, and values above 64 are refused unless
+  `--force-provider-concurrency` is passed -- OpenRouter publishes no
+  per-account concurrency limit for paid models, so that cap is this
+  package's own prudence rather than a quoted provider limit.
 
 - **Each run records the repeat count its search actually ran at, and the
   study refuses one that disagrees with `K_REPEAT`.** The per-optimizer
@@ -28,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   evaluations' own `EvalEvidence.num_seeds` for COPRO, null-A, and Codex,
   which record no such scalar and inherit the bound engine's sampling
   whole. `None` on null-identity, which runs no optimizer.
+
+### Fixed
+- The release workflow's validate jobs allow 30 minutes: the 3.13 and 3.14 legs
+  take just over 15 on `ubuntu-latest`, so the v0.2.3 tag's run was cancelled
+  before it could publish (v0.2.3 is tagged but not on PyPI).
+
 - **The arm stage refuses on both sides of the dispatch.** Before any arm
   runs it refuses a stage whose bound engine would not sample at the
   design's `K_REPEAT` -- structural, and free, because binding issues no
@@ -44,6 +62,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   rather than renumbering the rules, which would silently redefine what an
   already-recorded `leakage_check` block claims, and its verdict is
   recorded in the manifest and printed by the report.
+
+- **A single rate-limited row no longer voids a whole paid evaluation.**
+  The live Stage 0 evaluated 352 rows, lost exactly one to an unretried
+  429, and aborted -- discarding 351 good rows and the money spent on
+  them. Two independent causes, both fixed:
+  - *Retries never waited.* `ProviderExecutionPolicy` already classified
+    rate limits as retryable and already computed a backoff, but the
+    delay is applied through an injected `sleep` that the evaluation path
+    never supplies, so all three attempts fired within microseconds.
+    Paid transports are now wrapped in a `RetryingTransport` that waits:
+    5 attempts, 2-32 s exponential backoff with jitter, honouring the
+    provider's `Retry-After` (bounded at 120 s). Transient 5xx and
+    timeouts retry on the same terms; permanent rejections still do not.
+  - *One missing row poisoned the aggregate.* Aggregation ran with
+    `missing_data="propagate"`, so a single absent row set the mean to
+    `None`, which made the reward term missing, which its `FAIL`
+    missing-data policy then raised on. Aggregation now runs with
+    `missing_data="skip"` and `max_skip_fraction = 0.10`: present rows
+    are averaged and the shortfall is reported as reduced completeness,
+    which the analysis already weights by per-task achieved counts.
+    Beyond that fraction the aggregate returns to `None`, so the
+    tolerance is a floor against losing an evaluation to one bad row, not
+    permission to average a biased subset. The bound is the complement of
+    the 90% completeness backstop §3.9 already pre-registered, so there
+    is one threshold rather than two.
+
+  This changes the reward-policy and eval-config hashes. That is
+  acceptable only because nothing is pinned yet: the live Stage 0 failed
+  before writing `design` or `pre_registration`, and its manifest records
+  no stages. Recorded as item 18 of the protocol document's Revision 2
+  (2026-08-23), with the digest golden and `PROTOCOL_DOC_SHA256`
+  recomputed.
+- **Paid task calls are given a reasoning-sized timeout.** The 30 s
+  default is a chat-completion bound; the live Stage 0 measured a median
+  of 4,466 completion tokens and a maximum of 12,335 per call, which
+  routinely outruns it and turns an ordinary slow call into a billed
+  timeout. Paid transports now use 300 s. The effective timeout, attempt
+  count, and backoff schedule are recorded in the manifest's
+  `provider_calls` block, unhashed, beside the controls already there.
 
 ## [0.2.3] - 2026-08-23
 

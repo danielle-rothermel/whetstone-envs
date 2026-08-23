@@ -34,14 +34,27 @@ from typing import TYPE_CHECKING, cast
 from dr_providers import ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.core.roles import EvalRole
+from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.eval.runtime_engine import (
+    DEFAULT_CONCURRENCY as WHETSTONE_DEFAULT_CONCURRENCY,
+)
+from whetstone.eval.runtime_engine import RuntimeEvalEngine
 
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    RETRY_BASE_SECONDS,
+    RETRY_JITTER_FRACTION,
+    RETRY_MAX_SECONDS,
+    RETRY_MULTIPLIER,
     bind_openrouter_transport,
     fake_gold_by_prompt,
     fake_transport_factory,
+    hardened_execution_policy,
     openrouter_seeded_call_config,
+    validate_provider_concurrency,
+    widened_execution_policy,
 )
 from whetstone_envs.optim.rows import task_rows_from_instances
 from whetstone_envs.optim.study.manifest import (
@@ -66,6 +79,7 @@ if TYPE_CHECKING:
     from dr_store import ObjectStore
     from whetstone.eval.protocol import EvalEngine
     from whetstone.experiment.candidate import Candidate
+    from whetstone.provider.policy import ProviderExecutionPolicy
 
     from whetstone_envs.pools import PoolSplit
 
@@ -77,6 +91,7 @@ __all__ = [
     "STUDY_STORE_NAME",
     "TOY_API_KEY_ENV",
     "anchor_candidates",
+    "assert_default_concurrency_matches",
     "bound_stage_environment",
     "require_transport_credentials",
 ]
@@ -110,6 +125,28 @@ SPLIT_ROLE_BY_EVAL_ROLE: dict[EvalRole, str] = {
 #: held-out rows, so they are owned constants rather than inline strings.
 NAIVE_ANCHOR_NAME = "naive"
 CEILING_ANCHOR_NAME = "ceiling"
+
+
+def assert_default_concurrency_matches() -> None:
+    """Refuse to bind if whetstone's default has moved off ours.
+
+    :data:`~whetstone_envs.optim.provider.DEFAULT_PROVIDER_CONCURRENCY`
+    is persisted identity, so it is a literal rather than an import of
+    whetstone's
+    ``DEFAULT_CONCURRENCY``. That leaves exactly one way for the two to
+    disagree silently -- a dependency bump -- and this is the check that
+    turns that into a loud failure at bind time instead of a stage that
+    records one width and runs at another.
+    """
+    if DEFAULT_PROVIDER_CONCURRENCY != WHETSTONE_DEFAULT_CONCURRENCY:
+        raise RuntimeError(
+            "whetstone's DEFAULT_CONCURRENCY is "
+            f"{WHETSTONE_DEFAULT_CONCURRENCY}, but this package records "
+            f"{DEFAULT_PROVIDER_CONCURRENCY} as the width an invocation "
+            "that names none ran at. Update "
+            "DEFAULT_PROVIDER_CONCURRENCY and confirm what existing "
+            "stage records mean."
+        )
 
 
 def anchor_candidates(family_id: str) -> tuple[Candidate, Candidate]:
@@ -204,7 +241,10 @@ def _control_text(value: object) -> str:
 
 
 def _provider_call_record(
-    *, transport: str, config: ProviderCallConfig
+    *,
+    transport: str,
+    config: ProviderCallConfig,
+    policy: ProviderExecutionPolicy,
 ) -> ProviderCallRecord:
     """The bound config, flattened into the manifest's own record.
 
@@ -240,11 +280,47 @@ def _provider_call_record(
         extensions=json.dumps(
             config.extensions.model_dump(mode="json"), sort_keys=True
         ),
+        # Read off the policy that was actually bound, not off the
+        # constants it was built from: the paid route is hardened and the
+        # fake route is not, and the record must say which one ran.
+        timeout_seconds=repr(policy.transport_policy.timeout_seconds),
+        max_attempts=str(policy.max_attempts),
+        retry_backoff=_retry_backoff_text(policy),
+    )
+
+
+def _retry_backoff_text(policy: ProviderExecutionPolicy) -> str:
+    """The waits between attempts, as the operator would read them.
+
+    Spelled as the actual delay sequence rather than as the schedule's
+    three parameters, because what a reader wants to know is how long a
+    rate-limited row could have been held -- and because the sequence is
+    what makes the retry budget and the timeout comparable at a glance.
+    """
+    if policy.max_attempts <= 1:
+        return "none (single attempt)"
+    schedule = ", ".join(
+        repr(
+            min(
+                RETRY_BASE_SECONDS * RETRY_MULTIPLIER ** (attempt - 1),
+                RETRY_MAX_SECONDS,
+            )
+        )
+        for attempt in range(1, policy.max_attempts)
+    )
+    return (
+        f"exponential {schedule} s "
+        f"(+/-{int(RETRY_JITTER_FRACTION * 100)}% jitter, "
+        "Retry-After honoured)"
     )
 
 
 def _record_provider_call_config(
-    study_dir: Path, *, transport: str, config: ProviderCallConfig
+    study_dir: Path,
+    *,
+    transport: str,
+    config: ProviderCallConfig,
+    policy: ProviderExecutionPolicy,
 ) -> None:
     """Record what this transport actually bound, replacing its entry.
 
@@ -255,7 +331,9 @@ def _record_provider_call_config(
     an ordinary resume does not touch the manifest.
     """
     manifest = read_study_manifest(study_dir)
-    record = _provider_call_record(transport=transport, config=config)
+    record = _provider_call_record(
+        transport=transport, config=config, policy=policy
+    )
     existing = manifest.models.provider_calls
     if record in existing:
         return
@@ -283,6 +361,7 @@ def bound_stage_environment(
     transport: str = FAKE_TRANSPORT,
     allow_real_codex: bool = False,
     discard_stale_runs: bool = False,
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
 ) -> Iterator[StageEnvironment]:
     """Open a study's store and bind one engine per evaluation role.
 
@@ -307,8 +386,20 @@ def bound_stage_environment(
     authorization to discard a run directory whose own artifacts say it is
     not this invocation's run, rather than refusing. It defaults off
     because such a directory may be paid evidence.
+
+    ``provider_concurrency`` is how many task evaluations run against the
+    provider at once. It is an invocation property like the transport --
+    it changes how long the stage takes, not what it measures, and it
+    never enters the pre-registration hash -- but unlike the Codex
+    authorization it is *recorded*, because a stage's wall time and its
+    rate-limit failures are only interpretable against the width it ran
+    at. It reaches both bounds that matter: the engine's worker pool and
+    the HTTP client's connection pool, which is raised to match so the
+    workers are not queued behind sockets.
     """
     require_transport_credentials(transport)
+    validate_provider_concurrency(provider_concurrency)
+    assert_default_concurrency_matches()
     # Imported inside the binder, not at module scope. ``arms`` reaches the
     # shared optimizer runner, which reaches ``optim.run_cost``, which reads
     # this package's ``RunSpendRecord`` -- so a module-level import here
@@ -358,6 +449,37 @@ def bound_stage_environment(
     )
     split = reference.split
     _require_recorded_population(split, manifest.splits)
+    # The policy the engines below will be bound with, derived here so the
+    # manifest records the settings that actually ran rather than the
+    # defaults they were built from. It is rebuilt, not shared, because
+    # the store is not open yet; the two agree by construction because
+    # both apply the same two transforms in the same order to the same
+    # reference config.
+    runtime_config_for_role = {
+        role: ReferenceEvalRuntimeConfig(
+            split_role=SPLIT_ROLE_BY_EVAL_ROLE[role],
+            transport_api_key_env=(
+                OPENROUTER_API_KEY_ENV if paid else TOY_API_KEY_ENV
+            ),
+            **({"provider_kind": ProviderKind.OPENROUTER} if paid else {}),
+        )
+        for role in SPLIT_ROLE_BY_EVAL_ROLE
+    }
+    # The policy every engine and the live transport share. Derived from
+    # the internal role's config because all three roles build the same
+    # policy from the same key and provider kind; binding one and using it
+    # everywhere is what keeps the transport's pool, the engines' worker
+    # counts, and the manifest's record describing a single decision.
+    execution_policy = widened_execution_policy(
+        runtime_config_for_role[EvalRole.INTERNAL].execution_policy,
+        concurrency=provider_concurrency,
+    )
+    if paid:
+        # Only the billed route: the fake transport answers from the
+        # experiment's own gold, so a reasoning-sized timeout and a retry
+        # budget would describe a provider it never reaches -- and would
+        # change the fake path's recorded policy identity for no reason.
+        execution_policy = hardened_execution_policy(execution_policy)
     # Read off the prepared experiment rather than off the argument above:
     # on the fake transport that argument is ``None`` and the effective
     # config is the reference default the experiment builds for itself, so
@@ -367,29 +489,16 @@ def bound_stage_environment(
         study_dir,
         transport=transport,
         config=reference.experiment.rollout_graph.provider_call_config,
+        policy=execution_policy,
     )
     with open_sqlite(str(study_dir / STUDY_STORE_NAME)) as store:
-        runtime_config_for_role = {
-            role: ReferenceEvalRuntimeConfig(
-                split_role=SPLIT_ROLE_BY_EVAL_ROLE[role],
-                transport_api_key_env=(
-                    OPENROUTER_API_KEY_ENV if paid else TOY_API_KEY_ENV
-                ),
-                **({"provider_kind": ProviderKind.OPENROUTER} if paid else {}),
-            )
-            for role in SPLIT_ROLE_BY_EVAL_ROLE
-        }
         # One live transport for the whole stage, not one per engine
         # binding. A stage binds an engine per (role, repeat count) and
         # rebinds on every scored candidate, so a factory that built a
         # fresh HTTP client each time would open one connection pool per
         # evaluation against a provider the study is rate-limited by.
         openrouter_factory = (
-            bind_openrouter_transport(
-                runtime_config_for_role[EvalRole.INTERNAL].execution_policy
-            )[1]
-            if paid
-            else None
+            bind_openrouter_transport(execution_policy)[1] if paid else None
         )
 
         def bind_engine(*, role: EvalRole, num_seeds: int) -> EvalEngine:
@@ -415,13 +524,29 @@ def bound_stage_environment(
                     )
                 )
             )
-            return config.build_engine(
-                cast("ObjectStore", store),
-                experiment=prepared.experiment,
+            # Built here rather than through ``config.build_engine``,
+            # which takes neither a concurrency nor a policy and so always
+            # yields whetstone's default width over the unwidened policy.
+            # This is the same in-process driver that helper assembles for
+            # ``driver_mode="in_process"``, which is the mode every study
+            # config above binds; the study needs the two arguments the
+            # helper does not forward, so it constructs the pair itself
+            # rather than building an engine and discarding it.
+            driver = GraphRolloutEvalDriver(
                 eval_runner=family.eval_runner(),
                 mutation_field=family.mutation_field,
                 render_contract=family.render_contract(),
                 transport_factory=transport_factory,
+            )
+            return RuntimeEvalEngine(
+                store=cast("ObjectStore", store),
+                experiment=prepared.experiment,
+                sampling=prepared.experiment.eval_configs.split_for(
+                    config.split_role
+                ),
+                execution_policy=execution_policy,
+                driver=driver,
+                concurrency=provider_concurrency,
             )
 
         task_ids_by_role = {
@@ -498,6 +623,7 @@ def bound_stage_environment(
             load_recorded_run=runner.load_recorded_run,
             real_codex_authorized=allow_real_codex,
             transport=transport,
+            provider_concurrency=provider_concurrency,
             # The stage's own store, so a stage that evaluates through the
             # engine can price what it evaluated. It is the same connection
             # every engine writes into, which is what makes reading the

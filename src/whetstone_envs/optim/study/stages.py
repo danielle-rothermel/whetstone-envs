@@ -36,6 +36,7 @@ from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate
 
 from whetstone_envs.optim.nulls import NULL_IDENTITY_OPTIMIZER
+from whetstone_envs.optim.provider import DEFAULT_PROVIDER_CONCURRENCY
 from whetstone_envs.optim.study.analysis import (
     AnalysisResult,
     measure_reference_candidates,
@@ -259,6 +260,14 @@ class StageEnvironment:
     #: stage produces is evidence of, so the stage writes it into the
     #: manifest and the cross-stage check reads it back.
     transport: str = TransportName.FAKE.value
+    #: How many task evaluations this invocation runs against the provider
+    #: at once. Recorded for the same reason the transport is: it does not
+    #: change what the stage measures, but a stage's wall time and its
+    #: rate-limit failures are only interpretable against the width it ran
+    #: at. Set by ``whetstone-study run --provider-concurrency``, never
+    #: read off the manifest's design, and never hashed into the
+    #: pre-registration.
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
     #: The study's evidence store, when the caller bound one. A stage that
     #: evaluates through the engine prices what it evaluated by reading its
     #: own persisted output rows back out of this store; without it the
@@ -538,6 +547,7 @@ def _stage_record(
     return StageRecord(
         stage=stage.value,
         transport=environment.transport,
+        provider_concurrency=environment.provider_concurrency,
         spend=spend,
     )
 
@@ -1519,6 +1529,7 @@ def _record_report_spend(
         StageRecord(
             stage=stage.value,
             transport=environment.transport,
+            provider_concurrency=environment.provider_concurrency,
             report_spend=folded,
         )
         if existing is None

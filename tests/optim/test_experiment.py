@@ -103,3 +103,69 @@ def test_experiment_without_held_out_rows_leaves_the_split_absent() -> None:
     assert configs.held_out is None
     assert configs.held_out_task_hashes == ()
     assert set(configs.splits()) == {INTERNAL_EVAL, OFFICIAL}
+
+
+def test_a_rare_failed_row_reduces_completeness_instead_of_voiding() -> None:
+    """351 good rows are evidence; one 429 must not erase them.
+
+    This is the exact shape that aborted the live paid Stage 0: the naive
+    anchor evaluated 352 rows, one failed with an unretried 429, and under
+    ``missing_data="propagate"`` the aggregate went to ``None``. A ``None``
+    aggregate makes the Reward Policy's ``score`` term missing, and its
+    FAIL missing-data policy then raised -- voiding the evaluation, the
+    stage, and the money already spent on the other 351 rows.
+
+    Fails-before: with ``propagate`` this same input aggregates to
+    ``status=missing_data, value=None``.
+
+    Binding ``skip`` is what the protocol already pre-registered for this
+    problem -- §8's O7 recommends per-task weighting with a hard backstop
+    at 90%, the analysis already weights by ``per_task_counts``, and
+    ``COMPLETENESS_BACKSTOP`` is already 0.90. Propagating was the piece
+    inconsistent with that rule.
+    """
+    pytest.importorskip("whetstone.eval.aggregation")
+    from whetstone.eval.aggregation import AggregationInput, aggregate
+
+    from whetstone_envs.optim.experiment import _reference_aggregation
+
+    config = _reference_aggregation("whetstone_envs.c19")
+    inputs = (
+        *(AggregationInput(value=1.0) for _ in range(351)),
+        AggregationInput(value=None),
+    )
+    output = aggregate(config, inputs)
+    assert output.status.value == "ok"
+    assert output.value == 1.0
+    # The shortfall is not hidden: it is reported as reduced completeness,
+    # which is what the analysis weights by.
+    assert output.count_present == 351
+    assert output.count_applicable == 352
+
+
+def test_losing_more_than_the_tolerance_still_refuses_a_number() -> None:
+    """The tolerance is a floor, not permission to average a biased subset."""
+    pytest.importorskip("whetstone.eval.aggregate")
+    from whetstone.eval.aggregate import _policy_from_aggregation_config
+
+    from whetstone_envs.optim.experiment import (
+        MAX_SKIP_FRACTION,
+        _reference_aggregation,
+    )
+
+    policy = _policy_from_aggregation_config(
+        _reference_aggregation("whetstone_envs.c19")
+    )
+    assert policy.row_policy.value == "skip"
+    assert policy.max_skip_fraction == MAX_SKIP_FRACTION
+    # One row in 352 is tolerated; a tenth of the matrix is not.
+    assert policy.within_tolerance(skipped=1, planned=352)
+    assert not policy.within_tolerance(skipped=36, planned=352)
+
+
+def test_the_skip_tolerance_matches_the_pre_registered_backstop() -> None:
+    """One rule, not two: the aggregate and the report agree on 90%."""
+    from whetstone_envs.optim.experiment import MAX_SKIP_FRACTION
+    from whetstone_envs.optim.study.manifest import COMPLETENESS_BACKSTOP
+
+    assert pytest.approx(1.0 - COMPLETENESS_BACKSTOP) == MAX_SKIP_FRACTION

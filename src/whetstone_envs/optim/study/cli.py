@@ -36,6 +36,13 @@ from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV_VALUE,
 )
 from whetstone_envs.optim.nulls import NULL_IDENTITY_OPTIMIZER
+from whetstone_envs.optim.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    MAX_UNFORCED_PROVIDER_CONCURRENCY,
+    PROVIDER_CONCURRENCY_FLAG,
+    PROVIDER_CONCURRENCY_FORCE_FLAG,
+    resolve_provider_concurrency,
+)
 from whetstone_envs.optim.study.environment import (
     FAKE_TRANSPORT,
     OPENROUTER_API_KEY_ENV,
@@ -205,6 +212,11 @@ class StageRunner(Protocol):
     outside the pre-registration hash -- but the stage *records* it, because
     a stage run on the fake transport and a stage run against a provider
     are different evidence for whatever the stage measured.
+
+    ``provider_concurrency`` is recorded on the same terms and for the
+    same reason: it does not change what the stage measures, but a
+    stage's wall time and its rate-limit failures cannot be read without
+    knowing how wide it ran.
     """
 
     def __call__(  # noqa: PLR0913
@@ -216,6 +228,7 @@ class StageRunner(Protocol):
         allow_real_codex: bool = False,
         discard_stale_runs: bool = False,
         transport: str = FAKE_TRANSPORT,
+        provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
     ) -> StudyManifest: ...
 
 
@@ -560,6 +573,11 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
     that says whether an empty row means "reached no provider" or
     "reached one and lost the bill".
 
+    ``width`` is the provider concurrency the stage ran at, printed
+    beside the transport because the two together say how the stage was
+    executed rather than what it measured, and because it is what a
+    reader comparing two stages' wall times needs.
+
     A stage row is the whole of what the stage bought: its arms' optimizer
     runs, and the reporting pass -- official-selection scoring, the
     held-out evaluations, and the anchors' re-measurement -- folded onto
@@ -571,8 +589,8 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
         lines.extend((f"  {NO_STAGES_RUN}", ""))
         return tuple(lines)
     lines.append(
-        f"  {'stage':<10}{'transport':<14}{'calls':>10}{'tokens':>14}"
-        f"  {'usd':>22}"
+        f"  {'stage':<10}{'transport':<14}{'width':>6}{'calls':>10}"
+        f"{'tokens':>14}  {'usd':>22}"
     )
     by_stage = {entry.stage: entry for entry in stages}
     for stage in STAGE_IDS:
@@ -587,6 +605,7 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
         if not spend:
             lines.append(
                 f"  {record.stage:<10}{record.transport:<14}"
+                f"{record.provider_concurrency:>6}"
                 f"  {_no_spend_label(record)}"
             )
             continue
@@ -595,7 +614,8 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
             entry.input_tokens + entry.output_tokens for entry in spend
         )
         lines.append(
-            f"  {record.stage:<10}{record.transport:<14}{calls:>10,}"
+            f"  {record.stage:<10}{record.transport:<14}"
+            f"{record.provider_concurrency:>6}{calls:>10,}"
             f"{tokens:>14,}  {_stage_usd(spend):>22}"
         )
     lines.append("")
@@ -734,6 +754,7 @@ def _run_stage(  # noqa: PLR0913
     allow_real_codex: bool = False,
     discard_stale_runs: bool = False,
     transport: str = FAKE_TRANSPORT,
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
 ) -> int:
     if run_stage is None:
         print(
@@ -749,12 +770,17 @@ def _run_stage(  # noqa: PLR0913
         allow_real_codex=allow_real_codex,
         discard_stale_runs=discard_stale_runs,
         transport=transport,
+        provider_concurrency=provider_concurrency,
     )
     print(f"{stage} complete for study {manifest.study_id}")
     # The transport is echoed because it decides what the stage's numbers
     # are evidence of, and an operator scripting three stages should see
-    # which one each ran on without opening the manifest.
+    # which one each ran on without opening the manifest. The width is
+    # echoed beside it because it is what decides how long the stage
+    # took, and it is the setting an operator is most likely to want to
+    # change on the next one.
     print(f"transport: {transport}")
+    print(f"provider concurrency: {provider_concurrency}")
     _emit(stage_spend_lines(manifest.stages))
     print(study_dir / STUDY_MANIFEST_NAME)
     return EXIT_OK
@@ -1252,6 +1278,38 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        PROVIDER_CONCURRENCY_FLAG,
+        type=int,
+        default=DEFAULT_PROVIDER_CONCURRENCY,
+        metavar="N",
+        help=(
+            "How many task evaluations run against the provider at once. "
+            f"Defaults to {DEFAULT_PROVIDER_CONCURRENCY}, the width a "
+            "stage runs at when no invocation names one. Raising it is "
+            "what makes a real stage finish in hours rather than days: "
+            "each call spends most of its time waiting on the provider, "
+            "so the width sets the throughput almost directly. Sets both "
+            "the evaluation worker pool and the HTTP connection pool, "
+            "and is recorded on the stage -- it is an invocation "
+            "property like the transport, and does not enter the "
+            "pre-registration hash. "
+            f"Above {MAX_UNFORCED_PROVIDER_CONCURRENCY} it is refused "
+            f"unless {PROVIDER_CONCURRENCY_FORCE_FLAG} is also passed."
+        ),
+    )
+    run.add_argument(
+        PROVIDER_CONCURRENCY_FORCE_FLAG,
+        action="store_true",
+        help=(
+            "Authorize a provider concurrency above the sanity cap of "
+            f"{MAX_UNFORCED_PROVIDER_CONCURRENCY}. OpenRouter publishes "
+            "no per-account concurrency limit for paid models, so the "
+            "cap is this study's own prudence and not a provider limit; "
+            "this flag exists so that exceeding it is a deliberate act "
+            "rather than a typed digit."
+        ),
+    )
+    run.add_argument(
         "--replace-design",
         action="store_true",
         help=(
@@ -1304,6 +1362,7 @@ def default_stage_runner(  # noqa: PLR0913
     allow_real_codex: bool = False,
     discard_stale_runs: bool = False,
     transport: str = FAKE_TRANSPORT,
+    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
 ) -> StudyManifest:
     """Run one stage on the fake transport, over the study's own directory.
 
@@ -1323,12 +1382,18 @@ def default_stage_runner(  # noqa: PLR0913
     reaches both the study's optimizer runner and the harness's early
     refusal. It travels no further: the manifest this returns records the
     design, and an authorization to spend is not one.
+
+    ``provider_concurrency`` is forwarded the same way and does travel
+    further: the binder sets it on every engine it builds and widens the
+    transport's connection pool to match, and the stage writes it onto
+    its own record.
     """
     with bound_stage_environment(
         study_dir,
         transport=transport,
         allow_real_codex=allow_real_codex,
         discard_stale_runs=discard_stale_runs,
+        provider_concurrency=provider_concurrency,
     ) as environment:
         return _run_stage_harness(
             study_dir=study_dir,
@@ -1392,6 +1457,10 @@ def _dispatch(
             allow_real_codex=arguments.allow_real_codex,
             discard_stale_runs=arguments.discard_stale_runs,
             transport=arguments.transport,
+            provider_concurrency=resolve_provider_concurrency(
+                arguments.provider_concurrency,
+                force=arguments.force_provider_concurrency,
+            ),
         )
     if arguments.command == "report":
         return _run_report(

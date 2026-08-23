@@ -112,9 +112,11 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: not run. The revision block at the head of the document lists every
 #: change and the plan note that decided it. Revision 2 was amended the same
 #: day by item 17 -- L1 restated as task-set containment -- so its earlier
-#: digest ``1fa2102b...`` is historical for the same reason.
+#: digest ``1fa2102b...`` is historical for the same reason, as is
+#: ``2e98198b...``, which item 18 superseded later the same day when §3.9
+#: gained the row-level retry and missing-row rules.
 PROTOCOL_DOC_SHA256 = (
-    "2e98198b8bdcc9721993f7dfce66c7e059901b5195814e5213df3fa75698c813"
+    "086dc1ba7867d9dc817e208e15dce0eba35b4e409484feb54dcc4b2f6b9a4903"
 )
 
 

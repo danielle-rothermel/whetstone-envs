@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import random
+import time
+from typing import TYPE_CHECKING, Any
 
 from dr_providers import (
     HttpProvider,
     ProviderCallRequest,
     ProviderInvocationEvidence,
+    RecoverabilityClass,
     RequestControl,
     openrouter_chat_config,
 )
@@ -13,11 +16,101 @@ from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
 from dr_providers.outcomes.models import ProviderTransportResponse
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from whetstone.experiment.candidate import TemplateRenderContract
     from whetstone.experiment.env import Experiment
     from whetstone.provider.policy import ProviderExecutionPolicy
+
+
+#: How long a task call may take, in seconds.
+#:
+#: whetstone's ``default_transport_policy`` allows 30 s, which is a fine
+#: bound for a chat completion and far too short for a reasoning model.
+#: The live Stage 0 measured a median of 4,466 completion tokens and a
+#: maximum of 12,335 on ``gpt-5-nano``; at that size a call routinely runs
+#: past 30 s, and a timeout is charged for the tokens already generated
+#: before it is retried. This bound is set from that measurement with room
+#: above the observed maximum, so the timeout catches a genuinely stuck
+#: call rather than a merely slow one.
+TASK_CALL_TIMEOUT_SECONDS = 300.0
+
+#: How many times one provider call may be attempted.
+#:
+#: Five rather than whetstone's three: a 429 under load is the failure
+#: this exists for, and a rate limit that clears needs enough attempts to
+#: outlast a burst. Every attempt after the first waits -- see
+#: :class:`RetryingTransport` -- so this is bounded in time as well as in
+#: count.
+TASK_CALL_MAX_ATTEMPTS = 5
+
+#: The backoff schedule between attempts: 2 s, 4 s, 8 s, 16 s, capped.
+#:
+#: Exponential because a rate limit that is still firing should be given
+#: geometrically more room rather than be re-probed at a fixed rate.
+RETRY_BASE_SECONDS = 2.0
+RETRY_MULTIPLIER = 2.0
+RETRY_MAX_SECONDS = 32.0
+
+#: The fraction of a computed delay that is randomized.
+#:
+#: Without jitter, N concurrent workers rate-limited by the same burst all
+#: sleep the same duration and retry in lockstep, reproducing the burst
+#: that limited them. The wait is drawn from ``[(1-J)*d, d]`` so the
+#: retries spread out while the schedule's ceiling still holds.
+RETRY_JITTER_FRACTION = 0.25
+
+#: How long a provider's own ``Retry-After`` may hold a worker.
+#:
+#: The header is honoured because the provider knows better than this
+#: schedule when it will accept traffic again, but it is bounded: a
+#: mistaken or hostile header naming an hour would otherwise park a
+#: worker for an hour.
+MAX_HONOURED_RETRY_AFTER_SECONDS = 120.0
+
+
+def _retry_after_seconds(evidence: object) -> float | None:
+    """Seconds the provider asked for, when it named a plain delta.
+
+    Only ``delta_seconds`` is honoured. The HTTP-date form would have to
+    be parsed against the provider's clock and this package's, and a
+    disagreement between the two is exactly the case where waiting the
+    wrong amount is worst; the schedule's own backoff is the safer answer.
+    """
+    hint = getattr(evidence, "retry_after", None)
+    if hint is None or getattr(hint, "kind", None) != "delta_seconds":
+        return None
+    try:
+        seconds = float(hint.value)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return min(seconds, MAX_HONOURED_RETRY_AFTER_SECONDS)
+
+
+def _is_transient(evidence: object) -> bool:
+    """Whether this outcome is worth another attempt.
+
+    Read off dr-providers' own ``RecoverabilityClass`` rather than off
+    status codes, so the classification stays the transport's to make: a
+    rate limit, a transient 5xx, and a contained timeout are all retried,
+    and a permanent rejection -- a bad request, a refused key -- is not,
+    because re-sending it would spend again to be told the same thing.
+    """
+    failure = getattr(evidence, "failure", None)
+    if failure is None:
+        return False
+    return failure.recoverability in _TRANSIENT_RECOVERABILITY
+
+
+_TRANSIENT_RECOVERABILITY = frozenset(
+    {
+        RecoverabilityClass.TRANSIENT,
+        RecoverabilityClass.RATE_LIMITED,
+        RecoverabilityClass.RESOURCE_EXHAUSTION,
+    }
+)
 
 
 class OpenRouterTransport:
@@ -28,6 +121,191 @@ class OpenRouterTransport:
 
     def __call__(self, request: object):
         return self._provider.invoke(request)
+
+
+class RetryingTransport:
+    """Wait between attempts, which whetstone's own retry loop does not.
+
+    **This is why one 429 aborted a paid Stage 0.**
+    ``ProviderExecutionPolicy`` already classifies a rate limit as
+    retryable and already computes a backoff delay, and
+    ``whetstone.provider.driver`` already loops over ``max_attempts``. But
+    the delay is applied through an injected ``sleep``, and the eval path
+    never injects one: ``GraphRolloutEvalDriver`` builds its
+    ``LlmCallContext`` without a ``sleep``, so ``run_provider_call`` falls
+    back to ``_no_sleep`` and all three attempts are made within
+    microseconds of each other. Against a rate limit that is still
+    firing, three instant retries are one retry.
+
+    Waiting here rather than there is deliberate. The sleep seam exists
+    upstream but is not reachable from anything this package binds -- the
+    driver takes no ``sleep`` argument to forward -- so the wait is
+    applied at the transport, which is the seam this package *does* own.
+    The retry *count* stays with the execution policy, which is where it
+    is recorded; this wrapper only makes the waiting real.
+
+    The consequence is that the attempt whetstone's loop sees is already
+    a waited attempt, so both loops compose rather than multiply: this
+    wrapper sleeps *before returning* a transient failure, and the driver
+    then immediately re-invokes.
+    """
+
+    def __init__(
+        self,
+        inner: Callable[[Any], Any],
+        *,
+        max_attempts: int = TASK_CALL_MAX_ATTEMPTS,
+        sleep: Callable[[float], None] | None = None,
+        rng: random.Random | None = None,
+    ) -> None:
+        if max_attempts < 1:
+            raise ValueError("max_attempts is at least 1")
+        self._inner = inner
+        self._max_attempts = max_attempts
+        self._sleep = sleep if sleep is not None else time.sleep
+        # Jitter spreads retries apart so concurrent workers do not
+        # retry in lockstep; it is not a security primitive.
+        self._rng = rng if rng is not None else random.Random()  # noqa: S311
+
+    def delay_for(self, attempt_number: int) -> float:
+        """The jittered wait before ``attempt_number``'s retry."""
+        if attempt_number < 1:
+            raise ValueError("attempt_number is at least 1")
+        raw = RETRY_BASE_SECONDS * RETRY_MULTIPLIER ** (attempt_number - 1)
+        capped = min(raw, RETRY_MAX_SECONDS)
+        low = capped * (1.0 - RETRY_JITTER_FRACTION)
+        return self._rng.uniform(low, capped)
+
+    def __call__(self, request: object):
+        evidence = self._inner(request)
+        for attempt_number in range(1, self._max_attempts):
+            if not _is_transient(evidence):
+                return evidence
+            # The provider's own instruction wins over the schedule when
+            # it gave one, because it knows when it will accept traffic.
+            requested = _retry_after_seconds(evidence)
+            delay = (
+                requested
+                if requested is not None
+                else self.delay_for(attempt_number)
+            )
+            self._sleep(delay)
+            evidence = self._inner(request)
+        return evidence
+
+
+#: The flag that sets the provider concurrency, spelled once.
+#:
+#: Named beside the bounds it is refused against, so the CLI declaration
+#: and the sanity-cap refusal that quotes it cannot drift apart.
+PROVIDER_CONCURRENCY_FLAG = "--provider-concurrency"
+
+#: The operator's override of the concurrency sanity cap, spelled once.
+PROVIDER_CONCURRENCY_FORCE_FLAG = "--force-provider-concurrency"
+
+#: How many task evaluations a stage runs against the provider at once.
+#:
+#: This is whetstone's own ``DEFAULT_CONCURRENCY``, restated here as the
+#: value this package records when an invocation names nothing. It is not
+#: imported from whetstone because it is *persisted identity*: a stage
+#: record written today must keep meaning what it said even if the
+#: dependency's default moves, and a silently-tracking import would
+#: rewrite the meaning of every historical record instead of surfacing the
+#: change. ``test_recorded_default_matches_whetstones_own`` pins the two
+#: together so the drift is caught rather than inferred.
+DEFAULT_PROVIDER_CONCURRENCY = 5
+
+#: The largest concurrency reachable without an explicit override.
+#:
+#: OpenRouter documents no per-account concurrency ceiling for paid models
+#: -- only free-tier request-per-minute limits and Cloudflare's protection
+#: against traffic that "dramatically exceeds reasonable usage" -- so
+#: there is no provider-published number to encode here. This cap is
+#: therefore this study's own prudence rather than a quoted limit: it is
+#: high enough that a real stage is bounded by the provider's latency
+#: rather than by this package, and low enough that a typo cannot open
+#: hundreds of billed connections at once.
+MAX_UNFORCED_PROVIDER_CONCURRENCY = 64
+
+
+def validate_provider_concurrency(value: int) -> int:
+    """Refuse a concurrency below one, and return it otherwise.
+
+    Spelled once, here, because three surfaces refuse the same value for
+    the same reason -- the CLI parses it, the stage environment binds it,
+    and the stage record persists it -- and a bound that disagreed between
+    them would let an invocation run at a width its record could not hold.
+    """
+    if value < 1:
+        raise ValueError(f"provider concurrency is at least 1; got {value}")
+    return value
+
+
+def resolve_provider_concurrency(value: int, *, force: bool) -> int:
+    """Refuse a concurrency below one or above the cap without ``force``.
+
+    The lower bound is arithmetic and cannot be forced: a width below one
+    names no run at all. The upper bound is prudence rather than a
+    provider-published limit -- see
+    :data:`MAX_UNFORCED_PROVIDER_CONCURRENCY` -- so it is overridable, and
+    the override is a separate explicit flag rather than a larger number,
+    because the number alone cannot distinguish a deliberate choice from a
+    typo with an extra digit.
+    """
+    validate_provider_concurrency(value)
+    if value > MAX_UNFORCED_PROVIDER_CONCURRENCY and not force:
+        raise ValueError(
+            f"provider concurrency {value} exceeds the sanity cap of "
+            f"{MAX_UNFORCED_PROVIDER_CONCURRENCY}. OpenRouter publishes "
+            "no per-account concurrency limit for paid models, so this "
+            "cap is this study's own prudence rather than a provider "
+            "limit -- but a width this large opens that many billed "
+            "connections at once, and an extra digit is far likelier "
+            f"than a deliberate choice. Pass "
+            f"{PROVIDER_CONCURRENCY_FORCE_FLAG} to mean it."
+        )
+    return value
+
+
+def widened_execution_policy(
+    policy: ProviderExecutionPolicy, *, concurrency: int
+) -> ProviderExecutionPolicy:
+    """Return ``policy`` with a connection pool that can hold ``concurrency``.
+
+    The engine's worker pool and the HTTP client's connection pool are two
+    separate bounds, and the smaller one wins. whetstone's
+    ``default_transport_policy`` fixes the client at ten connections, so
+    raising the worker count alone would leave workers queued on sockets
+    rather than talking to the provider -- the requested width would be
+    recorded and not run.
+
+    Keepalive is raised with the ceiling rather than left at its default:
+    these are many short requests to one host, so a connection returned to
+    the pool and immediately discarded would pay a fresh TLS handshake per
+    call, which is the cost the pool exists to avoid.
+
+    This changes the policy's ``identity_hash``, which is correct and
+    harmless: that hash identifies the transport configuration a call was
+    made under, and this *is* a different transport configuration. It is
+    not an input to the pre-registration design hash, which covers the
+    design fields alone -- see
+    :func:`~whetstone_envs.optim.study.manifest.
+    pre_registration_design_hash`.
+    """
+    validate_provider_concurrency(concurrency)
+    transport_policy = policy.transport_policy
+    if transport_policy.max_connections >= concurrency:
+        return policy
+    return policy.model_copy(
+        update={
+            "transport_policy": transport_policy.model_copy(
+                update={
+                    "max_connections": concurrency,
+                    "max_keepalive_connections": concurrency,
+                }
+            )
+        }
+    )
 
 
 def openrouter_seeded_call_config(*, model: str):
@@ -46,11 +324,57 @@ def openrouter_transport_factory(policy: ProviderExecutionPolicy):
     return OpenRouterTransport(policy)
 
 
-def bind_openrouter_transport(policy: ProviderExecutionPolicy):
-    """Return one transport and a factory that always yields it."""
-    transport = OpenRouterTransport(policy)
+def hardened_execution_policy(
+    policy: ProviderExecutionPolicy,
+) -> ProviderExecutionPolicy:
+    """Give ``policy`` a reasoning-sized timeout and enough attempts.
 
-    def factory(_policy: ProviderExecutionPolicy) -> OpenRouterTransport:
+    Two changes, both measured against the live Stage 0 rather than
+    guessed:
+
+    * ``timeout_seconds`` rises from whetstone's 30 s to
+      :data:`TASK_CALL_TIMEOUT_SECONDS`, because ``gpt-5-nano`` spends
+      thousands of reasoning tokens per call and a 30 s bound turns an
+      ordinary slow call into a timeout that is billed and then retried.
+    * ``max_attempts`` rises to :data:`TASK_CALL_MAX_ATTEMPTS`, so a rate
+      limit has room to clear. The waiting that makes those attempts
+      worth having is :class:`RetryingTransport`'s.
+
+    The retry *eligibility* is left exactly as whetstone sets it: rate
+    limits, transport errors, and timeouts are already retryable, and
+    provider rejections and malformed responses already are not, which is
+    the right split -- re-sending a refused request buys the same refusal.
+
+    Like :func:`widened_execution_policy` this changes the policy's
+    ``identity_hash`` and not the pre-registration design hash. Both are
+    invocation properties: they change how a call is made, never what is
+    being measured.
+    """
+    return policy.model_copy(
+        update={
+            "max_attempts": TASK_CALL_MAX_ATTEMPTS,
+            "transport_policy": policy.transport_policy.model_copy(
+                update={
+                    "timeout_seconds": TASK_CALL_TIMEOUT_SECONDS,
+                    "idle_timeout_seconds": TASK_CALL_TIMEOUT_SECONDS,
+                }
+            ),
+        }
+    )
+
+
+def bind_openrouter_transport(policy: ProviderExecutionPolicy):
+    """Return one retrying transport and a factory that always yields it.
+
+    The transport is wrapped in :class:`RetryingTransport` here, at the
+    one place a live provider client is constructed, so no caller can
+    bind a paid route that retries a 429 without waiting. The wrapper is
+    what the whole study talks through: eval and proposal share it, which
+    is also what keeps one connection pool rather than one per binding.
+    """
+    transport = RetryingTransport(OpenRouterTransport(policy))
+
+    def factory(_policy: ProviderExecutionPolicy) -> RetryingTransport:
         return transport
 
     return transport, factory
@@ -138,12 +462,28 @@ def fake_transport_factory(*, gold_by_prompt: Mapping[str, str]):
 
 
 __all__ = [
+    "DEFAULT_PROVIDER_CONCURRENCY",
+    "MAX_HONOURED_RETRY_AFTER_SECONDS",
+    "MAX_UNFORCED_PROVIDER_CONCURRENCY",
+    "PROVIDER_CONCURRENCY_FLAG",
+    "PROVIDER_CONCURRENCY_FORCE_FLAG",
+    "RETRY_BASE_SECONDS",
+    "RETRY_JITTER_FRACTION",
+    "RETRY_MAX_SECONDS",
+    "RETRY_MULTIPLIER",
+    "TASK_CALL_MAX_ATTEMPTS",
+    "TASK_CALL_TIMEOUT_SECONDS",
     "FakeTaskTransport",
     "OpenRouterTransport",
+    "RetryingTransport",
     "bind_openrouter_transport",
     "fake_gold_by_prompt",
     "fake_task_reply",
     "fake_transport_factory",
+    "hardened_execution_policy",
     "openrouter_seeded_call_config",
     "openrouter_transport_factory",
+    "resolve_provider_concurrency",
+    "validate_provider_concurrency",
+    "widened_execution_policy",
 ]

@@ -1547,15 +1547,24 @@ def test_the_amendment_clears_every_verdict_over_dropped_evidence(
 #: literal is: a hash recomputed by the same code that produced it cannot
 #: catch that code changing. Recompute deliberately and update these if the
 #: fake path's config is meant to change.
+#:
+#: **Rebased 2026-08-23** by protocol Revision 2 item 18, which moved the
+#: aggregation config from ``missing_data="propagate"`` to ``"skip"`` with
+#: ``max_skip_fraction = 0.10``. The aggregation config is part of the Eval
+#: Config, so all three hashes move with it; this is the deliberate
+#: recompute the note above calls for, and not a fake path that started
+#: carrying provider configuration. The superseded values were
+#: ``58d7f579...`` / ``9fecb902...`` / ``df7978da...``, which are what a
+#: study initialised before that change recorded.
 FAKE_TOY_EVAL_CONFIG_HASHES = {
     "internal": (
-        "58d7f579f007870d14598ebc023540043d855028f1c79a647cb647c56a9f2bfb"
+        "6e8a5bc3522e167cd3bcc6297e07cec6b8706c971e955a94cd1d76433cfacbba"
     ),
     "official": (
-        "9fecb9025af7dd99618ec6c5f281c416e27a83edd47f0da11462d1f68d61f068"
+        "3e53c0606186b881958ffeaf4219320e4da1c81ee16d35ab8653a331b562eb21"
     ),
     "held_out": (
-        "df7978daf73a12643e7ce8e5b0349fa516e919c1bdf5aaa0305a1cd4e313f45e"
+        "887b20c7b59928002582b1f375e51c4a4779b3319f04cb09c2f00505915a9e65"
     ),
 }
 
@@ -1805,12 +1814,24 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     the paid transport needs a key, and what is under test here is that
     the recorded route is the one the study named.
     """
-    from whetstone_envs.optim.provider import openrouter_seeded_call_config
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    from whetstone_envs.optim.provider import (
+        TASK_CALL_MAX_ATTEMPTS,
+        TASK_CALL_TIMEOUT_SECONDS,
+        hardened_execution_policy,
+        openrouter_seeded_call_config,
+    )
     from whetstone_envs.optim.study.environment import _provider_call_record
 
     record = _provider_call_record(
         transport=OPENROUTER_TRANSPORT,
         config=openrouter_seeded_call_config(model="openai/gpt-5-nano"),
+        policy=hardened_execution_policy(
+            ReferenceEvalRuntimeConfig(
+                transport_api_key_env="OPENROUTER_API_KEY",
+            ).execution_policy
+        ),
     )
     assert record.transport == OPENROUTER_TRANSPORT
     assert record.provider == "openrouter"
@@ -1819,3 +1840,9 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     # task-model reasoning effort is an open decision, and this block
     # states what was bound rather than choosing it.
     assert record.reasoning == PROVIDER_CONTROL_UNSET
+    # The execution settings that were actually in force, so a stage that
+    # lost rows to timeouts and one that did not are distinguishable.
+    assert record.timeout_seconds == repr(TASK_CALL_TIMEOUT_SECONDS)
+    assert record.max_attempts == str(TASK_CALL_MAX_ATTEMPTS)
+    assert "exponential" in record.retry_backoff
+    assert "Retry-After honoured" in record.retry_backoff

@@ -35,6 +35,7 @@ from dr_store import ObjectStore
 from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate
 
+from whetstone_envs.optim.nulls import NULL_IDENTITY_OPTIMIZER
 from whetstone_envs.optim.study.analysis import (
     AnalysisResult,
     measure_reference_candidates,
@@ -1048,6 +1049,74 @@ def _design_record(spec: StudySpec, result: Stage0Result) -> DesignRecord:
 # --------------------------------------------------------------------------
 
 
+def _refuse_engine_repeats_disagreeing_with_design(
+    *, stage: StageId, environment: StageEnvironment, k_repeat: int
+) -> None:
+    """Refuse before dispatch if the bound engine will not run K_REPEAT.
+
+    This is the structural half of the design's repeat-count guarantee, and
+    it is the half that costs nothing. Every arm in this stage evaluates
+    through the engine this binder produces, so an engine bound at a
+    different repeat count does not run the design the study
+    pre-registered -- it runs a cheaper search under the same name, and
+    every number the stage buys is evidence for a study nobody registered.
+
+    Checked here rather than after the fact because after the fact is a
+    full stage of provider spend later. The recorded-run refusal in
+    :func:`_refuse_run_repeats_disagreeing_with_design` remains, and is
+    deliberately not made redundant by this one: this checks what the stage
+    will *bind*, that one checks what each run *did*, and a run reused from
+    an earlier invocation never passed through this binder at all.
+    """
+    bound = environment.bind_engine(
+        role=EvalRole.OFFICIAL, num_seeds=k_repeat
+    ).sampling.num_seeds
+    if bound != k_repeat:
+        raise StageError(
+            f"{stage.value} would bind an engine sampling {bound} "
+            f"repeat(s) per task, but the recorded design pre-registers "
+            f"K_REPEAT = {k_repeat}. Every evaluation this stage buys "
+            f"would be evidence for a search the study never registered, "
+            f"so no arm is dispatched"
+        )
+
+
+def _refuse_run_repeats_disagreeing_with_design(
+    *, arm: ArmSpec, record: RunRecord, k_repeat: int
+) -> None:
+    """Refuse to record a run whose search did not run at K_REPEAT.
+
+    The detection half. A run's own ``*_repeats_as_recorded`` audit holds
+    its evaluations to the count the run recorded, which says nothing about
+    whether that count is the design's: a run that recorded one repeat and
+    searched at one passes its audit while having bought a third of the
+    evidence a study registering three priced. This is the diff that audit
+    structurally cannot perform, and it names both numbers so the operator
+    can tell which of the two is wrong.
+
+    A ``None`` count is refused for a run that searched. Null-identity runs
+    no optimizer and never reaches here; anything else recording no count
+    either produced no readable evaluations or produced evaluations that
+    disagree with each other, and neither is a run whose repeats have been
+    shown to be the design's.
+    """
+    if arm.optimizer == NULL_IDENTITY_OPTIMIZER:
+        return
+    if record.search_num_seeds == k_repeat:
+        return
+    found = (
+        "no single repeat count"
+        if record.search_num_seeds is None
+        else f"{record.search_num_seeds} repeat(s) per task"
+    )
+    raise StageError(
+        f"run {record.run_id!r} of arm {arm.arm_id!r} searched at {found}, "
+        f"but the recorded design pre-registers K_REPEAT = {k_repeat}. "
+        f"Recording it would enter evidence bought under a different "
+        f"search into a study that registered this one"
+    )
+
+
 def _refuse_unauthorized_codex_arm(
     *,
     spec: StudySpec,
@@ -1225,6 +1294,15 @@ def run_arm_stage(
         environment=environment,
     )
     _require_passed_stage1_gate(manifest=manifest, stage=stage)
+    # Structural, and before dispatch for the same reason the Codex
+    # authorization is: an engine bound at the wrong repeat count makes
+    # every number this stage buys evidence for an unregistered search,
+    # and binding costs nothing because it issues no evaluation.
+    _refuse_engine_repeats_disagreeing_with_design(
+        stage=stage,
+        environment=environment,
+        k_repeat=manifest.design.k_repeat,
+    )
 
     arm_records, run_results, executed_runs = _run_every_arm(
         spec=spec,
@@ -1232,6 +1310,7 @@ def run_arm_stage(
         study_dir=study_dir,
         environment=environment,
         recorded=manifest.arms,
+        k_repeat=manifest.design.k_repeat,
     )
     write_study_manifest(
         study_dir,
@@ -1625,13 +1704,14 @@ def _candidate_template(candidate: Candidate) -> str | None:
     return value if type(value) is str else None
 
 
-def _run_every_arm(
+def _run_every_arm(  # noqa: PLR0913
     *,
     spec: StudySpec,
     stage: StageId,
     study_dir: Path,
     environment: StageEnvironment,
     recorded: tuple[ArmRecord, ...],
+    k_repeat: int,
 ) -> tuple[
     tuple[ArmRecord, ...],
     dict[str, tuple[ArmRunResult, ...]],
@@ -1669,6 +1749,13 @@ def _run_every_arm(
         merged_runs = (*existing_runs, *(result.record for result in fresh))
         if not merged_runs:
             raise StageError(f"arm {arm.arm_id!r} produced no runs")
+        # Every run this arm will carry, not only the fresh ones: a run an
+        # earlier invocation recorded is evidence this stage is about to
+        # select and report over, so it is held to the same design.
+        for run in merged_runs:
+            _refuse_run_repeats_disagreeing_with_design(
+                arm=arm, record=run, k_repeat=k_repeat
+            )
         results_by_arm[arm.arm_id] = _candidates_for(
             arm=arm,
             stage_seeds=stage_seeds,

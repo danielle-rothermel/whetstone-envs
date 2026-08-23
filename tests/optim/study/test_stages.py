@@ -180,6 +180,11 @@ def test_an_unknown_stage_is_named_rather_than_ignored(
 # --------------------------------------------------------------------------
 
 
+#: The ``K_REPEAT`` the stage fixtures' design pre-registers. The harness
+#: mints runs that searched at it, which is what an honest run records.
+HARNESS_K_REPEAT = 3
+
+
 def _pointer(char: str) -> EvidencePointer:
     return EvidencePointer(schema_name="s.schema", content_hash=char * 64)
 
@@ -193,10 +198,15 @@ class _Harness:
         *,
         scores: dict[str, float],
         task_calls: int = 10,
+        search_num_seeds: int | None = HARNESS_K_REPEAT,
     ) -> None:
         self.study_dir = study_dir
         self.scores = scores
         self.task_calls = task_calls
+        #: What each run this harness mints reports having searched at.
+        #: Defaults to the design's ``K_REPEAT``, which is what an honest
+        #: run records; a test lowers it to drive the stage's refusal.
+        self.search_num_seeds = search_num_seeds
         self.events: list[str] = []
         self.selection_seen_at_held_out: list[tuple[str, bool]] = []
 
@@ -223,6 +233,7 @@ class _Harness:
                 audit_passed=True,
                 transport=TransportName.FAKE.value,
                 spend=(),
+                search_num_seeds=self.search_num_seeds,
             ),
             observed_task_calls=self.task_calls,
         )

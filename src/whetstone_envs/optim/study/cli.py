@@ -35,6 +35,7 @@ from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
 )
+from whetstone_envs.optim.nulls import NULL_IDENTITY_OPTIMIZER
 from whetstone_envs.optim.study.environment import (
     FAKE_TRANSPORT,
     OPENROUTER_API_KEY_ENV,
@@ -54,6 +55,7 @@ from whetstone_envs.optim.study.leakage import (
     HeldOutObservation,
     LeakageRule,
     OptimizerEvalObservation,
+    SearchRepeatObservation,
     SplitIdentity,
     optimizer_observations_for_study,
     study_leakage_check,
@@ -911,6 +913,38 @@ def _recorded_run_dirs(manifest: StudyManifest) -> tuple[Path, ...]:
     return tuple(Path(run.artifact_dir) for run in recorded)
 
 
+def _search_repeat_observations(
+    manifest: StudyManifest,
+) -> tuple[SearchRepeatObservation, ...]:
+    """Every recorded run's search repeat count, as L7 reads it.
+
+    Arms and c18 alike, and read off the manifest for
+    :func:`_recorded_run_dirs`'s reason: the runs the rule is checked over
+    are exactly the runs the study recorded.
+
+    Null-identity is excluded by its arm's own recorded optimizer, not by
+    its missing count: it runs no optimizer, so it has no search whose
+    repeats could disagree with the design, and it records ``None`` by
+    construction. Excluding on the optimizer rather than on ``None``
+    matters -- a searching run that recorded no count is exactly what the
+    rule must catch, and skipping every ``None`` would skip it too.
+    """
+    recorded = [
+        run
+        for arm in manifest.arms
+        if arm.optimizer != NULL_IDENTITY_OPTIMIZER
+        for run in arm.runs
+    ]
+    if manifest.c18 is not None:
+        recorded.extend(manifest.c18.runs)
+    return tuple(
+        SearchRepeatObservation(
+            run_id=run.run_id, search_num_seeds=run.search_num_seeds
+        )
+        for run in recorded
+    )
+
+
 def _leakage_report(
     manifest: StudyManifest,
     *,
@@ -937,6 +971,11 @@ def _leakage_report(
         expected_arm_ids=[arm.arm_id for arm in manifest.arms],
         held_out_candidate_names=_held_out_claim_names(manifest),
         held_out_observations=_held_out_observations(manifest),
+        # L7 reads the manifest's own run records rather than reopening
+        # the run directories: the manifest is what the study reports
+        # from, so it is the manifest the design is checked against.
+        search_repeats=_search_repeat_observations(manifest),
+        k_repeat=None if manifest.design is None else manifest.design.k_repeat,
         splits=(
             SplitIdentity(
                 role=SplitName.INTERNAL.value,

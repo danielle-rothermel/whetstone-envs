@@ -12,6 +12,7 @@ from whetstone_envs.optim.study.leakage import (
     LeakageReport,
     LeakageRule,
     OptimizerEvalObservation,
+    SearchRepeatObservation,
     SplitIdentity,
     check_held_out_nesting,
     check_l1_optimizer_internal_only,
@@ -63,6 +64,20 @@ def _clean_held_out_observations() -> tuple[HeldOutObservation, ...]:
     )
 
 
+#: The design's pre-registered per-task repeat count, as L7 reads it.
+K_REPEAT = 3
+
+
+def _clean_search_repeats() -> tuple[SearchRepeatObservation, ...]:
+    """One run per arm, each having searched at the registered K_REPEAT."""
+    return tuple(
+        SearchRepeatObservation(
+            run_id=f"{arm_id}-1000", search_num_seeds=K_REPEAT
+        )
+        for arm_id in ARM_IDS
+    )
+
+
 def _clean_splits() -> tuple[SplitIdentity, ...]:
     return (
         SplitIdentity("internal", INTERNAL_TASKS),
@@ -78,6 +93,8 @@ def _run_check(  # noqa: PLR0913
     held_out_observations: tuple[HeldOutObservation, ...] | None = None,
     held_out_candidate_names: list[str] | None = None,
     splits: tuple[SplitIdentity, ...] | None = None,
+    search_repeats: tuple[SearchRepeatObservation, ...] | None = None,
+    k_repeat: int | None = K_REPEAT,
     strict: bool = True,
 ) -> LeakageReport:
     """Run L6 over a clean study, with one part optionally mutated.
@@ -111,6 +128,12 @@ def _run_check(  # noqa: PLR0913
         ),
         held_out_observations=observations,
         splits=_clean_splits() if splits is None else splits,
+        search_repeats=(
+            _clean_search_repeats()
+            if search_repeats is None
+            else search_repeats
+        ),
+        k_repeat=k_repeat,
         strict=strict,
     )
 

@@ -1,8 +1,8 @@
-"""The study's leakage checks, L1-L6, as mechanical predicates.
+"""The study's leakage checks, L1-L5 and L7, as mechanical predicates.
 
 Each rule is a pure function over recorded evidence, so a violation is found
 by running the check rather than by reading the code that was supposed to
-prevent it. :func:`study_leakage_check` runs all five and fails the study
+prevent it. :func:`study_leakage_check` runs all six and fails the study
 loudly before any report is generated -- that is L6.
 
 **Detection is not prevention.** L2 and L3 are enforced structurally in
@@ -36,12 +36,14 @@ __all__ = [
     "LeakageReport",
     "LeakageRule",
     "OptimizerEvalObservation",
+    "SearchRepeatObservation",
     "SplitIdentity",
     "check_l1_optimizer_internal_only",
     "check_l2_selection_once_per_arm",
     "check_l3_held_out_once_per_candidate",
     "check_l4_identical_held_out_procedure",
     "check_l5_splits_disjoint",
+    "check_l7_search_repeats_as_designed",
     "optimizer_observations_for_study",
     "optimizer_observations_from_run",
     "study_leakage_check",
@@ -50,11 +52,16 @@ __all__ = [
 
 @verify(UNIQUE)
 class LeakageRule(StrEnum):
-    """The five substantive rules, plus the check that runs them.
+    """The six substantive rules, plus the check that runs them.
 
     These identifiers are persisted in the manifest's ``leakage_check``
     block and cited by the report, so they are an owned enum rather than
     ad-hoc strings.
+
+    L6 is the roll-up rather than a rule of its own, so it keeps its
+    identifier where it has always been and L7 is appended after it.
+    Renumbering would silently redefine what an already-recorded
+    ``leakage_check`` block claims.
     """
 
     L1_OPTIMIZER_INTERNAL_ONLY = "L1"
@@ -63,6 +70,7 @@ class LeakageRule(StrEnum):
     L4_IDENTICAL_HELD_OUT_PROCEDURE = "L4"
     L5_SPLITS_DISJOINT = "L5"
     L6_CHECK_RAN = "L6"
+    L7_SEARCH_REPEATS_AS_DESIGNED = "L7"
 
 
 class LeakageCheckError(RuntimeError):
@@ -182,6 +190,21 @@ class HeldOutObservation:
     candidate_name: str
     eval_config_hash: str
     repeats: int
+
+
+@dataclass(frozen=True, slots=True)
+class SearchRepeatObservation:
+    """One recorded run's search repeat count, as L7 reads it.
+
+    ``search_num_seeds`` is the run record's own field rather than a
+    re-reading of the run directory: the manifest is what the study
+    reports from, so it is the manifest the design is checked against.
+    ``None`` carries through as the absence it is -- a run whose repeats
+    were never established is not a run shown to have run at ``K_REPEAT``.
+    """
+
+    run_id: str
+    search_num_seeds: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,6 +474,71 @@ def check_l5_splits_disjoint(
     )
 
 
+def check_l7_search_repeats_as_designed(
+    observations: Iterable[SearchRepeatObservation],
+    *,
+    k_repeat: int,
+) -> LeakageFinding:
+    """L7: every recorded run searched at the design's ``K_REPEAT``.
+
+    L4 establishes that the *held-out* evaluations shared one procedure,
+    which is what makes the paired comparison paired. It says nothing
+    about the search: an arm whose optimizer searched at one repeat under
+    a design registering three bought a third of the evidence the
+    pre-registration priced, then had its one candidate measured on
+    held-out under a perfectly shared procedure. L4 passes on that study.
+
+    The per-run audits do not close it either. Each optimizer's
+    ``*_repeats_as_recorded`` invariant holds a run's evaluations to the
+    count that run *itself* recorded, so a run that consistently recorded
+    and searched at one passes. Only a diff against the pre-registered
+    number catches it, and that number lives in the manifest rather than
+    in any run -- which is why the rule is here rather than in the audit.
+
+    The arm stage refuses such a run before recording it. This is the
+    after-the-fact reading of the whole manifest, which covers runs the
+    refusal was not in force for and is the verdict the report prints.
+    """
+    seen = tuple(observations)
+    if not seen:
+        # Vacuous, exactly as L1 and L4 treat an empty set: a study with no
+        # recorded run has not established that its searches ran at the
+        # registered repeat count, and must not be told it has.
+        return LeakageFinding(
+            rule=LeakageRule.L7_SEARCH_REPEATS_AS_DESIGNED,
+            passed=False,
+            detail=(
+                "no run recorded a search repeat count, so this rule had "
+                "nothing to check"
+            ),
+            checked=False,
+        )
+    offenders = tuple(
+        f"{observation.run_id} searched at "
+        + (
+            "no single repeat count"
+            if observation.search_num_seeds is None
+            else f"{observation.search_num_seeds}"
+        )
+        for observation in seen
+        if observation.search_num_seeds != k_repeat
+    )
+    return LeakageFinding(
+        rule=LeakageRule.L7_SEARCH_REPEATS_AS_DESIGNED,
+        passed=not offenders,
+        detail=(
+            f"all {len(seen)} recorded runs searched at the "
+            f"pre-registered K_REPEAT = {k_repeat}"
+            if not offenders
+            else (
+                f"{len(offenders)} of {len(seen)} recorded runs did not "
+                f"search at the pre-registered K_REPEAT = {k_repeat}"
+            )
+        ),
+        offenders=offenders,
+    )
+
+
 def check_held_out_nesting(
     *, smaller: tuple[str, ...], larger: tuple[str, ...]
 ) -> LeakageFinding:
@@ -492,9 +580,11 @@ def study_leakage_check(  # noqa: PLR0913
     held_out_candidate_names: Iterable[str],
     held_out_observations: Iterable[HeldOutObservation],
     splits: Iterable[SplitIdentity],
+    search_repeats: Iterable[SearchRepeatObservation] = (),
+    k_repeat: int | None = None,
     strict: bool = True,
 ) -> LeakageReport:
-    """L6: run L1-L5 over the study's artifacts and fail loudly.
+    """L6: run L1-L5 and L7 over the study's artifacts and fail loudly.
 
     ``strict`` raises on the first failing report rather than returning it.
     That is the default because the caller this exists for is report
@@ -515,6 +605,25 @@ def study_leakage_check(  # noqa: PLR0913
         check_l3_held_out_once_per_candidate(held_out_candidate_names),
         check_l4_identical_held_out_procedure(held_out_observations),
         check_l5_splits_disjoint(splits),
+        (
+            # A study with no recorded design has no pre-registered repeat
+            # count to hold its runs to, which is an unchecked rule rather
+            # than a passing one: Stage 0 writes the design, so this is the
+            # state of a study whose arms have not been registered yet.
+            LeakageFinding(
+                rule=LeakageRule.L7_SEARCH_REPEATS_AS_DESIGNED,
+                passed=False,
+                detail=(
+                    "the study records no design, so there is no "
+                    "pre-registered K_REPEAT to check its runs against"
+                ),
+                checked=False,
+            )
+            if k_repeat is None
+            else check_l7_search_repeats_as_designed(
+                search_repeats, k_repeat=k_repeat
+            )
+        ),
     ]
     ran = tuple(finding.rule.value for finding in findings if finding.checked)
     skipped = tuple(

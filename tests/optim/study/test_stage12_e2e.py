@@ -292,6 +292,7 @@ def test_the_leakage_verdict_is_recorded_not_only_printed(
         "L3",
         "L4",
         "L5",
+        "L7",
     }
 
 

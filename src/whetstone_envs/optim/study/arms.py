@@ -46,7 +46,8 @@ from whetstone.eval.protocol import EvalRequest
 from whetstone.eval.schema import EvalEvidence
 from whetstone.optim.contracts import OptimResult
 
-from whetstone_envs.optim.audit.registry import audit_run
+from whetstone_envs.optim.audit._evidence import load_run_evidence
+from whetstone_envs.optim.audit.registry import audit_evidence
 from whetstone_envs.optim.audit.schema import AUDIT_REPORT_SCHEMA
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.nulls import (
@@ -640,7 +641,12 @@ class StudyOptimizerRunner:
         is one projection from artifacts to record, not two.
         """
         result = _read_optim_result(run_dir)
-        report = audit_run(run_dir)
+        # Loaded once and audited from, rather than calling ``audit_run``:
+        # the repeat count this run searched at is read off the same
+        # evidence the audit reads, so the two cannot disagree about which
+        # artifacts they are describing, and the store is opened once.
+        evidence = load_run_evidence(run_dir)
+        report = audit_evidence(evidence)
         template = _terminal_template(result, run_dir=run_dir)
         cost = project_run_cost(result, run_id=report.run_id)
         pointers = self._copy_evidence(
@@ -672,6 +678,11 @@ class StudyOptimizerRunner:
                 # stage row and its runs can disagree -- and the
                 # cross-transport refusal checks the runs.
                 transport=self.transport,
+                # What this run's search *did*, read from its artifacts --
+                # not ``self.num_seeds``, which is what this invocation
+                # asked for and so is the claim the record exists to be
+                # checkable against.
+                search_num_seeds=evidence.search_num_seeds,
             ),
             observed_task_calls=_observed_task_calls(result, run_dir=run_dir),
         )

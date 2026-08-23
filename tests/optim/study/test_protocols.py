@@ -73,6 +73,22 @@ def test_the_real_protocol_pins_its_control_shapes() -> None:
     assert STEP10_C19.miprov2_minibatch_size == MIPROV2_MINIBATCH_SIZE == 35
 
 
+def test_the_miprov2_candidate_count_is_at_the_runners_minibatch_floor() -> (
+    None
+):
+    """The pin the import cycle stopped `protocols` from reading directly.
+
+    Two candidates with minibatching exhausts MIPROv2's search space and
+    raises inside the durable run boundary on releases before the fix
+    (note 25d), so the runner refuses anything below its floor. The design
+    states the number as a literal because the runner imports the study
+    package for its spend record; this is the check that literal is for.
+    """
+    from whetstone_envs.optim.run import MIPROV2_MINIBATCH_MIN_CANDIDATES
+
+    assert MIPROV2_NUM_CANDIDATES == MIPROV2_MINIBATCH_MIN_CANDIDATES
+
+
 def test_the_protocol_declares_every_pre_registered_arm() -> None:
     """The arm list is design: six efficacy-or-control arms plus two
     MIPROv2 fidelity modes."""

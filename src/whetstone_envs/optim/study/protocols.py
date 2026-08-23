@@ -35,7 +35,6 @@ from typing import TYPE_CHECKING
 from whetstone_envs.c19.generation import (
     GENERATOR_VERSION as C19_GENERATOR_VERSION,
 )
-from whetstone_envs.optim.run import MIPROV2_MINIBATCH_MIN_CANDIDATES
 from whetstone_envs.optim.study.spec import (
     CODEX_EVALUATE_CALL_CAP,
     PROTOCOL_SPLIT_SIZES,
@@ -144,7 +143,12 @@ GEPA_MAX_METRIC_CALLS = 200
 #: search space and raises inside the durable run boundary on releases
 #: before the fix (note 25d), so the design pins the shape that runs.
 MIPROV2_NUM_TRIALS = 10
-MIPROV2_NUM_CANDIDATES = MIPROV2_MINIBATCH_MIN_CANDIDATES
+#: Stated as a literal rather than read from
+#: ``whetstone_envs.optim.run.MIPROV2_MINIBATCH_MIN_CANDIDATES``: the
+#: runner imports the study package for its spend record, so importing the
+#: runner back from here closes a cycle. ``test_protocols`` asserts the two
+#: agree, which is the check the import was standing in for.
+MIPROV2_NUM_CANDIDATES = 3
 
 #: The minibatch size, pinned as a design field alongside trials and
 #: candidates (Phase E item 3). Left unset the batch is the whole validation

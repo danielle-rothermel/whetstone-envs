@@ -192,6 +192,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `total_metric_calls`. Each invariant ships a negative fixture that FAILs
   it alone.
 
+- **A MIPROv2 control takes its repeat count from the engine it is bound
+  to.** `Miprov2Control.num_seeds` is new in whetstone-ai 0.1.11 and
+  defaults to 1, and `build_miprov2_control` did not set it, so a control
+  asked for one repeat per in-search evaluation while the engine beneath it
+  was bound at `K_REPEAT`. `engine_binding.resolve` refuses exactly that
+  disagreement -- "engine sampling repeats (3) do not match the requested
+  num_seeds (1)" -- so every MIPROv2 arm of the Step 10 design still died
+  inside the durable run boundary on 0.1.11, at the same message 0.1.10
+  produced for a different reason. The count is now read off
+  `engine.sampling.num_seeds` rather than taken as a parameter: the bound
+  engine's seed plan is the authority the resolver checks against, so there
+  is no second place for the two to disagree.
+
 - **A fake-transport COPRO arm can fill the breadth the protocol pins.**
   A family scripts exactly two proposal bodies -- the ceiling draft and the
   naive seed -- and the seed fills a slot COPRO never requests, so an

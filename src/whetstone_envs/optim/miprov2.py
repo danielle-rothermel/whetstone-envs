@@ -264,6 +264,14 @@ def build_miprov2_control(  # noqa: PLR0913
         minibatch_full_eval_steps=minibatch_full_eval_steps,
         demo_mode=demo_mode,
         defaults=defaults,
+        # Read off the engine rather than taken as a parameter: the bound
+        # engine's seed plan is the authority on how many repeats an
+        # evaluation pays for, and ``engine_binding.resolve`` refuses a
+        # request whose count disagrees with it. ``Miprov2Control.num_seeds``
+        # defaults to 1 upstream, so a control built without this ran every
+        # in-search evaluation at one repeat under an engine bound at
+        # ``K_REPEAT`` -- which is the disagreement that guard reports.
+        num_seeds=engine.sampling.num_seeds,
     )
 
 

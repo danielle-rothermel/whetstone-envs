@@ -118,6 +118,59 @@ def test_control_binds_the_c19_mutation_surface(
     assert train | val == set(engine.sampling.task_hashes)
 
 
+@pytest.fixture
+def repeated_engine_and_store(tmp_path):
+    """An engine bound at three repeats per task, like the study's design."""
+    prepared = prepare_c19_experiment(
+        generate_pool(n_per_stratum=2, seed_start=765_432),
+        split_sizes=(2, 2, 0),
+        num_seeds=3,
+    )
+    runtime_config = ReferenceEvalRuntimeConfig(
+        transport_api_key_env="WHETSTONE_TOY_API_KEY",
+    )
+    with open_sqlite(str(tmp_path / "repeated.sqlite")) as store:
+        engine = runtime_config.build_engine(
+            cast("ObjectStore", store),
+            experiment=prepared.experiment,
+            eval_runner=ExactMatchEvalProcedureRunner(),
+            mutation_field=C19_MUTATION_FIELD,
+            render_contract=c19_render_contract(),
+            transport_factory=fake_transport_factory(
+                gold_by_prompt=fake_gold_by_prompt(
+                    prepared.experiment,
+                    render_contract=C19.render_contract(),
+                    ceiling_template=C19.probes.ceiling_template,
+                )
+            ),
+        )
+        yield engine, store, prepared
+
+
+def test_the_control_takes_its_repeat_count_from_the_engine(
+    repeated_engine_and_store,
+) -> None:
+    """The bound engine's seed plan is the authority on repeats.
+
+    ``Miprov2Control.num_seeds`` defaults to 1 upstream, so a control built
+    without reading the engine ran every in-search evaluation at one repeat
+    while the engine was bound at ``K_REPEAT``. ``engine_binding.resolve``
+    refuses that disagreement outright -- "engine sampling repeats (3) do
+    not match the requested num_seeds (1)" -- which killed every MIPROv2
+    arm of a ``K_REPEAT = 3`` study inside the durable run boundary.
+    """
+    engine, _store, prepared = repeated_engine_and_store
+    assert engine.sampling.num_seeds == 3
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=prepared.experiment,
+        family=C19,
+        trainset_task_hashes=_halves(engine)[0],
+        valset_task_hashes=_halves(engine)[1],
+    )
+    assert control.num_seeds == 3
+
+
 def test_zeroshot_carries_zero_demo_maxima(engine_and_store, prepared) -> None:
     engine, _store = engine_and_store
     control = build_miprov2_control(

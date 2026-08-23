@@ -211,8 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the arm id to `estimate_optimizer_calls`, so both fidelity arms printed
   "no estimate" and dropped out of the budget entirely. The seed and
   run-count tables are now keyed by arm with an optimizer fallback, and
-  `StudySpec` grows `optimizer_by_arm`. Every arm named after its
-  optimizer is unaffected.
+  `StudySpec` grows `optimizer_by_arm`. `_arm_seeds_from`, which rebuilds
+  an arm's seeds when a manifest is read back, looks up by arm id too, so
+  a manifest authored at the disjoint ranges reads back at them. Every arm
+  named after its optimizer is unaffected.
 
 - **A report's scores are checked by the family that produced them.** The
   `EvalReport` schema re-derives every scored observation to validate it,

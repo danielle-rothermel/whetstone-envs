@@ -190,6 +190,15 @@ null-B (`null-identity`) is deliberately *not* a runner optimizer: it
 proposes nothing, so it has no search to drive and no fidelity invariant to
 audit. The study harness records it directly.
 
+**The study's two null arms run the same way this section describes.** A
+study's null-A arm dispatches `run_optimizer(optimizer="null-random", …)`
+like any other arm — same internal split, same proposal budget, same
+result, audit, and cost evidence — so its number is the product of a real
+selection over real evaluations and the arm controls for
+selection-on-noise. `whetstone-study plan` therefore prices it at COPRO's
+search shape. Null-B stays the seed measured through the report harness,
+and `plan` prices it at one official pass plus one held-out pass.
+
 ### Real transport smoke rungs
 
 Before any multi-run spend, one rung per optimizer arm runs end to end on

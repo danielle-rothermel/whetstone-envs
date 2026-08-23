@@ -281,6 +281,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   there, because adding an arm and re-pinning is exactly how
   `stage0 --replace-design` records an amendment.
 
+### Fixed
+
+- **The study's null-A arm runs a real optimizer, so the selection control
+  is real.** `StudyOptimizerRunner._run_null` handled both nulls and
+  bypassed the runner entirely: null-A evaluated nothing, recorded
+  `observed_task_calls=0` and `spend=()`, pointed all three of its evidence
+  refs at one synthesized record, and its "perturbation" was a
+  `(variant N)` suffix on the naive template rather than the protocol's
+  placeholder-preserving perturbation. An arm that never evaluated cannot
+  control for selection-on-noise, because no selection happened — so a
+  study's headline null-A comparison was against a stub. Null-A now
+  dispatches `run_optimizer(optimizer="null-random", …)` like every other
+  arm: COPRO's search shape with an uninformative proposer, evaluating on
+  the internal split, spending the same proposal budget, and leaving a run
+  directory, a result, a passing audit, and priced cost rows. Its arm-stage
+  spend folds into `StageRecord.spend` the way every other arm's does, and
+  a recorded null-A resumes by re-reading its run rather than by
+  re-synthesizing a template no evaluation ranked. `whetstone-study plan`
+  already priced it at COPRO's shape; that estimate is now what the arm
+  costs rather than a mis-estimate of a stub. Null-B is unchanged and still
+  runs no optimizer — it proposes nothing, so there is no search to drive —
+  and `null_random_template` is deleted with the path that used it.
+
 ### Changed
 
 - **`--miprov2-minibatch` requires `--miprov2-minibatch-size`.** Left

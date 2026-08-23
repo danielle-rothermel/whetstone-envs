@@ -600,7 +600,9 @@ GEPA_MEASURED_TASK_CALLS_AT_PIN = -(
 #: ``(depth + 1) x breadth x internal x K_REPEAT`` -- which is the cost of a
 #: search null-B never performs. ``StudyOptimizerRunner._run_null`` does not
 #: call ``run_optimizer`` at all: it emits the naive anchor unchanged as its
-#: terminal candidate and reports ``observed_task_calls=0``.
+#: terminal candidate and reports ``observed_task_calls=0``. Null-A is the
+#: opposite case and takes COPRO's shape above: it *does* drive the runner,
+#: because the thing it controls for is selection.
 #:
 #: What null-B does cost is the *report harness*, which every arm pays and
 #: which ``report_arm`` issues identically for controls and optimizers (L4):

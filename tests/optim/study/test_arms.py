@@ -400,3 +400,138 @@ def test_discard_stale_runs_replaces_the_directory_it_cannot_claim(
     # the discard removed is back, written by the run this invocation made.
     assert (run_dir / "trajectory-report.json").is_file()
     assert (run_dir / "result.json").is_file()
+
+
+# --------------------------------------------------------------------------
+# Null-A is a real run, because a control for selection must select
+# --------------------------------------------------------------------------
+
+
+def _null_a_arm() -> ArmSpec:
+    return ArmSpec(
+        arm_id="null-random",
+        optimizer="null-random",
+        kind=ArmKind.NULL,
+        k_run=1,
+        seeds=(5000,),
+    )
+
+
+def _null_b_arm() -> ArmSpec:
+    return ArmSpec(
+        arm_id="null-identity",
+        optimizer="null-identity",
+        kind=ArmKind.NULL,
+        k_run=1,
+        seeds=(6000,),
+    )
+
+
+def test_null_a_dispatches_through_the_shared_runner(
+    tmp_path: Path,
+) -> None:
+    """Null-A's spec is an ordinary run spec, dispatched like any arm.
+
+    Fails-before: ``__call__`` matched ``null-random`` alongside
+    ``null-identity`` and returned ``_run_null``, which never built a
+    ``RunSpec`` and never called ``run_optimizer`` at all. The arm's
+    "perturbation" was a ``(variant N)`` suffix on the naive template and
+    its record carried ``observed_task_calls=0`` and ``spend=()``.
+    """
+    spec = _runner(tmp_path)._spec_for(
+        _null_a_arm(), seed=5000, run_dir=tmp_path / "run"
+    )
+    assert spec.optimizer == "null-random"
+    assert spec.seed == 5000
+    # COPRO's search shape, so it has no train/val partition of its own --
+    # the same fields the COPRO arm leaves unset.
+    assert spec.train_size is None
+    assert spec.val_size is None
+    assert spec.transport == "fake"
+
+
+def test_null_a_evaluates_and_records_spend_like_every_other_arm(
+    tmp_path: Path,
+) -> None:
+    """The control's evidence is an arm's evidence, produced the same way.
+
+    Fails-before: the arm evaluated nothing, so ``observed_task_calls``
+    was 0, its ``result_ref``/``audit_ref``/``cost_ref`` all addressed one
+    synthesized ``study_null_run`` record, and there was no run directory
+    at all. Selection-on-noise cannot be controlled for by an arm that
+    never selected, which is what makes this the item most likely to
+    invalidate an efficacy claim.
+    """
+    result = _runner(tmp_path)(
+        arm=_null_a_arm(), seed=5000, study_dir=tmp_path
+    )
+
+    run_dir = arm_run_directory(tmp_path, result.record.run_id)
+    assert (run_dir / "result.json").is_file()
+    assert (run_dir / "trajectory-report.json").is_file()
+    # It evaluated candidates on the internal split rather than nothing.
+    assert result.observed_task_calls > 0
+    # And it produced the same three distinct evidence records an
+    # optimizer arm does, rather than one record standing in for all three.
+    pointers = {
+        result.record.result_ref,
+        result.record.audit_ref,
+        result.record.cost_ref,
+    }
+    assert len(pointers) == 3
+    assert result.record.audit_passed
+    assert result.record.transport == "fake"
+
+
+def test_null_a_terminal_template_comes_from_its_own_search(
+    tmp_path: Path,
+) -> None:
+    """The candidate is what the run selected, not a suffixed anchor.
+
+    Fails-before: the template was ``f"{naive}\\n\\n(variant {seed})"`` --
+    a meaning-free suffix rather than the protocol's placeholder-preserving
+    perturbation, and never a candidate any evaluation ranked.
+    """
+    runner = _runner(tmp_path)
+    result = runner(arm=_null_a_arm(), seed=5000, study_dir=tmp_path)
+
+    assert "(variant 5000)" not in result.candidate.template
+    assert result.candidate.template != runner.naive_template
+
+
+def test_null_a_is_resumable_from_its_recorded_run(tmp_path: Path) -> None:
+    """A recorded null-A is re-read off disk, not re-synthesized.
+
+    Fails-before: ``load_recorded_run`` rebuilt null-A's template from the
+    seed, so a resumed stage produced a candidate no run had evaluated.
+    """
+    runner = _runner(tmp_path)
+    arm = _null_a_arm()
+    first = runner(arm=arm, seed=5000, study_dir=tmp_path)
+
+    reloaded = runner.load_recorded_run(arm=arm, run=first.record)
+    assert reloaded is not None
+    assert reloaded.candidate.template == first.candidate.template
+    assert reloaded.observed_task_calls == first.observed_task_calls
+
+
+def test_null_b_still_runs_no_optimizer(tmp_path: Path) -> None:
+    """Null-B controls for pipeline overhead, so it proposes nothing.
+
+    It stays the seed through the report harness (note 13): a byte-identical
+    proposal is unreachable under COPRO's proposal-cardinality contract, so
+    there is no search to drive.
+    """
+    runner = _runner(tmp_path)
+    result = runner(arm=_null_b_arm(), seed=6000, study_dir=tmp_path)
+
+    assert result.candidate.template == runner.naive_template
+    assert result.observed_task_calls == 0
+    assert result.record.spend == ()
+    # One synthesized record standing in for all three, which is honest
+    # here precisely because there is no optimizer result to point at.
+    assert (
+        result.record.result_ref
+        == result.record.audit_ref
+        == result.record.cost_ref
+    )

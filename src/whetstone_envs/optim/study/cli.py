@@ -606,7 +606,7 @@ def _run_init(  # noqa: PLR0913
     )
     _emit(
         (
-            f"initialised study {study_id or protocol.study_id!r} "
+            f"initialised study {(study_id or protocol.study_id)!r} "
             f"from protocol {protocol.protocol_id!r}",
             f"arms: {', '.join(arm.arm_id for arm in protocol.arms)}",
             "splits: internal={} official={} held_out={}".format(

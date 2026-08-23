@@ -41,7 +41,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.10`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.11`.
 
 ## Installation
 
@@ -56,7 +56,7 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
-Codex against a task family. The extra pins published `whetstone-ai==0.1.10`
+Codex against a task family. The extra pins published `whetstone-ai==0.1.11`
 from PyPI:
 
 ```bash
@@ -567,7 +567,7 @@ No rung live-skips. An agent that decides the seed template is best may say
 so either by returning no selection or by *selecting* a call whose template
 equals the seed; whetstone-ai 0.1.9 ([#138]) records both as
 `seed_retained`, so agent taste no longer decides whether a rung is
-observed. The pinned 0.1.10 also runs the agent against a per-run scratch
+observed. whetstone-ai 0.1.10 also runs the agent against a per-run scratch
 `HOME` and quotes the CLI's own error items when a session fails ([#140]),
 so a failure names its cause rather than the first symptom.
 

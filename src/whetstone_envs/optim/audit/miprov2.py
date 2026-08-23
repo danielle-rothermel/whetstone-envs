@@ -1,4 +1,4 @@
-"""The nine MIPROv2 fidelity invariants.
+"""The ten MIPROv2 fidelity invariants.
 
 MIPROv2's claim is a specific algorithm: bootstrap demonstrations from the
 trainset, ground instruction proposals in them, then search the resulting
@@ -87,6 +87,21 @@ BOOTSTRAP_PURPOSE = "miprov2_bootstrap"
 BASELINE_PURPOSE = "miprov2_baseline"
 SAMPLE_PURPOSE = "miprov2_sample"
 PROMOTION_PURPOSE = "miprov2_promotion"
+
+#: The purposes that are *in-search* evaluations, which is all four: every
+#: construction site in ``runtime.py`` binds the request at
+#: ``control.num_seeds``, bootstrap attempts included. Named as a set so
+#: the repeat-count invariant states the scope it covers rather than
+#: leaving "all of them" implicit -- a purpose added upstream without a
+#: repeat count would then be a visible omission here.
+_IN_SEARCH_PURPOSES = frozenset(
+    {
+        BOOTSTRAP_PURPOSE,
+        BASELINE_PURPOSE,
+        SAMPLE_PURPOSE,
+        PROMOTION_PURPOSE,
+    }
+)
 
 #: The proposer effect that is an instruction proposal, as recorded on
 #: ``Miprov2ProposalRequest.effect``. The other effects (dataset summaries,
@@ -613,6 +628,7 @@ def miprov2_tpe_selection(evidence: RunEvidence) -> AuditFinding:
             run_id=transcript.run_id,
             validation_task_hashes=transcript.validation_task_hashes,
             validation_eval_source=transcript.validation_eval_source,
+            validation_num_seeds=transcript.validation_num_seeds,
             reward_policy_hash=transcript.reward_policy_hash,
             optimizer_config=transcript.optimizer_config,
             prompt_adapter_identity_hash=(
@@ -1119,6 +1135,91 @@ def miprov2_train_val_disjoint(evidence: RunEvidence) -> AuditFinding:
     )
 
 
+def miprov2_repeats_as_recorded(evidence: RunEvidence) -> AuditFinding:
+    """The recorded repeat count is the one the search actually paid for.
+
+    The study pre-registers ``K_REPEAT`` as covering *every* evaluation,
+    in-search ones included, and whetstone-ai 0.1.11 makes MIPROv2 carry
+    that count rather than asserting it away. The transcript states the
+    count it resolved to (``validation_num_seeds``, study contract v7) and
+    hashes it into the control's identity, so a run that searched at one
+    repeat under a design registering three is a different search from the
+    one the pre-registration priced -- and it is the *recorded* number an
+    envs manifest is diffed against.
+
+    So the number has to be checked against what the evaluations did, not
+    trusted. Each in-search evaluation's own ``EvalEvidence.num_seeds`` is
+    the repeats the engine billed for it; every one must equal the recorded
+    count. A run whose transcript says three while its evaluations paid for
+    one would otherwise reconcile cleanly against the manifest while having
+    bought a third of the evidence.
+
+    Repeats multiply rows rather than evaluations, so this is deliberately
+    a check on each evaluation's declared repeats rather than on any row
+    total: a row count also moves with the task subset, which is
+    ``MIPRO_MINIBATCH_SIZING``'s business.
+    """
+    invariant = InvariantId.MIPRO_REPEATS_AS_RECORDED
+    transcript = _terminal_transcript(evidence)
+    refs = list(_state_refs(evidence))
+    if transcript is None:
+        return _missing(invariant, "the run persisted no study transcript")
+
+    recorded = transcript.validation_num_seeds
+    problems: list[str] = []
+    checked = 0
+    for entry in evidence.steps:
+        for position, resolution in enumerate(entry.resolved_intents):
+            purpose = eval_purpose(
+                resolution.optim_eval_request.eval_request.metadata
+            )
+            if purpose not in _IN_SEARCH_PURPOSES:
+                continue
+            ref = resolution.eval_result_ref
+            if ref is None:
+                continue
+            found = evidence.eval_evidence(ref)
+            if found is None:
+                continue
+            refs.append(evidence_ref(ref))
+            checked += 1
+            if found.num_seeds != recorded:
+                problems.append(
+                    f"step {entry.index} intent {position} ({purpose}) "
+                    f"evaluated at {found.num_seeds} repeat(s), not the "
+                    f"recorded {recorded}"
+                )
+
+    if not checked:
+        return _missing(
+            invariant,
+            (
+                f"no in-search evaluation resolved to eval evidence across "
+                f"{len(evidence.steps)} step(s)"
+            ),
+        )
+    if problems:
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            (
+                f"{len(problems)} of {checked} in-search evaluation(s) did "
+                f"not run at the recorded repeat count: "
+                f"{'; '.join(problems[:3])}"
+            ),
+            tuple(refs),
+        )
+    return _finding(
+        invariant,
+        AuditStatus.PASS,
+        (
+            f"all {checked} in-search evaluation(s) ran at the "
+            f"{recorded} repeat(s) the transcript records"
+        ),
+        tuple(refs),
+    )
+
+
 #: Every MIPROv2 invariant, in the order the audit report lists them.
 #:
 #: Enumerated here for the registry to splice in; ``registry.py`` stays the
@@ -1133,6 +1234,7 @@ MIPROV2_INVARIANTS = (
     miprov2_bootstrap_through_engine,
     miprov2_trials_match_control,
     miprov2_train_val_disjoint,
+    miprov2_repeats_as_recorded,
 )
 
 
@@ -1156,6 +1258,7 @@ __all__ = [
     "miprov2_ground_only_deviation",
     "miprov2_minibatch_sizing",
     "miprov2_periodic_full_eval",
+    "miprov2_repeats_as_recorded",
     "miprov2_tpe_selection",
     "miprov2_train_val_disjoint",
     "miprov2_trials_match_control",

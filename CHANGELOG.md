@@ -150,6 +150,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `num_trials` on the control so auto-mode never runs.
 
 ### Fixed
+
+- **Pins published whetstone-ai 0.1.11, which lets MIPROv2 and GEPA run at
+  the study's pre-registered repeat count.** Both optimizers refused a
+  multi-repeat evaluation plan outright on 0.1.10 — MIPROv2 with `engine
+  sampling repeats (3) do not match the requested num_seeds (1)` and GEPA
+  with `GEPA evaluation engine must use a single-repeat plan` — so five of
+  the study's eight arms could not run at all under a protocol whose
+  `K_REPEAT` covers in-search evaluations. In-search evaluations now run at
+  the eval config's repeat count and the score each search consumes is
+  unchanged in kind: the existing per-task mean over repeats. [#142]
+
+  Three recorded contracts move with it, and each is a schema bump an audit
+  reads: `Miprov2Control` gains `num_seeds` and hashes it into the control's
+  identity (control schema **v8**), the persisted MIPROv2 study contract
+  records `validation_num_seeds` (study schema **v7**, per-intent context
+  **v3**), and `GepaDetailedResult` gains `validation_num_seeds`
+  (`whetstone.gepa_detailed_result/v2`). The platform step executor also
+  carries the launch's extra pools into the opening Step, without which no
+  MIPROv2 run reaches step 0 on the platform path. [#143]
+
+[#142]: https://github.com/danielle-rothermel/whetstone-ai/pull/142
+[#143]: https://github.com/danielle-rothermel/whetstone-ai/pull/143
+
+- **The audit holds MIPROv2 and GEPA to the repeat count they recorded.**
+  Both now state the repeats every in-search evaluation resolved to, and
+  that number is what a manifest diff reads, so it is the number that has
+  to be checked rather than trusted. `MIPRO_REPEATS_AS_RECORDED` and
+  `GEPA_REPEATS_AS_RECORDED` compare each evaluation's own
+  `EvalEvidence.num_seeds` against the recorded count.
+
+  The gap is real on both sides.
+  `Miprov2Study._validate_evaluation_binding` already rejects a transcript
+  whose `validation_num_seeds` disagrees with its own recorded binding
+  *requests*, but it walks no `eval_result_ref`, so what the engine
+  actually billed is unchecked — the MIPROv2 negative fixture violates
+  exactly that layer. GEPA has no such cross-validator at all, and its
+  budget cannot substitute for one: a metric call is one candidate-task
+  evaluation at any repeat count, so a run that searched at one repeat
+  under a design registering three is indistinguishable in
+  `total_metric_calls`. Each invariant ships a negative fixture that FAILs
+  it alone.
+
 - **Fidelity arms no longer produce efficacy verdicts.** MIPROv2's
   `zeroshot` and `ground_only` modes run once each as evidence for two
   audit invariants. They pass their audits and are measured on held-out,

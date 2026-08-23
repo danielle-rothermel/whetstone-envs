@@ -91,6 +91,9 @@ class InvariantId(StrEnum):
     #: the internal split, and every evaluation the run paid for touched
     #: only those tasks.
     MIPRO_TRAIN_VAL_DISJOINT = "mipro_train_val_disjoint"
+    #: MIPROv2: the repeat count the transcript records is the one every
+    #: in-search evaluation actually paid for.
+    MIPRO_REPEATS_AS_RECORDED = "mipro_repeats_as_recorded"
     #: GEPA: the terminal step's history resolves to a
     #: ``GepaRunResultArtifact`` bound to this run. The precondition every
     #: other GEPA invariant reads through, and the replacement for the
@@ -122,6 +125,9 @@ class InvariantId(StrEnum):
     #: internal split, and every evaluation the run paid for touched only
     #: those tasks.
     GEPA_TRAIN_VAL_DISJOINT = "gepa_train_val_disjoint"
+    #: GEPA: the repeat count the detailed result records is the one every
+    #: in-search evaluation actually paid for.
+    GEPA_REPEATS_AS_RECORDED = "gepa_repeats_as_recorded"
     #: Codex: every evaluation the run paid for went through the one
     #: granted Tool, and every admitted call is reachable as Tool
     #: Evidence on the Step Result.

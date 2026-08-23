@@ -1,11 +1,11 @@
-"""GEPA's nine fidelity invariants over one run's durable evidence.
+"""GEPA's ten fidelity invariants over one run's durable evidence.
 
 GEPA claims a specific search: an evolutionary loop that keeps a Pareto
 front of candidates over per-instance validation scores, mutates a selected
 candidate by reflecting over that candidate's own execution traces, records
 every rejected reflection rather than silently narrowing the search, and
 stops at a declared metric-call ceiling, over a train/val partition it
-declared up front. These nine invariants check each
+declared up front. These ten invariants check each
 of those claims against what the run persisted, and nothing else.
 
 Where the evidence lives (whetstone-ai ``miprofix-ai`` @ ``716976f2``)
@@ -48,7 +48,7 @@ Nothing persisted records how many instance traces one reflection consumed.
 per-reflection-batch, and ``control.reflection_minibatch_size`` is a
 *configured* value the evidence does not independently witness. An audit
 with no failing fixture is not an audit, so it ships not at all rather than
-as a permanent ``NOT_APPLICABLE``. :data:`GEPA_INVARIANTS` keeps nine by
+as a permanent ``NOT_APPLICABLE``. :data:`GEPA_INVARIANTS` keeps ten by
 adding :func:`gepa_terminal_artifact_present`, the precondition every other
 invariant reads through.
 
@@ -1157,7 +1157,109 @@ def gepa_train_val_disjoint(evidence: RunEvidence) -> AuditFinding:
     )
 
 
-#: GEPA's nine invariants, in the order an ``audit.json`` reports them.
+def gepa_repeats_as_recorded(evidence: RunEvidence) -> AuditFinding:
+    """The recorded repeat count is the one the search actually paid for.
+
+    The study pre-registers ``K_REPEAT`` as covering *every* evaluation,
+    in-search ones included, and whetstone-ai 0.1.11 makes GEPA carry that
+    count rather than refusing it. ``GepaDetailedResult`` states what it
+    resolved to (``validation_num_seeds``, detailed result v2), which is
+    the field an envs manifest is diffed against instead of inferring the
+    count from row totals.
+
+    Inference is exactly what must not be trusted here: a GEPA metric call
+    is one candidate-task evaluation whatever the repeat count, so repeats
+    move provider rows without moving the metric-call total. A run that
+    searched at one repeat under a design registering three therefore looks
+    identical in the budget the ceiling is stated in, and only the recorded
+    number and the evaluations' own ``num_seeds`` disagree. Every
+    resolvable evaluation must match the recorded count.
+
+    Both evidence paths are walked, because which one a GEPA evaluation
+    lands on is a dispatch property rather than a fidelity one: an
+    in-process run drives everything through the effect cache and records
+    its evaluations under ``search_evidence`` with no intents at all, while
+    a deferral episode surfaces them as ``resolved_intents``. Reading only
+    one would make this invariant vacuous on the other.
+    """
+    invariant = InvariantId.GEPA_REPEATS_AS_RECORDED
+    terminal = evidence.gepa_terminal
+    if terminal is None:
+        return AuditFinding(
+            invariant_id=invariant,
+            status=AuditStatus.FAIL,
+            detail=(
+                "no step's history carries a GEPA terminal artifact, so the "
+                "run records no repeat count to hold its evaluations to"
+            ),
+        )
+    refs = list(_artifact_refs(terminal))
+    recorded = terminal.detailed_result.validation_num_seeds
+
+    problems: list[str] = []
+    checked = 0
+    for entry in evidence.steps:
+        sources = [
+            (
+                f"step {entry.index} intent {position}",
+                resolution.eval_result_ref,
+            )
+            for position, resolution in enumerate(entry.resolved_intents)
+        ]
+        sources.extend(
+            (
+                f"step {entry.index} search evidence {position}",
+                found.eval_result_ref,
+            )
+            for position, found in enumerate(entry.search_evidence)
+        )
+        for where, ref in sources:
+            if ref is None:
+                continue
+            found_evidence = evidence.eval_evidence(ref)
+            if found_evidence is None:
+                continue
+            refs.append(evidence_ref(ref))
+            checked += 1
+            if found_evidence.num_seeds != recorded:
+                problems.append(
+                    f"{where} evaluated at {found_evidence.num_seeds} "
+                    f"repeat(s), not the recorded {recorded}"
+                )
+
+    if not checked:
+        return AuditFinding(
+            invariant_id=invariant,
+            status=AuditStatus.FAIL,
+            detail=(
+                f"no evaluation resolved to eval evidence across "
+                f"{len(evidence.steps)} step(s), so this invariant cannot "
+                f"be shown to hold"
+            ),
+            evidence_refs=tuple(refs),
+        )
+    if problems:
+        return AuditFinding(
+            invariant_id=invariant,
+            status=AuditStatus.FAIL,
+            detail=(
+                f"{len(problems)} of {checked} evaluation(s) did not run at "
+                f"the recorded repeat count: {'; '.join(problems[:3])}"
+            ),
+            evidence_refs=tuple(refs),
+        )
+    return AuditFinding(
+        invariant_id=invariant,
+        status=AuditStatus.PASS,
+        detail=(
+            f"all {checked} evaluation(s) ran at the {recorded} repeat(s) "
+            f"the detailed result records"
+        ),
+        evidence_refs=tuple(refs),
+    )
+
+
+#: GEPA's ten invariants, in the order an ``audit.json`` reports them.
 #: The precondition comes first so a reader triaging a failing run sees
 #: immediately whether the search result was readable at all.
 GEPA_INVARIANTS = (
@@ -1170,6 +1272,7 @@ GEPA_INVARIANTS = (
     gepa_no_forged_terminal,
     gepa_platform_resume_identity,
     gepa_train_val_disjoint,
+    gepa_repeats_as_recorded,
 )
 
 
@@ -1188,6 +1291,7 @@ __all__ = [
     "gepa_no_forged_terminal",
     "gepa_pareto_front",
     "gepa_platform_resume_identity",
+    "gepa_repeats_as_recorded",
     "gepa_skipped_mutations_recorded",
     "gepa_step_evidence_present",
     "gepa_terminal_artifact_present",

@@ -74,6 +74,7 @@ from whetstone_envs.optim.audit.gepa import (
     SKIPPED_MUTATION_EXHAUSTED_FIELD,
     SKIPPED_MUTATION_KEY_NAME,
     _as_skip_record,
+    gepa_repeats_as_recorded,
     gepa_terminal_artifact_present,
     gepa_train_val_disjoint,
 )
@@ -275,16 +276,18 @@ def _rewrite_artifact(
 # --- the invariant set -----------------------------------------------------
 
 
-def test_gepa_registers_exactly_nine_invariants() -> None:
-    """Nine: the protocol's eight less F5, plus train/val disjointness.
+def test_gepa_registers_exactly_ten_invariants() -> None:
+    """Ten: the protocol's eight less F5, plus two later additions.
 
     F5 deleted GEPA_REFLECTION_MINIBATCH -- nothing persisted witnesses a
     reflection's minibatch size, so it ships not at all rather than as a
     permanent NOT_APPLICABLE, and ``GEPA_TERMINAL_ARTIFACT_PRESENT``
     replaces it. ``GEPA_TRAIN_VAL_DISJOINT`` is the ninth, added with the
-    required train/val split.
+    required train/val split, and ``GEPA_REPEATS_AS_RECORDED`` the tenth,
+    added when whetstone-ai 0.1.11 let GEPA search at more than one repeat
+    and began recording the count it resolved to.
     """
-    assert len(GEPA_INVARIANTS) == 9
+    assert len(GEPA_INVARIANTS) == 10
     assert {invariant.__name__ for invariant in GEPA_INVARIANTS} == {
         "gepa_terminal_artifact_present",
         "gepa_pareto_front",
@@ -295,6 +298,7 @@ def test_gepa_registers_exactly_nine_invariants() -> None:
         "gepa_no_forged_terminal",
         "gepa_platform_resume_identity",
         "gepa_train_val_disjoint",
+        "gepa_repeats_as_recorded",
     }
 
 
@@ -477,7 +481,51 @@ def test_gepa_invariant_wire_values_are_pinned() -> None:
         "GEPA_NO_FORGED_TERMINAL": "gepa_no_forged_terminal",
         "GEPA_PLATFORM_RESUME_IDENTITY": "gepa_platform_resume_identity",
         "GEPA_TRAIN_VAL_DISJOINT": "gepa_train_val_disjoint",
+        "GEPA_REPEATS_AS_RECORDED": "gepa_repeats_as_recorded",
     }
+
+
+def test_repeats_as_recorded_fails_on_an_overstated_repeat_count(
+    gepa_run_dir, tmp_path
+) -> None:
+    """A detailed result claiming more repeats than the search bought.
+
+    ``validation_num_seeds`` is what an envs manifest is diffed against, and
+    nothing else re-derives it: a GEPA metric call is one candidate-task
+    evaluation at any repeat count, so repeats move provider rows without
+    moving ``total_metric_calls``. A run that searched at one repeat under a
+    design registering three is therefore indistinguishable in the budget
+    the ceiling is stated in, and only this comparison catches it.
+    """
+    run_dir = copy_run(gepa_run_dir, tmp_path / "overstated-repeats")
+    document = _read(run_dir)
+    recorded = _gepa_terminal(load_run_evidence(gepa_run_dir))
+    before = recorded.detailed_result.validation_num_seeds
+
+    _rewrite_detailed_result(
+        run_dir,
+        document,
+        lambda detailed: {**detailed, "validation_num_seeds": before + 1},
+    )
+    mutated = _write(run_dir, document)
+
+    assert f"not the recorded {before + 1}" in _detail(
+        mutated, InvariantId.GEPA_REPEATS_AS_RECORDED
+    )
+    assert_only_this_failed(
+        gepa_run_dir, mutated, InvariantId.GEPA_REPEATS_AS_RECORDED
+    )
+
+
+def test_repeats_as_recorded_passes_on_the_run_as_issued(gepa_run_dir) -> None:
+    """The same predicate on the unmutated run must PASS.
+
+    Without this the test above would pass on a predicate that failed every
+    run regardless of what its detailed result recorded.
+    """
+    finding = gepa_repeats_as_recorded(load_run_evidence(gepa_run_dir))
+    assert finding.status is AuditStatus.PASS, finding.detail
+    assert finding.evidence_refs
 
 
 def test_persisted_read_path_literals_are_pinned() -> None:

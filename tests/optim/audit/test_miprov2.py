@@ -96,6 +96,7 @@ from whetstone_envs.optim.audit.miprov2 import (
     miprov2_ground_only_deviation,
     miprov2_minibatch_sizing,
     miprov2_periodic_full_eval,
+    miprov2_repeats_as_recorded,
     miprov2_train_val_disjoint,
     miprov2_zeroshot_grounding,
     zeroshot_grounding_problems,
@@ -343,12 +344,19 @@ MIPROV2_INVARIANT_IDS = (
     InvariantId.MIPRO_BOOTSTRAP_THROUGH_ENGINE,
     InvariantId.MIPRO_TRIALS_MATCH_CONTROL,
     InvariantId.MIPRO_TRAIN_VAL_DISJOINT,
+    InvariantId.MIPRO_REPEATS_AS_RECORDED,
 )
 
 
-def test_the_assignment_names_nine_miprov2_invariants() -> None:
-    assert len(MIPROV2_INVARIANTS) == 9
-    assert len(MIPROV2_INVARIANT_IDS) == 9
+def test_the_assignment_names_ten_miprov2_invariants() -> None:
+    """Ten: the assignment's nine plus the repeat-count invariant.
+
+    ``MIPRO_REPEATS_AS_RECORDED`` was added when whetstone-ai 0.1.11 let
+    MIPROv2 search at more than one repeat and began recording the count
+    it resolved to.
+    """
+    assert len(MIPROV2_INVARIANTS) == 10
+    assert len(MIPROV2_INVARIANT_IDS) == 10
 
 
 def test_every_miprov2_invariant_is_registered() -> None:
@@ -368,6 +376,7 @@ def test_persisted_invariant_ids_are_pinned() -> None:
         "mipro_bootstrap_through_engine",
         "mipro_trials_match_control",
         "mipro_train_val_disjoint",
+        "mipro_repeats_as_recorded",
     ]
 
 
@@ -516,13 +525,21 @@ def test_minibatch_sizing_sees_a_genuine_subset(minibatched_run) -> None:
 
 @pytest.mark.parametrize("mode", DEMO_MODES)
 def test_every_finding_cites_the_state_it_read(miprov2_runs, mode) -> None:
-    """A verdict with no evidence ref is not auditable evidence."""
+    """A verdict with no evidence ref is not auditable evidence.
+
+    Every MIPROv2 invariant reads through the persisted state snapshots, so
+    each finding must cite at least one of them. ``MIPRO_REPEATS_AS_RECORDED``
+    additionally cites the eval evidence whose repeat count it compared,
+    which is the record its verdict actually rests on -- so the assertion is
+    that a finding cites the state it read, not that it cites nothing else.
+    """
     report = audit_run(miprov2_runs[mode])
     for invariant_id in MIPROV2_INVARIANT_IDS:
         finding = _finding_for(report, invariant_id)
         assert finding.evidence_refs, finding.invariant_id.value
+        schemas = {ref.schema_name for ref in finding.evidence_refs}
+        assert "whetstone.optim_state_snapshot" in schemas, schemas
         for ref in finding.evidence_refs:
-            assert ref.schema_name == "whetstone.optim_state_snapshot"
             assert len(ref.content_hash) == 64
 
 
@@ -1142,6 +1159,57 @@ def test_trials_match_control_fails_on_a_short_transcript(
     assert finding.status is AuditStatus.FAIL
     assert "terminal failure" in finding.detail
     assert not report.passed
+
+
+def test_repeats_as_recorded_fails_when_an_evaluation_billed_fewer(
+    miprov2_runs,
+    tmp_path,
+) -> None:
+    """An evaluation that paid for fewer repeats than the run recorded.
+
+    The violation has to be made on the *evidence*, which is the layer
+    nothing else guards. ``Miprov2Study._validate_evaluation_binding``
+    already rejects a transcript whose ``validation_num_seeds`` disagrees
+    with its own recorded eval binding requests (``study.py:1169``), so an
+    overstated transcript never loads as a ``Miprov2State`` at all and no
+    invariant would get to judge it. What upstream never compares is the
+    ``EvalEvidence`` the engine actually produced -- it walks no
+    ``eval_result_ref`` -- so a request that asked for three repeats and an
+    evaluation that billed one is exactly the gap this invariant closes.
+    """
+    source = miprov2_runs["fewshot"]
+    evidence = load_run_evidence(source)
+    recorded = _transcript(evidence).validation_num_seeds
+
+    def rewrite(run_dir: Path, document: dict[str, Any]) -> None:
+        _, resolution = _first_with_purpose(document, SAMPLE_PURPOSE)
+        ref = resolution["eval_result_ref"]
+        payload = _state_payload(run_dir, ref)
+        assert payload["num_seeds"] == recorded, payload["num_seeds"]
+        payload["num_seeds"] = recorded + 1
+        resolution["eval_result_ref"] = put_record(
+            run_dir, ref["schema_name"], payload
+        )
+
+    mutated = _mutated(source, tmp_path / "underbilled-repeats", rewrite)
+    finding = _assert_isolated_failure(
+        source, mutated, InvariantId.MIPRO_REPEATS_AS_RECORDED
+    )
+    assert f"not the recorded {recorded}" in finding.detail
+
+
+def test_repeats_as_recorded_passes_on_the_run_as_issued(
+    miprov2_runs,
+) -> None:
+    """The same predicate on the unmutated run must PASS.
+
+    Without this the test above would pass on a predicate that failed every
+    run regardless of what its transcript recorded.
+    """
+    evidence = load_run_evidence(miprov2_runs["fewshot"])
+    finding = miprov2_repeats_as_recorded(evidence)
+    assert finding.status is AuditStatus.PASS, finding.detail
+    assert finding.evidence_refs
 
 
 # --------------------------------------------------------------------------

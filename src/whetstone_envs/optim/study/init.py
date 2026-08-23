@@ -30,7 +30,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from whetstone_envs.c19.generation import build_manifest as build_c19_manifest
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.rows import task_rows_from_instances
 from whetstone_envs.optim.study.manifest import (
@@ -198,13 +197,16 @@ def _splits_record(protocol: StudyProtocol) -> SplitsRecord:
 
 def _population_record(protocol: StudyProtocol) -> PopulationRecord:
     """The pinned population and the content hash of its own manifest."""
-    pool_manifest = build_c19_manifest(
+    pool_manifest = family_spec(protocol.family).pool_manifest(
         n_per_stratum=protocol.n_per_stratum,
         seed_start=protocol.pool_seed_start,
     )
     return PopulationRecord(
         family=protocol.family,
-        generator_version=protocol.generator_version,
+        # From the manifest the family just built, not restated by the
+        # protocol: the generator version describes the pool that was
+        # generated, so the thing that generated it is what should name it.
+        generator_version=pool_manifest.generator_version,
         n_per_stratum=protocol.n_per_stratum,
         pool_seed_start=protocol.pool_seed_start,
         pool_manifest_content_hash=pool_manifest.content_hash,

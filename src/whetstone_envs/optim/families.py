@@ -25,6 +25,9 @@ from typing import TYPE_CHECKING, Protocol
 from whetstone_envs.c18 import PROBES as C18_PROBES
 from whetstone_envs.c19 import PROBES as C19_PROBES
 from whetstone_envs.c19 import generate_pool as c19_generate_pool
+from whetstone_envs.c19.generation import (
+    build_manifest as c19_build_manifest,
+)
 from whetstone_envs.optim.c18_experiment import (
     C18_CONTRACT,
     C18_DEFAULT_N_PER_STRATUM,
@@ -32,6 +35,7 @@ from whetstone_envs.optim.c18_experiment import (
     C18_TASK_CONTEXT,
     C18VerdictEvalProcedureRunner,
     c18_generate_pool,
+    c18_pool_manifest,
     prepare_c18_experiment,
 )
 from whetstone_envs.optim.experiment import (
@@ -50,6 +54,7 @@ if TYPE_CHECKING:
         TemplateRenderContract,
     )
 
+    from whetstone_envs.manifests import Manifest
     from whetstone_envs.optim.experiment import PreparedExperiment
     from whetstone_envs.pools import TaskPool
 
@@ -60,6 +65,7 @@ __all__ = [
     "FamilyId",
     "FamilySpec",
     "PoolGenerator",
+    "PoolManifestBuilder",
     "family_spec",
     "register_family",
     "registered_family_ids",
@@ -100,6 +106,19 @@ class ExperimentBuilder(Protocol):
         num_seeds: int,
         provider_call_config: ProviderCallConfig | None,
     ) -> PreparedExperiment: ...
+
+
+class PoolManifestBuilder(Protocol):
+    """Build the canonical manifest of one of this family's pools.
+
+    A study records its population by the manifest's content hash and its
+    generator version, so the family that knows how to generate the pool is
+    also the one that knows how to describe it. Keeping this behind the
+    registration is what stops a study author from importing a family's
+    generation module directly -- the domain leak C3 exists to catch.
+    """
+
+    def __call__(self, *, n_per_stratum: int, seed_start: int) -> Manifest: ...
 
 
 class EvalRunnerFactory(Protocol):
@@ -146,6 +165,10 @@ class FamilySpec:
     #: Naive and ceiling anchors, and the scripted fake-transport bodies.
     probes: ProbePair
     generate_pool: PoolGenerator
+    #: How this family describes a generated pool: the manifest whose
+    #: content hash and generator version a study records as its
+    #: population.
+    pool_manifest: PoolManifestBuilder
     build_experiment: ExperimentBuilder
     #: Scores one generation against a task's frozen gold.
     eval_runner: EvalRunnerFactory
@@ -246,6 +269,7 @@ _C19_SPEC = FamilySpec(
     ),
     probes=C19_PROBES,
     generate_pool=c19_generate_pool,
+    pool_manifest=c19_build_manifest,
     build_experiment=prepare_c19_experiment,
     eval_runner=ExactMatchEvalProcedureRunner,
     # The historical runner default, retained so an unparameterised run
@@ -270,6 +294,7 @@ _C18_SPEC = FamilySpec(
     ),
     probes=C18_PROBES,
     generate_pool=c18_generate_pool,
+    pool_manifest=c18_pool_manifest,
     build_experiment=prepare_c18_experiment,
     eval_runner=C18VerdictEvalProcedureRunner,
     default_n_per_stratum=C18_DEFAULT_N_PER_STRATUM,

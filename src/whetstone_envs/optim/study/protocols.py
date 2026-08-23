@@ -32,9 +32,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from whetstone_envs.c19.generation import (
-    GENERATOR_VERSION as C19_GENERATOR_VERSION,
-)
+from whetstone_envs.optim.families import FamilyId
 from whetstone_envs.optim.study.spec import (
     CODEX_EVALUATE_CALL_CAP,
     PROTOCOL_SPLIT_SIZES,
@@ -124,7 +122,14 @@ SEED_CONTROL_NOTE = "advertised"
 # Population
 # --------------------------------------------------------------------------
 
-#: The pinned c19 population: 22 strata at 32 instances each, 704 total, of
+#: The family this protocol studies, named through the registry's own
+#: identifier rather than as a literal: the study reaches every piece of
+#: family knowledge -- the pool, the experiment, the pool manifest -- through
+#: :func:`~whetstone_envs.optim.families.family_spec`, and spelling the name
+#: here as a bare string would be the one place it did not.
+FAMILY = FamilyId.C19.value
+
+#: The pinned population: 22 strata at 32 instances each, 704 total, of
 #: which the three splits consume 660 and the tail stays unassigned.
 N_PER_STRATUM = 32
 POOL_SEED_START = 1_000_000
@@ -250,7 +255,6 @@ class StudyProtocol:
     protocol_id: str
     study_id: str
     family: str
-    generator_version: str
     n_per_stratum: int
     pool_seed_start: int
     split_sizes: tuple[int, int, int]
@@ -404,8 +408,7 @@ def _step10_c19(  # noqa: PLR0913
     return StudyProtocol(
         protocol_id=protocol_id,
         study_id=study_id,
-        family="c19",
-        generator_version=C19_GENERATOR_VERSION,
+        family=FAMILY,
         n_per_stratum=n_per_stratum,
         pool_seed_start=pool_seed_start,
         split_sizes=split_sizes,

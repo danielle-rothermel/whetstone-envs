@@ -56,7 +56,23 @@ def test_the_real_protocol_pins_the_protocol_documents_values() -> None:
     assert STEP10_C19.n_per_stratum == 32
     assert STEP10_C19.pool_seed_start == 1_000_000
     assert STEP10_C19.family == "c19"
-    assert STEP10_C19.generator_version == "c19-custom-v2"
+
+
+def test_the_population_is_described_by_the_family_that_generated_it() -> None:
+    """The generator version is the pool manifest's, not the protocol's.
+
+    A protocol that restated it could name a version the generator no
+    longer produces, and the manifest would record the claim rather than
+    the fact.
+    """
+    from whetstone_envs.optim.families import family_spec
+
+    manifest = family_spec(STEP10_C19.family).pool_manifest(
+        n_per_stratum=STEP10_C19.n_per_stratum,
+        seed_start=STEP10_C19.pool_seed_start,
+    )
+    assert manifest.generator_version == "c19-custom-v2"
+    assert len(manifest.stratum_counts) == 22
 
 
 def test_the_real_protocol_pins_its_models() -> None:

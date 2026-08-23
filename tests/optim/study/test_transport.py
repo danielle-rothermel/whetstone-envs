@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -38,7 +39,6 @@ from whetstone_envs.optim.study.cli import (
     NO_RECORDED_SPEND,
     NO_STAGES_RUN,
     STAGE_SPEND_HEADING,
-    UNLEDGERED_SCORING_NOTE,
     UNLEDGERED_SPEND,
     main,
     stage_spend_lines,
@@ -71,7 +71,10 @@ from whetstone_envs.optim.study.manifest import (
     write_study_manifest,
 )
 from whetstone_envs.optim.study.spec import StageId as SpecStageId
-from whetstone_envs.optim.study.spend import run_spend_records
+from whetstone_envs.optim.study.spend import (
+    ReportSpendLedger,
+    run_spend_records,
+)
 from whetstone_envs.optim.study.stages import (
     StageEnvironment,
     StageError,
@@ -82,7 +85,7 @@ from whetstone_envs.optim.study.stages import (
 )
 from whetstone_envs.reporting.study_report import (
     NO_PROVIDER_STAGE_DETAIL,
-    UNLEDGERED_SCORING_NOTE_REPORT,
+    STAGE_SPEND_COVERAGE_NOTE,
     UNLEDGERED_STAGE_DETAIL,
     study_leakage_failed,
 )
@@ -90,6 +93,8 @@ from whetstone_envs.reporting.study_report import (
 from .conftest import toy_manifest
 
 if TYPE_CHECKING:
+    from dr_store import ObjectStore
+    from whetstone.eval.schema import EvalEvidence
     from whetstone.experiment.candidate import Candidate
 
     from whetstone_envs.optim.study.anchors import EngineBinder
@@ -938,27 +943,36 @@ def test_a_paid_stage_with_records_prints_the_totals() -> None:
     assert NO_RECORDED_SPEND not in text
 
 
-def test_the_ledger_states_what_it_does_not_cover() -> None:
-    """Official-selection and held-out calls are outside every total."""
-    expected = (
-        "note: official-selection scoring and held-out evaluation calls "
-        "are not yet ledgered; every total below excludes them."
-    )
-    assert expected == UNLEDGERED_SCORING_NOTE
+def test_the_ledger_no_longer_disclaims_the_reporting_pass() -> None:
+    """The omission the note described is closed, so the note is gone.
+
+    Fails-before: every rendering of the ledger carried
+    ``UNLEDGERED_SCORING_NOTE`` -- "official-selection scoring and held-out
+    evaluation calls are not yet ledgered; every total below excludes
+    them." That was true and is now false: the reporting pass is folded
+    onto the stage's own row, so a total that still disclaimed it would
+    understate its own completeness.
+    """
     for stages in (
         (),
         (StageRecord(stage=StageId.STAGE0.value, transport=FAKE_TRANSPORT),),
     ):
-        assert expected in "\n".join(stage_spend_lines(stages))
+        text = "\n".join(stage_spend_lines(stages))
+        assert "not yet ledgered" not in text
+        assert "excludes them" not in text
 
 
-def test_the_report_states_the_same_omission() -> None:
-    assert UNLEDGERED_SCORING_NOTE_REPORT == (
-        "The per-stage spend below is a lower bound. Official-selection "
-        "scoring and held-out evaluation calls are not yet ledgered: they "
-        "reach the provider through the evaluation engine outside any "
-        "optimizer run, so no stage total includes them."
-    )
+def test_the_report_states_what_the_ledger_covers() -> None:
+    """Both routes named, so a reader knows the row is the whole bill."""
+    assert "not yet ledgered" not in STAGE_SPEND_COVERAGE_NOTE
+    assert "lower bound" not in STAGE_SPEND_COVERAGE_NOTE
+    for phrase in (
+        "official-selection scoring",
+        "held-out evaluations",
+        "optimizer runs",
+        "persisted output rows",
+    ):
+        assert phrase in STAGE_SPEND_COVERAGE_NOTE, phrase
 
 
 def test_the_report_labels_the_two_empty_cases_apart() -> None:
@@ -1579,3 +1593,155 @@ def test_the_three_roles_bind_three_distinct_configs(
         for name in FAKE_TOY_EVAL_CONFIG_HASHES
     ]
     assert len(set(hashes)) == len(hashes)
+
+
+# --------------------------------------------------------------------------
+# The reporting pass is ledgered too (D3 defect (c))
+# --------------------------------------------------------------------------
+
+
+class _StubEvidence:
+    """The two fields the ledger reads off an evaluation's evidence."""
+
+    def __init__(self, key: tuple[str, str]) -> None:
+        schema_name, content_hash = key
+        self.outputs_ref = SimpleNamespace(
+            schema_name=schema_name,
+            content_hash=content_hash,
+            reference=key,
+        )
+
+
+def _ledger_with(records: dict[tuple[str, str], tuple[RunSpendRecord, ...]]):
+    """A ledger whose pricing is stubbed, so the *collection* is under test.
+
+    The projection from rows to records is ``stage_spend_records``' own
+    contract and is exercised where it lives; what this pins is that every
+    evaluation is collected exactly once, attributed to its evidence, and
+    folded under the honesty rules.
+    """
+    ledger = ReportSpendLedger(cast("ObjectStore", object()))
+
+    def _priced(*, store, evidence):  # noqa: ARG001
+        (record,) = evidence
+        key = (
+            record.outputs_ref.schema_name,
+            record.outputs_ref.content_hash,
+        )
+        return records.get(key, ())
+
+    return ledger, _priced
+
+
+def test_the_ledger_records_one_entry_per_evaluation(monkeypatch) -> None:
+    """One record per role per evaluation, cited by its own evidence.
+
+    Fails-before: there was no ledger. Official-selection scoring and
+    held-out evaluation reached the provider through the evaluation engine
+    outside any optimizer run, and nothing collected their rows -- so the
+    stage row stopped at the run-side total and a study's reported cost
+    understated its spend by the whole reporting pass.
+    """
+    first = ("outputs", "a" * 64)
+    second = ("outputs", "b" * 64)
+    ledger, priced = _ledger_with(
+        {
+            first: (_spend(calls=10, usd=0.01),),
+            second: (_spend(calls=4, usd=0.004),),
+        }
+    )
+    monkeypatch.setattr(
+        "whetstone_envs.optim.study.spend.stage_spend_records", priced
+    )
+
+    ledger.record(
+        evidence=cast("EvalEvidence", _StubEvidence(first)),
+        purpose="study-official-selection",
+        candidate_name="copro-run1",
+    )
+    ledger.record(
+        evidence=cast("EvalEvidence", _StubEvidence(second)),
+        purpose="study-held-out-report",
+        candidate_name="copro-run1",
+    )
+
+    records = ledger.records()
+    assert len(records) == 2
+    assert [record.purpose for record in records] == [
+        "study-official-selection",
+        "study-held-out-report",
+    ]
+    # Each record cites the evidence its number was derived from, so the
+    # total is checkable rather than taken on the ledger's word.
+    assert [record.evidence_key for record in records] == [first, second]
+
+    (folded,) = ledger.folded()
+    assert folded.role == "task_model"
+    assert folded.calls == 14
+    assert folded.usd == pytest.approx(0.014)
+
+
+def test_one_unpriced_reporting_evaluation_withholds_the_total(
+    monkeypatch,
+) -> None:
+    """The honesty rule survives the fold, as it does for runs.
+
+    A sum over the priced evaluations alone would look authoritative while
+    understating the pass, which is the same failure ``RunSpendRecord``
+    forbids within one run.
+    """
+    priced_key = ("outputs", "c" * 64)
+    unpriced_key = ("outputs", "d" * 64)
+    ledger, priced = _ledger_with(
+        {
+            priced_key: (_spend(calls=10, usd=0.01),),
+            unpriced_key: (_spend(calls=2, usd=None),),
+        }
+    )
+    monkeypatch.setattr(
+        "whetstone_envs.optim.study.spend.stage_spend_records", priced
+    )
+    for key in (priced_key, unpriced_key):
+        ledger.record(
+            evidence=cast("EvalEvidence", _StubEvidence(key)),
+            purpose="study-held-out-report",
+            candidate_name="arm",
+        )
+
+    (folded,) = ledger.folded()
+    assert folded.calls == 12
+    assert folded.usd is None
+
+
+def test_an_evaluation_that_evidenced_no_call_appends_nothing(
+    monkeypatch,
+) -> None:
+    """ "Not measured" and "free" stay distinct, as everywhere else here."""
+    key = ("outputs", "e" * 64)
+    ledger, priced = _ledger_with({})
+    monkeypatch.setattr(
+        "whetstone_envs.optim.study.spend.stage_spend_records", priced
+    )
+    ledger.record(
+        evidence=cast("EvalEvidence", _StubEvidence(key)),
+        purpose="study-held-out-report",
+        candidate_name="arm",
+    )
+    assert ledger.records() == ()
+    assert ledger.folded() == ()
+
+
+def test_a_ledger_with_no_store_collects_nothing() -> None:
+    """A caller supplying its own collaborators prices nothing.
+
+    The rows are read back out of the store, so with none bound there is
+    nothing to read -- and inventing a bill would be worse than omitting one.
+    """
+    ledger = ReportSpendLedger(None)
+    ledger.record(
+        evidence=cast("EvalEvidence", _StubEvidence(("outputs", "f" * 64))),
+        purpose="study-held-out-report",
+        candidate_name="arm",
+    )
+    assert ledger.records() == ()
+    assert ledger.folded() == ()

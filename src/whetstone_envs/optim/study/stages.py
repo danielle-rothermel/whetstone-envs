@@ -92,6 +92,7 @@ from whetstone_envs.optim.study.spec import (
     spec_from_manifest,
 )
 from whetstone_envs.optim.study.spend import (
+    ReportSpendLedger,
     run_spend_records,
     stage_spend_records,
 )
@@ -218,6 +219,16 @@ class StageEnvironment:
     #: ``run_optimizer`` carries the same authorization and remains the
     #: thing that actually gates the spend, together with the opt-in
     #: environment variable.
+    #: Where the reporting pass's own spend accumulates.
+    #:
+    #: Official-selection scoring and held-out evaluation reach the
+    #: provider outside any optimizer run, so the run fold cannot see them
+    #: and the stage's own evidence route -- which is Stage 0's -- does not
+    #: cover them either. The scorers append here as they go and
+    #: :func:`run_arm_stage` folds the result into the stage's row once the
+    #: pass is done. ``None`` on a caller that supplies its own
+    #: collaborators, which ledgers nothing rather than inventing a bill.
+    report_spend: ReportSpendLedger | None = None
     real_codex_authorized: bool = False
     #: How a test points the harness's Codex preflight at the scripted
     #: fake CLI instead of a real session.
@@ -1188,11 +1199,60 @@ def run_arm_stage(
         k_repeat=manifest.design.k_repeat,
         log=log,
     )
+    # The reporting pass's own bill, folded in only now. It cannot be
+    # written with the arms' row above: official-selection scoring, the
+    # held-out evaluations, and the anchors' re-measurement all happen
+    # after that write, and every one of them reaches the provider. A
+    # stage row that stopped at the run-side total would understate the
+    # study by the whole pass its efficacy claims are made against.
+    _record_report_spend(
+        study_dir=study_dir, stage=stage, environment=environment
+    )
     return StageResult(
         stage=stage,
         manifest=read_study_manifest(study_dir),
         arms=reports,
         analysis=analysis,
+    )
+
+
+def _record_report_spend(
+    *, study_dir: Path, stage: StageId, environment: StageEnvironment
+) -> None:
+    """Merge the reporting pass's spend onto this stage's row.
+
+    Merged rather than replaced, for :func:`_arm_stage_record`'s reason:
+    the row already carries what the arms' runs cost, and the reporting
+    pass is a second bill on the same stage rather than a correction of
+    the first. The fold re-applies the honesty rules, so one unpriced
+    reporting evaluation withholds the role's whole ``usd``.
+
+    A fake-transport stage is skipped: its rows are real rows that would
+    total to a bill nobody owes, which is the judgement
+    :func:`_stage_record` keeps at the call site.
+    """
+    ledger = environment.report_spend
+    if ledger is None or environment.transport == TransportName.FAKE.value:
+        return
+    folded = ledger.folded()
+    if not folded:
+        return
+    manifest = read_study_manifest(study_dir)
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                "stages": _arm_stage_record(
+                    manifest,
+                    StageRecord(
+                        stage=stage.value,
+                        transport=environment.transport,
+                        spend=folded,
+                    ),
+                )
+            }
+        ),
+        replace=True,
     )
 
 

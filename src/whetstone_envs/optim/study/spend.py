@@ -21,11 +21,16 @@ the total rather than carrying it from the parts, so a single unpriced run
 withholds the whole role's total exactly as a single unpriced call does
 within one run.
 
-Neither function covers official-selection scoring or held-out evaluation:
-those reach the provider outside any optimizer run and leave no record
-either route can see, so every total here is a lower bound. Ledgering them
-is Phase E; the renderers say so rather than letting a partial total read
-as a complete one.
+**Reporting evaluations are the third route, and it is this module's
+too.** Official-selection scoring and held-out evaluation reach the
+provider outside any optimizer run, so neither of the two routes above can
+see them -- and their rows are exactly the rows every efficacy claim is
+finally made against. :class:`ReportSpendLedger` collects them the same
+way Stage 0's are collected: one record per role per evaluation, projected
+from the evaluation's own persisted rows, cited in the manifest by the
+evidence it was derived from. Folding those records into the stage's own
+row is what makes a stage total the whole bill rather than the run-side
+part of it.
 
 **Every number is read back, never accumulated.** The stage hands over the
 :class:`~whetstone.eval.schema.EvalEvidence` its evaluations produced, this
@@ -57,6 +62,7 @@ owes -- and that judgement lives at the call site rather than here.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from whetstone.eval.schema import EvalOutputRow, EvalOutputsRecord
@@ -77,6 +83,8 @@ if TYPE_CHECKING:
     from whetstone.eval.schema import EvalEvidence
 
 __all__ = [
+    "ReportSpendLedger",
+    "ReportSpendRecord",
     "row_observation",
     "run_spend_records",
     "stage_spend_records",
@@ -258,3 +266,107 @@ def run_spend_records(
         )
         for role in order
     )
+
+
+# --------------------------------------------------------------------------
+# The reporting pass's own spend
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ReportSpendRecord:
+    """One reporting evaluation's spend, and the evidence behind it.
+
+    The purpose and the candidate are carried so a reader can tell an
+    official-selection pass from a held-out one and attribute either to
+    the candidate it measured. ``evidence_key`` is the evidence's own
+    ``(schema, content_hash)``, which is what makes the record checkable:
+    the manifest cites the evaluation, and the number is re-derivable from
+    it rather than taken on the ledger's word.
+    """
+
+    purpose: str
+    candidate_name: str
+    evidence_key: tuple[str, str]
+    spend: tuple[RunSpendRecord, ...]
+
+
+class ReportSpendLedger:
+    """Every reporting evaluation this stage paid for, in issue order.
+
+    The reporting pass is the one route neither :func:`stage_spend_records`
+    nor :func:`run_spend_records` can see: it evaluates through the engine
+    like Stage 0 but happens *after* the arm stage has already written its
+    row, and its rows belong to no optimizer run. So the scorers append
+    here as they go, and the stage folds what accumulated into its own
+    record once the pass is done.
+
+    **One record per role per evaluation.** An evaluation is the unit the
+    study pays for and the unit the manifest can cite, so collapsing two
+    into one would make the total unattributable to any evidence a reader
+    could check.
+
+    Deliberately mutable, and deliberately the only mutable thing in this
+    module: a scorer is a frozen value object bound once per study and
+    called many times, and threading a return value back through
+    ``report_arm``'s two callable contracts would change what those
+    contracts are for. The ledger is handed in, appended to, and read once.
+
+    An evaluation whose rows evidence no provider call appends **nothing**.
+    That is the same honesty rule :func:`stage_spend_records` applies: a
+    zero-call record would claim the evaluation was measured and found
+    free, which is a different and untrue claim from "not measured".
+    """
+
+    __slots__ = ("_records", "_store")
+
+    def __init__(self, store: ObjectStore | None) -> None:
+        #: ``None`` on a caller that bound no store -- a test injecting
+        #: its own collaborators -- in which case nothing is collected,
+        #: because the rows are read back out of the store and there is
+        #: nothing to read.
+        self._store = store
+        self._records: list[ReportSpendRecord] = []
+
+    def record(
+        self,
+        *,
+        evidence: EvalEvidence,
+        purpose: str,
+        candidate_name: str,
+    ) -> None:
+        """Price one reporting evaluation from its own persisted rows."""
+        if self._store is None:
+            return
+        spend = stage_spend_records(store=self._store, evidence=(evidence,))
+        if not spend:
+            return
+        outputs_ref = evidence.outputs_ref
+        self._records.append(
+            ReportSpendRecord(
+                purpose=purpose,
+                candidate_name=candidate_name,
+                evidence_key=(
+                    outputs_ref.schema_name,
+                    outputs_ref.content_hash,
+                ),
+                spend=spend,
+            )
+        )
+
+    def records(self) -> tuple[ReportSpendRecord, ...]:
+        """Every evaluation this ledger priced, in issue order."""
+        return tuple(self._records)
+
+    def folded(self) -> tuple[RunSpendRecord, ...]:
+        """The reporting pass's per-role total.
+
+        Folded through :func:`run_spend_records` rather than re-read from
+        the rows, for its reason: the parts already re-derived themselves
+        from evidence, and a second reading could disagree with them. The
+        fold re-applies the honesty rules to the total, so one unpriced
+        evaluation withholds the whole role's ``usd``.
+        """
+        return run_spend_records(
+            entry for record in self._records for entry in record.spend
+        )

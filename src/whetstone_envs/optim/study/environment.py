@@ -227,6 +227,9 @@ def bound_stage_environment(
         RoleScorer,
         StudyOptimizerRunner,
     )
+    from whetstone_envs.optim.study.spend import (  # noqa: PLC0415
+        ReportSpendLedger,
+    )
 
     manifest = read_study_manifest(study_dir)
     population = manifest.population
@@ -334,12 +337,19 @@ def bound_stage_environment(
         # falling back to one repeat only affects Stage 0's own bind.
         k_repeat = 1 if manifest.design is None else manifest.design.k_repeat
         build_candidate = BuildCandidate(population.family)
+        # One ledger for both scorers, because the reporting pass is one
+        # bill: official-selection scoring and held-out evaluation reach
+        # the same provider on the same invocation, and splitting them
+        # would make the stage fold two partial totals that must then be
+        # kept in step.
+        report_spend = ReportSpendLedger(cast("ObjectStore", store))
         official = RoleScorer(
             bind_engine=bind_engine,
             role=EvalRole.OFFICIAL,
             task_ids=task_ids_by_role[EvalRole.OFFICIAL],
             num_seeds=k_repeat,
             build_candidate=build_candidate,
+            spend_ledger=report_spend,
         )
         held_out = RoleScorer(
             bind_engine=bind_engine,
@@ -347,6 +357,7 @@ def bound_stage_environment(
             task_ids=task_ids_by_role[EvalRole.HELD_OUT],
             num_seeds=k_repeat,
             build_candidate=build_candidate,
+            spend_ledger=report_spend,
         )
         runner = StudyOptimizerRunner(
             study_dir=study_dir,
@@ -380,4 +391,5 @@ def bound_stage_environment(
             # every engine writes into, which is what makes reading the
             # rows back a read of this stage's own evidence.
             store=cast("ObjectStore", store),
+            report_spend=report_spend,
         )

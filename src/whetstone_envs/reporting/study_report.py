@@ -84,8 +84,8 @@ __all__ = [
     "NULL_ARM_PREFIX",
     "REPORT_HTML_NAME",
     "REPORT_MARKDOWN_NAME",
+    "STAGE_SPEND_COVERAGE_NOTE",
     "STUDY_MANIFEST_COPY",
-    "UNLEDGERED_SCORING_NOTE_REPORT",
     "UNLEDGERED_STAGE_DETAIL",
     "UNPRICED",
     "VALIDATION_CHECKLIST",
@@ -1390,7 +1390,7 @@ def _stage_history_section(manifest: StudyManifest) -> Section:
                 "were calibrated on, because every held-out delta is paired "
                 "against those anchors."
             ),
-            (UNLEDGERED_SCORING_NOTE_REPORT),
+            (STAGE_SPEND_COVERAGE_NOTE),
         ),
         tables=(
             Table(
@@ -1449,19 +1449,22 @@ def _stage_label(stage: str) -> str:
     return f"Stage {stage.removeprefix('stage')}"
 
 
-#: What the report says the per-stage ledger does not yet cover.
+#: What the report says the per-stage ledger covers.
 #:
-#: Official-selection scoring and held-out evaluation reach the provider
-#: through the evaluation engine outside any optimizer run, so no run
-#: record and no anchor evidence carries them and no stage total includes
-#: them. Full ledgering of those calls is Phase E; until then the report
-#: states the omission rather than presenting a partial total as the whole
-#: bill.
-UNLEDGERED_SCORING_NOTE_REPORT = (
-    "The per-stage spend below is a lower bound. Official-selection "
-    "scoring and held-out evaluation calls are not yet ledgered: they "
-    "reach the provider through the evaluation engine outside any "
-    "optimizer run, so no stage total includes them."
+#: A stage spends by two routes and the row is the sum of both: its arms'
+#: optimizer runs, each of which projected its own bill, and the reporting
+#: pass -- official-selection scoring, the held-out evaluations, and the
+#: anchors' re-measurement -- which reaches the provider through the
+#: evaluation engine outside any run and is priced from its own persisted
+#: rows. Saying so is what stops a reader from taking the run-side number
+#: for the whole bill, which is what it used to be.
+STAGE_SPEND_COVERAGE_NOTE = (
+    "The per-stage spend below is the whole of what each stage bought: "
+    "its arms' optimizer runs, plus the reporting pass -- "
+    "official-selection scoring, the held-out evaluations, and the "
+    "anchors' re-measurement -- folded onto the same row. Both routes are "
+    "priced from the persisted output rows rather than accumulated while "
+    "the stage ran."
 )
 
 #: What a paid stage that recorded no spend reports. Never the

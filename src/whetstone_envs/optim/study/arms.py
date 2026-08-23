@@ -67,6 +67,7 @@ from whetstone_envs.optim.study.selection import (
     HeldOutMeasurement,
     RunCandidate,
 )
+from whetstone_envs.optim.study.spend import ReportSpendLedger
 from whetstone_envs.optim.study.stages import ArmRunResult, StageError
 from whetstone_envs.reporting.publication import TRAJECTORY_REPORT_NAME
 
@@ -158,6 +159,18 @@ class RoleScorer:
     task_ids: tuple[str, ...]
     num_seeds: int
     build_candidate: BuildCandidate
+    #: Where this scorer's evaluations are priced.
+    #:
+    #: A reporting evaluation reaches the provider outside any optimizer
+    #: run, so neither the run fold nor the stage's own evidence route can
+    #: see it -- and these are the calls every efficacy claim is finally
+    #: made against. Each evaluation appends one record per role, projected
+    #: from its own persisted rows, and the stage folds what accumulated
+    #: into its row once the reporting pass is done.
+    #:
+    #: ``None`` on a caller that supplies its own collaborators, which
+    #: collects nothing rather than pricing evidence it cannot read back.
+    spend_ledger: ReportSpendLedger | None = None
 
     def evidence_for(
         self, *, candidate_name: str, template: str, purpose: str
@@ -167,6 +180,10 @@ class RoleScorer:
         Returns the persisted evidence rather than a scalar, because every
         caller needs the per-task vector and the row accounting: a mean
         without its completeness cannot be judged against the backstop.
+
+        The evaluation is priced here, at the one place every reporting
+        evaluation passes through, so a new caller cannot reach the
+        provider without its call being ledgered.
         """
         engine = self.bind_engine(role=self.role, num_seeds=self.num_seeds)
         subset = engine.for_task_ids(self.task_ids)
@@ -186,6 +203,12 @@ class RoleScorer:
                 f"candidate {candidate_name!r} produced no successful "
                 f"evaluation on the {self.role.value} split: "
                 f"{type(evidence).__name__}"
+            )
+        if self.spend_ledger is not None:
+            self.spend_ledger.record(
+                evidence=evidence,
+                purpose=purpose,
+                candidate_name=candidate_name,
             )
         return evidence
 

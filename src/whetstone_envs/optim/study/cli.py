@@ -468,19 +468,6 @@ UNLEDGERED_SPEND = (
 #: What the ledger prints when no stage has run yet.
 NO_STAGES_RUN = "no stage has run yet"
 
-#: Which of a stage's provider calls the ledger does *not* yet cover.
-#:
-#: Official-selection scoring and held-out evaluation happen through the
-#: evaluation engine outside any optimizer run, so no ``RunRecord`` and no
-#: anchor evidence carries them and this ledger cannot see them. Full
-#: ledgering of those calls is Phase E. Until then the omission is stated
-#: on every rendering of the ledger rather than left for a reader to infer
-#: from a total that looks complete.
-UNLEDGERED_SCORING_NOTE = (
-    "note: official-selection scoring and held-out evaluation calls are "
-    "not yet ledgered; every total below excludes them."
-)
-
 
 def _stage_usd(spend: tuple[RunSpendRecord, ...]) -> str:
     """One stage's total USD, or the honest reason there is none.
@@ -528,12 +515,13 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
     that says whether an empty row means "reached no provider" or
     "reached one and lost the bill".
 
-    The ledger states what it does not cover. Official-selection and
-    held-out scoring calls are not ledgered yet, so every total is a
-    lower bound and says so, rather than presenting itself as the whole
-    bill.
+    A stage row is the whole of what the stage bought: its arms' optimizer
+    runs, and the reporting pass -- official-selection scoring, the
+    held-out evaluations, and the anchors' re-measurement -- folded onto
+    the same row. The two are recorded by different routes because they
+    spend by different routes, but neither is left out of the total.
     """
-    lines = ["", STAGE_SPEND_HEADING, f"  {UNLEDGERED_SCORING_NOTE}"]
+    lines = ["", STAGE_SPEND_HEADING]
     if not stages:
         lines.extend((f"  {NO_STAGES_RUN}", ""))
         return tuple(lines)
@@ -1234,7 +1222,6 @@ __all__ = [
     "OPTIMIZER_BUDGET_HEADING",
     "PROGRAM_NAME",
     "STAGE_SPEND_HEADING",
-    "UNLEDGERED_SCORING_NOTE",
     "UNLEDGERED_SPEND",
     "ReportGenerator",
     "StageLedgerLoader",

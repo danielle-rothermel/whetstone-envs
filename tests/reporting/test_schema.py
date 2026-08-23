@@ -22,7 +22,7 @@ from whetstone_envs.reporting.schema import (
 
 
 def test_persisted_schema_literals_are_pinned() -> None:
-    assert EVAL_REPORT_SCHEMA == "whetstone_envs.eval_report/v1"
+    assert EVAL_REPORT_SCHEMA == "whetstone_envs.eval_report/v2"
     assert TRAJECTORY_REPORT_SCHEMA == "whetstone_envs.trajectory_report/v1"
 
 

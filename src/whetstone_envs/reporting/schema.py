@@ -20,7 +20,12 @@ from whetstone_envs.scoring.families import family_score
 
 # Persisted literals are owned here and pinned directly by golden tests.
 
-EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v1"
+#: v2 adds ``spend``: what the evaluation's own provider calls cost.
+#: v1 published a report for a run that had reached a provider and said
+#: nothing about the bill, so a held-out evaluation -- the role every
+#: efficacy claim is finally made against -- spent money no artifact
+#: recorded.
+EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v2"
 TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
 #: The only whetstone-ai cost-report schema version this package projects.
 #: An embedded report at any other version carries semantics this schema has
@@ -373,12 +378,21 @@ EvaluationResult = Annotated[
 
 
 class EvalReport(_StrictModel):
-    schema_version: Literal["whetstone_envs.eval_report/v1"]
+    schema_version: Literal["whetstone_envs.eval_report/v2"]
     run: EvalRun
     candidates: tuple[CandidateRecord, ...]
     tasks: tuple[TaskRecord, ...]
     observations: tuple[Observation, ...]
     results: tuple[EvaluationResult, ...]
+    #: What this evaluation's provider calls cost, re-derived from the
+    #: persisted output rows rather than accumulated while it ran.
+    #:
+    #: ``None`` when the run evidenced no provider call -- a fake-transport
+    #: evaluation reaches no provider, and a paid one whose rows carried no
+    #: usage telemetry measured nothing it could bill. Reporting an
+    #: all-zero block for either would claim the evaluation was measured
+    #: and found free.
+    spend: EvalSpend | None = None
 
     @model_validator(mode="after")
     def _validate_collections(self) -> EvalReport:  # noqa: PLR0912
@@ -583,6 +597,27 @@ class RunSpend(_StrictModel):
             raise ValueError("task model spend must carry the task_model role")
         if self.proposer.role != "proposer":
             raise ValueError("proposer spend must carry the proposer role")
+        return self
+
+
+class EvalSpend(_StrictModel):
+    """What one standalone evaluation's provider calls cost.
+
+    Only the task model appears. A standalone evaluation runs no
+    optimizer, so there is no proposer to report -- and an all-zero
+    proposer row would claim the evaluation measured one and found it
+    free, which is a different and untrue claim. That is why this is not
+    :class:`RunSpend`, which requires both roles because an optimizer run
+    has both.
+    """
+
+    schema_version: Literal[1]
+    task_model: RoleSpend
+
+    @model_validator(mode="after")
+    def _validate_roles(self) -> EvalSpend:
+        if self.task_model.role != "task_model":
+            raise ValueError("task model spend must carry the task_model role")
         return self
 
 

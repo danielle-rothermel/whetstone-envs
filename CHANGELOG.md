@@ -91,13 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   nobody. A **paid** stage with no records reports a loud `UNLEDGERED`,
   because it reached a provider and lost track of what it bought: its bill
   is unknown, not zero.
-- **The ledger states what it does not cover.** Official-selection scoring
-  and held-out evaluation reach the provider through the evaluation engine
-  outside any optimizer run, so no run record and no anchor evidence
-  carries them and no stage total includes them. `plan`, `run`, the report,
-  and the README now say so explicitly, so a printed total reads as the
-  lower bound it is rather than as the whole bill. Full ledgering of those
-  calls is Phase E.
+- **The ledger states what it covers.** A stage row is the sum of both
+  routes it spends by — its arms' optimizer runs and its reporting pass —
+  and `plan`, `run`, the report, and the README say so, so a printed total
+  reads as the whole bill rather than as the run-side part of it.
 - **The fake path's Eval Config hashes are pinned.** A golden test fixes
   the three role config hashes the fake toy study binds, so a change that
   let provider call configuration leak onto the fake path — the way the
@@ -280,6 +277,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   run count, or place in the correction family. Stage 0 stays permissive
   there, because adding an arm and re-pinning is exactly how
   `stage0 --replace-design` records an amendment.
+
+### Fixed
+
+- **The reporting pass's spend is ledgered, so a stage total is the whole
+  bill.** Official-selection scoring, the held-out evaluations, and the
+  anchors' re-measurement reach the provider through the evaluation engine
+  outside any optimizer run, so neither the run fold nor Stage 0's evidence
+  route could see them — and those are the calls every efficacy claim is
+  finally made against. `RoleScorer` now prices each evaluation from its
+  own persisted rows as it issues it, through `study/spend.py`'s row-derived
+  aggregation: one record per role per evaluation, each citing the evidence
+  it was derived from, collected by `ReportSpendLedger` and folded onto the
+  stage's `StageRecord.spend` once the pass is done. It is merged onto the
+  arms' row rather than replacing it — the two are separate bills for one
+  stage — and the fold re-applies the honesty rules, so one unpriced
+  reporting evaluation withholds the role's whole `usd`. A fake-transport
+  stage is skipped, as everywhere else: its rows would total to a bill
+  nobody owes.
+- **The standalone eval path publishes what it spent.** `run_c19_evaluation`
+  wrote `eval-report.json` and `runtime.sqlite` and no cost document at all,
+  so a held-out evaluation spent real money that no artifact recorded.
+  `EvalReport` gains a `spend` block (schema `v2`) projected from the
+  evaluation's own persisted rows, and `whetstone-eval` writes a `cost.json`
+  beside the report in the same shape optimizer runs publish. Only the task
+  model appears — an evaluation runs no proposer, and an all-zero proposer
+  row would claim it measured one and found it free — and an evaluation that
+  evidenced no provider call publishes neither block rather than a zero.
 
 ### Fixed
 

@@ -380,12 +380,16 @@ spend reports `UNLEDGERED` — it reached a provider and lost track of what
 it bought, so its bill is unknown rather than zero, and that is a defect to
 act on rather than a free stage.
 
-**What the ledger does not yet cover.** Official-selection scoring and
-held-out evaluation calls are not ledgered: they reach the provider through
-the evaluation engine outside any optimizer run, so no `RunRecord` and no
-anchor evidence carries them and no stage total includes them. Every
-printed total is therefore a lower bound, and `plan`, `run`, and the report
-each say so. Full ledgering of those calls is Phase E.
+**What the ledger covers.** A stage spends by two routes and its row is
+the sum of both. Its arms spend through optimizer runs, each of which
+projected its own per-role bill, and the stage total is the fold of those
+records. Its **reporting pass** — official-selection scoring, the held-out
+evaluations, and the anchors' re-measurement — reaches the provider through
+the evaluation engine outside any run, so those evaluations are priced one
+record per role per evaluation from their own persisted rows and folded
+onto the same stage row. Both routes read the numbers back out of evidence
+rather than accumulating them, so a stage total and a run total are the
+same kind of fact under the same honesty rules.
 
 ### Reading the ledger before authorizing a paid stage
 

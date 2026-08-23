@@ -72,8 +72,8 @@ from whetstone_envs.reporting.study_report import (
     NO_PROVIDER_STAGE_DETAIL,
     REPORT_HTML_NAME,
     REPORT_MARKDOWN_NAME,
+    STAGE_SPEND_COVERAGE_NOTE,
     STUDY_MANIFEST_COPY,
-    UNLEDGERED_SCORING_NOTE_REPORT,
     UNLEDGERED_STAGE_DETAIL,
     UNPRICED,
     VALIDATION_CHECKLIST,
@@ -1354,7 +1354,7 @@ def test_the_report_says_which_calls_the_ledger_omits(
             )
         }
     )
-    assert UNLEDGERED_SCORING_NOTE_REPORT in _rendered(
+    assert STAGE_SPEND_COVERAGE_NOTE in _rendered(
         manifest, tmp_path, monkeypatch
     )
 

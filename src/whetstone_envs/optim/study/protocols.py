@@ -106,8 +106,13 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: not what a manifest records -- it is what a test asserts the shipped
 #: document still hashes to. A pre-registration whose text could change
 #: without anything failing would pre-register nothing.
+#: Revision 2 (2026-08-23). Revision 1 hashed to ``a311de47...``; that value
+#: is historical -- it is what a manifest initialised before the 2026-08-23
+#: decisions recorded, and the text it names states a design this code does
+#: not run. The revision block at the head of the document lists every
+#: change and the plan note that decided it.
 PROTOCOL_DOC_SHA256 = (
-    "a311de47411412c7a02b7e83c46874f927f17eb9c173c0b53b207499c6d0e85e"
+    "1fa2102bc16bbe9cbd35a140e53615bbc1830314db5a61de404e815608adbbe0"
 )
 
 

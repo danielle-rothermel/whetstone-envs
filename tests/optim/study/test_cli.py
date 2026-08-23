@@ -74,6 +74,16 @@ class _Spec:
         self.k_repeat = 3
         self.split_sizes = (88, 132, 440)
 
+    @property
+    def optimizer_by_arm(self) -> Mapping[str, str]:
+        """Each arm's optimizer.
+
+        These fixtures name every arm after its optimizer, which is the
+        common case; the study's own MIPROv2 demo-mode arms are where the
+        two names come apart, and ``test_protocols`` covers that.
+        """
+        return {arm_id: arm_id for arm_id in self.arm_ids}
+
 
 # --------------------------------------------------------------------------
 # parser

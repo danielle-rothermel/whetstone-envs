@@ -1622,7 +1622,7 @@ def _run_every_arm(
     # the study spent.
     executed: list[RunRecord] = []
     for arm in spec.arms:
-        stage_seeds = arm_seeds(arm.optimizer, stage=stage)
+        stage_seeds = arm_seeds(arm.arm_id, stage=stage)
         existing = by_arm_id.get(arm.arm_id)
         existing_runs = () if existing is None else existing.runs
         done = {run.seed for run in existing_runs if run.seed is not None}

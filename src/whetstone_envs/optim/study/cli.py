@@ -48,6 +48,7 @@ from whetstone_envs.optim.study.gates import (
     MEASURED_MIPROV2_FEWSHOT_TASK_CALLS,
     estimate_optimizer_calls,
 )
+from whetstone_envs.optim.study.init import init_study
 from whetstone_envs.optim.study.leakage import (
     HeldOutObservation,
     LeakageRule,
@@ -76,6 +77,12 @@ from whetstone_envs.optim.study.manifest import (
 from whetstone_envs.optim.study.power import (
     WORST_CASE_SIGMA_SQ,
     minimum_detectable_effect,
+)
+from whetstone_envs.optim.study.protocols import (
+    SIZED_FIELDS,
+    STEP10_C19_ID,
+    study_protocol,
+    without_codex,
 )
 from whetstone_envs.optim.study.selection import SelectionError
 from whetstone_envs.optim.study.spec import load_study_spec
@@ -107,10 +114,11 @@ class StudySpecLike(Protocol):
     and the repeat count -- nothing about how a stage executes.
     ``StudySpec`` satisfies this by carrying exactly these members.
 
-    Arm ids double as optimizer names for the estimate: the study's arms are
-    one per optimizer, so the id *is* the optimizer, and an arm whose id the
-    estimator does not recognize reports "no estimate" rather than a number
-    derived from a guess.
+    An arm and its optimizer are named separately, because the study runs
+    one optimizer under more than one arm: MIPROv2's three demo modes are
+    three arms of the same optimizer. ``optimizer_by_arm`` is what the
+    estimate is keyed on; an optimizer the estimator does not recognize
+    reports "no estimate" rather than a number derived from a guess.
     """
 
     @property
@@ -121,6 +129,9 @@ class StudySpecLike(Protocol):
 
     @property
     def k_run_by_arm(self) -> Mapping[str, int]: ...
+
+    @property
+    def optimizer_by_arm(self) -> Mapping[str, str]: ...
 
     @property
     def k_repeat(self) -> int: ...
@@ -393,11 +404,12 @@ def _optimizer_budget_lines(
     ]
     total_low = 0
     total_high = 0
+    optimizers = spec.optimizer_by_arm
     for arm_id in spec.arm_ids:
         k_run = spec.k_run_by_arm[arm_id]
         try:
             estimate = estimate_optimizer_calls(
-                arm_id,
+                optimizers[arm_id],
                 internal_size=internal_size,
                 k_repeat=k_repeat,
                 official_size=official_size,
@@ -565,6 +577,45 @@ def stage_spend_lines(stages: tuple[StageRecord, ...]) -> tuple[str, ...]:
 def _emit(lines: Iterable[str]) -> None:
     for line in lines:
         print(line)
+
+
+def _run_init(  # noqa: PLR0913
+    *,
+    study_dir: Path,
+    protocol_id: str,
+    toy: bool,
+    protocol_doc: Path | None,
+    study_id: str | None,
+    without_codex_arm: bool = False,
+) -> int:
+    """Author a pre-Stage-0 manifest and say where it landed.
+
+    The refusal to overwrite is :func:`write_study_manifest`'s, not a
+    check restated here: ``init`` writes without ``replace``, so a second
+    initialisation over a study that already holds evidence raises rather
+    than resetting a design that evidence refers to.
+    """
+    protocol = study_protocol(protocol_id, toy=toy)
+    if without_codex_arm:
+        protocol = without_codex(protocol)
+    path = init_study(
+        study_dir,
+        protocol=protocol,
+        study_id=study_id,
+        protocol_doc=protocol_doc,
+    )
+    _emit(
+        (
+            f"initialised study {study_id or protocol.study_id!r} "
+            f"from protocol {protocol.protocol_id!r}",
+            f"arms: {', '.join(arm.arm_id for arm in protocol.arms)}",
+            "splits: internal={} official={} held_out={}".format(
+                *protocol.split_sizes
+            ),
+            f"{path}",
+        )
+    )
+    return EXIT_OK
 
 
 def _run_plan(
@@ -951,6 +1002,67 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
+    init = commands.add_parser(
+        "init",
+        help="Write a pre-Stage-0 study.json from a committed protocol.",
+    )
+    init.add_argument("--study-dir", type=Path, required=True)
+    init.add_argument(
+        "--protocol",
+        choices=(STEP10_C19_ID,),
+        required=True,
+        help=(
+            "Which committed protocol to author. The design is a module, "
+            "not a set of flags: every value it pins is in "
+            "whetstone_envs.optim.study.protocols, so two initialisations "
+            "of the same protocol produce the same manifest."
+        ),
+    )
+    init.add_argument(
+        "--toy",
+        action="store_true",
+        help=(
+            "Author the sized-down variant of the same protocol. Only the "
+            f"sized fields differ ({', '.join(SIZED_FIELDS)}); everything "
+            "else -- the arms, the models, the control pins, the "
+            "correction -- is shared with the real design, so a toy "
+            "cannot rehearse a study the real one is not."
+        ),
+    )
+    init.add_argument(
+        "--protocol-doc",
+        type=Path,
+        default=None,
+        help=(
+            "The pre-registration document to digest. Defaults to the "
+            "protocol's own durable path; the manifest records the digest "
+            "of whatever file is read, so a study names the revision that "
+            "was actually in force."
+        ),
+    )
+    init.add_argument(
+        "--study-id",
+        default=None,
+        help=(
+            "Override the study id. Defaults to the protocol's own, which "
+            "is what a fresh confirmatory run uses; a rehearsal names "
+            "itself so its artifacts cannot be mistaken for the study's."
+        ),
+    )
+    init.add_argument(
+        "--without-codex",
+        action="store_true",
+        help=(
+            "Drop the Codex arm from the authored design. The Codex arm's "
+            "runs spawn a real, billed agent session and the stage "
+            "harness refuses a Codex-bearing design before any arm runs, "
+            "whatever transport the task model is on -- so a "
+            "fake-transport rehearsal of the rest of the study drops the "
+            "arm rather than stubbing it. The result is a smaller design, "
+            "not the pre-registration."
+        ),
+    )
+
     plan = commands.add_parser(
         "plan",
         help="Print the run matrix and evaluation budget for a study spec.",
@@ -1127,6 +1239,15 @@ def _dispatch(
     each readable on their own: this function knows the subcommands, and
     ``main`` knows what each failure means to a caller's exit code.
     """
+    if arguments.command == "init":
+        return _run_init(
+            study_dir=arguments.study_dir,
+            protocol_id=arguments.protocol,
+            toy=arguments.toy,
+            protocol_doc=arguments.protocol_doc,
+            study_id=arguments.study_id,
+            without_codex_arm=arguments.without_codex,
+        )
     if arguments.command == "plan":
         return _run_plan(
             study_dir=arguments.study_dir,

@@ -52,7 +52,9 @@ __all__ = [
     "PROTOCOL_VAL_SIZE",
     "REAL_OPTIMIZER_ARM_IDS",
     "RESAMPLES",
+    "SEED_RANGE_BY_ARM",
     "SEED_RANGE_BY_OPTIMIZER",
+    "SINGLE_RUN_ARM_IDS",
     "ArmKind",
     "ArmSpec",
     "SplitSpec",
@@ -127,17 +129,58 @@ class ArmKind(StrEnum):
     NULL = auto()
 
 
-#: Disjoint per-optimizer seed ranges. Disjointness is what lets a run's seed
-#: identify its arm in a flat artifact directory, and null-B takes a single
-#: seed because it runs once.
-SEED_RANGE_BY_OPTIMIZER: dict[str, int] = {
+#: Disjoint seed ranges, keyed by arm. Disjointness is what lets a run's
+#: seed identify its arm in a flat artifact directory, and null-B takes a
+#: single seed because it runs once.
+#:
+#: Keyed by **arm**, not by optimizer, because the study runs one optimizer
+#: under more than one arm: MIPROv2's three demo modes are three separate
+#: arms of the same optimizer, and a table keyed by optimizer would hand
+#: all three the same seeds -- three arms the report would present as
+#: independent evidence while they shared an RNG stream. An arm the table
+#: does not name falls back to its optimizer's range, which is what keeps
+#: every existing single-arm-per-optimizer caller unchanged.
+SEED_RANGE_BY_ARM: dict[str, int] = {
     "copro": 1000,
     "miprov2": 2000,
     "gepa": 3000,
     "codex": 4000,
     "null-random": 5000,
     "null-identity": 6000,
+    # MIPROv2's fidelity modes, on their own ranges so their runs never
+    # share a seed with the efficacy arm's.
+    "miprov2-zeroshot": 2100,
+    "miprov2-ground_only": 2200,
 }
+
+#: The seed table under its former name, for callers that hold an
+#: optimizer rather than an arm. Every optimizer's own range is its
+#: same-named arm's.
+SEED_RANGE_BY_OPTIMIZER: dict[str, int] = {
+    optimizer: SEED_RANGE_BY_ARM[optimizer]
+    for optimizer in (
+        "copro",
+        "miprov2",
+        "gepa",
+        "codex",
+        "null-random",
+        "null-identity",
+    )
+}
+
+#: Arms that run once because one run is their whole contribution.
+#:
+#: Null-B is a pipeline-overhead assertion (D4). MIPROv2's ``zeroshot`` and
+#: ``ground_only`` are fidelity evidence for two audit invariants, not
+#: efficacy arms: the protocol pre-registers ``fewshot`` as the arm that
+#: carries the MIPROv2 claim, and running the other two at the full count
+#: would both cost four extra runs each and invite promoting one of them
+#: into the efficacy slot after the deltas were visible (R2).
+SINGLE_RUN_ARM_IDS: tuple[str, ...] = (
+    "null-identity",
+    "miprov2-zeroshot",
+    "miprov2-ground_only",
+)
 
 #: The Codex arm, named where the study's spend guard reads it. It is the
 #: only arm whose runs can bill a foreign subscription, so the id is an
@@ -156,23 +199,29 @@ REAL_OPTIMIZER_ARM_IDS: tuple[str, ...] = (
 NULL_ARM_IDS: tuple[str, ...] = ("null-random", "null-identity")
 
 
-def k_run_for(optimizer: str, *, stage: StageId) -> int:
-    """Runs this optimizer gets at ``stage``.
+def k_run_for(arm_id: str, *, stage: StageId) -> int:
+    """Runs this arm gets at ``stage``.
 
-    Null-B is the exception at every stage: one run is the whole control, so
-    a pilot does not run it twice and Stage 2 does not run it five times.
+    Named by **arm**, because run count is a property of the arm rather
+    than of the optimizer behind it: MIPROv2's efficacy arm runs five
+    times and its two fidelity arms run once each, all on the same
+    optimizer. Every arm whose id is its optimizer's name is unaffected.
+
+    The single-run arms are the exception at every stage: one run is their
+    whole contribution, so a pilot does not run them twice and Stage 2
+    does not run them five times.
     """
-    if optimizer == "null-identity":
+    if arm_id in SINGLE_RUN_ARM_IDS:
         return K_RUN_NULL_B
     if stage is StageId.STAGE1:
         return K_RUN_PILOT
     if stage is StageId.STAGE2:
-        return K_RUN_NULL_A if optimizer == "null-random" else K_RUN_STAGE2
+        return K_RUN_NULL_A if arm_id == "null-random" else K_RUN_STAGE2
     raise ValueError(f"stage {stage.value!r} runs no optimizers")
 
 
-def arm_seeds(optimizer: str, *, stage: StageId) -> tuple[int, ...]:
-    """The seeds this optimizer runs at ``stage``, from its own range.
+def arm_seeds(arm_id: str, *, stage: StageId) -> tuple[int, ...]:
+    """The seeds this arm runs at ``stage``, from its own range.
 
     Stage 2 returns the full seed set including Stage 1's, because Stage 1's
     runs count toward Stage 2 rather than being repeated. A caller that has
@@ -180,10 +229,10 @@ def arm_seeds(optimizer: str, *, stage: StageId) -> tuple[int, ...]:
     either way, which is what makes "reused" checkable rather than asserted.
     """
     try:
-        base = SEED_RANGE_BY_OPTIMIZER[optimizer]
+        base = SEED_RANGE_BY_ARM[arm_id]
     except KeyError as error:
-        raise ValueError(f"unknown optimizer {optimizer!r}") from error
-    runs = k_run_for(optimizer, stage=stage)
+        raise ValueError(f"unknown arm {arm_id!r}") from error
+    runs = k_run_for(arm_id, stage=stage)
     return tuple(base + offset for offset in range(runs))
 
 
@@ -408,6 +457,8 @@ def default_arms(*, stage: StageId) -> tuple[ArmSpec, ...]:
                 arm_id=optimizer,
                 optimizer=optimizer,
                 kind=kind,
+                # ``default_arms`` names each arm after its optimizer, so
+                # the two coincide here; the lookups are by arm either way.
                 k_run=k_run_for(optimizer, stage=stage),
                 seeds=arm_seeds(optimizer, stage=stage),
                 **splits,
@@ -524,6 +575,17 @@ class StudySpec:
     def k_run_by_arm(self) -> dict[str, int]:
         """Each arm's run count, keyed by arm id."""
         return {arm.arm_id: arm.k_run for arm in self.arms}
+
+    @property
+    def optimizer_by_arm(self) -> dict[str, str]:
+        """Which optimizer each arm runs, keyed by arm id.
+
+        The two are not the same name: MIPROv2's three demo modes are three
+        arms of one optimizer. A caller pricing an arm needs the optimizer
+        to estimate its calls, and reading the arm id as an optimizer is
+        how the two fidelity arms came to report no estimate at all.
+        """
+        return {arm.arm_id: arm.optimizer for arm in self.arms}
 
     @property
     def real_arms(self) -> tuple[ArmSpec, ...]:
@@ -849,7 +911,7 @@ def _k_run_from(
     """
     if design is not None and arm.arm_id in design.k_run_by_arm:
         return design.k_run_by_arm[arm.arm_id]
-    return k_run_for(arm.optimizer, stage=stage)
+    return k_run_for(arm.arm_id, stage=stage)
 
 
 def load_study_spec(

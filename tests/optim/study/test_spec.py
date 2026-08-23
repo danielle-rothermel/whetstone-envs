@@ -20,7 +20,7 @@ from whetstone_envs.optim.study.spec import (
     PROTOCOL_VAL_SIZE,
     REAL_OPTIMIZER_ARM_IDS,
     RESAMPLES,
-    SEED_RANGE_BY_OPTIMIZER,
+    SEED_RANGE_BY_ARM,
     ArmKind,
     ArmSpec,
     SplitSpec,
@@ -107,9 +107,9 @@ def test_stage0_runs_no_optimizers() -> None:
 def test_seed_ranges_are_disjoint_across_arms() -> None:
     """Disjointness is what lets a seed identify its arm."""
     assigned: list[int] = []
-    for optimizer in SEED_RANGE_BY_OPTIMIZER:
+    for arm_id in SEED_RANGE_BY_ARM:
         stage = StageId.STAGE2
-        assigned.extend(arm_seeds(optimizer, stage=stage))
+        assigned.extend(arm_seeds(arm_id, stage=stage))
     assert len(set(assigned)) == len(assigned)
 
 
@@ -122,8 +122,10 @@ def test_stage2_seeds_extend_stage1_rather_than_replacing_them() -> None:
     assert full == (1000, 1001, 1002, 1003, 1004)
 
 
-def test_an_unknown_optimizer_has_no_seed_range() -> None:
-    with pytest.raises(ValueError, match="unknown optimizer"):
+def test_an_unknown_arm_has_no_seed_range() -> None:
+    """The seed table is keyed by arm, so an unnamed arm is refused rather
+    than seeded from whatever its optimizer happened to hold."""
+    with pytest.raises(ValueError, match="unknown arm"):
         arm_seeds("copro-v2", stage=StageId.STAGE2)
 
 

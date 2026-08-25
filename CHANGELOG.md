@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-24
+
 ### Added
 
 - **Pins published whetstone-ai 0.1.14.** Three upstream changes reach the

@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A run naming a `proposer_model` distinct from its task model no longer
+  fails mid-run.** COPRO, GEPA, and MIPROv2 each minted the
+  `ProposerConfig`'s `provider_call_config` reference from the *experiment's*
+  config while the resolver returned the *proposer's* config, so
+  `ProviderProposerTransport.draft` -- which resolves that reference and
+  asserts the resolved record matches it -- raised `resolved
+  'dr_providers.provider_call_config' record reference does not match
+  IdentityRef`, surfacing from inside the durable boundary as a
+  `DurableRunError`. The reference and the record are now derived from one
+  route object, so they cannot name different configs. Only a run that names
+  a distinct proposer was affected: `proposer_model=None` reused the
+  experiment's config on both sides already, and its recorded reference hash
+  is unchanged. The proposer route remains deliberately unpinned -- reasoning
+  effort is a property of the task model a study measures.
+
 ## [0.2.7] - 2026-08-25
 
 ### Changed

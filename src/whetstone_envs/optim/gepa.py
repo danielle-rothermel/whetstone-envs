@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from whetstone.core.identity import compute_identity_hash
+from whetstone.core.identity import IdentityRef, compute_identity_hash
 from whetstone.optim.gepa.control import configure_gepa
 from whetstone.optim.gepa.factory import build_gepa_harness_adapter
 from whetstone.optim.gepa.prompts import (
@@ -102,6 +102,7 @@ def build_gepa_control(  # noqa: PLR0913
     family: FamilySpec,
     prompt_services: GepaPromptServices,
     policy_identity_hash: str,
+    proposer_config_ref: IdentityRef | None = None,
     seed: int = 0,
     max_metric_calls: int | None = None,
     reflection_minibatch_size: int | None = None,
@@ -114,6 +115,12 @@ def build_gepa_control(  # noqa: PLR0913
     control. ``max_metric_calls`` pins the paid metric-call ceiling; ``None``
     keeps the default of one full pass over the trainset plus one reflection
     minibatch, which is what a smoke run needs.
+
+    ``proposer_config_ref`` names the reflection route. The proposer
+    transport resolves this reference and asserts the resolved record
+    matches it, so a run whose proposer differs from its task model must
+    pass the reference minted from the *proposer's* config; ``None`` keeps
+    the experiment's own route, for a run that never named a proposer.
 
     ``reflection_minibatch_size`` is how many traces the reflection
     proposer consumes per round. ``None`` keeps the single-trace default a
@@ -143,7 +150,11 @@ def build_gepa_control(  # noqa: PLR0913
     )
     return configure_gepa(
         reflection_model=ProposerConfig(
-            provider_call_config=provider_call_config_ref(experiment),
+            provider_call_config=(
+                provider_call_config_ref(experiment)
+                if proposer_config_ref is None
+                else proposer_config_ref
+            ),
         ),
         metric=engine.eval_config_ref,
         reward_policy_hash=experiment.reward_policy.identity_hash(),
@@ -196,6 +207,7 @@ def build_gepa_adapter(  # noqa: PLR0913
     family: FamilySpec,
     run_id: str,
     proposer_transport: ProposerTransport | None,
+    proposer_config_ref: IdentityRef | None = None,
     seed: int = 0,
     max_metric_calls: int | None = None,
     reflection_minibatch_size: int | None = None,
@@ -212,6 +224,7 @@ def build_gepa_adapter(  # noqa: PLR0913
         family=family,
         prompt_services=prompt_services,
         policy_identity_hash=policy_identity_hash,
+        proposer_config_ref=proposer_config_ref,
         seed=seed,
         max_metric_calls=max_metric_calls,
         reflection_minibatch_size=reflection_minibatch_size,

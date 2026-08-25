@@ -40,7 +40,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from whetstone.core.identity import ImmutableJsonObject, compute_identity_hash
+from whetstone.core.identity import (
+    IdentityRef,
+    ImmutableJsonObject,
+    compute_identity_hash,
+)
 from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.contracts import (
@@ -155,6 +159,7 @@ def build_miprov2_control(  # noqa: PLR0913
     engine: EvalEngine,
     experiment: Experiment,
     family: FamilySpec,
+    proposer_config_ref: IdentityRef | None = None,
     demo_mode: Miprov2DemoMode = Miprov2DemoMode.FEWSHOT,
     num_trials: int = DEFAULT_MIPROV2_NUM_TRIALS,
     num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES,
@@ -177,6 +182,12 @@ def build_miprov2_control(  # noqa: PLR0913
     are parameters rather than literals so a study arm can request the
     protocol's shape; raising them raises the run's call count, which is
     why the Stage-1 estimate is a loose upper bound.
+
+    ``proposer_config_ref`` names the instruction-proposal route. The
+    proposer transport resolves this reference and asserts the resolved
+    record matches it, so a run whose proposer differs from its task model
+    must pass the reference minted from the *proposer's* config; ``None``
+    keeps the experiment's own route, for a run that never named a proposer.
 
     ``trainset_task_hashes`` and ``valset_task_hashes`` are required and
     must be disjoint subsets of the engine's internal split: bootstrapping
@@ -218,7 +229,11 @@ def build_miprov2_control(  # noqa: PLR0913
         raise ValueError("minibatch_full_eval_steps must be at least 1")
     defaults = Miprov2InjectedDefaults(
         prompt_model=ProposerConfig(
-            provider_call_config=provider_call_config_ref(experiment),
+            provider_call_config=(
+                provider_call_config_ref(experiment)
+                if proposer_config_ref is None
+                else proposer_config_ref
+            ),
             temperature=1.0,
         ),
         bootstrap_eval_source=engine.eval_config_ref,

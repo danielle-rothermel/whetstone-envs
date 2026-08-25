@@ -27,6 +27,78 @@ def test_openrouter_preset_advertises_seed() -> None:
     assert config.definition.constraints.supports(RequestControl.SEED)
 
 
+def test_a_pinned_effort_reaches_the_request_body() -> None:
+    """The pin's verification point: the *outgoing request*, not the bill.
+
+    A reasoning effort cannot be verified from billed token counts -- a
+    provider is free to spend whatever it likes at any effort, and
+    OpenRouter is known to silently ignore controls on nano routes (it does
+    exactly that with ``temperature``). What is checkable is whether the
+    request this package sends carries the control at all, so that is what
+    this pins: the exact wire shape the OpenRouter chat preset's
+    ``REASONING_OBJECT`` translation emits.
+    """
+    from dr_providers import ProviderCallRequest, ReasoningEffort
+    from dr_providers.modeling.transcript import (
+        MessageRole,
+        PromptMessage,
+        Transcript,
+    )
+    from dr_providers.translation.request import build_payload
+
+    transcript = Transcript(
+        messages=(PromptMessage(role=MessageRole.USER, content="hi"),)
+    )
+    payload = build_payload(
+        ProviderCallRequest(
+            config=openrouter_seeded_call_config(
+                model="openai/gpt-5-nano",
+                reasoning_effort=ReasoningEffort.MINIMAL,
+            ),
+            transcript=transcript,
+        )
+    )
+    assert payload["reasoning"] == {"effort": "minimal"}
+
+
+def test_an_unpinned_route_sends_no_reasoning_key_at_all() -> None:
+    """``None`` is absence, not a default spelled out.
+
+    A study that left the effort unpinned must send a request byte-identical
+    to the ones sent before this control existed; a payload carrying
+    ``reasoning: null`` would be a different request.
+    """
+    from dr_providers import ProviderCallRequest
+    from dr_providers.modeling.transcript import (
+        MessageRole,
+        PromptMessage,
+        Transcript,
+    )
+    from dr_providers.translation.request import build_payload
+
+    payload = build_payload(
+        ProviderCallRequest(
+            config=openrouter_seeded_call_config(model="openai/gpt-5-nano"),
+            transcript=Transcript(
+                messages=(PromptMessage(role=MessageRole.USER, content="hi"),)
+            ),
+        )
+    )
+    assert "reasoning" not in payload
+
+
+def test_the_pinned_effort_survives_the_seed_assertion() -> None:
+    """The pin does not cost the route its SEED advertisement."""
+    from dr_providers import ReasoningEffort
+
+    config = openrouter_seeded_call_config(
+        model="openai/gpt-5-nano",
+        reasoning_effort=ReasoningEffort.MINIMAL,
+    )
+    assert config.definition.constraints.supports(RequestControl.SEED)
+    assert config.controls.reasoning is ReasoningEffort.MINIMAL
+
+
 def test_fake_transport_emits_gold_for_ceiling_prompt() -> None:
     pytest.importorskip("whetstone.experiment.env")
     experiment = prepare_c19_experiment(

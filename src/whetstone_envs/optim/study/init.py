@@ -284,6 +284,7 @@ def study_manifest_for(
         splits=_splits_record(protocol),
         models=ModelsRecord(
             task_model=protocol.task_model,
+            task_reasoning_effort=protocol.task_reasoning_effort.value,
             proposer_model=protocol.proposer_model,
             temperature=protocol.temperature,
             provider=protocol.provider,

@@ -35,16 +35,28 @@ through the identical procedure -- that is the whole point of a control.
 from __future__ import annotations
 
 import json
+
+# Imported at runtime, not under ``TYPE_CHECKING``: ``dataclasses``
+# evaluates this module's field annotations when it builds
+# ``StudyOptimizerRunner``, so a deferred name here is a NameError at class
+# creation rather than a typing-only reference.
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
 from typing import TYPE_CHECKING
 
+from dr_providers import ProviderKind, ReasoningEffort
+from dr_providers.modeling.call import ProviderCallConfig
 from dr_store.sync import open_sqlite
 from whetstone.core.roles import EvalRole
 from whetstone.eval.protocol import EvalRequest
+from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.eval.schema import EvalEvidence
 from whetstone.optim.contracts import OptimResult
+from whetstone.provider.policy import (
+    ProviderExecutionPolicy,
+)
 
 from whetstone_envs.optim.audit._evidence import load_run_evidence
 from whetstone_envs.optim.audit.registry import audit_evidence
@@ -414,6 +426,16 @@ class StudyOptimizerRunner:
     n_per_stratum: int
     pool_seed_start: int
     task_model: str
+    #: The task route's pre-registered reasoning effort.
+    #:
+    #: Required rather than defaulted, and required for the same reason
+    #: ``task_model`` is: it is design. Every arm this runner drives
+    #: evaluates through a ``RunSpec`` it builds itself, so an effort that
+    #: did not reach this field would leave every *in-search* evaluation
+    #: -- the high-volume majority of the study's paid calls -- running at
+    #: the provider's default while the reporting pass ran pinned. A
+    #: default here would have made that silent.
+    task_reasoning_effort: ReasoningEffort
     proposer_model: str
     num_seeds: int
     naive_template: str
@@ -443,6 +465,23 @@ class StudyOptimizerRunner:
     #: A *matching* directory is still reused rather than discarded: this
     #: authorizes discarding the stale, not re-running the paid.
     discard_stale_runs: bool = False
+    #: Where this runner reports the task route its in-search runs bind.
+    #:
+    #: The stage environment records the config the *reporting* pass binds
+    #: before any arm runs, but the optimizers' own evaluations go through
+    #: a ``RunSpec`` this runner builds, on a route the stage never saw --
+    #: so without this the manifest's provider-call witness described the
+    #: smaller half of the study's paid calls and the pre-registration
+    #: refusal that reads it could not fire on the larger half.
+    #:
+    #: Injected rather than imported: the recorder lives in
+    #: :mod:`~whetstone_envs.optim.study.environment`, which reaches this
+    #: module, so calling it directly would close an import cycle. ``None``
+    #: records nothing, which is what a runner built outside a stage --
+    #: every direct-construction test -- wants.
+    record_provider_call: (
+        Callable[[ProviderCallConfig, ProviderExecutionPolicy], None] | None
+    ) = None
     #: How many task evaluations each in-search run drives against the
     #: provider at once.
     #:
@@ -485,8 +524,44 @@ class StudyOptimizerRunner:
             # than written over in place.
             rmtree(run_dir)
         if not run_dir.exists():
-            run_optimizer(self._spec_for(arm, seed=seed, run_dir=run_dir))
+            spec = self._spec_for(arm, seed=seed, run_dir=run_dir)
+            # Before the run, not after: the recorder carries the
+            # pre-registration refusal, and a check that ran after
+            # ``run_optimizer`` would report an effort mismatch the study
+            # had already paid for.
+            self._record_in_search_route(spec)
+            run_optimizer(spec)
         return self._result_from(arm=arm, seed=seed, run_dir=run_dir)
+
+    def _record_in_search_route(self, spec: RunSpec) -> None:
+        """Report the task route this arm's in-search evaluations bind.
+
+        Built the same way ``run_optimizer`` builds it, from the same spec
+        -- so what is recorded is the route the run actually uses rather
+        than a restatement of what the caller intended.
+        """
+        if self.record_provider_call is None or spec.transport != "openrouter":
+            return
+        from whetstone_envs.optim.provider import (  # noqa: PLC0415
+            hardened_execution_policy,
+            openrouter_seeded_call_config,
+            widened_execution_policy,
+        )
+
+        config = openrouter_seeded_call_config(
+            model=spec.model,
+            reasoning_effort=spec.task_reasoning_effort,
+        )
+        policy = hardened_execution_policy(
+            widened_execution_policy(
+                ReferenceEvalRuntimeConfig(
+                    transport_api_key_env="OPENROUTER_API_KEY",
+                    provider_kind=ProviderKind.OPENROUTER,
+                ).execution_policy,
+                concurrency=self.provider_concurrency,
+            )
+        )
+        self.record_provider_call(config, policy)
 
     def _is_reusable(
         self, *, arm: ArmSpec, run_id: str, run_dir: Path
@@ -597,6 +672,12 @@ class StudyOptimizerRunner:
             output_dir=run_dir,
             run_id=_run_id_for(arm, seed),
             model=self.task_model,
+            # Unconditional, like ``provider_concurrency`` below and for a
+            # sharper reason: every optimizer evaluates, so an arm-scoped
+            # forward would leave the in-search evaluations of whichever
+            # arms it skipped measuring a different task model than the
+            # one the study pre-registered.
+            task_reasoning_effort=self.task_reasoning_effort,
             proposer_model=self.proposer_model,
             num_seeds=self.num_seeds,
             n_per_stratum=self.n_per_stratum,

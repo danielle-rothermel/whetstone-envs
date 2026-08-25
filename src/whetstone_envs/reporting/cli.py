@@ -17,6 +17,21 @@ from whetstone_envs.optim.concurrency import (
 )
 
 _SPLIT_PARTS = 3
+
+#: The reasoning efforts ``--task-reasoning-effort`` accepts, spelled as
+#: literals so ``build_parser`` -- and therefore ``whetstone-eval --help``
+#: -- imports nothing from the ``optim`` extra. ``_reasoning_effort``
+#: asserts this tuple still equals ``dr_providers.ReasoningEffort``'s
+#: values, so a vocabulary change fails loudly rather than silently
+#: rejecting a valid effort.
+REASONING_EFFORTS: tuple[str, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
 CandidateInputKind = Literal["naive", "ceiling", "custom"]
 
 
@@ -68,6 +83,53 @@ class _CandidateAction(argparse.Action):
 
 def _color_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-color", action="store_true")
+
+
+def _task_route_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare the task route's model and reasoning effort.
+
+    The effort is declared as a plain string and converted to
+    ``dr_providers.ReasoningEffort`` in :func:`main`, once a command has
+    actually been chosen. Declaring it as the enum would import
+    ``dr_providers`` here, and ``dr_providers`` ships with the ``optim``
+    extra while ``build_parser`` backs a console script a base install
+    must be able to run -- ``whetstone-eval --help`` is exercised by the
+    wheel smoke test on exactly that install.
+
+    :data:`REASONING_EFFORTS` is the argparse-visible copy of the
+    vocabulary; :func:`_reasoning_effort` checks it against the enum so
+    the two cannot drift.
+    """
+    parser.add_argument("--model", default="openai/gpt-4.1-nano")
+    parser.add_argument(
+        "--task-reasoning-effort",
+        default=None,
+        choices=REASONING_EFFORTS,
+        help=(
+            "Reasoning effort for the task route. Omitted sends no "
+            "reasoning key and leaves the route on the provider's "
+            "default. The proposer route never takes it."
+        ),
+    )
+
+
+def _reasoning_effort(value: str | None):
+    """Parse a ``--task-reasoning-effort`` string into the provider enum.
+
+    Called from ``main`` rather than as an argparse ``type``, so the
+    ``dr_providers`` import stays off the base install's ``--help`` path.
+    The membership assertion is what keeps :data:`REASONING_EFFORTS` --
+    which exists only so ``--help`` can list the choices without the
+    extra -- from drifting away from the enum that owns the vocabulary.
+    """
+    from dr_providers import ReasoningEffort
+
+    if tuple(member.value for member in ReasoningEffort) != REASONING_EFFORTS:
+        raise RuntimeError(
+            "REASONING_EFFORTS no longer matches dr_providers' "
+            "ReasoningEffort; update the CLI's choices"
+        )
+    return None if value is None else ReasoningEffort(value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument("--split-sizes", type=_split_sizes, default=(20, 20, 0))
-    run.add_argument("--model", default="openai/gpt-4.1-nano")
+    _task_route_arguments(run)
     run.add_argument("--run-id")
     run.add_argument("--output", type=Path)
     _color_argument(run)
@@ -225,6 +287,9 @@ def _dispatch(arguments: argparse.Namespace) -> int:
                 output_dir=arguments.output,
                 run_id=arguments.run_id,
                 model=arguments.model,
+                task_reasoning_effort=_reasoning_effort(
+                    arguments.task_reasoning_effort
+                ),
                 provider_concurrency=resolve_provider_concurrency(
                     arguments.provider_concurrency,
                     force=arguments.force_provider_concurrency,

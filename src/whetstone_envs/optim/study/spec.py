@@ -536,6 +536,12 @@ class StudySpec:
     official: SplitSpec
     held_out: SplitSpec
     task_model: str
+    #: The task route's pre-registered reasoning effort, as its wire value.
+    #:
+    #: Carried on the spec because it is design the *stages* need: the
+    #: design hash covers it, and the hash is computed here from the spec
+    #: rather than from the manifest's models block.
+    task_reasoning_effort: str
     proposer_model: str
     #: The Codex agent's own model, pre-registered rather than defaulted.
     #:
@@ -770,6 +776,7 @@ def spec_from_manifest(
         official=_split_spec("official", manifest.splits.official),
         held_out=_split_spec("held_out", manifest.splits.held_out),
         task_model=manifest.models.task_model,
+        task_reasoning_effort=manifest.models.task_reasoning_effort,
         proposer_model=manifest.models.proposer_model,
         # Read off the hand-authored ``models`` block, which is where the
         # study pre-registers it. Carried only when a Codex arm exists,

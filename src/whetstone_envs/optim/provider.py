@@ -6,9 +6,11 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from dr_providers import (
+    GenerationControls,
     HttpProvider,
     ProviderCallRequest,
     ProviderInvocationEvidence,
+    ReasoningEffort,
     RecoverabilityClass,
     RequestControl,
     openrouter_chat_config,
@@ -342,9 +344,29 @@ def widened_execution_policy(
     )
 
 
-def openrouter_seeded_call_config(*, model: str):
-    """Return the OpenRouter chat preset, which advertises SEED."""
-    config = openrouter_chat_config(model=model)
+def openrouter_seeded_call_config(
+    *, model: str, reasoning_effort: ReasoningEffort | None = None
+):
+    """Return the OpenRouter chat preset, which advertises SEED.
+
+    ``reasoning_effort`` pins the route's reasoning budget. The OpenRouter
+    chat preset declares ``ReasoningRequestShape.REASONING_OBJECT``, so a
+    pinned effort reaches the wire as ``{"reasoning": {"effort": ...}}`` in
+    the request body; ``None`` sends no reasoning key at all and leaves the
+    route on the provider's default, which is what every call made before
+    the pin existed did.
+
+    The effort is a *design* value, not an invocation setting: it changes
+    the task model's capability and therefore the thing a study measures.
+    It is passed in rather than defaulted here so the one caller that must
+    not receive it -- the proposer route -- cannot acquire it by accident.
+    """
+    controls = (
+        None
+        if reasoning_effort is None
+        else GenerationControls(reasoning=reasoning_effort)
+    )
+    config = openrouter_chat_config(model=model, controls=controls)
     if not config.definition.constraints.supports(RequestControl.SEED):
         msg = (
             "OpenRouter preset for "

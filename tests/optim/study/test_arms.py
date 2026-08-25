@@ -17,6 +17,8 @@ import pytest
 
 pytest.importorskip("whetstone.experiment.env")
 
+from dr_providers import ReasoningEffort
+
 from whetstone_envs.optim.completeness import (
     TaskCompletenessError,
     require_task_completeness,
@@ -47,6 +49,7 @@ def _runner(tmp_path: Path) -> StudyOptimizerRunner:
         n_per_stratum=2,
         pool_seed_start=1,
         task_model="openai/gpt-4.1-nano",
+        task_reasoning_effort=ReasoningEffort.MINIMAL,
         proposer_model="openai/gpt-4.1-nano",
         num_seeds=1,
         naive_template="naive {input}",

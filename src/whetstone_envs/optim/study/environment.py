@@ -31,7 +31,7 @@ import os
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
 
-from dr_providers import ProviderKind
+from dr_providers import ProviderKind, ReasoningEffort
 from dr_store.sync import open_sqlite
 from whetstone.core.roles import EvalRole
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
@@ -64,6 +64,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVIDER_CONTROL_UNSET,
     PROVIDER_SEED_DERIVED_PER_CALL,
     STUDY_STORE_NAME,
+    ModelsRecord,
     ProviderCallRecord,
     SplitsRecord,
     TransportName,
@@ -71,7 +72,7 @@ from whetstone_envs.optim.study.manifest import (
     write_study_manifest,
 )
 from whetstone_envs.optim.study.spec import CODEX_EVALUATE_CALL_CAP
-from whetstone_envs.optim.study.stages import StageEnvironment
+from whetstone_envs.optim.study.stages import StageEnvironment, StageError
 from whetstone_envs.reporting.schema import SPLIT_ROLE_BY_REPORT_ROLE
 
 if TYPE_CHECKING:
@@ -356,6 +357,38 @@ def _retry_backoff_text(policy: ProviderExecutionPolicy) -> str:
     )
 
 
+def _require_pinned_reasoning_effort(
+    *,
+    transport: str,
+    record: ProviderCallRecord,
+    models: ModelsRecord,
+) -> None:
+    """Refuse a paid bind whose effort disagrees with the design.
+
+    The manifest already *records* what was bound, which makes a
+    disagreement visible to a reader. That is not enough: a reader has to
+    look, and the looking happens after the stage has spent. This turns
+    the same comparison into a refusal, so a paid stage that would have
+    evaluated at an effort the pre-registration does not name fails before
+    it bills rather than after.
+
+    Applied to paid transports only. The fake transport binds the
+    reference default and never reaches a provider, so its recorded
+    effort is not a claim about the study's treatment.
+    """
+    if transport != OPENROUTER_TRANSPORT:
+        return
+    expected = models.task_reasoning_effort
+    if record.reasoning == expected:
+        return
+    raise StageError(
+        "the bound task route disagrees with the pre-registered reasoning "
+        f"effort: the design names {expected!r} and this transport bound "
+        f"{record.reasoning!r}. A stage that ran this way would measure a "
+        "task model the pre-registration does not describe."
+    )
+
+
 def _record_provider_call_config(
     study_dir: Path,
     *,
@@ -374,6 +407,9 @@ def _record_provider_call_config(
     manifest = read_study_manifest(study_dir)
     record = _provider_call_record(
         transport=transport, config=config, policy=policy
+    )
+    _require_pinned_reasoning_effort(
+        transport=transport, record=record, models=manifest.models
     )
     existing = manifest.models.provider_calls
     if record in existing:
@@ -485,7 +521,16 @@ def bound_stage_environment(  # noqa: PLR0913
     # every Eval Config hash it derives -- is byte-for-byte what it was
     # before a paid path existed.
     provider_call_config = (
-        openrouter_seeded_call_config(model=manifest.models.task_model)
+        openrouter_seeded_call_config(
+            model=manifest.models.task_model,
+            # The pre-registered effort, read off the manifest rather than
+            # off the protocol module: the manifest is what this study was
+            # initialised with, and a stage that reached past it could bind
+            # an effort the pre-registration does not name.
+            reasoning_effort=ReasoningEffort(
+                manifest.models.task_reasoning_effort
+            ),
+        )
         if paid
         else None
     )
@@ -656,6 +701,16 @@ def bound_stage_environment(  # noqa: PLR0913
             n_per_stratum=population.n_per_stratum,
             pool_seed_start=population.pool_seed_start,
             task_model=manifest.models.task_model,
+            # The pinned effort, reaching the *in-search* evaluations.
+            # The engines bound above cover the reporting pass only; the
+            # runner builds its own ``RunSpec`` per arm, so without this
+            # the optimizers' own evaluations -- the K_REPEAT-multiplied
+            # majority of the study's paid calls -- would run at the
+            # provider's default under a design that pre-registered
+            # otherwise.
+            task_reasoning_effort=ReasoningEffort(
+                manifest.models.task_reasoning_effort
+            ),
             proposer_model=manifest.models.proposer_model,
             num_seeds=k_repeat,
             naive_template=family.probes.naive_template,
@@ -676,6 +731,18 @@ def bound_stage_environment(  # noqa: PLR0913
             # while the reporting pass ran at the operator's -- one stage
             # running at two widths, recorded as one.
             provider_concurrency=provider_concurrency,
+            # The in-search route reports itself into the same witness the
+            # reporting pass writes to, which is also where the
+            # pre-registration refusal lives -- so an arm that would
+            # evaluate at an unpinned effort is refused before it bills.
+            record_provider_call=lambda config, policy: (
+                _record_provider_call_config(
+                    study_dir,
+                    transport=transport,
+                    config=config,
+                    policy=policy,
+                )
+            ),
         )
         yield StageEnvironment(
             bind_engine=bind_engine,

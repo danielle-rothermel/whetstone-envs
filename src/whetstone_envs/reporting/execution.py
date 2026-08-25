@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
 
-from dr_providers import ProviderKind
+from dr_providers import ProviderKind, ReasoningEffort
 from dr_store.sync import open_sqlite
 from whetstone.eval import EvalRequest
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
@@ -76,6 +76,13 @@ class C19EvalSpec:
     output_dir: Path | None = None
     run_id: str | None = None
     model: str = "openai/gpt-4.1-nano"
+    #: The task route's reasoning effort. ``None`` sends no reasoning key,
+    #: which is what this CLI did before the field existed.
+    #:
+    #: Threaded so a standalone report can reproduce a study arm's route
+    #: exactly: an evaluation of the study's own candidates at a different
+    #: effort is an evaluation of a different task model.
+    task_reasoning_effort: ReasoningEffort | None = None
     #: How many task evaluations run against the provider at once.
     #:
     #: The same operator setting the study path takes, for the same
@@ -151,7 +158,9 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
     provider = None
     api_key_env = "WHETSTONE_TOY_API_KEY"
     if spec.transport == "openrouter":
-        provider = openrouter_seeded_call_config(model=spec.model)
+        provider = openrouter_seeded_call_config(
+            model=spec.model, reasoning_effort=spec.task_reasoning_effort
+        )
         api_key_env = "OPENROUTER_API_KEY"
     requested_tasks = sum(spec.split_sizes)
     n_per_stratum = max(

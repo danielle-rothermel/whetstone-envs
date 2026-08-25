@@ -105,6 +105,7 @@ from whetstone_envs.reporting.study_report import (
 from .conftest import toy_manifest
 
 if TYPE_CHECKING:
+    from dr_providers.modeling.call import ProviderCallConfig
     from dr_store import ObjectStore
     from whetstone.eval.schema import EvalEvidence
     from whetstone.experiment.candidate import Candidate
@@ -251,6 +252,222 @@ def test_the_cli_refuses_a_keyless_paid_stage_nonzero(
     assert code == EXIT_ERROR
     assert OPENROUTER_API_KEY_ENV in capsys.readouterr().err
     assert read_study_manifest(study_dir).design is None
+
+
+def _rebuilt_task_identity(study_dir: Path, *, effort) -> str:
+    """One engine's task-model identity at a given effort.
+
+    Built through the Codex runtime config, which is the one path in this
+    package that rebuilds an engine from parameters alone -- so the
+    comparison is against a real engine rather than a hand-recomputed hash.
+    """
+    from dr_store.sync import open_sqlite
+
+    from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
+
+    manifest = read_study_manifest(study_dir)
+    config = EnvsCodexRuntimeConfig(
+        family_id=manifest.population.family,
+        split_sizes=(
+            manifest.splits.internal.size,
+            manifest.splits.official.size,
+            manifest.splits.held_out.size,
+        ),
+        n_per_stratum=manifest.population.n_per_stratum,
+        pool_seed_start=manifest.population.pool_seed_start,
+        num_seeds=1,
+        transport="openrouter",
+        model=manifest.models.task_model,
+        reasoning_effort=effort,
+    )
+    name = "pinned" if effort is not None else "unpinned"
+    with open_sqlite(str(study_dir / f"identity-{name}.sqlite")) as store:
+        engine = config.build_engine(cast("ObjectStore", store))
+        return engine.task_model_identity_hash()
+
+
+def test_every_paid_role_binds_the_manifests_reasoning_effort(
+    study_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pin reaches every arm, because it reaches the shared route.
+
+    Every arm evaluates through one bound provider call config, so this is
+    where "every arm carries the effort" is decided: a pin that reached
+    only some arms would mean arms measured against different task models
+    under one pre-registration.
+
+    Read off the manifest rather than off the protocol module, so a study
+    initialised at one effort cannot be run at another.
+
+    Fails-before: the binder called ``openrouter_seeded_call_config`` with
+    no effort at all, so the bound config was always unpinned.
+    """
+    from whetstone.core.roles import EvalRole
+
+    monkeypatch.setenv(OPENROUTER_API_KEY_ENV, "test-key-not-a-real-secret")
+    manifest = read_study_manifest(study_dir)
+    assert manifest.models.task_reasoning_effort == "minimal"
+
+    with bound_stage_environment(
+        study_dir, transport=OPENROUTER_TRANSPORT
+    ) as environment:
+        identities = {
+            role: environment.bind_engine(
+                role=role, num_seeds=1
+            ).task_model_identity_hash()
+            for role in EvalRole
+        }
+
+    # One route, so every role lands on one task-model identity: an arm
+    # that bound a different effort would show up here as a second value.
+    assert len(set(identities.values())) == 1
+    bound = next(iter(identities.values()))
+
+    # And that one identity is the *pinned* one, not the unpinned route it
+    # would otherwise be. Compared against a rebuild rather than a literal
+    # so the assertion survives an unrelated identity-payload change.
+    from dr_providers import ReasoningEffort
+
+    unpinned = _rebuilt_task_identity(study_dir, effort=None)
+    pinned = _rebuilt_task_identity(study_dir, effort=ReasoningEffort.MINIMAL)
+    assert pinned != unpinned
+    assert bound == pinned
+
+
+def test_the_in_search_route_binds_the_pinned_effort(
+    study_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The optimizers' own evaluations run pinned, not just the report pass.
+
+    This is the path the engines bound by ``bound_stage_environment`` do
+    **not** cover. ``StudyOptimizerRunner`` builds its own ``RunSpec`` per
+    arm, and the in-search evaluations that spec drives are the
+    K_REPEAT-multiplied majority of the study's paid calls -- so an effort
+    that reached the reporting engines and not the runner would leave most
+    of the study measuring a task model the pre-registration does not name.
+
+    Asserted on the route the runner reports for a real arm spec, which is
+    the same config ``run_optimizer`` builds from that spec.
+
+    Fails-before: ``StudyOptimizerRunner`` had no effort field at all, so
+    every ``RunSpec`` it built carried ``task_reasoning_effort=None`` and
+    the bound control was ``None``.
+    """
+    from dr_providers import ReasoningEffort
+
+    monkeypatch.setenv(OPENROUTER_API_KEY_ENV, "test-key-not-a-real-secret")
+    manifest = read_study_manifest(study_dir)
+
+    from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+    from whetstone_envs.optim.study.spec import ArmKind, ArmSpec
+
+    recorded: list[ProviderCallConfig] = []
+    with bound_stage_environment(
+        study_dir, transport=OPENROUTER_TRANSPORT
+    ) as environment:
+        # The concrete runner, not the ``OptimizerRunner`` protocol the
+        # environment is typed against: this test is about the study's own
+        # runner carrying the pin into the specs it builds.
+        runner = cast("StudyOptimizerRunner", environment.run_optimizer)
+        assert runner is not None
+        # The runner carries the design's effort, not a default.
+        assert runner.task_reasoning_effort == ReasoningEffort(
+            manifest.models.task_reasoning_effort
+        )
+
+        # And it reaches the ``RunSpec`` every arm actually runs from --
+        # which is what ``run_optimizer`` binds the in-search route out of.
+        arm = ArmSpec(
+            arm_id="copro",
+            optimizer="copro",
+            kind=ArmKind.REAL,
+            k_run=1,
+            seeds=(1,),
+            copro_breadth=2,
+            copro_depth=1,
+        )
+        spec = runner._spec_for(arm, seed=1, run_dir=study_dir / "run")
+        assert spec.task_reasoning_effort is ReasoningEffort.MINIMAL
+
+        # The route that spec reports into the manifest's witness carries
+        # it too, which is what puts the in-search bind under the refusal.
+        from dataclasses import replace
+
+        probe = replace(
+            runner,
+            record_provider_call=lambda config, _policy: recorded.append(
+                config
+            ),
+        )
+        probe._record_in_search_route(spec)
+
+    (bound,) = recorded
+    assert bound.controls.reasoning is ReasoningEffort.MINIMAL
+
+
+def test_a_paid_bind_at_an_unpinned_effort_is_refused(
+    study_dir: Path,
+) -> None:
+    """The disagreement is a refusal, not a note for a reader.
+
+    Recording the bound effort makes a mismatch *visible*; it does not
+    make it *safe*, because seeing it requires a reader and the reading
+    happens after the stage has spent. This turns the same comparison into
+    a gate: a paid stage whose task route does not carry the
+    pre-registered effort fails before it bills.
+
+    Fails-before: ``_record_provider_call_config`` wrote the disagreeing
+    record and returned normally.
+    """
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    from whetstone_envs.optim.provider import (
+        hardened_execution_policy,
+        openrouter_seeded_call_config,
+    )
+    from whetstone_envs.optim.study.environment import (
+        _record_provider_call_config,
+    )
+    from whetstone_envs.optim.study.stages import StageError
+
+    policy = hardened_execution_policy(
+        ReferenceEvalRuntimeConfig(
+            transport_api_key_env="OPENROUTER_API_KEY",
+        ).execution_policy
+    )
+    manifest = read_study_manifest(study_dir)
+    with pytest.raises(StageError, match="pre-registered reasoning effort"):
+        _record_provider_call_config(
+            study_dir,
+            transport=OPENROUTER_TRANSPORT,
+            # The defect the gate exists to catch: a task route bound
+            # without the design's effort.
+            config=openrouter_seeded_call_config(
+                model=manifest.models.task_model
+            ),
+            policy=policy,
+        )
+    # Refused before the write, so the manifest is untouched.
+    assert read_study_manifest(study_dir) == manifest
+
+
+def test_the_fake_transport_is_not_held_to_the_pin(
+    study_dir: Path,
+) -> None:
+    """The refusal is about paid routes, not about every bind.
+
+    The fake transport binds whetstone's reference default and never
+    reaches a provider, so its recorded effort is not a claim about the
+    study's treatment. Holding it to the pin would refuse every free
+    rehearsal of a study that pre-registers one.
+    """
+    with bound_stage_environment(study_dir):
+        pass
+    (record,) = read_study_manifest(study_dir).models.provider_calls
+    assert record.transport == FAKE_TRANSPORT
+    assert record.reasoning == PROVIDER_CONTROL_UNSET
 
 
 # --------------------------------------------------------------------------
@@ -1844,9 +2061,10 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     assert record.transport == OPENROUTER_TRANSPORT
     assert record.provider == "openrouter"
     assert record.model_route == "openai/gpt-5-nano"
-    # Recorded verbatim and never set from here: whether the design pins a
-    # task-model reasoning effort is an open decision, and this block
-    # states what was bound rather than choosing it.
+    # Recorded verbatim and never set from here. This call binds no effort,
+    # so the record says so: the design pins the effort in
+    # ``ModelsRecord.task_reasoning_effort`` and the study path passes it
+    # in, while this block only ever states what was bound.
     assert record.reasoning == PROVIDER_CONTROL_UNSET
     # The execution settings that were actually in force, so a stage that
     # lost rows to timeouts and one that did not are distinguishable.
@@ -1862,6 +2080,46 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     # header is honoured in full.
     assert "Retry-After delta honoured" in record.retry_backoff
     assert "HTTP-date ignored" in record.retry_backoff
+
+
+def test_the_paid_route_records_a_pinned_reasoning_effort() -> None:
+    """The manifest's request-side proof that the pin reached the wire.
+
+    A reasoning effort is not checkable from billed tokens -- a provider
+    may spend what it likes at any effort, and OpenRouter is known to
+    ignore controls on nano routes. What *is* checkable is the config the
+    transport was bound with, and this record is where a reader of a live
+    study's manifest sees it. A stage that bound the task route without the
+    pin records ``PROVIDER_CONTROL_UNSET`` here while
+    ``models.task_reasoning_effort`` still says ``minimal``, and the
+    disagreement is visible without rerunning anything.
+
+    Fails-before: ``openrouter_seeded_call_config`` took no effort, so this
+    record could only ever read "unset".
+    """
+    from dr_providers import ReasoningEffort
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    from whetstone_envs.optim.provider import (
+        hardened_execution_policy,
+        openrouter_seeded_call_config,
+    )
+    from whetstone_envs.optim.study.environment import _provider_call_record
+
+    record = _provider_call_record(
+        transport=OPENROUTER_TRANSPORT,
+        config=openrouter_seeded_call_config(
+            model="openai/gpt-5-nano",
+            reasoning_effort=ReasoningEffort.MINIMAL,
+        ),
+        policy=hardened_execution_policy(
+            ReferenceEvalRuntimeConfig(
+                transport_api_key_env="OPENROUTER_API_KEY",
+            ).execution_policy
+        ),
+    )
+    assert record.reasoning != PROVIDER_CONTROL_UNSET
+    assert "minimal" in record.reasoning
 
 
 # --------------------------------------------------------------------------

@@ -55,6 +55,8 @@ OPTIONAL_DISTRIBUTION_MODULES = ("dr_providers", "whetstone", "rich")
 
 def _import_without_optional_dependencies(
     module: str,
+    *,
+    extra: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """Import ``module`` in a subprocess where the optim stack is missing.
 
@@ -62,6 +64,10 @@ def _import_without_optional_dependencies(
     a network -- this blocks the optional distributions at the import
     system, which reproduces exactly what the base install presents: the
     module is not there, and reaching for it raises ``ModuleNotFoundError``.
+
+    ``extra`` runs after the import, in the same blocked interpreter, so a
+    caller can exercise more than import time -- building a parser, say --
+    under the base install's constraints.
     """
     blocker = ",".join(repr(name) for name in OPTIONAL_DISTRIBUTION_MODULES)
     code = f"""
@@ -84,6 +90,7 @@ for name in list(sys.modules):
     if name.partition(".")[0] in {{{blocker}}}:
         del sys.modules[name]
 import {module}
+{extra}
 """
     return subprocess.run(  # noqa: S603 - fixed interpreter, derived module name
         [sys.executable, "-c", code],
@@ -104,6 +111,34 @@ def test_base_install_module_imports_without_the_optim_extra(
         f"but it reaches an optional dependency at import time. Import it "
         f"lazily, inside the function that needs it, or move the code that "
         f"needs it into a module the base install does not import.\n"
+        f"stderr:\n{completed.stderr}"
+    )
+
+
+def test_the_base_install_entry_point_parses_help_without_the_extra() -> None:
+    """``--help`` must work on a base install, not merely import.
+
+    The wheel smoke test in ``scripts/check_distributions.py`` invokes
+    ``whetstone-eval --help`` on a real extra-free install, so a parser
+    that reached the ``optim`` extra while *building* -- an argparse
+    ``type=`` or ``choices=`` naming a ``dr_providers`` enum, say -- broke
+    the packaged console script while every import-time check still
+    passed. This closes that gap at unit speed.
+    """
+    completed = _import_without_optional_dependencies(
+        "whetstone_envs.reporting.cli",
+        extra=(
+            "import whetstone_envs.reporting.cli as cli\n"
+            "parser = cli.build_parser()\n"
+            "try:\n"
+            "    parser.parse_args(['--help'])\n"
+            "except SystemExit as error:\n"
+            "    raise SystemExit(error.code or 0)\n"
+        ),
+    )
+    assert completed.returncode == 0, (
+        "whetstone-eval --help must work on a base install; the parser "
+        "reached an optional dependency while being built.\n"
         f"stderr:\n{completed.stderr}"
     )
 

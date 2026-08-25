@@ -321,6 +321,7 @@ def test_the_runtime_config_field_names_are_pinned() -> None:
         "num_seeds",
         "transport",
         "model",
+        "reasoning_effort",
         "provider_concurrency",
         "partial_log_path",
         "prompt_cache_path",
@@ -352,6 +353,7 @@ def test_the_runtime_config_serialized_keys_are_the_field_names() -> None:
         "num_seeds",
         "transport",
         "model",
+        "reasoning_effort",
         "provider_concurrency",
         "partial_log_path",
         "prompt_cache_path",
@@ -519,6 +521,56 @@ def test_the_eval_config_alone_does_not_pin_the_model_route(
 
     assert asked_for[0] == drifted[0]
     assert asked_for[1] != drifted[1]
+
+
+def test_the_reasoning_effort_reaches_the_task_model_identity(
+    tmp_path,
+) -> None:
+    """The cross-process guard sees the effort, and the runtime carries it.
+
+    Same mechanism as the model route above: the effort rides on the
+    provider call config rather than the Eval Config, so two runtimes at
+    different efforts rebuild to the same ``eval_config_ref`` and are told
+    apart only by ``task_model_identity_hash``. Two consequences, both
+    asserted here.
+
+    First, a runtime that *dropped* the pin would not quietly evaluate the
+    Codex arm at an unpinned effort -- ``build_codex_adapter`` compares
+    this hash against the harness's and refuses the run outright.
+
+    Second, a runtime that carries the *same* effort as the harness agrees,
+    which is what makes the Codex arm runnable at all under the pin.
+
+    Fails-before: ``EnvsCodexRuntimeConfig`` had no effort field, so the
+    two arms of this test could not be distinguished.
+    """
+    from dr_providers import ReasoningEffort
+
+    def rebuilt(effort, name: str):
+        config = EnvsCodexRuntimeConfig(
+            family_id="c19",
+            split_sizes=SPLIT_SIZES,
+            n_per_stratum=family_spec("c19").default_n_per_stratum,
+            pool_seed_start=family_spec("c19").default_pool_seed_start,
+            num_seeds=1,
+            transport="openrouter",
+            model="openai/gpt-5-nano",
+            reasoning_effort=effort,
+        )
+        with open_sqlite(str(tmp_path / f"{name}.sqlite")) as store:
+            engine = config.build_engine(cast("ObjectStore", store))
+            return engine.eval_config_ref, engine.task_model_identity_hash()
+
+    pinned = rebuilt(ReasoningEffort.MINIMAL, "pinned")
+    unpinned = rebuilt(None, "unpinned")
+    agreeing = rebuilt(ReasoningEffort.MINIMAL, "agreeing")
+
+    # The Eval Config cannot see the difference -- which is exactly why the
+    # adapter checks the task model identity as well.
+    assert pinned[0] == unpinned[0]
+    assert pinned[1] != unpinned[1]
+    # Two runtimes carrying the same pin agree, so the arm can run.
+    assert agreeing[1] == pinned[1]
 
 
 @pytest.mark.skipif(

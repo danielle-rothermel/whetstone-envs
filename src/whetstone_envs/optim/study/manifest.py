@@ -576,9 +576,18 @@ class ProviderCallRecord(_StrictModel):
     #: Whatever reasoning control the bound config carries, verbatim.
     #:
     #: Recorded because it is the single largest term in this study's
-    #: per-call bill, and **not** settable from here: whether the design
-    #: pins a task-model reasoning effort is an open decision, and a
-    #: manifest field that looked like a knob would answer it by accident.
+    #: per-call bill, and **not** settable from here: the design pins the
+    #: task model's effort in :data:`ModelsRecord.task_reasoning_effort`,
+    #: and a second field that looked like a knob would let an invocation
+    #: contradict the pre-registration.
+    #:
+    #: This is the manifest's **request-side proof of the pin**. It is read
+    #: off the config the transport was actually bound with, so a stage that
+    #: bound the task route without the pinned effort records a value that
+    #: disagrees with ``task_reasoning_effort`` -- which is what a reader
+    #: checks to know the outgoing request carried the reasoning object,
+    #: rather than inferring it from billed token counts, which no provider
+    #: guarantees.
     reasoning: StrictStr
     seed: StrictStr
     extensions: StrictStr
@@ -637,9 +646,27 @@ class ModelsRecord(_StrictModel):
     agent that disagrees with it -- but the agent's own calls run off the
     study's key entirely, so what the study controls is *which* agent ran,
     never what it cost.
+
+    ``task_reasoning_effort`` is different again: unlike ``temperature`` it
+    is a control the study **does** hold, and it is hashed into the
+    pre-registered design.
     """
 
     task_model: StrictStr
+    #: The task route's pre-registered reasoning effort, as its wire value.
+    #:
+    #: A string rather than a new enum: the typed value is dr-providers'
+    #: ``ReasoningEffort``, which owns the vocabulary at the API boundary,
+    #: and a manifest is a record of what was declared rather than a second
+    #: place the vocabulary could drift. Every other field in this block is
+    #: a string for the same reason.
+    #:
+    #: Unlike ``temperature``, this is a control the study holds: the route
+    #: honours it, so a manifest that named one effort while the transport
+    #: bound another would be recording a design the run did not execute.
+    #: ``ProviderCallRecord.reasoning`` is where a reader checks that it
+    #: reached the bound config.
+    task_reasoning_effort: StrictStr
     proposer_model: StrictStr
     temperature: StrictStr
     provider: StrictStr
@@ -659,6 +686,7 @@ class ModelsRecord(_StrictModel):
     def _validate_models(self) -> ModelsRecord:
         values = (
             self.task_model,
+            self.task_reasoning_effort,
             self.proposer_model,
             self.temperature,
             self.provider,
@@ -780,6 +808,16 @@ class PreRegistrationRecord(_StrictModel):
     #: result would change both what the arm searched and what it was
     #: allowed to spend.
     search_by_arm: dict[StrictStr, dict[StrictStr, StrictInt]]
+    #: The task route's pre-registered reasoning effort, as its wire value.
+    #:
+    #: Hashed with the design rather than left in the models block, and for
+    #: a reason none of the fields above share: the effort changes the task
+    #: model's *capability*, so it changes the treatment every arm is
+    #: measured under rather than how much of it was measured. A design that
+    #: could change effort without changing its hash would let the study
+    #: re-run its arms against a different task model under the same
+    #: pre-registration.
+    task_reasoning_effort: StrictStr
     ci_level: StrictFloat
     resamples: StrictInt
     bootstrap_seed: StrictInt
@@ -815,6 +853,10 @@ class PreRegistrationRecord(_StrictModel):
             raise ValueError("bootstrap resamples must be positive")
         if not self.correction.strip():
             raise ValueError("a pre-registration names its correction")
+        if not self.task_reasoning_effort.strip():
+            raise ValueError(
+                "a pre-registration names the task route's reasoning effort"
+            )
         if self.m < 1:
             raise ValueError("the correction family holds at least one test")
         if not 0.0 < self.completeness_backstop <= 1.0:
@@ -840,6 +882,7 @@ class PreRegistrationRecord(_StrictModel):
             split_by_arm=self.split_by_arm,
             minibatch_by_arm=self.minibatch_by_arm,
             search_by_arm=self.search_by_arm,
+            task_reasoning_effort=self.task_reasoning_effort,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -863,6 +906,7 @@ class PreRegistrationRecord(_StrictModel):
             split_by_arm=self.split_by_arm,
             minibatch_by_arm=self.minibatch_by_arm,
             search_by_arm=self.search_by_arm,
+            task_reasoning_effort=self.task_reasoning_effort,
             ci_level=self.ci_level,
             resamples=self.resamples,
             bootstrap_seed=self.bootstrap_seed,
@@ -966,6 +1010,7 @@ def _pre_registration_payload(  # noqa: PLR0913
     split_by_arm: Mapping[str, tuple[int, int] | None],
     minibatch_by_arm: Mapping[str, int | None],
     search_by_arm: Mapping[str, Mapping[str, int]],
+    task_reasoning_effort: str,
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -983,10 +1028,23 @@ def _pre_registration_payload(  # noqa: PLR0913
     id like ``k_run_by_arm``, so the document is canonical whatever order
     the arms were declared in.
 
+    ``task_reasoning_effort`` is hashed because a reasoning effort is not an
+    invocation setting: it changes the task model's capability, and
+    therefore the treatment every arm is measured under. Two studies that
+    agreed on every power field and disagreed on the effort measured
+    different task models, so a design hash that could not tell them apart
+    would let the effort be chosen after Stage 0 saw the anchors -- the
+    post-hoc adjustment this block exists to forbid. It sits beside the
+    power fields rather than in the models block because the models block
+    is not hashed, and an unhashed pin is not pre-registered.
+
     Deliberately **not** in here: whether the invocation was authorized to
     spend on a real Codex session. That is a run-time permission rather than
     a design choice, and hashing it would make two runs of one design
-    pre-register differently.
+    pre-register differently. The task and proposer *model routes* are
+    likewise absent: they were absent before the effort was pinned, and
+    widening the hash to cover them is a separate decision this change does
+    not make.
     """
     return {
         "k_repeat": k_repeat,
@@ -1001,6 +1059,7 @@ def _pre_registration_payload(  # noqa: PLR0913
             arm_id: dict(sorted(shape.items()))
             for arm_id, shape in sorted(search_by_arm.items())
         },
+        "task_reasoning_effort": task_reasoning_effort,
         "ci_level": ci_level,
         "resamples": resamples,
         "bootstrap_seed": bootstrap_seed,
@@ -1018,6 +1077,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
     split_by_arm: Mapping[str, tuple[int, int] | None],
     minibatch_by_arm: Mapping[str, int | None],
     search_by_arm: Mapping[str, Mapping[str, int]],
+    task_reasoning_effort: str,
     ci_level: float,
     resamples: int,
     bootstrap_seed: int,
@@ -1034,6 +1094,7 @@ def pre_registration_design_hash(  # noqa: PLR0913
             split_by_arm=split_by_arm,
             minibatch_by_arm=minibatch_by_arm,
             search_by_arm=search_by_arm,
+            task_reasoning_effort=task_reasoning_effort,
             ci_level=ci_level,
             resamples=resamples,
             bootstrap_seed=bootstrap_seed,

@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pins published whetstone-ai 0.1.14.** Three upstream changes reach the
+  evidence this package reads. Evaluation rows gain per-row node-failure
+  diagnostics -- `error_type`, `error_message` (bounded to 2000
+  characters), `failed_node_id`, and `row_attempts` -- carried through the
+  subprocess worker, so a stage that loses rows records what failed rather
+  than only that something did. Unattributed node failures are retried at
+  row level (`max_row_attempts`, default 3) with a fresh provider call per
+  attempt and summed usage, which changes how a transient failure appears
+  in a stage's spend: one row, several attempts. Blank or whitespace-only
+  generations now score as terminal `invalid` rows under failure code
+  `blank-provider-generation` instead of surfacing as
+  `node_execution_error`, so the per-task completeness floor sees them as
+  lost rather than as a crashed node. `EvalEvidence` stays at schema
+  version 6, so the committed Codex audit fixtures validate unchanged and
+  are not regenerated.
+
+  One projected field follows the upstream change. `ExecutedRowState` gains
+  an `invalid` member -- a row that executed and was billed but produced
+  nothing the contract can score -- so `Observation.trace_state` admits it,
+  and an invalid observation now reconciles against a trace that says
+  `invalid` rather than one that says `failed`. That fold existed only
+  because the upstream enum had no way to spell the state; under 0.1.14 it
+  would have rejected exactly the rows the blank-generation change makes
+  reachable. `trace_state` stays a closed literal rather than the imported
+  enum, because it is a persisted report field, and a test pins it against
+  `ExecutedRowState` so a future widening is a deliberate change here
+  instead of one the projection inherits silently.
+
 - **Each run records the provider concurrency it ran at, and a resume that
   changes the width is refused.** The width was recorded once per *stage*,
   which names what the latest invocation asked for -- not what the runs
@@ -39,6 +67,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   stage whose runs span two -- and both renderers name the distinct per-run
   widths when they differ: `whetstone-study run`'s ledger and the report
   packet's stage rows. The ordinary single-width study is not annotated.
+
+### Fixed
+
+- **The width guard no longer reads a crashed stage as a first run.** It
+  settled the question entirely from the manifest, so a missing
+  `StageRecord` returned early: no recorded width, nothing to disagree
+  with. But a stage writes its row *after* its arms finish, so a crash
+  between the last run and `write_study_manifest` leaves the run
+  directories on disk with no row to say what width produced them -- a
+  state the manifest cannot tell apart from a stage that never started.
+  The resume then claimed those directories, re-ran nothing, and recorded
+  the requested width over paid runs that may never have run at it. It is
+  the worse of the two states, because the recorded-width refusal can at
+  least say "re-run at the recorded width" and this one cannot: the width
+  was never written anywhere, so no inspection recovers it.
+
+  An arm stage now reads the study's `runs/` directory as well as its
+  manifest, and a stage with no row that finds run directories the manifest
+  cannot account for is refused -- naming the directories, the requested
+  width, and three recoveries: a fresh study directory,
+  `--allow-width-change` to record the requested width over them
+  deliberately (returning a note that says the reused runs' width is
+  unrecoverable rather than merely different), or `--discard-stale-runs`,
+  under which the directories are discarded and re-run so nothing survives
+  to be misdescribed. As with the recorded-width refusal, neither escape
+  amends a design: the width does not enter the pre-registration hash.
+
+  *Cannot account for* is the operative condition, because `runs/` is one
+  directory for the whole study rather than one per stage. A directory
+  behind a recorded `RunRecord` is accounted for -- that is every Stage 2,
+  which stands on Stage 1's runs by design, and those runs carry their own
+  per-run widths. A directory an amendment deliberately orphaned is
+  accounted for too: `--replace-design` records exactly which directories
+  it left behind, and they remain the stale-run refusal's subject, which
+  reads each directory's own identity and names `--discard-stale-runs`
+  against it. What is left is the crash residue. A study with no row and no
+  unexplained directories is the ordinary first run and is unaffected.
 
 ## [0.2.4] - 2026-08-23
 

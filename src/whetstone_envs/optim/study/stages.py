@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
 from dr_store import ObjectStore
@@ -61,6 +62,7 @@ from whetstone_envs.optim.study.manifest import (
     CORRECTION_FAMILY_SIZE,
     CORRECTION_HOLM_BONFERRONI,
     DESIGN_PROJECTION_FULL,
+    DISCARD_STALE_RUNS_FLAG,
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
     STUDY_STORE_NAME,
@@ -110,7 +112,6 @@ from whetstone_envs.optim.study.spend import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from pathlib import Path
 
     from whetstone.eval.schema import EvalEvidence
 
@@ -304,6 +305,18 @@ class StageEnvironment:
     #: pre-registration hash, so authorizing a change to it amends no
     #: design. What it does do is get recorded, as a note on the stage.
     allow_width_change: bool = False
+    #: Whether this invocation may discard a run directory it cannot
+    #: claim, mirrored here from the runner that owns the discarding.
+    #:
+    #: The runner decides directory by directory, reading each one's own
+    #: identity. The width refusal needs the same authorization one step
+    #: earlier and one level coarser: run directories surviving with no
+    #: stage row are of unrecoverable width, and an operator who has
+    #: already authorized discarding unclaimable directories is saying
+    #: those runs are not evidence to preserve -- so there is nothing a
+    #: new width could misdescribe. Carried from
+    #: ``whetstone-study run --discard-stale-runs``.
+    discard_stale_runs: bool = False
     #: The study's evidence store, when the caller bound one. A stage that
     #: evaluates through the engine prices what it evaluated by reading its
     #: own persisted output rows back out of this store; without it the
@@ -497,12 +510,159 @@ def _surviving_runs_of_stage(
     return tuple(sorted(surviving))
 
 
-def refuse_resumed_width_change(
+def _unrecorded_run_directories(
+    manifest: StudyManifest, *, study_dir: Path | None
+) -> tuple[str, ...]:
+    """Run directories on disk that nothing in the manifest explains.
+
+    The disagreement between the filesystem and the manifest is the whole
+    signal, so what counts is which directories the manifest *cannot
+    account for*. Two kinds are accounted for and neither is this
+    refusal's business:
+
+    A recorded run's directory. ``runs/`` is one directory for the study,
+    not one per stage, so a stage's own first run routinely finds the
+    previous stage's directories there. Those carry their widths on their
+    own ``RunRecord``s, and refusing on them would refuse every Stage 2.
+
+    A directory an amendment deliberately orphaned. ``--replace-design``
+    drops runs from the manifest and records exactly which directories it
+    left behind, so the study already says why they are unrecorded. They
+    are the stale-run refusal's subject, which reads each directory's own
+    identity and names ``--discard-stale-runs``; a width refusal firing
+    first would replace that specific message with a vaguer one.
+
+    What is left is the crash residue: a run that completed and whose
+    manifest entry never landed, which is exactly what a failure between
+    the last run and ``write_study_manifest`` leaves.
+
+    Names only, not identities. Which arm or seed produced a directory is
+    read out of the run's own artifacts, and this caller does not need to
+    know: an unexplained directory is one a resume may claim, and it
+    carries no width. An unreadable or missing ``runs`` directory reports
+    nothing rather than raising, since a study that has produced no runs
+    is exactly the state with nothing to refuse.
+    """
+    if study_dir is None:
+        return ()
+    # Imported here rather than at module scope: ``arms`` imports this
+    # module for ``StageError``, so the module-scope edge would be a
+    # cycle. The constant still has one owner, which is the point.
+    from whetstone_envs.optim.study.arms import (  # noqa: PLC0415
+        RUNS_DIRECTORY_NAME,
+    )
+
+    runs_dir = study_dir / RUNS_DIRECTORY_NAME
+    explained = {run.run_id for arm in manifest.arms for run in arm.runs}
+    explained.update(
+        Path(directory).name
+        for amendment in manifest.amendments
+        for directory in amendment.dropped_run_directories
+    )
+    try:
+        return tuple(
+            sorted(
+                entry.name
+                for entry in runs_dir.iterdir()
+                if entry.is_dir() and entry.name not in explained
+            )
+        )
+    except OSError:
+        return ()
+
+
+def _resolve_width_of_unrecorded_stage(  # noqa: PLR0913
+    manifest: StudyManifest,
+    *,
+    stage: StageId,
+    provider_concurrency: int,
+    allow_width_change: bool,
+    study_dir: Path | None,
+    discard_stale_runs: bool,
+) -> str | None:
+    """Refuse a resume whose runs survive with no row to describe them.
+
+    The state this owns is narrow and entirely a crash's doing: the stage
+    ran, its run directories landed on disk, and the process died before
+    ``write_study_manifest`` recorded either the runs or the row that
+    says what width produced them. A first run of a stage looks identical
+    in the manifest -- no row -- and differs only on disk, which is why
+    the check has to look there.
+
+    It looks for directories the manifest *cannot account for*, which is
+    narrower than "directories present". ``runs/`` is one directory for
+    the whole study, so a stage's genuine first run finds the previous
+    stage's recorded directories in it as a matter of course, and an
+    amendment records the ones it deliberately orphaned;
+    :func:`_unrecorded_run_directories` excludes both. What is left is
+    the crash residue, and the only kind whose width nothing can name.
+
+    It is refused rather than noted because the recovery the recorded
+    case offers does not exist here. That refusal can say "re-run at the
+    recorded width", since the row survives to name it. This one cannot:
+    the width was never written anywhere, so no inspection recovers it,
+    and the directories are potentially paid evidence that no operator
+    should silently inherit under a width nobody can check.
+
+    Both escapes are the operator supplying what the crash lost.
+    ``--allow-width-change`` says the requested width is the right one to
+    record over them; ``--discard-stale-runs`` says the directories are
+    not evidence worth keeping, and the resume re-runs rather than
+    reuses. Either is a decision; proceeding by default is a guess.
+    """
+    surviving = _unrecorded_run_directories(manifest, study_dir=study_dir)
+    if not surviving:
+        # No row, and every directory present is one the manifest
+        # explains: the ordinary first run of a stage, including a Stage 2
+        # standing on Stage 1's recorded runs. Nothing here has a width
+        # that a new one could misdescribe.
+        return None
+    if discard_stale_runs:
+        # The directories are authorized for discard, so the resume will
+        # re-run rather than reuse them and every run of this stage will
+        # be the requested width's. Nothing survives to misdescribe.
+        return None
+    if allow_width_change:
+        return (
+            f"{stage.value} holds {len(surviving)} run director(ies) with "
+            f"no stage record to say what provider concurrency produced "
+            f"them, and was resumed at {provider_concurrency}; authorized "
+            f"with {ALLOW_WIDTH_CHANGE_FLAG}. The width is an invocation "
+            f"property and does not enter the pre-registration hash, so "
+            f"the study's design is unchanged; the reused runs may have "
+            f"run at another width, which this stage cannot recover"
+        )
+    shown = list(surviving[:_WIDTH_RUNS_SHOWN])
+    more = (
+        ""
+        if len(surviving) <= _WIDTH_RUNS_SHOWN
+        else f" (+{len(surviving) - _WIDTH_RUNS_SHOWN} more)"
+    )
+    raise StageError(
+        f"{stage.value} was asked to run at provider concurrency "
+        f"{provider_concurrency}, but it holds {len(surviving)} run "
+        f"director(ies) and no stage record: {shown}{more}. That is what "
+        f"a crash after the runs finished and before the stage row was "
+        f"written leaves behind, and a run does not persist the width it "
+        f"ran at, so those directories are of unknown width -- recording "
+        f"{provider_concurrency} over them would describe runs by a width "
+        f"nothing can show they ran at. Start a fresh study directory "
+        f"whose runs are all at the new width, or pass "
+        f"{ALLOW_WIDTH_CHANGE_FLAG} to record {provider_concurrency} over "
+        f"them deliberately, or {DISCARD_STALE_RUNS_FLAG} to discard them "
+        f"and re-run. Neither amends a design, because the width does not "
+        f"enter the pre-registration hash"
+    )
+
+
+def refuse_resumed_width_change(  # noqa: PLR0913
     manifest: StudyManifest,
     *,
     stage: StageId,
     provider_concurrency: int,
     allow_width_change: bool = False,
+    study_dir: Path | None = None,
+    discard_stale_runs: bool = False,
 ) -> str | None:
     """Refuse a resume that would misdescribe the runs it keeps, or note it.
 
@@ -538,9 +698,25 @@ def refuse_resumed_width_change(
     changes is how the stage's timing evidence reads, and the note is
     what says so.
 
+    **A missing stage row is not the same as a first run.** A stage
+    writes its row after its arms finish, so a crash between the last run
+    and ``write_study_manifest`` leaves run directories on disk with no
+    row to say what width produced them. Reading that as "no recorded
+    width, so nothing to reconcile" is how the guard could be walked
+    past: the resume finds those directories, claims them, re-runs
+    nothing, and writes a row naming a width they may never have run at
+    -- and unlike the recorded-width case, nothing on disk even says
+    which width to re-run at. Paid run directories of unknown width are
+    the worse state, not the safer one, so a resume that finds them with
+    no stage row is refused too. ``allow_width_change`` accepts them at
+    the requested width; ``discard_stale_runs`` is the other recovery,
+    since a directory the operator is willing to discard is not evidence
+    a new width could misdescribe.
+
     Returns ``None`` when there is nothing to say: a stage with no
-    recorded width, no surviving runs, or a requested width equal to the
-    recorded one is a stage whose row already describes its runs.
+    recorded width and no surviving run directories, no surviving runs,
+    or a requested width equal to the recorded one is a stage whose row
+    already describes its runs.
     """
     recorded = next(
         (
@@ -550,7 +726,16 @@ def refuse_resumed_width_change(
         ),
         None,
     )
-    if recorded is None or recorded == provider_concurrency:
+    if recorded is None:
+        return _resolve_width_of_unrecorded_stage(
+            manifest,
+            stage=stage,
+            provider_concurrency=provider_concurrency,
+            allow_width_change=allow_width_change,
+            study_dir=study_dir,
+            discard_stale_runs=discard_stale_runs,
+        )
+    if recorded == provider_concurrency:
         return None
     surviving = _surviving_runs_of_stage(manifest, stage=stage)
     if not surviving:
@@ -1561,11 +1746,19 @@ def run_arm_stage(
     # old one, and a run does not persist the width it ran at, so the row
     # would describe runs by a width they never ran at. The note an
     # authorized change returns is recorded on the stage below.
+    #
+    # ``study_dir`` is passed because the manifest alone cannot see the
+    # worst case: a crash after the runs finished and before the stage row
+    # was written leaves paid run directories with no row to say what
+    # width produced them, and the manifest reads that exactly like a
+    # first run.
     width_change_note = refuse_resumed_width_change(
         manifest,
         stage=stage,
         provider_concurrency=environment.provider_concurrency,
         allow_width_change=environment.allow_width_change,
+        study_dir=study_dir,
+        discard_stale_runs=environment.discard_stale_runs,
     )
     # The design's ``k_run_by_arm`` is the *full* pre-registration, so it
     # says how many runs Stage 2 gets, not how many this stage does. Stage 1

@@ -91,6 +91,7 @@ from whetstone_envs.optim.study.protocols import (
 from whetstone_envs.optim.study.selection import (
     CandidateScore,
     HeldOutMeasurement,
+    HeldOutRefusalError,
     RunCandidate,
 )
 from whetstone_envs.optim.study.spend import ReportSpendLedger
@@ -257,10 +258,18 @@ class RoleScorer:
                 evidence, purpose=f"{purpose}:{candidate_name}"
             )
         except TaskCompletenessError as error:
-            # Re-raised as the stage's own type: a stage that cannot
-            # report truthfully must not continue, and every other
-            # refusal on this path is a ``StageError``.
-            raise StageError(str(error)) from error
+            # Re-raised as ``HeldOutRefusalError`` rather than the stage's
+            # generic ``StageError``, because *which* failure this is
+            # decides whether the candidate's one held-out claim may be
+            # written off. This is the deterministic post-billing case:
+            # the call returned, the ledger above already priced it, and
+            # the evidence was judged against a fixed rule, so re-issuing
+            # would buy the same verdict again. The failures raised
+            # earlier in this method -- a transport that never produced
+            # evidence -- stay ``StageError`` and leave the claim
+            # outstanding, which is the crash-shaped state a resume
+            # refuses rather than a settled one it can report around.
+            raise HeldOutRefusalError(str(error)) from error
         return evidence
 
     def eval_config_hash(self) -> str:

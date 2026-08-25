@@ -149,7 +149,7 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: 90% floor are still what the design *requests*, and realized counts are
 #: measurement.
 PROTOCOL_DOC_SHA256 = (
-    "6abaf36cbd0b63ff8f31986321d97e2767ae52d3cda14b63e68932e44d14f65f"
+    "ec6501136e5a87884399c403cf8f26ec74239887bdcf68e7854c95bd4cad1d53"
 )
 
 

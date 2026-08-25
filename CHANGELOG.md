@@ -71,16 +71,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   discarding a Stage 2 of paid runs. `HeldOutClaimRecord` gains a `refusal`
   field and a `settled` property, the ledger gains `refuse_held_out` and
   `refused_claim_for`, and a refused evaluation settles its claim durably
-  with its reason. L3's once-only rule is untouched: a settled claim is
-  still spent, and an outstanding one is still refused.
+  with its reason.
 
-- **The anchors resume from their completed claims.** `completed_claim_for`
-  was consulted only for arms, while the anchor pass runs *last* -- after
-  every arm has been scored and measured. A crash anywhere in the reporting
-  pass therefore left the anchors with durable L3 claims that refused a
-  second evaluation and no code path reading them back, so the resumed pass
-  re-issued the call, was refused, and wedged a study that had already paid
-  for essentially all of its rows.
+  A resumed arm whose claim was settled as refused is **returned** with
+  `ArmReport.held_out = None` rather than raised over: it keeps its
+  selection and official scores, contributes no held-out row, and the
+  report renders it `VERDICT_UNMEASURED`, so the pass finishes and every
+  other arm still reports the number it was paid for. `held_out` is
+  therefore `HeldOutMeasurement | None`, and `_measurements_by_name` skips
+  an arm without one rather than substituting a placeholder.
+
+  Only a **deterministic post-billing judgement** settles a claim. The new
+  `HeldOutRefusalError` is raised by `RoleScorer.evidence_for` after pricing,
+  and it is the only exception `_evaluate_claimed` writes off. A transient
+  failure -- a connection reset, a 503, an OOM -- may never have reached
+  the provider and could well succeed on the next attempt, so it
+  propagates untouched and leaves the claim outstanding and resumable;
+  `KeyboardInterrupt` and other `BaseException`s escape without settling by
+  design rather than by inheritance. L3's once-only rule is untouched: a
+  settled claim is still spent, and an outstanding one is still refused.
+
+- **The anchors resume from their claims, completed or refused.**
+  `completed_claim_for` was consulted only for arms, while the anchor pass
+  runs *last* -- after every arm has been scored and measured. A crash
+  anywhere in the reporting pass therefore left the anchors with durable L3
+  claims that refused a second evaluation and no code path reading them
+  back, so the resumed pass re-issued the call, was refused, and wedged a
+  study that had already paid for essentially all of its rows. The resume
+  now reads both states: a completed claim replays, and a refused one is
+  omitted from the returned mapping rather than re-issued into
+  `claim_held_out`'s any-claim rejection -- which stays as it is, since
+  that rejection is L3 working correctly.
+
+  A refused **ceiling** anchor is narrow: no arm's delta is measured
+  against it, so every arm still reports against naive and the study simply
+  carries no ceiling row. A refused **naive** anchor is fatal and says so
+  -- every delta is measured against it, so there is nothing to degrade to,
+  and the refusal names the consequence and the recovery instead of reading
+  as an anchor nobody got around to measuring.
 
 - Verified `bootstrap_paired_delta_ci` and `holm_adjust` on all-identical
   (zero-variance) resample sets, an unverified gap in the audit. Both are
@@ -113,7 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   quantities -- breadth 6, depth 3, the K values, the 90% floor -- are
   unchanged and remain what the design *requests*, with realized counts
   recorded as measurement. `PROTOCOL_DOC_SHA256` is re-pinned to
-  `6abaf36c...`; `0dfd0c47...` is historical.
+  `ec650113...`; `0dfd0c47...` is historical.
 
 ## [0.2.5] - 2026-08-24
 

@@ -43,9 +43,11 @@ from whetstone_envs.optim.study.manifest import (
     read_study_manifest,
     write_study_manifest,
 )
+from whetstone_envs.optim.study.power import COMPLETENESS_BACKSTOP
 from whetstone_envs.optim.study.selection import (
     CandidateScore,
     HeldOutMeasurement,
+    HeldOutRefusalError,
     ManifestSelectionLog,
     RunCandidate,
     SelectionError,
@@ -197,17 +199,27 @@ def _pointer(char: str) -> EvidencePointer:
 class _Harness:
     """Injected collaborators that record the order they were called in."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         study_dir: Path,
         *,
         scores: dict[str, float],
         task_calls: int = 10,
         search_num_seeds: int | None = HARNESS_K_REPEAT,
+        refuse: frozenset[str] = frozenset(),
+        raise_transient: frozenset[str] = frozenset(),
     ) -> None:
         self.study_dir = study_dir
         self.scores = scores
         self.task_calls = task_calls
+        #: Candidates whose held-out evaluation returns, is billed, and is
+        #: then judged unfit to report -- the deterministic post-billing
+        #: refusal that may settle a claim.
+        self.refuse = refuse
+        #: Candidates whose held-out evaluation fails transiently. The call
+        #: may never have reached the provider, so this must *not* settle
+        #: the claim.
+        self.raise_transient = raise_transient
         #: What each run this harness mints reports having searched at.
         #: Defaults to the design's ``K_REPEAT``, which is what an honest
         #: run records; a test lowers it to drive the stage's refusal.
@@ -294,6 +306,15 @@ class _Harness:
                 ),
             )
         )
+        if candidate_name in self.raise_transient:
+            raise ConnectionError(
+                f"the provider dropped the connection evaluating "
+                f"{candidate_name!r}"
+            )
+        if candidate_name in self.refuse:
+            raise HeldOutRefusalError(
+                f"held_out:{candidate_name}: below the task-completeness floor"
+            )
         return HeldOutMeasurement(
             candidate_name=candidate_name,
             per_task=(1.0, 0.0),
@@ -1025,25 +1046,159 @@ def test_a_settled_claim_cannot_be_settled_twice(tmp_path: Path) -> None:
         )
 
 
-def test_a_resumed_stage_reports_a_refused_arm_rather_than_deadlocking(
+def _arm_scores(study_dir: Path) -> dict[str, float]:
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    return {
+        f"{arm.arm_id}-{seed}": 0.5 for arm in spec.arms for seed in arm.seeds
+    }
+
+
+def test_a_refused_arm_lets_the_reporting_pass_finish(
     tmp_path: Path,
 ) -> None:
-    """**Fails-before: the resume raised the un-re-issuable-claim error.**
+    """**Fails-before: `StageError`, and the whole pass died with it.**
 
-    The recovery it named was "complete the outstanding entry in the
-    manifest by hand, or start a fresh study directory" -- after a Stage 2
-    of paid runs. Now the refusal is legible, so the resume says what
-    happened and names a recovery that does not involve editing JSON.
+    Driven end to end through the real stage rather than the ledger alone,
+    because the ledger was never where the wedge lived. `copro`'s held-out
+    evaluation returns, is billed, and is judged unfit to report. The old
+    code settled that claim and then *raised* over it on resume -- and
+    nothing under `src/` catches `StageError` on this path, so it left the
+    CLI at exit 2 having discarded every other arm's already-paid
+    evidence, after reading the very record written so it could continue.
+
+    What must be true instead: the pass completes, the refused arm carries
+    no held-out row, and every other arm still reports its number.
     """
     study_dir = _calibrated_study(tmp_path)
-    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
-    log.claim_held_out("copro")
-    log.refuse_held_out("copro", "TaskCompletenessError: below the floor")
+    scores = _arm_scores(study_dir)
 
+    # First pass: copro's evaluation is billed and refused, so the stage
+    # itself does not complete -- but the refusal is now durable.
+    with pytest.raises(HeldOutRefusalError):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=_Harness(
+                study_dir, scores=scores, refuse=frozenset({"copro"})
+            ).environment(),
+        )
+    log = ManifestSelectionLog(
+        study_dir,
+        transport=TransportName.FAKE.value,
+        stage=StageId.STAGE1.value,
+    )
     assert log.refused_claim_for("copro") is not None
-    # The refusal reason travels to whoever reads it, rather than being
-    # flattened into "an evaluation that never completed".
-    assert "below the floor" in (log.refused_claim_for("copro") or "")
+
+    # The resume completes. Nothing re-issues copro's evaluation -- L3
+    # spent it -- and the pass continues past it to a written manifest.
+    harness = _Harness(study_dir, scores=scores)
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=harness.environment(),
+    )
+    assert "held_out:copro" not in harness.events
+
+    manifest = result.manifest
+    reported = {row.candidate_name for row in manifest.held_out}
+    # The refused arm has no held-out row: that absence is what the report
+    # renders as VERDICT_UNMEASURED.
+    assert "copro" not in reported
+    # And the study still reported everything else it paid for -- which is
+    # the whole point, and exactly what raising destroyed.
+    assert NAIVE_CANDIDATE_NAME in reported
+    assert reported - {NAIVE_CANDIDATE_NAME, CEILING_CANDIDATE_NAME}
+
+
+def test_a_refused_arm_renders_as_unmeasured(tmp_path: Path) -> None:
+    """The degraded verdict the pass now survives to produce."""
+    from whetstone_envs.reporting.study_report import (
+        VERDICT_UNMEASURED,
+        _arm_verdict,
+    )
+
+    study_dir = _calibrated_study(tmp_path)
+    scores = _arm_scores(study_dir)
+    with pytest.raises(HeldOutRefusalError):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=_Harness(
+                study_dir, scores=scores, refuse=frozenset({"copro"})
+            ).environment(),
+        )
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=_Harness(study_dir, scores=scores).environment(),
+    )
+
+    manifest = result.manifest
+    arm = next(entry for entry in manifest.arms if entry.arm_id == "copro")
+    rows = {row.candidate_name: row for row in manifest.held_out}
+    verdict = _arm_verdict(
+        arm=arm,
+        row=rows.get("copro"),
+        backstop=COMPLETENESS_BACKSTOP,
+    )
+    assert verdict == VERDICT_UNMEASURED
+
+
+def test_a_transient_failure_leaves_the_claim_resumable(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: `except Exception` settled this as a refusal.**
+
+    A dropped connection may never have reached the provider -- the spend
+    could be zero, and the next attempt could well succeed. Settling it
+    would permanently burn the candidate's one evaluation over a blip,
+    which is the opposite of what this wave is for.
+
+    So it stays *unsettled*: crash-shaped, which the resume refuses to
+    re-issue on its own, and which a fresh attempt at the outstanding
+    claim can still complete into a real measurement.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    scores = _arm_scores(study_dir)
+
+    with pytest.raises(ConnectionError):
+        run_arm_stage(
+            study_dir=study_dir,
+            stage=StageId.STAGE1,
+            environment=_Harness(
+                study_dir, scores=scores, raise_transient=frozenset({"copro"})
+            ).environment(),
+        )
+
+    log = ManifestSelectionLog(
+        study_dir,
+        transport=TransportName.FAKE.value,
+        stage=StageId.STAGE1.value,
+    )
+    # Claimed, but neither measured nor written off.
+    assert log.held_out_count("copro") == 1
+    assert log.refused_claim_for("copro") is None
+    assert log.completed_claim_for("copro") is None
+    claim = next(
+        entry
+        for entry in read_study_manifest(study_dir).held_out_claims
+        if entry.candidate_name == "copro"
+    )
+    assert not claim.settled
+
+    # The evaluation is still owed, so completing the outstanding claim
+    # yields a real measurement -- the recovery a settled claim forecloses.
+    log.complete_held_out(
+        HeldOutMeasurement(
+            candidate_name="copro",
+            per_task=(1.0, 0.0),
+            mean=0.5,
+            eval_config_hash=HELD_OUT_CONFIG,
+            repeats=3,
+            completeness=1.0,
+        )
+    )
+    assert log.completed_claim_for("copro") is not None
 
 
 def test_an_arm_stage_leaves_a_completed_claim_per_arm(

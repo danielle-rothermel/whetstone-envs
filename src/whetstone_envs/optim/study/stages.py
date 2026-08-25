@@ -2115,11 +2115,23 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     selection: the held-out evaluation it never issued is still owed, and
     issuing it now costs exactly what the uncrashed stage would have cost.
 
+    An arm whose claim was settled as *refused* is rebuilt without a
+    held-out number. The evaluation ran and was billed, and a fixed rule
+    judged it unfit to report, so re-issuing would buy the same verdict
+    again. The arm returns with ``held_out=None``, keeps its selection and
+    official scores, and the report renders it ``VERDICT_UNMEASURED``. This
+    is the whole reason the refusal is recorded: a settled outcome the pass
+    can continue past, rather than a state only a hand-edited manifest
+    could clear.
+
     An arm with an *outstanding* claim is the one case that cannot be
     continued. The claim is written before the evaluation is issued, so
     whether the provider was billed is not knowable from here -- re-issuing
     would risk paying twice and skipping would report a number nobody
-    measured -- and it is refused with the recovery named.
+    measured -- and it is refused with the recovery named. Only a
+    deterministic post-billing judgement settles a claim, so a transient
+    failure lands here rather than being written off; see
+    :class:`~whetstone_envs.optim.study.selection.HeldOutRefusalError`.
     """
     durable_scorer = _DurableOfficialScorer(
         arm_id=arm_id, log=log, score_official=score_official
@@ -2149,17 +2161,24 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
         refusal = log.refused_claim_for(arm_id)
         if refusal is not None:
             # The evaluation ran, was billed, and was judged unfit to
-            # report. L3 is satisfied and spent, so it is not re-issued;
-            # the arm reaches the report with no held-out row, which is
-            # the unmeasured verdict the report already renders. Raising
-            # instead would stop the pass over an arm whose outcome is
-            # settled and recorded.
-            raise StageError(
-                f"arm {arm_id!r} already spent its held-out evaluation at "
-                f"{stage.value} and it was refused: {refusal}. The "
-                "evaluation is not re-issued -- it was billed once and L3 "
-                "allows one. Re-run this arm's stage in a fresh study "
-                "directory to measure it again."
+            # report. L3 is satisfied and spent, so it is not re-issued --
+            # and the arm is *returned* rather than raised over. It keeps
+            # its selection and its official scores, contributes no
+            # held-out row, and the report renders it
+            # ``VERDICT_UNMEASURED``.
+            #
+            # Raising here would have been the same wedge this branch
+            # exists to remove: nothing in this package catches
+            # ``StageError`` on the reporting path, so it exits the CLI
+            # and discards every other arm's already-paid evidence --
+            # having read the refusal record that was written precisely so
+            # the pass could continue past it.
+            return ArmReport(
+                arm_id=arm_id,
+                selection=selection,
+                official_scores=official_scores,
+                representative=representative,
+                held_out=None,
             )
         if log.held_out_count(arm_id) > 0:
             raise StageError(

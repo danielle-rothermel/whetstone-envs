@@ -126,25 +126,36 @@ def measure_reference_candidates(
     first costs nothing when there is none and is the whole recovery when
     there is.
 
+    **A refused anchor is omitted rather than re-issued.** A claim settled
+    as refused is spent, so re-issuing it would be refused by
+    ``claim_held_out`` anyway -- which is exactly the wedge, since that
+    method rejects on *any* existing claim, settled or not, and cannot be
+    routed around from inside. Consulting the refusal here is what routes
+    around it: the anchor is left out of the returned mapping, and
+    :func:`write_held_out_analysis` decides what a study missing that
+    anchor can still say.
+
     The once-only rule itself is untouched. A completed claim is *the*
-    measurement, replayed rather than re-bought; an outstanding one is
-    still refused by
+    measurement, replayed rather than re-bought; a refused one is spent and
+    stays spent; an outstanding one is still refused by
     :meth:`~whetstone_envs.optim.study.selection.SelectionLedger.
     claim_held_out`, because a claim written with no result recorded
     against it is an evaluation whose billing is not knowable from here.
     """
-    return {
-        name: _reference_candidate_resumably(
+    measured = {}
+    for name, template in (
+        (NAIVE_CANDIDATE_NAME, naive_template),
+        (CEILING_CANDIDATE_NAME, ceiling_template),
+    ):
+        measurement = _reference_candidate_resumably(
             candidate_name=name,
             template=template,
             evaluate_held_out=evaluate_held_out,
             log=log,
         )
-        for name, template in (
-            (NAIVE_CANDIDATE_NAME, naive_template),
-            (CEILING_CANDIDATE_NAME, ceiling_template),
-        )
-    }
+        if measurement is not None:
+            measured[name] = measurement
+    return measured
 
 
 def _reference_candidate_resumably(
@@ -153,11 +164,19 @@ def _reference_candidate_resumably(
     template: str,
     evaluate_held_out: HeldOutEvaluator,
     log: SelectionLedger,
-) -> HeldOutMeasurement:
-    """One anchor's held-out measurement, replayed if already bought."""
+) -> HeldOutMeasurement | None:
+    """One anchor's held-out measurement, or ``None`` if it was refused.
+
+    Three states, checked in the order that costs nothing when the answer
+    is "just measure it": a completed claim replays, a refused claim yields
+    ``None`` because it is spent and produced no number, and anything else
+    is measured through the ordinary once-only path.
+    """
     completed = log.completed_claim_for(candidate_name)
     if completed is not None:
         return completed
+    if log.refused_claim_for(candidate_name) is not None:
+        return None
     return report_reference_candidate(
         candidate_name=candidate_name,
         template=template,
@@ -188,13 +207,26 @@ def write_held_out_analysis(  # noqa: PLR0913
     size; and the nulls are analysed uncorrected beside them, because a
     control that had to survive a family-wise correction would be hardest to
     trip exactly when tripping it matters most.
+
+    **A missing naive anchor is fatal to the analysis, and says so.** Every
+    delta is measured against it, so there is nothing to degrade *to*: no
+    arm has a comparison, and inventing one would be inventing the study's
+    reference point. This refuses rather than writing rows, which is the
+    correct asymmetry -- an arm losing its number costs one claim, the
+    naive anchor losing its number costs all of them. A **ceiling** anchor
+    is narrower: it carries no arm's delta, so a study without one still
+    reports every arm against naive and simply has no ceiling row.
     """
     manifest = read_study_manifest(study_dir)
     naive = references.get(NAIVE_CANDIDATE_NAME)
     if naive is None:
         raise ValueError(
             "the held-out analysis reports every delta against the naive "
-            "anchor; measure it before analysing"
+            "anchor, and this study has no naive measurement to report "
+            "against. If its held-out claim was settled as refused, that "
+            "evaluation is spent and cannot be re-issued: the study's "
+            "reference point is gone, and every delta with it. Re-run this "
+            "stage in a fresh study directory."
         )
     measurements = _measurements_by_name(arms=arms, references=references)
     # Fidelity arms are analysed for nothing: they carry no efficacy claim,
@@ -350,7 +382,16 @@ def _measurements_by_name(
     arms: tuple[ArmReport, ...],
     references: dict[str, HeldOutMeasurement],
 ) -> dict[str, HeldOutMeasurement]:
-    """Every measured candidate, anchors first so ``naive`` is row one."""
+    """Every measured candidate, anchors first so ``naive`` is row one.
+
+    An arm whose held-out evaluation was spent and refused carries no
+    measurement, so it is skipped rather than represented by a placeholder.
+    That is what makes it *unmeasured* downstream: no entry here means no
+    delta, no interval, and no held-out row, and the report reads a missing
+    row as ``VERDICT_UNMEASURED``. Substituting a zero or an empty vector
+    would put a number nobody measured into a manifest that a reader would
+    then have no way to distinguish from one that was.
+    """
     measurements: dict[str, HeldOutMeasurement] = {
         NAIVE_CANDIDATE_NAME: references[NAIVE_CANDIDATE_NAME]
     }
@@ -359,6 +400,8 @@ def _measurements_by_name(
             CEILING_CANDIDATE_NAME
         ]
     for report in arms:
+        if report.held_out is None:
+            continue
         measurements[report.arm_id] = report.held_out
     return measurements
 

@@ -285,3 +285,110 @@ def test_an_unclaimed_anchor_is_still_measured_normally() -> None:
     # And each spent exactly its one claim (L3 is untouched).
     assert log.held_out_count(NAIVE_CANDIDATE_NAME) == 1
     assert log.held_out_count(CEILING_CANDIDATE_NAME) == 1
+
+
+# --------------------------------------------------------------------------
+# A refused anchor resumes without re-issuing
+# --------------------------------------------------------------------------
+
+
+def _refusing_log(refused: set[str]):
+    """A ledger whose named candidates hold settled *refused* claims."""
+    from whetstone_envs.optim.study.selection import SelectionLog
+
+    class _Log(SelectionLog):
+        def refused_claim_for(self, candidate_name: str) -> str | None:
+            if candidate_name in refused:
+                return "HeldOutRefusalError: below the task-completeness floor"
+            return None
+
+    return _Log()
+
+
+def test_a_refused_anchor_is_not_re_issued_on_resume() -> None:
+    """**Fails-before: `claim_held_out` refused and the study wedged.**
+
+    `_reference_candidate_resumably` consulted only `completed_claim_for`,
+    so a *refused* anchor looked unmeasured and was re-issued -- and
+    `ManifestSelectionLog.claim_held_out` rejects on any existing claim
+    index, settled or not, so the resume died with "already evaluated on
+    held-out... exactly once". This is the audit's own deadlock, on the
+    path that runs LAST, after every arm has been paid for.
+
+    The once-only rule is not what changes: it is still correct that a
+    spent claim cannot be re-issued. What changes is that the resume reads
+    the refusal and routes around it instead of walking into it.
+    """
+    from whetstone_envs.optim.study.analysis import (
+        CEILING_CANDIDATE_NAME,
+        NAIVE_CANDIDATE_NAME,
+        measure_reference_candidates,
+    )
+
+    issued: list[str] = []
+
+    def evaluate(*, candidate_name: str, template: str):
+        del template
+        issued.append(candidate_name)
+        return _measurement(candidate_name, (1.0, 0.0))
+
+    references = measure_reference_candidates(
+        naive_template="naive {q}",
+        ceiling_template="ceiling {q}",
+        evaluate_held_out=evaluate,
+        log=_refusing_log({CEILING_CANDIDATE_NAME}),
+    )
+
+    # The refused ceiling was never re-issued, and never claimed again.
+    assert issued == [NAIVE_CANDIDATE_NAME]
+    # It is absent rather than fabricated: no measurement means no row.
+    assert CEILING_CANDIDATE_NAME not in references
+    assert NAIVE_CANDIDATE_NAME in references
+
+
+def test_a_refused_ceiling_still_reports_every_arm() -> None:
+    """The narrow case: no arm's delta is measured against the ceiling.
+
+    The ceiling anchors the *scale* a reader interprets a delta on; it is
+    not the reference any delta is computed from. So a study that lost it
+    reports every arm against naive exactly as before and simply carries
+    no ceiling row.
+    """
+    from whetstone_envs.optim.study.analysis import (
+        CEILING_CANDIDATE_NAME,
+        NAIVE_CANDIDATE_NAME,
+        _measurements_by_name,
+    )
+
+    references = {NAIVE_CANDIDATE_NAME: _measurement("naive", (0.5, 0.5))}
+    measurements = _measurements_by_name(arms=(), references=references)
+    assert CEILING_CANDIDATE_NAME not in measurements
+    assert NAIVE_CANDIDATE_NAME in measurements
+
+
+def test_a_refused_naive_anchor_voids_every_delta(tmp_path) -> None:
+    """The fatal case, reported as fatal rather than as a missing anchor.
+
+    Every delta is measured against naive, so there is nothing to degrade
+    *to* -- no arm has a comparison, and inventing one would invent the
+    study's reference point. The refusal is stated with its consequence
+    (the reference point is gone) and its recovery (a fresh study
+    directory), rather than the old wording, which read as though nobody
+    had got around to measuring it.
+    """
+    from whetstone_envs.optim.study.analysis import write_held_out_analysis
+    from whetstone_envs.optim.study.manifest import write_study_manifest
+
+    from .conftest import toy_manifest
+
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+
+    with pytest.raises(ValueError, match="reference point is gone"):
+        write_held_out_analysis(
+            study_dir=study_dir,
+            store_path=study_dir / "store.sqlite",
+            arms=(),
+            references={},
+            k_repeat=3,
+        )

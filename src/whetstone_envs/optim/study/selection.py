@@ -64,6 +64,7 @@ __all__ = [
     "CandidateScore",
     "HeldOutEvaluator",
     "HeldOutMeasurement",
+    "HeldOutRefusalError",
     "ManifestSelectionLog",
     "OfficialScorer",
     "RunCandidate",
@@ -93,6 +94,32 @@ class SelectionError(RuntimeError):
 
     Distinct from ``ValueError`` because these are protocol violations, not
     bad arguments: a caller must not catch and continue past one.
+    """
+
+
+class HeldOutRefusalError(RuntimeError):
+    """A held-out evaluation returned, was billed, and is unfit to report.
+
+    The one outcome that may settle a claim without a measurement, and it
+    is deliberately narrow. Two things have to be true before a claim can
+    be written off: the provider call **returned**, so the spend is real
+    and already ledgered; and the result was **judged** against a
+    deterministic rule, so re-issuing would produce the same verdict and
+    buy nothing.
+
+    A transient failure satisfies neither. A connection reset, a 503, or
+    an OOM mid-evaluation may never have reached the provider at all --
+    the spend could be zero -- and the next attempt could well succeed.
+    Settling those as refusals would permanently burn a candidate's one
+    evaluation over a blip, which is precisely the class of infrastructure
+    outcome this wave exists to stop treating as final. They stay
+    unsettled, which is crash-shaped, and a resume treats them as the
+    in-flight crash they are.
+
+    Raised by the layer that does the judging --
+    :meth:`~whetstone_envs.optim.study.arms.RoleScorer.evidence_for`,
+    after pricing -- so the narrowing lives with the decision rather than
+    being re-derived by matching on messages further out.
     """
 
 
@@ -393,13 +420,22 @@ class SelectionLog:
 
 @dataclass(frozen=True, slots=True)
 class ArmReport:
-    """One arm's selection, its official scores, and its held-out number."""
+    """One arm's selection, its official scores, and its held-out number.
+
+    ``held_out`` is ``None`` for an arm whose one held-out evaluation was
+    spent and refused. That arm was selected, scored on official, and
+    billed, but produced no number anybody may report -- so it carries its
+    selection and its official evidence into the report and contributes no
+    held-out row, which the report renders as ``VERDICT_UNMEASURED``. The
+    alternative is what this replaced: raising, and taking every *other*
+    arm's already-paid evidence down with it.
+    """
 
     arm_id: str
     selection: SelectionRecord
     official_scores: tuple[CandidateScore, ...]
     representative: RunCandidate
-    held_out: HeldOutMeasurement
+    held_out: HeldOutMeasurement | None
 
 
 def _argmax_official(
@@ -549,20 +585,35 @@ def _evaluate_claimed(
     The claim is written before the call, so between the two there is a
     window where the candidate has spent its one evaluation and no record
     says what came of it. A crash there is genuinely unrecoverable and
-    stays that way. A *refusal* is not: the call returned, the spend is
-    real and already ledgered, and the only thing missing was a reportable
-    number -- so the claim is settled as refused rather than left looking
-    like a crash, and the study resumes into a degraded verdict instead of
-    a dead end that only a hand-edited manifest could clear.
+    stays that way. A :class:`HeldOutRefusalError` is not: the call returned,
+    the spend is real and already ledgered, and the only thing missing was
+    a reportable number -- so the claim is settled as refused rather than
+    left looking like a crash, and the study resumes into a degraded
+    verdict instead of a dead end only a hand-edited manifest could clear.
 
-    The exception still propagates. Settling the claim records what
-    happened; it does not decide that the caller should carry on.
+    **Only that type settles.** Catching every exception here would treat
+    a connection reset, a 503, or an OOM -- failures that may never have
+    reached the provider, and that a retry could well survive -- as a
+    permanent write-off of the candidate's one evaluation. Those propagate
+    untouched, leaving the claim outstanding, which is exactly the
+    crash-shaped state a resume knows how to refuse safely.
+
+    ``KeyboardInterrupt`` and other ``BaseException``\\ s escape without
+    settling, by design: an operator stopping a run has not judged
+    anything, and recording a refusal on their behalf would write off an
+    evaluation nobody evaluated. That is now a property of the narrowed
+    ``except`` rather than an accident of what ``Exception`` happens not
+    to cover.
+
+    The exception still propagates in every case. Settling the claim
+    records what happened; it does not decide that the caller should
+    carry on.
     """
     try:
         return evaluate_held_out(
             candidate_name=candidate_name, template=template
         )
-    except Exception as error:
+    except HeldOutRefusalError as error:
         log.refuse_held_out(candidate_name, f"{type(error).__name__}: {error}")
         raise
 

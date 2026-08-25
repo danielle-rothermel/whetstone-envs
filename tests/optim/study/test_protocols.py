@@ -11,6 +11,7 @@ import hashlib
 from dataclasses import fields, replace
 
 import pytest
+from dr_providers import ReasoningEffort
 
 pytest.importorskip("whetstone.experiment.env")
 
@@ -31,6 +32,7 @@ from whetstone_envs.optim.study.protocols import (
     STEP10_C19,
     STEP10_C19_TOY,
     TASK_MODEL,
+    TASK_REASONING_EFFORT,
     StudyProtocol,
     protocol_doc_sha256,
     study_protocol,
@@ -84,6 +86,35 @@ def test_the_real_protocol_pins_its_models() -> None:
     assert STEP10_C19.task_model == TASK_MODEL == "openai/gpt-5-nano"
     assert STEP10_C19.proposer_model == PROPOSER_MODEL == "openai/gpt-5.4-nano"
     assert STEP10_C19.codex_agent_model == CODEX_AGENT_MODEL == "gpt-5.6-sol"
+
+
+def test_the_protocol_pins_the_task_models_reasoning_effort() -> None:
+    """The pinned effort, as a literal.
+
+    A reasoning effort is design rather than an invocation setting: it sets
+    the task model's capability, so an effort chosen after Stage 0 measured
+    the anchors would change the treatment under a pre-registration that
+    had already named it. Pinned as a literal here so the value cannot
+    drift silently -- ``minimal`` is what Danielle ratified, and a change
+    to it is a change to the study.
+    """
+    assert TASK_REASONING_EFFORT is ReasoningEffort.MINIMAL
+    assert TASK_REASONING_EFFORT.value == "minimal"
+    assert STEP10_C19.task_reasoning_effort is TASK_REASONING_EFFORT
+
+
+def test_the_toy_runs_at_the_same_reasoning_effort_as_the_real_study() -> None:
+    """The effort is not a sized field, and the toy proves it.
+
+    A toy that ran at a different effort would be exercising a different
+    task model than the study it stands in for -- which is precisely what
+    ``SIZED_FIELDS`` exists to bound.
+    """
+    assert (
+        STEP10_C19_TOY.task_reasoning_effort
+        == STEP10_C19.task_reasoning_effort
+    )
+    assert "task_reasoning_effort" not in SIZED_FIELDS
 
 
 def test_the_real_protocol_pins_its_control_shapes() -> None:

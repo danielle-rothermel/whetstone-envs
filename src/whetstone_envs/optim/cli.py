@@ -5,6 +5,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from dr_providers import ReasoningEffort
+
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
     MAX_UNFORCED_PROVIDER_CONCURRENCY,
@@ -159,6 +161,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--model", default="openai/gpt-4.1-nano")
+    parser.add_argument(
+        "--task-reasoning-effort",
+        type=ReasoningEffort,
+        default=None,
+        choices=list(ReasoningEffort),
+        help=(
+            "Reasoning effort for the task route. Omitted sends no "
+            "reasoning key and leaves the route on the provider's "
+            "default. The proposer route never takes it."
+        ),
+    )
     parser.add_argument(
         "--proposer-model",
         default=None,
@@ -369,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=output,
                 run_id=run_id,
                 model=arguments.model,
+                task_reasoning_effort=arguments.task_reasoning_effort,
                 proposer_model=arguments.proposer_model,
                 demo_mode=arguments.demo_mode,
                 num_seeds=arguments.num_seeds,

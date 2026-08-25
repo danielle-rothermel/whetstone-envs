@@ -129,6 +129,7 @@ def _spec(k_cal: int = 4) -> StudySpec:
         official=SplitSpec("official", official),
         held_out=SplitSpec("held_out", held_out),
         task_model="fake",
+        task_reasoning_effort="minimal",
         proposer_model="fake",
         k_cal=k_cal,
         k_repeat=1,

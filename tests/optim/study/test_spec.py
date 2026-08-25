@@ -55,6 +55,7 @@ def _spec(
         official=SplitSpec("official", 132),
         held_out=SplitSpec("held_out", 220) if held_out is None else held_out,
         task_model="openai/gpt-5-nano",
+        task_reasoning_effort="minimal",
         proposer_model="openai/gpt-5.4-nano",
         k_cal=k_cal,
         codex_agent_model=codex_agent_model,
@@ -685,6 +686,7 @@ def test_the_batch_size_enters_the_pre_registered_payload() -> None:
         "kind_by_arm": {"miprov2": ArmKind.REAL.value},
         "split_by_arm": {"miprov2": (44, 44)},
         "search_by_arm": {"miprov2": {"num_trials": 10}},
+        "task_reasoning_effort": "minimal",
         "ci_level": CI_LEVEL,
         "resamples": RESAMPLES,
         "bootstrap_seed": 0,
@@ -1016,6 +1018,12 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
     ``minibatch_by_arm`` carries a real size rather than all-``None``,
     because an all-``None`` mapping is exactly the shape a payload that
     dropped the key entirely would produce.
+
+    The literal changed once, deliberately, when ``task_reasoning_effort``
+    entered the payload: the design hash before that widening was
+    ``d4f0e4de10158b0eb9c24df2b230608c7f26064f2d05767e983074cdf1a7c199``.
+    That value is historical -- it names a design that did not state the
+    task model's reasoning effort, and no study should be run against it.
     """
     from whetstone_envs.optim.study.manifest import (
         pre_registration_design_hash,
@@ -1054,6 +1062,7 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
                 "miprov2": {"num_candidates": 3, "num_trials": 10},
                 "null-identity": {},
             },
+            task_reasoning_effort="minimal",
             ci_level=CI_LEVEL,
             resamples=RESAMPLES,
             bootstrap_seed=0,
@@ -1061,5 +1070,5 @@ def test_the_pre_registration_design_hash_is_pinned_to_a_literal() -> None:
             m=HOLM_FAMILY_SIZE,
             completeness_backstop=0.9,
         )
-        == "d4f0e4de10158b0eb9c24df2b230608c7f26064f2d05767e983074cdf1a7c199"
+        == "fb83cf89b846bb5cb450443ad9bd984b8cb89401f4738497ef70744685380e33"
     )

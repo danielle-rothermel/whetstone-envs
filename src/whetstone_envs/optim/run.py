@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from dr_providers import ProviderKind
+from dr_providers import ProviderKind, ReasoningEffort
 from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     RegisteredRuntime,
@@ -219,6 +219,15 @@ class RunSpec:
     output_dir: Path | None = None
     run_id: str | None = None
     model: str = "openai/gpt-4.1-nano"
+    #: The task route's reasoning effort. ``None`` sends no reasoning key
+    #: and leaves the route on the provider's default, which is what every
+    #: run made before this field existed did.
+    #:
+    #: Applies to the **task** route only; the proposer route never takes
+    #: it. A study pins this in its manifest and the study path reads it
+    #: from there -- this field is the standalone runner's way to say the
+    #: same thing.
+    task_reasoning_effort: ReasoningEffort | None = None
     #: The proposer's model. ``None`` reuses ``model`` for both roles.
     proposer_model: str | None = None
     #: MIPROv2's demonstration regime; ignored by COPRO and GEPA.
@@ -735,6 +744,14 @@ def build_codex_runtime_config(
         num_seeds=spec.num_seeds,
         transport=cast("CodexRuntimeTransport", spec.transport),
         model=spec.model,
+        # Forwarded for the same reason ``provider_concurrency`` is, with
+        # a sharper consequence: the server rebuilds its engine from this
+        # config alone, and ``build_codex_adapter`` refuses a rebuild whose
+        # ``task_model_identity_hash`` disagrees with the harness's. An
+        # unforwarded effort therefore does not silently run unpinned -- it
+        # aborts the Codex arm, which is the correct failure but a
+        # confusing one to debug.
+        reasoning_effort=spec.task_reasoning_effort,
         # Forwarded rather than defaulted: the server rebuilds from this
         # config alone, so an unforwarded width would leave the Codex arm
         # evaluating at whetstone's default while every other arm ran at
@@ -1123,7 +1140,9 @@ def run_optimizer(  # noqa: PLR0915
     provider = None
     api_key_env = "WHETSTONE_TOY_API_KEY"
     if spec.transport == "openrouter":
-        provider = openrouter_seeded_call_config(model=spec.model)
+        provider = openrouter_seeded_call_config(
+            model=spec.model, reasoning_effort=spec.task_reasoning_effort
+        )
         api_key_env = "OPENROUTER_API_KEY"
     pool = family.generate_pool(
         n_per_stratum=validated.n_per_stratum,

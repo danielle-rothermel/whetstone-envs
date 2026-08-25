@@ -34,6 +34,8 @@ from dataclasses import dataclass, replace
 from importlib.resources import files
 from typing import TYPE_CHECKING
 
+from dr_providers import ReasoningEffort
+
 from whetstone_envs.optim.families import FamilyId
 from whetstone_envs.optim.study.manifest import CODEX_AGENT_OMITTED
 from whetstone_envs.optim.study.protocol_docs import STEP10_C19_PROTOCOL_DOC
@@ -75,6 +77,7 @@ __all__ = [
     "STEP10_C19_TOY",
     "STEP10_C19_TOY_ID",
     "TASK_MODEL",
+    "TASK_REASONING_EFFORT",
     "TOY_COPRO_BREADTH",
     "TOY_COPRO_DEPTH",
     "TOY_MIPROV2_MINIBATCH_SIZE",
@@ -127,8 +130,14 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: ``whetstone-eval`` report, with in-search evaluations exempt to the
 #: optimizer's reward policy -- and states that "measured" means measured to
 #: a full ``K_REPEAT``, without which the 90% bound could never bind.
+#: ``df0e9d4c...`` is historical in turn: item 19 (2026-08-24) pins the task
+#: model's reasoning effort to ``minimal``, which the text had previously
+#: declined to pin. That revision also states how the pin is verified --
+#: request correctness, read off the manifest's recorded provider call
+#: config, rather than billed reasoning tokens, which no provider
+#: guarantees.
 PROTOCOL_DOC_SHA256 = (
-    "df0e9d4c4a969f8d3a7c9866bc4e207b7e6ff3bc2d8e548a282ea53f600fecf9"
+    "3d1a8e5f336fb610d0e87266c9e43f8f49541ed9bd76d5f689547690da94a3fe"
 )
 
 
@@ -162,6 +171,27 @@ PROTOCOL_DOC_PATH = _protocol_doc_path()
 #: run-time evidence, not design, so it is not pinned here.
 TASK_MODEL = "openai/gpt-5-nano"
 PROPOSER_MODEL = "openai/gpt-5.4-nano"
+
+#: The task model's pinned reasoning effort, pre-registered as design.
+#:
+#: Pinned rather than left at the route's default because it is not an
+#: invocation setting: ``gpt-5-nano`` bills reasoning tokens as the largest
+#: term in this study's per-call cost, and the effort that produces them
+#: also sets the task model's capability. Two arms measured at different
+#: efforts measured different task models, so the effort has to be fixed
+#: before Stage 0 measures the anchors -- an effort chosen afterwards is the
+#: post-hoc adjustment the pre-registration exists to forbid.
+#:
+#: Applied to the **task** route only. The proposer route is deliberately
+#: unpinned: it writes candidates rather than answering tasks, its call
+#: count is three orders of magnitude smaller, and the study makes no claim
+#: about it.
+#:
+#: A design value, so it is hashed into
+#: :func:`~whetstone_envs.optim.study.manifest.pre_registration_design_hash`
+#: and it is **not** a sized field: the toy and the real study run the same
+#: effort or they are not the same protocol.
+TASK_REASONING_EFFORT = ReasoningEffort.MINIMAL
 
 #: What a projection with no Codex arm appends to the study id, so a
 #: rehearsal's artifacts can never be mistaken for the study's.
@@ -367,6 +397,10 @@ class StudyProtocol:
     train_size: int
     val_size: int
     task_model: str
+    #: The task route's pinned reasoning effort -- see
+    #: :data:`TASK_REASONING_EFFORT` for why it is design rather than an
+    #: invocation setting.
+    task_reasoning_effort: ReasoningEffort
     proposer_model: str
     codex_agent_model: str
     temperature: str
@@ -547,6 +581,7 @@ def _step10_c19(  # noqa: PLR0913
         train_size=train_size,
         val_size=val_size,
         task_model=TASK_MODEL,
+        task_reasoning_effort=TASK_REASONING_EFFORT,
         proposer_model=PROPOSER_MODEL,
         codex_agent_model=CODEX_AGENT_MODEL,
         temperature=TEMPERATURE_NOTE,

@@ -253,6 +253,87 @@ def test_the_cli_refuses_a_keyless_paid_stage_nonzero(
     assert read_study_manifest(study_dir).design is None
 
 
+def _rebuilt_task_identity(study_dir: Path, *, effort) -> str:
+    """One engine's task-model identity at a given effort.
+
+    Built through the Codex runtime config, which is the one path in this
+    package that rebuilds an engine from parameters alone -- so the
+    comparison is against a real engine rather than a hand-recomputed hash.
+    """
+    from dr_store.sync import open_sqlite
+
+    from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
+
+    manifest = read_study_manifest(study_dir)
+    config = EnvsCodexRuntimeConfig(
+        family_id=manifest.population.family,
+        split_sizes=(
+            manifest.splits.internal.size,
+            manifest.splits.official.size,
+            manifest.splits.held_out.size,
+        ),
+        n_per_stratum=manifest.population.n_per_stratum,
+        pool_seed_start=manifest.population.pool_seed_start,
+        num_seeds=1,
+        transport="openrouter",
+        model=manifest.models.task_model,
+        reasoning_effort=effort,
+    )
+    name = "pinned" if effort is not None else "unpinned"
+    with open_sqlite(str(study_dir / f"identity-{name}.sqlite")) as store:
+        engine = config.build_engine(cast("ObjectStore", store))
+        return engine.task_model_identity_hash()
+
+
+def test_every_paid_role_binds_the_manifests_reasoning_effort(
+    study_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pin reaches every arm, because it reaches the shared route.
+
+    Every arm evaluates through one bound provider call config, so this is
+    where "every arm carries the effort" is decided: a pin that reached
+    only some arms would mean arms measured against different task models
+    under one pre-registration.
+
+    Read off the manifest rather than off the protocol module, so a study
+    initialised at one effort cannot be run at another.
+
+    Fails-before: the binder called ``openrouter_seeded_call_config`` with
+    no effort at all, so the bound config was always unpinned.
+    """
+    from whetstone.core.roles import EvalRole
+
+    monkeypatch.setenv(OPENROUTER_API_KEY_ENV, "test-key-not-a-real-secret")
+    manifest = read_study_manifest(study_dir)
+    assert manifest.models.task_reasoning_effort == "minimal"
+
+    with bound_stage_environment(
+        study_dir, transport=OPENROUTER_TRANSPORT
+    ) as environment:
+        identities = {
+            role: environment.bind_engine(
+                role=role, num_seeds=1
+            ).task_model_identity_hash()
+            for role in EvalRole
+        }
+
+    # One route, so every role lands on one task-model identity: an arm
+    # that bound a different effort would show up here as a second value.
+    assert len(set(identities.values())) == 1
+    bound = next(iter(identities.values()))
+
+    # And that one identity is the *pinned* one, not the unpinned route it
+    # would otherwise be. Compared against a rebuild rather than a literal
+    # so the assertion survives an unrelated identity-payload change.
+    from dr_providers import ReasoningEffort
+
+    unpinned = _rebuilt_task_identity(study_dir, effort=None)
+    pinned = _rebuilt_task_identity(study_dir, effort=ReasoningEffort.MINIMAL)
+    assert pinned != unpinned
+    assert bound == pinned
+
+
 # --------------------------------------------------------------------------
 # What a stage records
 # --------------------------------------------------------------------------
@@ -1844,9 +1925,10 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     assert record.transport == OPENROUTER_TRANSPORT
     assert record.provider == "openrouter"
     assert record.model_route == "openai/gpt-5-nano"
-    # Recorded verbatim and never set from here: whether the design pins a
-    # task-model reasoning effort is an open decision, and this block
-    # states what was bound rather than choosing it.
+    # Recorded verbatim and never set from here. This call binds no effort,
+    # so the record says so: the design pins the effort in
+    # ``ModelsRecord.task_reasoning_effort`` and the study path passes it
+    # in, while this block only ever states what was bound.
     assert record.reasoning == PROVIDER_CONTROL_UNSET
     # The execution settings that were actually in force, so a stage that
     # lost rows to timeouts and one that did not are distinguishable.
@@ -1862,6 +1944,46 @@ def test_the_paid_route_records_the_route_it_would_bind() -> None:
     # header is honoured in full.
     assert "Retry-After delta honoured" in record.retry_backoff
     assert "HTTP-date ignored" in record.retry_backoff
+
+
+def test_the_paid_route_records_a_pinned_reasoning_effort() -> None:
+    """The manifest's request-side proof that the pin reached the wire.
+
+    A reasoning effort is not checkable from billed tokens -- a provider
+    may spend what it likes at any effort, and OpenRouter is known to
+    ignore controls on nano routes. What *is* checkable is the config the
+    transport was bound with, and this record is where a reader of a live
+    study's manifest sees it. A stage that bound the task route without the
+    pin records ``PROVIDER_CONTROL_UNSET`` here while
+    ``models.task_reasoning_effort`` still says ``minimal``, and the
+    disagreement is visible without rerunning anything.
+
+    Fails-before: ``openrouter_seeded_call_config`` took no effort, so this
+    record could only ever read "unset".
+    """
+    from dr_providers import ReasoningEffort
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    from whetstone_envs.optim.provider import (
+        hardened_execution_policy,
+        openrouter_seeded_call_config,
+    )
+    from whetstone_envs.optim.study.environment import _provider_call_record
+
+    record = _provider_call_record(
+        transport=OPENROUTER_TRANSPORT,
+        config=openrouter_seeded_call_config(
+            model="openai/gpt-5-nano",
+            reasoning_effort=ReasoningEffort.MINIMAL,
+        ),
+        policy=hardened_execution_policy(
+            ReferenceEvalRuntimeConfig(
+                transport_api_key_env="OPENROUTER_API_KEY",
+            ).execution_policy
+        ),
+    )
+    assert record.reasoning != PROVIDER_CONTROL_UNSET
+    assert "minimal" in record.reasoning
 
 
 # --------------------------------------------------------------------------

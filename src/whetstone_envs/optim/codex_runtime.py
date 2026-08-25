@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from dr_providers import ProviderKind
+from dr_providers import ProviderKind, ReasoningEffort
 from pydantic import BaseModel, ConfigDict, PositiveFloat, StrictInt, StrictStr
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -94,6 +94,22 @@ class EnvsCodexRuntimeConfig(BaseModel):
     num_seeds: StrictInt
     transport: CodexRuntimeTransport
     model: StrictStr
+
+    #: The task route's reasoning effort, or ``None`` for the provider's
+    #: default.
+    #:
+    #: Carried across the process boundary because the effort is part of
+    #: the bound provider call config, and therefore part of the Eval
+    #: Config the server must land on: ``build_codex_adapter`` compares
+    #: this process's ``task_model_identity_hash`` against the harness's
+    #: and refuses a rebuild that disagrees. A runtime that dropped the
+    #: field would not evaluate at an unpinned effort -- it would fail to
+    #: start, loudly, which is the guard working.
+    #:
+    #: Defaulted to ``None`` rather than required so a config written
+    #: before this field existed still validates under ``extra="forbid"``,
+    #: and so the fake transport keeps the identity it always had.
+    reasoning_effort: ReasoningEffort | None = None
 
     #: How many task evaluations the server runs against the provider at
     #: once.
@@ -192,7 +208,10 @@ class EnvsCodexRuntimeConfig(BaseModel):
             split_sizes=self.split_sizes,
             num_seeds=self.num_seeds,
             provider_call_config=(
-                openrouter_seeded_call_config(model=self.model)
+                openrouter_seeded_call_config(
+                    model=self.model,
+                    reasoning_effort=self.reasoning_effort,
+                )
                 if self.transport == "openrouter"
                 else None
             ),

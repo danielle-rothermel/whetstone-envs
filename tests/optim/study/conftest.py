@@ -144,6 +144,7 @@ def toy_manifest(
         splits=toy_splits(),
         models=ModelsRecord(
             task_model="fake",
+            task_reasoning_effort="minimal",
             proposer_model="fake",
             temperature="unset",
             provider="fake",

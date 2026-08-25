@@ -31,7 +31,7 @@ import os
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
 
-from dr_providers import ProviderKind
+from dr_providers import ProviderKind, ReasoningEffort
 from dr_store.sync import open_sqlite
 from whetstone.core.roles import EvalRole
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
@@ -485,7 +485,16 @@ def bound_stage_environment(  # noqa: PLR0913
     # every Eval Config hash it derives -- is byte-for-byte what it was
     # before a paid path existed.
     provider_call_config = (
-        openrouter_seeded_call_config(model=manifest.models.task_model)
+        openrouter_seeded_call_config(
+            model=manifest.models.task_model,
+            # The pre-registered effort, read off the manifest rather than
+            # off the protocol module: the manifest is what this study was
+            # initialised with, and a stage that reached past it could bind
+            # an effort the pre-registration does not name.
+            reasoning_effort=ReasoningEffort(
+                manifest.models.task_reasoning_effort
+            ),
+        )
         if paid
         else None
     )

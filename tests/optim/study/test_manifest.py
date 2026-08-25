@@ -171,6 +171,7 @@ def _minimal_manifest() -> StudyManifest:
         ),
         models=ModelsRecord(
             task_model="openai/gpt-5-nano",
+            task_reasoning_effort="minimal",
             proposer_model="openai/gpt-5.4-nano",
             temperature="unset",
             provider="openrouter",
@@ -453,6 +454,7 @@ def test_nested_record_wire_keys_are_pinned() -> None:
     ]
     assert list(payload["models"]) == [
         "task_model",
+        "task_reasoning_effort",
         "proposer_model",
         "temperature",
         "provider",
@@ -1027,6 +1029,7 @@ def _pre_registration(
         split_by_arm=splits,
         minibatch_by_arm=minibatch,
         search_by_arm=search,
+        task_reasoning_effort="minimal",
         ci_level=0.95,
         resamples=10_000,
         bootstrap_seed=0,
@@ -1040,6 +1043,7 @@ def _pre_registration(
             split_by_arm=splits,
             minibatch_by_arm=minibatch,
             search_by_arm=search,
+            task_reasoning_effort="minimal",
             ci_level=0.95,
             resamples=10_000,
             bootstrap_seed=0,
@@ -1082,6 +1086,7 @@ def test_the_hashed_payload_keys_are_pinned() -> None:
         "split_by_arm",
         "minibatch_by_arm",
         "search_by_arm",
+        "task_reasoning_effort",
         "ci_level",
         "resamples",
         "bootstrap_seed",
@@ -1089,6 +1094,52 @@ def test_the_hashed_payload_keys_are_pinned() -> None:
         "m",
         "completeness_backstop",
     ]
+
+
+def test_the_design_hash_changes_with_the_task_reasoning_effort() -> None:
+    """The widening's whole point, as a discriminating test.
+
+    Effort is not a run setting: it changes the task model's capability,
+    and therefore the treatment every arm is measured under. A design hash
+    that could not tell ``minimal`` from ``low`` would let the effort be
+    chosen after Stage 0 saw the anchors and still report the same
+    pre-registration.
+
+    Fails-before: the payload did not carry the effort, so both calls
+    hashed identically.
+    """
+    record = _pre_registration()
+
+    def hashed(effort: str) -> str:
+        return pre_registration_design_hash(
+            k_repeat=record.k_repeat,
+            k_run_by_arm=dict(record.k_run_by_arm),
+            kind_by_arm=record.kind_by_arm,
+            split_by_arm=record.split_by_arm,
+            minibatch_by_arm=record.minibatch_by_arm,
+            search_by_arm=record.search_by_arm,
+            task_reasoning_effort=effort,
+            ci_level=record.ci_level,
+            resamples=record.resamples,
+            bootstrap_seed=record.bootstrap_seed,
+            correction=record.correction,
+            m=record.m,
+            completeness_backstop=record.completeness_backstop,
+        )
+
+    assert hashed("minimal") != hashed("low")
+    # The design under test is the one the record already carries, so the
+    # widening is exercised against a real pre-registration rather than a
+    # payload assembled only for this assertion.
+    assert hashed(record.task_reasoning_effort) == record.design_hash
+
+
+def test_a_pre_registration_names_its_reasoning_effort() -> None:
+    """A blank effort is a design that did not state one."""
+    fields = _pre_registration().model_dump()
+    fields["task_reasoning_effort"] = "  "
+    with pytest.raises(ValidationError, match="reasoning effort"):
+        PreRegistrationRecord(**fields)
 
 
 def test_the_hashed_payload_writes_each_split_as_a_pair() -> None:

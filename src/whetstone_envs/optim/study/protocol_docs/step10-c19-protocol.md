@@ -57,6 +57,7 @@ revision 1 said something different.
 | 16 | §6 Codex evidence | unbounded → **one real Codex-direct run**, artifacts historical evidence only | note 20 |
 | 17 | L1's mechanical form | "the internal Eval Config ref" → **the evaluated task set is contained in the internal split**, checked on all three evaluation surfaces | this revision (2026-08-23), §3.2 |
 | 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**, paired with a **per-task completeness floor**: an evaluation is refused (`missing_data`) if any task lost every repeat, or if fewer than 90% of planned tasks were measured. The row tolerance alone cannot see a fully-lost task — at 76 tasks × 4 repeats one lost task is 1.3% of rows, inside the bound, yet it is dropped from the task mean's denominator and biases the reported mean upward. Paid transports additionally retry transient failures (429/5xx/timeout, **5 attempts total per logical call**, 2–32 s exponential backoff with jitter, `Retry-After` **delta-seconds** honoured and bounded at 120 s; the HTTP-date form is ignored by design, since resolving it against two clocks is least reliable exactly when it matters) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. The 5 attempts are spent inside the transport wrapper, which is the sole owner of the retry budget; whetstone's driver is pinned to a single attempt so the two loops cannot multiply. | this revision (2026-08-23), §3.9 and O7 |
+| 19 | Task-model reasoning effort | unpinned ("this protocol accepts the spend and does not pin reasoning effort") → **pinned `minimal`** on the task route, hashed into the pre-registered design. The proposer route stays unpinned. | Danielle, 2026-08-24 |
 
 **On item 8.** Revision 1 derived per-mode trial counts from DSPy's
 `_recommended_num_trials(component_count=1, searches_demos, n)` at `n = 6`
@@ -910,10 +911,43 @@ is an order-of-magnitude figure measured at toy prompt sizes, not a quote. The
 consequence is registered rather than hidden: the study is a **$152–$176** run,
 not a small-tens-of-dollars one.
 
-Pinning a task-model `reasoning.effort` (minimal/low) would reduce this, but it
-changes the task model's capability and therefore the thing being measured, so
-it would have to be fixed **before** Stage 0 measures the anchors. This protocol
-accepts the spend and does not pin reasoning effort.
+**The task model's `reasoning.effort` is pinned to `minimal` (item 19).** A
+reasoning effort changes the task model's capability, so it changes the thing
+being measured — which is exactly why it is fixed **before** Stage 0 measures
+the anchors and hashed into the pre-registered design rather than chosen once
+the anchor scores are visible. It applies to the task route only; the proposer
+route is deliberately unpinned, because it writes candidates rather than
+answering tasks and the study makes no claim about it.
+
+The measured rate above was taken at the route's *default* effort. The pin is
+expected to reduce it, but the protocol registers **no cost prediction from the
+pin**: the figures in §5.3 stand as the pre-registered upper bound, and what
+Stage 0 actually bills is what the manifest records. If Stage 0's gate fails
+under `minimal`, that is a finding for humans to act on, not a condition the
+protocol resolves automatically — there is no fallback to a higher effort.
+
+**How the pin is verified: request correctness, not token statistics.** A
+provider is free to spend whatever reasoning it likes at any effort, and
+OpenRouter is known to silently ignore controls on nano routes (it does exactly
+that with `temperature`), so billed reasoning tokens are not evidence that a
+control was honoured, and a token comparison could not distinguish "the pin was
+not sent" from "the pin was sent and ignored". What is checkable is the request
+this study sends. Two artifacts carry it:
+
+- The bound provider call config is recorded verbatim in the manifest at
+  `models.provider_calls[].reasoning`, per transport, before any stage
+  aggregates. A stage that bound the task route without the pin records a value
+  disagreeing with `models.task_reasoning_effort`, and a reader sees the
+  disagreement without rerunning anything.
+- The request body itself is pinned by a unit test over the same translation
+  the live transport uses: the OpenRouter chat preset declares
+  `ReasoningRequestShape.REASONING_OBJECT`, so a pinned effort is emitted as
+  `{"reasoning": {"effort": "minimal"}}` and an unpinned route sends no
+  `reasoning` key at all.
+
+The outgoing HTTP body is not itself persisted by a study run, so
+`models.provider_calls[].reasoning` is the artifact a runner reads to confirm
+what a live stage bound.
 
 ```
 ~105,000 calls × $0.00168 ≈ $176 (task model, gpt-5-nano, measured)
@@ -939,7 +973,14 @@ require a new decision mid-run.
   (`openrouter_seeded_call_config`). Note this changes from the 0.1.2 reruns'
   `openai/gpt-4.1-nano`, which scored 0.0 on both anchors at a 2-task split —
   Stage 0 exists to confirm gpt-5-nano is not also at the floor.
-- **Proposer / reflection model:** `openai/gpt-5.4-nano`.
+- **Task-model reasoning effort:** **`minimal`, pinned** (item 19). Carried as
+  `TASK_REASONING_EFFORT` in `protocols.py`, recorded as
+  `models.task_reasoning_effort` in the manifest, and hashed into
+  `pre_registration_design_hash` — a design that changed the effort could not
+  keep its design hash. It is **not** a sized field: the toy and the real study
+  run at the same effort or they are not the same protocol.
+- **Proposer / reflection model:** `openai/gpt-5.4-nano`, at the route's
+  default reasoning effort. The task-model pin does not reach it.
 - **Temperature:** left unset. `CoproControl` refuses a proposer temperature
   outright; OpenRouter ignores it on nano routes anyway. The manifest records
   "temperature: unset (provider-default)" rather than claiming 0.

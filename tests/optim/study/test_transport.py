@@ -32,6 +32,7 @@ pytest.importorskip("whetstone.experiment.env")
 from dr_providers import ProviderKind
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 
+from whetstone_envs.optim.study.arms import arm_run_directory
 from whetstone_envs.optim.study.cli import (
     EXIT_CHECK_FAILED,
     EXIT_ERROR,
@@ -60,6 +61,7 @@ from whetstone_envs.optim.study.manifest import (
     PROVIDER_SEED_DERIVED_PER_CALL,
     STUDY_MANIFEST_NAME,
     STUDY_STORE_NAME,
+    AmendmentRecord,
     ArmKind,
     ArmRecord,
     EvidencePointer,
@@ -2023,6 +2025,353 @@ def test_a_stage_with_no_surviving_runs_may_change_width_freely() -> None:
 
 def test_a_first_run_of_a_stage_has_no_width_to_disagree_with() -> None:
     """No recorded row, so no earlier width and no refusal."""
+    assert (
+        refuse_resumed_width_change(
+            toy_manifest(arms=_arms()),
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+        )
+        is None
+    )
+
+
+def _crashed_study(tmp_path: Path, *, runs: int = 1) -> Path:
+    """A study directory in the state a crash before the row write leaves.
+
+    Run directories on disk, no stage record in the manifest. Built by
+    making the directories directly rather than by running a stage and
+    killing it: the state under test is entirely "directories exist, row
+    does not", and constructing it is what makes the test assert on that
+    state rather than on a process's timing.
+    """
+    for index in range(runs):
+        arm_run_directory(tmp_path, f"copro-seed{1000 + index}").mkdir(
+            parents=True
+        )
+    return tmp_path
+
+
+def test_run_directories_with_no_stage_row_refuse_the_resume(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: a missing row returned early and the resume ran.**
+
+    The guard read a missing ``StageRecord`` as "first run of this stage,
+    nothing recorded to disagree with" and returned ``None``. But a stage
+    writes its row *after* its arms finish, so a crash between the last
+    run and ``write_study_manifest`` leaves the run directories on disk
+    with no row to say what width produced them -- a state the manifest
+    cannot tell apart from a first run. The resume then claimed those
+    directories, re-ran nothing, and wrote a row naming a width they may
+    never have run at. Unlike the recorded-width case, nothing survives
+    that could say which width to re-run at, so this is the worse state
+    and it was the one that passed.
+    """
+    study_dir = _crashed_study(tmp_path)
+    manifest = toy_manifest(arms=_arms())
+    assert not any(
+        entry.stage == SpecStageId.STAGE1.value for entry in manifest.stages
+    )
+    with pytest.raises(StageError) as excinfo:
+        refuse_resumed_width_change(
+            manifest,
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+            study_dir=study_dir,
+        )
+    message = str(excinfo.value)
+    # The requested width, and the reason the recorded one is absent.
+    assert "64" in message
+    assert "no stage record" in message
+    # The directory that would have been misdescribed, named.
+    assert "copro-seed1000" in message
+    # Both escapes, plus the fresh-directory recovery.
+    assert ALLOW_WIDTH_CHANGE_FLAG in message
+    assert DISCARD_STALE_RUNS_FLAG in message
+    assert "fresh study directory" in message
+    # The width is not design, on this refusal as on the recorded one.
+    assert "pre-registration hash" in message
+
+
+def test_a_crashed_stage_with_no_run_directories_is_a_first_run(
+    tmp_path: Path,
+) -> None:
+    """No row and no directories is the ordinary first run, still allowed.
+
+    The refusal is about surviving evidence of unknown width. A study
+    that produced none has nothing a new width could misdescribe, and
+    refusing it would strand every first run behind a guard.
+    """
+    assert (
+        refuse_resumed_width_change(
+            toy_manifest(arms=_arms()),
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+            study_dir=tmp_path,
+        )
+        is None
+    )
+
+
+def test_allow_width_change_accepts_run_directories_of_unknown_width(
+    tmp_path: Path,
+) -> None:
+    """The first escape: record the requested width over them deliberately.
+
+    The note says what the recorded-width note cannot -- that the reused
+    runs' width is not merely different but unrecoverable -- so a reader
+    of the stage row knows the width describes this invocation and not
+    necessarily the runs beneath it.
+    """
+    note = refuse_resumed_width_change(
+        toy_manifest(arms=_arms()),
+        stage=SpecStageId.STAGE1,
+        provider_concurrency=64,
+        allow_width_change=True,
+        study_dir=_crashed_study(tmp_path),
+    )
+    assert note is not None
+    assert "64" in note
+    assert "no stage record" in note
+    assert ALLOW_WIDTH_CHANGE_FLAG in note
+    # No amendment, for the same reason the recorded-width note says so.
+    assert "does not enter the pre-registration hash" in note
+    assert "design is unchanged" in note
+
+
+def test_discard_stale_runs_accepts_run_directories_of_unknown_width(
+    tmp_path: Path,
+) -> None:
+    """The second escape: the directories are not evidence to preserve.
+
+    An operator who has authorized discarding directories this
+    invocation cannot claim has said those runs may go, so the resume
+    re-runs rather than reuses them and every run of the stage ends up at
+    the requested width. Nothing survives to be misdescribed, so there is
+    no refusal and nothing to note.
+    """
+    assert (
+        refuse_resumed_width_change(
+            toy_manifest(arms=_arms()),
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+            discard_stale_runs=True,
+            study_dir=_crashed_study(tmp_path),
+        )
+        is None
+    )
+
+
+def test_the_unrecorded_width_refusal_summarises_beyond_the_shown_bound(
+    tmp_path: Path,
+) -> None:
+    """Actionable without printing every run of the full design.
+
+    The same bound the recorded-width refusal uses, applied to directory
+    names rather than run ids.
+    """
+    from whetstone_envs.optim.study.stages import _WIDTH_RUNS_SHOWN
+
+    extra = 3
+    study_dir = _crashed_study(tmp_path, runs=_WIDTH_RUNS_SHOWN + extra)
+    with pytest.raises(StageError) as excinfo:
+        refuse_resumed_width_change(
+            toy_manifest(arms=_arms()),
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+            study_dir=study_dir,
+        )
+    message = str(excinfo.value)
+    assert f"holds {_WIDTH_RUNS_SHOWN + extra} run" in message
+    assert f"(+{extra} more)" in message
+
+
+def test_a_recorded_runs_directory_is_not_crash_residue(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: every Stage 2 was refused.**
+
+    ``runs/`` is one directory for the whole study rather than one per
+    stage, so a stage's genuine first run finds the previous stage's
+    directories in it as a matter of course. Reading any surviving
+    directory as unattributable width made the check refuse exactly the
+    ordinary case it was meant to leave alone: Stage 2, whose whole
+    design is to stand on Stage 1's runs. A recorded run carries its
+    width on its own ``RunRecord``, so there is nothing to recover.
+    """
+    study_dir = _crashed_study(tmp_path)
+    # A manifest with the run recorded but no stage row, which is what a
+    # Stage 2 standing on Stage 1's runs looks like to this check.
+    recorded = toy_manifest(
+        arms=tuple(
+            arm.model_copy(
+                update={
+                    "runs": (
+                        (_run_at("copro-seed1000", seed=1000, width=16),)
+                        if arm.arm_id == "copro"
+                        else ()
+                    )
+                }
+            )
+            for arm in _arms()
+        )
+    )
+    # The manifest records exactly the directory that is on disk.
+    assert {run.run_id for arm in recorded.arms for run in arm.runs} == {
+        "copro-seed1000"
+    }
+    assert (
+        refuse_resumed_width_change(
+            recorded,
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+            study_dir=study_dir,
+        )
+        is None
+    )
+
+
+def test_a_directory_an_amendment_orphaned_is_left_to_the_stale_refusal(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: the width refusal pre-empted the stale-run one.**
+
+    ``--replace-design`` drops runs from the manifest and records exactly
+    which directories it left behind, so the study already says why they
+    are unrecorded. They belong to the stale-run refusal, which reads
+    each directory's own identity and names ``--discard-stale-runs``
+    against it; a width refusal firing first would replace that specific
+    message with a vaguer one about an unknown width.
+    """
+    study_dir = _crashed_study(tmp_path)
+    orphaned = str(arm_run_directory(study_dir, "copro-seed1000"))
+    manifest = toy_manifest(arms=_arms()).model_copy(
+        update={
+            "amendments": (
+                AmendmentRecord(
+                    at="2026-08-24T12:00:00+00:00",
+                    amended_stage=StageId.STAGE0.value,
+                    reason=AMENDMENT_REASON_TRANSPORT_CHANGE,
+                    from_transport=FAKE_TRANSPORT,
+                    to_transport=OPENROUTER_TRANSPORT,
+                    dropped_stages=(StageId.STAGE1.value,),
+                    dropped_run_ids=("copro-seed1000",),
+                    dropped_run_directories=(orphaned,),
+                    dropped_selections=1,
+                    dropped_held_out_claims=0,
+                    dropped_held_out_rows=0,
+                    dropped_call_count_gate=False,
+                    dropped_official_scores=1,
+                    dropped_report_spend=0,
+                ),
+            )
+        }
+    )
+    assert (
+        refuse_resumed_width_change(
+            manifest,
+            stage=SpecStageId.STAGE1,
+            provider_concurrency=64,
+            study_dir=study_dir,
+        )
+        is None
+    )
+
+
+def test_the_crash_residue_refusal_survives_the_cli_wiring(
+    study_dir: Path, no_openrouter_key: None, capsys
+) -> None:
+    """End to end, because the refusal is only useful if it is reached.
+
+    The state is built by running Stage 0 and Stage 1 for real and then
+    rewinding the manifest to what it held before Stage 1's write, while
+    leaving Stage 1's run directories on disk -- which is exactly what a
+    crash between the last run and ``write_study_manifest`` leaves,
+    reconstructed by editing the ledger rather than by killing a process
+    mid-write. The rewind drops the stage row, the runs, the selections,
+    and the held-out entries together, because one
+    ``write_study_manifest`` call records them all: a surviving run entry
+    would account for its own directory, a surviving selection would name
+    a run the manifest no longer holds, and a surviving held-out claim
+    would make the resume refuse for an unrelated reason.
+
+    Reaches no provider: everything runs on the fake transport.
+    """
+    del no_openrouter_key
+    for stage in (StageId.STAGE0, StageId.STAGE1):
+        assert _run_stage(study_dir, stage.value, FAKE_TRANSPORT) == EXIT_OK
+    ran = read_study_manifest(study_dir)
+    crashed = ran.model_copy(
+        update={
+            "stages": tuple(
+                entry
+                for entry in ran.stages
+                if entry.stage != StageId.STAGE1.value
+            ),
+            "arms": tuple(
+                arm.model_copy(update={"runs": ()}) for arm in ran.arms
+            ),
+            "selection": (),
+            "held_out_claims": (),
+            "held_out": (),
+        }
+    )
+    write_study_manifest(study_dir, crashed, replace=True)
+    # The directories the dropped runs left behind are still there, which
+    # is the whole reason the manifest alone cannot see this state.
+    assert any(
+        arm_run_directory(study_dir, run.run_id).is_dir()
+        for arm in ran.arms
+        for run in arm.runs
+    )
+
+    assert _run_stage(study_dir, StageId.STAGE1.value, FAKE_TRANSPORT) == (
+        EXIT_CHECK_FAILED
+    )
+    error = capsys.readouterr().err
+    assert "no stage record" in error
+    assert ALLOW_WIDTH_CHANGE_FLAG in error
+    assert DISCARD_STALE_RUNS_FLAG in error
+    # It refused before dispatch, so the manifest is still the crashed one.
+    assert not read_study_manifest(study_dir).arms[0].runs
+
+    # And the escape the message names actually recovers.
+    assert (
+        main(
+            [
+                "run",
+                "--study-dir",
+                str(study_dir),
+                "--stage",
+                StageId.STAGE1.value,
+                "--transport",
+                FAKE_TRANSPORT,
+                ALLOW_WIDTH_CHANGE_FLAG,
+            ]
+        )
+        == EXIT_OK
+    )
+    resumed = read_study_manifest(study_dir)
+    assert resumed.arms[0].runs
+    # The authorized change is recorded rather than silent.
+    stage1 = {entry.stage: entry for entry in resumed.stages}[
+        StageId.STAGE1.value
+    ]
+    assert stage1.width_change_notes
+
+
+def test_without_a_study_dir_the_guard_reads_only_the_manifest(
+    tmp_path: Path,
+) -> None:
+    """A caller that passes no directory cannot be refused for one.
+
+    The directory check is an addition to a manifest-only guard, and a
+    caller holding only a manifest -- the reporting paths, and every
+    existing test of the recorded-width case -- keeps the behaviour it
+    had. The refusal is reached from the arm stage, which always has the
+    study directory.
+    """
+    _crashed_study(tmp_path)
     assert (
         refuse_resumed_width_change(
             toy_manifest(arms=_arms()),

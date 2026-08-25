@@ -13,6 +13,8 @@ from whetstone_envs.reporting.schema import (
     EvalFailed,
     EvalReport,
     EvalSuccess,
+    Observation,
+    ObservationState,
     ReportRef,
     TrajectoryCandidate,
     TrajectoryReport,
@@ -79,6 +81,78 @@ def test_eval_report_reconciles_c19_output_and_gold(
     payload["observations"][0][field] = value
     with pytest.raises(ValidationError, match=message):
         EvalReport.model_validate_json(json.dumps(payload))
+
+
+def _invalid_observation(trace_state: str) -> Observation:
+    """One blank-generation row, at a given trace state."""
+    return Observation(
+        candidate_name="naive",
+        task_id="t-1",
+        task_hash="a" * 64,
+        task_index=0,
+        seed_index=0,
+        rendered_prompt="prompt",
+        output_text=None,
+        normalized_output=None,
+        score=None,
+        state=ObservationState.INVALID,
+        trace_state=trace_state,  # ty: ignore[invalid-argument-type]
+        failure_code="blank-provider-generation",
+        finish_reason=None,
+        provider_error=None,
+        max_budget=None,
+        over_budget=None,
+        submission_result=None,
+        component_trace=(),
+    )
+
+
+def test_an_invalid_observation_requires_an_invalid_trace_state() -> None:
+    """**Fails-before: an invalid row's trace had to say ``failed``.**
+
+    whetstone-ai 0.1.14 gave ``ExecutedRowState`` its own ``invalid``
+    member for a row that executed and was billed but produced nothing
+    the eval contract can score -- a blank generation, which 0.1.14 also
+    began scoring as terminally invalid rather than as a node execution
+    error. Before that member existed the trace could only spell such a
+    row ``failed``, so this reconciliation folded the two states
+    together. Under 0.1.14 that fold would reject exactly the rows the
+    upstream change made reachable, and ``trace_state``'s closed literal
+    would not have admitted the new spelling at all.
+    """
+    observation = _invalid_observation("invalid")
+    assert observation.state is ObservationState.INVALID
+    assert observation.trace_state == "invalid"
+
+
+def test_an_invalid_observation_rejects_a_failed_trace_state() -> None:
+    """The fold is gone in both directions, not merely widened.
+
+    Accepting either spelling would leave the report unable to say which
+    of the two upstream states a row was actually in, which is the whole
+    reason the trace state is carried beside the row state.
+    """
+    with pytest.raises(ValidationError, match="trace state disagrees"):
+        _invalid_observation("failed")
+
+
+def test_the_trace_states_are_exactly_upstreams_executed_row_states() -> None:
+    """Pinned against the upstream enum, so a widening cannot pass quietly.
+
+    ``trace_state`` is a persisted report field restated as a closed
+    literal rather than typed as the imported enum, which is what makes a
+    new upstream member a deliberate change here. This is the check that
+    makes the restatement safe rather than merely duplicated: it fails
+    when whetstone-ai grows a row state this package has not considered.
+    """
+    from typing import get_args
+
+    from whetstone.eval.traces import ExecutedRowState
+
+    field = Observation.model_fields["trace_state"]
+    assert set(get_args(field.annotation)) == {
+        member.value for member in ExecutedRowState
+    }
 
 
 def test_eval_report_scores_each_family_by_its_own_scorer(

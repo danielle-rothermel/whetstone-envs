@@ -696,6 +696,12 @@ def bound_stage_environment(  # noqa: PLR0913
             # *reused* runs may carry a different one is a question about
             # the manifest, settled before anything is dispatched.
             allow_width_change=allow_width_change,
+            # Read by the same pre-dispatch width refusal, for the case
+            # the manifest cannot see: run directories surviving with no
+            # stage row are of unrecoverable width, and this is the
+            # operator having already said such directories are not
+            # evidence to preserve.
+            discard_stale_runs=discard_stale_runs,
             # The stage's own store, so a stage that evaluates through the
             # engine can price what it evaluated. It is the same connection
             # every engine writes into, which is what makes reading the

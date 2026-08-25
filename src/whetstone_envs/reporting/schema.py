@@ -242,7 +242,12 @@ class Observation(_StrictModel):
     normalized_output: StrictStr | None
     score: StrictFloat | None
     state: ObservationState
-    trace_state: Literal["success", "failed", "missing"]
+    #: The row state the *trace* recorded, kept beside ``state`` so the
+    #: two can be cross-checked rather than assumed to agree. Its members
+    #: are whetstone's ``ExecutedRowState``, restated as a closed literal
+    #: because this is a persisted report field: a widened upstream enum
+    #: must be a deliberate change here, not one a projection inherits.
+    trace_state: Literal["success", "failed", "missing", "invalid"]
     failure_code: StrictStr
     finish_reason: StrictStr | None
     provider_error: ProviderErrorProjection | None
@@ -268,11 +273,16 @@ class Observation(_StrictModel):
             )
         if self.output_text is None and self.normalized_output is not None:
             raise ValueError("absent output text has no normalized output")
+        # An invalid row's trace says ``invalid`` rather than ``failed``:
+        # whetstone-ai 0.1.14 gave ``ExecutedRowState`` its own member for
+        # a row that executed and was billed but produced nothing the
+        # contract can score. Before it, an invalid row's trace could only
+        # say ``failed``, which is why this mapping folded the two.
         expected_trace = {
             ObservationState.SCORED: "success",
             ObservationState.FAILED: "failed",
             ObservationState.MISSING: "missing",
-            ObservationState.INVALID: "failed",
+            ObservationState.INVALID: "invalid",
         }[self.state]
         if self.trace_state != expected_trace:
             raise ValueError("trace state disagrees with report row state")

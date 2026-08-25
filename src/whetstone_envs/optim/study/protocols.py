@@ -155,8 +155,19 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: ``minimal`` to ``low`` on the evidence that probe produced -- a gate
 #: failure on ceiling capability rather than on power -- and by recording
 #: that probe's numbers in the document as the provenance for the change.
+#: ``17ad9c01...`` is historical in turn, and like ``ec650113...`` it was a
+#: digest a study ran against. Item 22 (2026-08-25) supersedes it on a
+#: correction rather than a design change: §3.8 and §5.4 justified null-B's
+#: shape partly by claiming COPRO cannot terminalize ``seed_retained``,
+#: because only GEPA and MIPROv2 carried ``terminal_proposal_count``.
+#: whetstone-ai 0.1.16 makes COPRO retain its seed at both terminal emission
+#: points, so that premise is false. The revision states the mechanism
+#: truthfully and records that null-B's conclusion is unchanged: it rests on
+#: ``diff_check`` rejecting a no-op mutation, which holds under every
+#: optimizer, not on COPRO's inability to retain. No pre-registered quantity
+#: moves.
 PROTOCOL_DOC_SHA256 = (
-    "17ad9c013b8772caf282a441d63efa8a4d254213dd4c5e056a1dd64dc2ae4ed0"
+    "0c5c14b473f0fc230e0b35f7a2e7e94b210686da256a54a30c54698fd7cfb734"
 )
 
 

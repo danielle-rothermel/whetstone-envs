@@ -278,6 +278,132 @@ def test_best_so_far_cites_the_rewards_it_compared(copro_run_dir) -> None:
         assert ref.schema_name == "whetstone.reward"
 
 
+# --- Seed retention (whetstone-ai 0.1.16) ----------------------------------
+
+
+def test_a_seed_retained_run_passes_every_copro_invariant(
+    copro_seed_retained_run_dir,
+) -> None:
+    """The adoption's whole point: an honest retention is not a failure.
+
+    Before 0.1.16 was adopted this run failed three invariants, and
+    ``audit_passed=False`` demotes the arm to ``VERDICT_NOT_VALIDATED`` --
+    so a run that truthfully reported "nothing beat the seed" would have
+    unclaimed the arm.
+    """
+    report = audit_run(copro_seed_retained_run_dir)
+    assert report.passed, [
+        (finding.invariant_id.value, finding.detail)
+        for finding in report.findings
+        if finding.status is AuditStatus.FAIL
+    ]
+
+
+def test_a_seed_retained_early_terminal_passes_every_invariant(
+    copro_seed_retained_early_run_dir,
+) -> None:
+    """The second emission point: retention short of the configured depth."""
+    report = audit_run(copro_seed_retained_early_run_dir)
+    assert report.passed, [
+        (finding.invariant_id.value, finding.detail)
+        for finding in report.findings
+        if finding.status is AuditStatus.FAIL
+    ]
+
+
+def test_the_retained_fixtures_really_are_retentions(
+    copro_seed_retained_run_dir, copro_seed_retained_early_run_dir
+) -> None:
+    """A fixture that lost its retention would pass for the wrong reason."""
+    for run_dir in (
+        copro_seed_retained_run_dir,
+        copro_seed_retained_early_run_dir,
+    ):
+        evidence = load_run_evidence(run_dir)
+        terminal = evidence.steps[-1]
+        assert evidence.result.seed_retained
+        assert terminal.step.seed_retained
+        assert not terminal.step.accepted_candidates
+        retained = terminal.step.retained_candidate_ref
+        seed = evidence.result.run.record.initial_candidate_ref
+        assert retained is not None
+        assert seed is not None
+        assert retained.record_ref == seed.record_ref
+
+
+def test_the_early_terminal_fixture_stops_short_of_the_depth(
+    copro_seed_retained_early_run_dir, copro_run_dir
+) -> None:
+    """Otherwise it would not exercise the ``COPRO_DEPTH_STEPS`` widening."""
+    early = load_run_evidence(copro_seed_retained_early_run_dir)
+    full = load_run_evidence(copro_run_dir)
+    assert len(early.steps) < len(full.steps)
+
+
+def test_best_so_far_checks_a_retention_rather_than_waving_it_through(
+    copro_seed_retained_run_dir,
+) -> None:
+    """The exemption must restate the claim, not retire the invariant.
+
+    A vacuous PASS would disable best-so-far precisely where it does its
+    only interesting work -- deciding that nothing beat the starting point
+    -- so the finding has to name the seed and the reward it compared.
+    """
+    finding = copro_best_so_far(load_run_evidence(copro_seed_retained_run_dir))
+    assert finding.status is AuditStatus.PASS
+    assert "retained its declared seed" in finding.detail
+    assert finding.evidence_refs
+    assert any(
+        ref.schema_name == "whetstone.reward" for ref in finding.evidence_refs
+    )
+
+
+def test_best_so_far_fails_a_retention_that_discarded_a_better_candidate(
+    copro_run_dir, tmp_path
+) -> None:
+    """The negative control for the widened exemption.
+
+    The shape is a structurally perfect retention -- every clause the schema
+    enforces still holds -- but the seed scores below a candidate this run
+    measured. An exemption that trusted the flag would pass this.
+    """
+    run_dir = copro_fixtures.retention_keeping_a_candidate_that_lost(
+        copro_run_dir, tmp_path / "losing-retention"
+    )
+    finding = copro_best_so_far(load_run_evidence(run_dir))
+    assert finding.status is AuditStatus.FAIL
+    assert "discarded a strictly better candidate" in finding.detail
+
+
+def test_the_widened_exemptions_still_fail_a_genuine_shape_violation(
+    copro_seed_retained_run_dir, tmp_path
+) -> None:
+    """Retention exempts the terminal shape, never the round cardinality.
+
+    An overfilled round carries candidates nobody budgeted for, which no
+    retention explains -- so widening the breadth exemption must not have
+    made ``seed_retained`` a blanket amnesty for the whole run.
+    """
+    run_dir = copro_fixtures.over_configured_breadth(
+        copro_seed_retained_run_dir, tmp_path / "retained-overfilled"
+    )
+    finding = _finding(run_dir, InvariantId.COPRO_BREADTH_PER_DEPTH)
+    assert finding.status is AuditStatus.FAIL
+    assert "more than the configured breadth" in finding.detail
+
+
+def test_depth_steps_still_fails_a_short_run_that_declared_nothing(
+    copro_run_dir, tmp_path
+) -> None:
+    """The un-widened half: short, with neither failure nor retention."""
+    run_dir = copro_fixtures.short_of_configured_depth(
+        copro_run_dir, tmp_path / "short-undeclared"
+    )
+    finding = _finding(run_dir, InvariantId.COPRO_DEPTH_STEPS)
+    assert finding.status is AuditStatus.FAIL
+    assert "neither a terminal failure nor retention" in finding.detail
+
+
 def test_distinct_bases_says_so_when_it_had_no_pair_to_check(
     copro_run_dir,
 ) -> None:

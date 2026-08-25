@@ -74,6 +74,41 @@ def copro_multi_draft_run_dir(tmp_path_factory) -> Path:
     )
 
 
+# --- COPRO seed retention -------------------------------------------------
+#
+# whetstone-ai 0.1.16 lets COPRO keep its own seed when the seed ties or wins
+# the terminal ranking, at both of its terminal emission points. The fake
+# transport always drafts a usable proposal, so no scripted run reaches
+# either branch; these are built by mutating a real run into the shape
+# whetstone persists, and stay schema-valid ``OptimResult`` artifacts because
+# ``OptimStepResult._validate`` enforces every structural clause of a
+# retention.
+
+
+@pytest.fixture(scope="session")
+def copro_seed_retained_run_dir(copro_run_dir, tmp_path_factory) -> Path:
+    """A retention at COPRO's ordinary finalizing step (``depth + 1``)."""
+    from tests.optim.audit.copro_fixtures import (
+        seed_retained_at_ordinary_finalize,
+    )
+
+    destination = tmp_path_factory.mktemp("audit-runs") / "copro-retained"
+    return seed_retained_at_ordinary_finalize(copro_run_dir, destination)
+
+
+@pytest.fixture(scope="session")
+def copro_seed_retained_early_run_dir(copro_run_dir, tmp_path_factory) -> Path:
+    """A retention from the early terminal, short of the configured depth."""
+    from tests.optim.audit.copro_fixtures import (
+        seed_retained_at_early_terminal,
+    )
+
+    destination = (
+        tmp_path_factory.mktemp("audit-runs") / "copro-retained-early"
+    )
+    return seed_retained_at_early_terminal(copro_run_dir, destination)
+
+
 @pytest.fixture
 def mutable_run_dir(copro_run_dir, tmp_path) -> Path:
     """A per-test copy of the run, safe to mutate into a negative fixture."""

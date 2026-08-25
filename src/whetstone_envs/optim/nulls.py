@@ -391,11 +391,31 @@ class NullIdentityTransport(_NullTransport):
 
     What the optimizer does with that is the optimizer's contract, not the
     transport's, and it differs by optimizer -- see this module's note in
-    ``CHANGELOG.md``. GEPA and MIPROv2 set ``terminal_proposal_count`` on
-    their step contracts and so may terminalize ``seed_retained`` when their
-    search accepts nothing over the seed. COPRO does not set it, so under
-    COPRO's control shape an unfilled round is a ``copro_proposal_cardinality``
-    terminal failure whose result still names the seed as the run's outcome.
+    ``CHANGELOG.md``. All three now terminalize ``seed_retained`` when the
+    search accepts nothing better than the seed: GEPA and MIPROv2 always
+    have, and as of whetstone-ai 0.1.16 COPRO does too, at both its ordinary
+    finalize and its early terminal. So under COPRO an unfilled round is a
+    clean completion naming the seed as the run's outcome, not the
+    ``copro_proposal_cardinality`` terminal failure it used to be.
+
+    **The null-B design argument does not rest on that.** It is worth being
+    explicit, because the reasoning recorded in the protocol document leaned
+    on COPRO's inability to retain, and that premise is now false. The
+    conclusion survives on the other, independent leg: ``diff_check``
+    rejects a no-op mutation ("proposal mutation must differ from its
+    base"), so a *byte-identical proposer* is unreachable under any
+    optimizer regardless of how the round terminalizes. Null-B is therefore
+    still the seed candidate routed through ``report_arm`` rather than an
+    optimizer run.
+
+    What has changed is the *character* of the alternative rather than its
+    availability. Running null-B as a COPRO run would now yield a clean
+    seed-retained completion instead of a declared failure, so it would no
+    longer be indistinguishable from a defect. It remains the wrong control:
+    it would measure COPRO's search machinery deciding to keep the seed,
+    which is a search outcome, where null-B's question is what the report
+    harness alone does to an unoptimized seed -- and it would spend a
+    round's proposer calls to answer it.
     """
 
     _null_kind = "null_identity"

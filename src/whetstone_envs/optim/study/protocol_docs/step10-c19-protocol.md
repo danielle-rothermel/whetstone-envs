@@ -61,6 +61,8 @@ revision 1 said something different.
 | 20 | Tolerance for stochastic outcomes | Three gates demanded perfection of infrastructure and are relaxed to **degrade-and-record**, with every deterministic invariant left exact. (a) A fully-lost task no longer aborts its stage: it is carried at zero weight into the reported vector, lowers achieved completeness, and downgrades the arm to `incomplete (not claimed)`; the 90% floor still refuses an evaluation too thin to report from. (b) A COPRO round proceeds on the proposals it realized (1..`breadth`), recording `proposal_shortfall`; the round count against depth stays exact. (c) The in-search reward policy sets `missing_data="skip"` explicitly rather than inheriting `fail`. Alongside: GEPA's metric-call audit gains the declared-terminal-failure exemption COPRO already had; a held-out evaluation refused *after* billing settles its claim durably, so the resumed pass reports that arm as unmeasured and continues rather than discarding every other arm's paid evidence; and the anchors gain the resume path the arms already had, reading both completed and refused claims (a refused ceiling narrows the report, a refused naive anchor voids every delta and says so). Only a deterministic post-billing judgement settles a claim — a transient failure leaves it outstanding and resumable, because a burnt claim over a dropped connection is the same intolerance in another place. Blank generations become scored failing samples rather than missing rows, and anchor calibration floors at 90% presence and balance-subsets the two anchors to equal per-task depth. | Danielle, 2026-08-25 ("we can't require perfection from our infra"); audit `0009-perfection-gates-audit.md` |
 | 21 | Task-model reasoning effort (value) | **`minimal` → `low`** on the task route. `minimal`'s Stage 0 failed the §7 gate on the task model's *capability*, not on the design's power: ceiling anchor **0.1977** against the 0.30 floor, leaving **0.1897** headroom against the 0.20 minimum, while naive (**0.008**) and the measured MDE (**0.0446**) both passed. Attempt 2 of the same design at the route's default effort measured a ceiling of **0.8068**, which is what identifies the effort rather than the task as the cause. Everything item 19 established — the pin, its place in the design hash, and the pre-bind refusal — is unchanged; only the pinned value moves. The re-pin moves the design hash and so requires a fresh `study_id`. | Danielle, 2026-08-25 |
 
+| 22 | Null-B's justification (correction) | §3.8 and §5.4 justified null-B's shape partly by claiming COPRO *cannot* terminalize `seed_retained` — that `seed_retained` "exists only on contracts carrying `terminal_proposal_count` (GEPA/MIPROv2)", so a byte-identical proposal under COPRO fails as `copro_proposal_cardinality` and the control would be "indistinguishable from a defect". **whetstone-ai 0.1.16 makes that premise false**: COPRO now retains its seed at both terminal emission points when the seed ties or wins the ranking, so such a round is a clean completion. Both passages are restated truthfully. **Null-B's design is unchanged**, because it never depended on the failure: `diff_check` rejects a no-op mutation under *every* optimizer, so a byte-identical proposer is unreachable regardless, and null-B's question — what the report harness alone does to an unoptimized seed — is not a question about an optimizer's search. No pre-registered quantity moves. | correction, 2026-08-25 (whetstone-ai 0.1.16) |
+
 **On item 21.** The design's own rule is that an effort chosen after Stage 0
 saw the anchors is a post-hoc adjustment. This revision *is* such an
 adjustment, and it is recorded as one rather than presented as the original
@@ -602,11 +604,18 @@ does not reward noise. Both are implemented.
 **null-B (identity, option (ii)) — `--optimizer null-identity`.** The **seed
 candidate evaluated through the study's own selection and report harness, with
 no optimizer step at all** (note 13). A byte-identical proposer cannot be run:
-`diff_check` rejects a no-op proposal, and `seed_retained` exists only on
-contracts carrying `terminal_proposal_count` (GEPA/MIPROv2), so under COPRO's
-shape a byte-identical proposal fails as `copro_proposal_cardinality` — the
-control would be indistinguishable from a defect. Routing the seed through
-`report_arm` instead gives the same evidence without a run that cannot succeed.
+`diff_check` rejects a no-op proposal ("proposal mutation must differ from its
+base"), so an optimizer run whose proposer returns the seed unchanged realizes
+no proposal under any optimizer. Routing the seed through `report_arm` instead
+gives the same evidence without a run that cannot succeed, and answers null-B's
+actual question — what the report harness alone does to an unoptimized seed —
+rather than what an optimizer's search decides about it.
+
+As of whetstone-ai 0.1.16 that unfilled round is a clean `seed_retained`
+completion under COPRO as well as GEPA/MIPROv2, rather than the
+`copro_proposal_cardinality` terminal failure earlier revisions of this
+document cited. The choice above is unchanged: it never depended on the failure,
+only on `diff_check`.
 Expected: `Δ = 0` exactly, up to repeat noise on the held-out evaluation. This is
 the pure pipeline-overhead control: any nonzero Δ here is either evaluation
 nondeterminism (quantifiable — it is `2σ²/K` over T) or a bug.
@@ -861,9 +870,11 @@ key, and are recorded as a separate cost role (`codex_agent`) with calls but no
 USD — §5.4's rule then leaves `usd` absent for Codex runs.
 
 **null-B (identity)**: **no optimizer run at all** (note 13). A byte-identical
-proposer is unreachable — `diff_check` rejects a no-op proposal, and
-`seed_retained` exists only on contracts carrying `terminal_proposal_count`, so
-under COPRO's shape it fails as `copro_proposal_cardinality`. Null-B is instead
+proposer is unreachable — `diff_check` rejects a no-op proposal, so such a run
+realizes no proposal under any optimizer (since whetstone-ai 0.1.16 that ends as
+a clean `seed_retained` completion under COPRO too, not a
+`copro_proposal_cardinality` failure; either way there is no identity run to
+measure). Null-B is instead
 the **seed candidate evaluated through the study's own selection and report
 harness**, with no optimizer step. Its cost is therefore the report harness's
 passes: `1 official pass × 132 + 1 held-out pass × 440`, at `K_REPEAT = 3` =

@@ -74,6 +74,11 @@ LOSING_INTENT_REWARD = (*FIRST_STEP_INTENTS, 1, "reward_ref")
 #: failing detail obviously synthetic to whoever reads it.
 _IMPLAUSIBLE_REWARD = 9.0
 
+#: How far below the measured maximum a dishonest retention's seed sits.
+#: Large enough that the gap cannot be float noise, small enough to stay a
+#: plausible reward rather than an obviously corrupt one.
+_LOSING_MARGIN = 0.25
+
 
 def _load(run_dir: Path) -> dict[str, Any]:
     return json.loads((run_dir / RESULT_FILENAME).read_text(encoding="utf-8"))
@@ -303,6 +308,183 @@ def evaluation_recorded_as_search(source: Path, destination: Path) -> Path:
     return _save(run_dir, document)
 
 
+# --- Seed retention -------------------------------------------------------
+#
+# whetstone-ai 0.1.16 lets COPRO terminalize on its own seed: when the seed
+# ties or wins the terminal ranking, the step sets ``seed_retained``, names
+# the run's seed as ``retained_candidate_ref``, and accepts nothing. Ties are
+# ordinary -- an exact-match reward over N internal tasks quantizes to k/N.
+#
+# These builders synthesize that shape from a real run rather than scripting
+# a proposer to produce it. The fake COPRO transport always drafts a usable
+# proposal, so no scripted run reaches either terminal branch, and a fixture
+# that could not be built would leave the widened exemptions untested. The
+# result stays a schema-valid ``OptimResult``: ``OptimStepResult._validate``
+# enforces every structural clause of a retention, so a builder that got the
+# shape wrong fails to seal rather than producing a fixture that quietly
+# tests nothing.
+
+
+def _retain_seed_on_step(
+    document: dict[str, Any], index: int
+) -> dict[str, Any]:
+    """Rewrite step ``index`` into an honest seed retention.
+
+    The step keeps its measured intents -- retention is a decision about
+    what the ranking chose, not a claim that nothing was measured -- but
+    accepts no candidate and names the run's declared seed as the one it
+    kept. Callers set the seed's own measured reward beforehand, which is
+    what makes the tie the retention rests on.
+    """
+    steps = document["step_results"]
+    del steps[index + 1 :]
+    step = steps[index]["record"]
+    seed = document["run"]["record"]["initial_candidate_ref"]
+    # Only a step whose output contract sets ``terminal_proposal_count`` may
+    # retain the seed. COPRO's continuing rounds already carry it, but the
+    # finalizing step binds the run's terminal contract, which does not --
+    # so 0.1.16 sets it to reach the retention branch at all, and the
+    # fixture mirrors that rather than inventing a shape whetstone refuses.
+    contract = step["request"]["record"]["step_output_contract"]
+    if contract.get("terminal_proposal_count") is None:
+        contract["terminal_proposal_count"] = contract.get(
+            "returned_proposal_count"
+        )
+    step["status"] = "complete"
+    step["accepted_candidates"] = []
+    step["seed_retained"] = True
+    step["retained_candidate_ref"] = json.loads(json.dumps(seed))
+    document["seed_retained"] = True
+    document["proposals"] = []
+    return document
+
+
+def _seed_measured_intent(
+    document: dict[str, Any],
+) -> dict[str, Any]:
+    """The resolved intent that measured the run's declared seed.
+
+    COPRO re-measures the initial candidate as the seed round's last
+    occurrence, so an honest retention always has one. Raising rather than
+    returning None keeps a builder from silently producing a fixture whose
+    retention rests on no measured seed at all.
+    """
+    seed_ref = document["run"]["record"]["initial_candidate_ref"]["record_ref"]
+    for step in document["step_results"]:
+        for intent in step["record"]["resolved_intents"]:
+            candidate = intent["optim_eval_request"]["eval_request"][
+                "candidate"
+            ]
+            reference = candidate_reference(
+                Candidate.model_validate(candidate)
+            )
+            if reference.record_ref.model_dump(mode="json") == seed_ref:
+                return intent
+    raise MutationError(
+        "the source run never measured its declared seed, so no honest "
+        "retention can be built from it"
+    )
+
+
+def _set_reward(intent: dict[str, Any], value: float) -> None:
+    """Rewrite one intent's recorded reward, resealing its ref."""
+    record = json.loads(json.dumps(intent["reward_ref"]["record"]))
+    record["value"] = value
+    for citation in record.get("input_citations", []):
+        citation["value"] = value
+        citation["contributed"] = value
+    intent["reward_ref"] = {
+        "record": record,
+        "record_ref": typed_ref_for_record(REWARD_SCHEMA, record).model_dump(
+            mode="json"
+        ),
+    }
+
+
+def _max_measured_reward(document: dict[str, Any]) -> float:
+    return max(
+        float(intent["reward_ref"]["record"]["value"])
+        for step in document["step_results"]
+        for intent in step["record"]["resolved_intents"]
+        if intent.get("reward_ref") is not None
+    )
+
+
+def seed_retained_at_ordinary_finalize(
+    source: Path, destination: Path
+) -> Path:
+    """An honest retention at COPRO's ordinary finalizing step.
+
+    The first emission point: the run spends its full configured depth, the
+    finalizing step ranks the measured history, and the seed comes out on
+    top. Step count stays ``depth + 1``, so this exercises the
+    ``COPRO_BEST_SO_FAR`` widening alone -- the depth and breadth invariants
+    take their ordinary branches, which is exactly the claim that the
+    common path was not loosened.
+    """
+    run_dir = _fresh_copy(source, destination)
+    document = _load(run_dir)
+    seed_intent = _seed_measured_intent(document)
+    _set_reward(seed_intent, _max_measured_reward(document))
+    _retain_seed_on_step(document, len(document["step_results"]) - 1)
+    reseal_step_chain(document)
+    return _save(run_dir, document)
+
+
+def seed_retained_at_early_terminal(source: Path, destination: Path) -> Path:
+    """An honest retention from ``_terminalize_without_proposals``.
+
+    The second emission point: a round realizes no valid proposal, so the
+    run completes on its best-so-far without spending the remaining depth.
+    The step count therefore falls short of ``depth + 1``, which is what
+    makes this the fixture ``COPRO_DEPTH_STEPS`` needs -- and the truncation
+    is to the *seed* round, so the retention is decided on a real measured
+    history rather than on nothing.
+    """
+    run_dir = _fresh_copy(source, destination)
+    document = _load(run_dir)
+    seed_intent = _seed_measured_intent(document)
+    _set_reward(seed_intent, _max_measured_reward(document))
+    if len(document["step_results"]) < 2:
+        raise MutationError(
+            "the source run has no step to drop, so it cannot show an early "
+            "terminal"
+        )
+    _retain_seed_on_step(document, 0)
+    reseal_step_chain(document)
+    return _save(run_dir, document)
+
+
+def retention_keeping_a_candidate_that_lost(
+    source: Path, destination: Path
+) -> Path:
+    """A retention that discarded a strictly better measured candidate.
+
+    The negative control for the ``COPRO_BEST_SO_FAR`` widening. The shape
+    is a structurally perfect retention -- correct flag, correct retained
+    ref, nothing accepted -- so every clause the schema enforces still
+    holds. What is false is the *substantive* claim: the seed scores below
+    a candidate this run measured and paid for. An exemption that waved
+    retention through would pass this run, which is what makes this fixture
+    the evidence that it does not.
+    """
+    run_dir = _fresh_copy(source, destination)
+    document = _load(run_dir)
+    seed_intent = _seed_measured_intent(document)
+    best = _max_measured_reward(document)
+    _set_reward(seed_intent, best - _LOSING_MARGIN)
+    if _max_measured_reward(document) <= float(
+        seed_intent["reward_ref"]["record"]["value"]
+    ):
+        raise MutationError(
+            "no candidate outscores the seed, so the fixture would not be a "
+            "negative"
+        )
+    _retain_seed_on_step(document, len(document["step_results"]) - 1)
+    reseal_step_chain(document)
+    return _save(run_dir, document)
+
+
 __all__ = [
     "FIRST_INTENT_EVAL_CONFIG",
     "FIRST_STEP_INTENTS",
@@ -312,7 +494,10 @@ __all__ = [
     "evaluation_off_the_internal_split",
     "evaluation_recorded_as_search",
     "over_configured_breadth",
+    "retention_keeping_a_candidate_that_lost",
     "round_missing_an_occurrence",
+    "seed_retained_at_early_terminal",
+    "seed_retained_at_ordinary_finalize",
     "seed_the_search_never_used",
     "short_of_configured_depth",
     "two_proposals_sharing_one_base",

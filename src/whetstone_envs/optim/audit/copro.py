@@ -23,6 +23,19 @@ and both are easy to get wrong by reading the algorithm description alone:
    budget, issues no intents, and only ranks the measured history into the
    accepted candidate. An invariant that expected evaluations on every step
    would fail on the finalizing step of every honest run.
+3. **A terminal step may keep the seed and accept nothing.** When the run's
+   own seed ties or wins the terminal ranking, COPRO terminalizes
+   ``seed_retained`` with a ``retained_candidate_ref`` and an empty
+   ``accepted_candidates`` -- the same mechanism GEPA and MIPROv2 use. Ties
+   are ordinary rather than exotic, because an exact-match reward over
+   ``N`` internal tasks quantizes to ``k/N``. This reaches the audit at
+   both of COPRO's terminal emission points: the ordinary finalize, which
+   still records ``depth + 1`` steps, and the early terminal a round taken
+   without a valid proposal, which stops short of the configured depth. An
+   invariant that read "accepted nothing" as "selected nothing" would fail
+   every honest retention, so three of the seven below carry an explicit
+   retention branch -- checked against the retained candidate, never waved
+   through.
 
 Each invariant is a pure function over :class:`RunEvidence` and cites an
 evidence ref for every judgment it makes. Missing evidence is reported FAIL,
@@ -170,6 +183,126 @@ def _measured_ref(resolution: IntentResolution) -> TypedRef:
 # --- The seven invariants --------------------------------------------------
 
 
+def _seed_retained(evidence: RunEvidence) -> bool:
+    """Whether this run terminalized by keeping its own seed.
+
+    **Read from the result, which is this module's one convention.** A step
+    carries its own ``seed_retained`` flag and GEPA's audit branches on that
+    one, so the two modules look inconsistent side by side. They are not
+    reading different facts: ``OptimResult._validate`` refuses a result whose
+    ``seed_retained`` differs from the final step's
+    (``optim/contracts.py:1493-1497``), so in any schema-valid artifact the
+    two are the same bit and neither reading can be wrong.
+
+    The result is preferred here because it is the grain COPRO's invariants
+    already judge on. This module reaches for ``evidence.result`` for the
+    other terminal facts it needs -- ``terminal_failure`` in three places --
+    and ``_empty_terminal_finding`` already reads retention off the result.
+    Branching on the step would leave one module consulting two authorities
+    for one terminal outcome, which is how a later edit ends up widening an
+    exemption on one of them and not the other. GEPA's step-flag reading is
+    correct for GEPA, which selects its terminal step by status rather than
+    taking the run's last, and is left alone.
+    """
+    return evidence.result.seed_retained
+
+
+def _retained_best_so_far(
+    invariant: InvariantId,
+    evidence: RunEvidence,
+    best: float | None,
+    refs: list[EvidenceRef],
+) -> AuditFinding:
+    """Judge a seed retention against the same best-so-far claim.
+
+    Not a pass-through. The retention is honest only if the thing retained
+    really is this run's declared seed and really did hold the maximum
+    measured reward, so both are checked against recomputed evidence rather
+    than taken from the run's own say-so.
+    """
+    terminal = _terminal_step(evidence)
+    seed = evidence.result.run.record.initial_candidate_ref
+    if terminal is None or seed is None:
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            (
+                "the run reports seed retention but names no terminal step "
+                "and declared seed to check the retained candidate against"
+            ),
+            tuple(refs),
+        )
+    seed_ref = seed.record_ref
+    retention_refs = (*refs, evidence_ref(seed_ref))
+    retained = terminal.step.retained_candidate_ref
+    if retained is None or retained.record_ref != seed_ref:
+        named = (
+            "no retained candidate"
+            if retained is None
+            else f"retained candidate {retained.record_ref.content_hash[:12]}"
+        )
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            (
+                f"the run reports seed retention but names {named}, not its "
+                f"declared seed {seed_ref.content_hash[:12]}, so the kept "
+                f"candidate is not the one the run claims to have started "
+                f"from"
+            ),
+            retention_refs,
+        )
+    if best is None:
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            (
+                f"the run retained its declared seed "
+                f"{seed_ref.content_hash[:12]} but measured no internal "
+                f"reward, so no best-so-far ranking decided the retention"
+            ),
+            retention_refs,
+        )
+    _reward_refs, reward_by_ref = _measured_rewards(evidence)
+    seed_reward = reward_by_ref.get(seed_ref)
+    if seed_reward is None:
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            (
+                f"the run retained its declared seed "
+                f"{seed_ref.content_hash[:12]} over {best}, but never "
+                f"measured that seed, so the retention rests on no reward "
+                f"this run recorded"
+            ),
+            retention_refs,
+        )
+    if seed_reward < best:
+        return _finding(
+            invariant,
+            AuditStatus.FAIL,
+            (
+                f"the run retained its declared seed "
+                f"{seed_ref.content_hash[:12]} scoring {seed_reward} while "
+                f"{best} was measured, so it discarded a strictly better "
+                f"candidate it had already measured"
+            ),
+            retention_refs,
+        )
+    return _finding(
+        invariant,
+        AuditStatus.PASS,
+        (
+            f"the run retained its declared seed "
+            f"{seed_ref.content_hash[:12]}, whose measured reward "
+            f"{seed_reward} equals the maximum over the "
+            f"{len(evidence.steps)} steps' measured candidates, so nothing "
+            f"it measured beat the starting point"
+        ),
+        retention_refs,
+    )
+
+
 def copro_breadth_per_depth(evidence: RunEvidence) -> AuditFinding:
     """Every proposal round measured between 1 and ``breadth`` occurrences.
 
@@ -229,32 +362,8 @@ def copro_breadth_per_depth(evidence: RunEvidence) -> AuditFinding:
             )
 
     if not rounds:
-        # A run that measured nothing has no round to check. This is a
-        # defect unless the run itself reported failing, in which case
-        # COPRO_DEPTH_STEPS owns the verdict and duplicating it here would
-        # report one fault twice.
-        if evidence.result.terminal_failure is not None:
-            return _finding(
-                invariant,
-                AuditStatus.PASS,
-                (
-                    f"the run measured no proposal round and reported "
-                    f"terminal failure "
-                    f"{evidence.result.terminal_failure.code!r}, so no round "
-                    f"was expected to fill breadth "
-                    f"{control.breadth}"
-                ),
-                tuple(refs),
-            )
-        return _finding(
-            invariant,
-            AuditStatus.FAIL,
-            (
-                f"the run measured no proposal round at all yet reported no "
-                f"terminal failure, so breadth {control.breadth} was never "
-                f"filled"
-            ),
-            tuple(refs),
+        return _no_rounds_finding(
+            invariant, evidence, breadth=control.breadth, refs=tuple(refs)
         )
 
     if problems:
@@ -296,15 +405,71 @@ def copro_breadth_per_depth(evidence: RunEvidence) -> AuditFinding:
     )
 
 
+def _no_rounds_finding(
+    invariant: InvariantId,
+    evidence: RunEvidence,
+    *,
+    breadth: int,
+    refs: tuple[EvidenceRef, ...],
+) -> AuditFinding:
+    """Judge a run that measured no proposal round at all.
+
+    A defect unless the run declared why it stopped: a reported terminal
+    failure, in which case ``COPRO_DEPTH_STEPS`` owns the verdict and
+    duplicating it here would report one fault twice, or a declared seed
+    retention, which is a completion rather than a fault. This exempts only
+    the *absence of rounds* -- a run that measured rounds is still judged on
+    their cardinality, retention or not.
+    """
+    if evidence.result.terminal_failure is not None:
+        return _finding(
+            invariant,
+            AuditStatus.PASS,
+            (
+                f"the run measured no proposal round and reported terminal "
+                f"failure {evidence.result.terminal_failure.code!r}, so no "
+                f"round was expected to fill breadth {breadth}"
+            ),
+            refs,
+        )
+    if _seed_retained(evidence):
+        return _finding(
+            invariant,
+            AuditStatus.PASS,
+            (
+                f"the run measured no proposal round and terminalized on its "
+                f"retained seed, so no round was expected to fill breadth "
+                f"{breadth}"
+            ),
+            refs,
+        )
+    return _finding(
+        invariant,
+        AuditStatus.FAIL,
+        (
+            f"the run measured no proposal round at all yet reported neither "
+            f"a terminal failure nor retention of its seed, so breadth "
+            f"{breadth} was never filled"
+        ),
+        refs,
+    )
+
+
 def copro_depth_steps(evidence: RunEvidence) -> AuditFinding:
     """Step count is exactly ``control.depth + 1``, or fewer with a failure.
 
     The ``+ 1`` is finalization: after ``depth`` proposal rounds the adapter
     is invoked once more, consumes no budget, issues no intents, and ranks
     the measured history into the accepted candidate. A run that stopped
-    early is honest only when it says so -- hence the ``terminal_failure``
-    exemption, which requires the failure to be recorded rather than
-    inferred from the short step count.
+    early is honest only when it says so, in one of two recorded ways: a
+    ``terminal_failure``, or a declared seed retention. Both must be
+    recorded rather than inferred from the short step count.
+
+    The retention case is the early terminal specifically -- a round that
+    realizes no valid proposal terminalizes on the run's best-so-far
+    without spending the remaining depth. COPRO's ordinary finalize still
+    records ``depth + 1`` steps and takes the exact-count branch above, so
+    widening here does not loosen the common path.
 
     A run with *more* steps than ``depth + 1`` is a defect regardless of any
     failure: the search ran longer than it was configured to.
@@ -340,24 +505,37 @@ def copro_depth_steps(evidence: RunEvidence) -> AuditFinding:
             ),
             refs,
         )
-    if failure is None:
+    if failure is not None:
         return _finding(
             invariant,
-            AuditStatus.FAIL,
+            AuditStatus.PASS,
             (
-                f"the run recorded {observed} of the expected {expected} "
-                f"steps (depth {control.depth} plus finalization) but "
-                f"reported no terminal failure explaining the shortfall"
+                f"the run stopped at {observed} of {expected} steps and "
+                f"recorded terminal failure {failure.code!r}, so the short "
+                f"search is declared rather than silent"
+            ),
+            refs,
+        )
+    if _seed_retained(evidence):
+        return _finding(
+            invariant,
+            AuditStatus.PASS,
+            (
+                f"the run stopped at {observed} of {expected} steps (depth "
+                f"{control.depth} plus finalization) and terminalized on its "
+                f"retained seed, so the short search is declared rather than "
+                f"silent"
             ),
             refs,
         )
     return _finding(
         invariant,
-        AuditStatus.PASS,
+        AuditStatus.FAIL,
         (
-            f"the run stopped at {observed} of {expected} steps and recorded "
-            f"terminal failure {failure.code!r}, so the short search is "
-            f"declared rather than silent"
+            f"the run recorded {observed} of the expected {expected} "
+            f"steps (depth {control.depth} plus finalization) but reported "
+            f"neither a terminal failure nor retention of its seed to "
+            f"explain the shortfall"
         ),
         refs,
     )
@@ -499,6 +677,28 @@ def copro_best_so_far(evidence: RunEvidence) -> AuditFinding:
 
     A selected candidate this run never measured is a FAIL -- selecting on a
     number with no backing reward is exactly the infidelity here.
+
+    **Seed retention is a selection, not an absence of one.** When the run's
+    own seed ties or wins the terminal ranking, COPRO keeps it and accepts
+    nothing, so there is no finalizing step to read
+    ``accepted_candidates`` from. Ties are not exotic here: an exact-match
+    reward over ``N`` internal tasks quantizes to ``k/N``, so a draft
+    drawing level with the seed is an ordinary outcome rather than a
+    degenerate one. Reading that shape as "no selection happened" would fail
+    the invariant on an honest run, and the arm would be demoted for
+    reporting its result truthfully.
+
+    The retention branch is therefore checked rather than waved through. A
+    vacuous PASS would retire the invariant precisely on the runs where
+    best-so-far is doing its only interesting work -- deciding that nothing
+    beat the starting point. So it re-derives the same claim against the
+    retained candidate: the retained ref must be the run's declared seed,
+    and the seed's own measured reward must *equal* the maximum this run
+    recorded. Equality, not dominance, for the reason the live-draft branch
+    uses it -- ``rank_attempt_history`` sorts on reward alone, so a seed that
+    tied the best draft is a legitimate retention, while a seed strictly
+    below one is a run that discarded a better candidate it had already
+    paid to measure.
     """
     invariant = InvariantId.COPRO_BEST_SO_FAR
     refs, reward_by_ref = _measured_rewards(evidence)
@@ -510,6 +710,8 @@ def copro_best_so_far(evidence: RunEvidence) -> AuditFinding:
         if entry.step.accepted_candidates and not entry.resolved_intents
     ]
     if not selecting:
+        if _seed_retained(evidence):
+            return _retained_best_so_far(invariant, evidence, best, refs)
         if evidence.result.terminal_failure is not None:
             return _finding(
                 invariant,
@@ -527,7 +729,8 @@ def copro_best_so_far(evidence: RunEvidence) -> AuditFinding:
             AuditStatus.FAIL,
             (
                 "the run finished without a finalizing step that selected "
-                "from measured history, and reported no terminal failure"
+                "from measured history, and reported neither a terminal "
+                "failure nor retention of its declared seed"
             ),
             tuple(refs),
         )
@@ -823,7 +1026,7 @@ def _empty_terminal_finding(
     saying why, which is a silent stop rather than a reported one.
     """
     refs = (evidence_ref(seed_ref),)
-    if evidence.result.seed_retained:
+    if _seed_retained(evidence):
         retained = terminal.step.retained_candidate_ref
         if retained is not None and retained.record_ref == seed_ref:
             return _finding(

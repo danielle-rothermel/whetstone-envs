@@ -6,6 +6,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A COPRO run that honestly kept its own seed no longer fails its audit
+  and unclaims the arm.** whetstone-ai 0.1.16 fixes a day-one COPRO bug:
+  when the run's seed ties or wins the terminal ranking, COPRO now returns
+  `seed_retained=True` with a `retained_candidate_ref` and zero accepted
+  candidates -- the mechanism GEPA and MIPROv2 already used -- at both of
+  its terminal emission points, the ordinary finalize and the early
+  terminal a round takes without a valid proposal. Ties are ordinary rather
+  than exotic, because an exact-match reward over `N` internal tasks
+  quantizes to `k/N`. Against the previous audit that shape hard-failed
+  three invariants, and `audit_passed=False` demotes the whole arm to
+  `VERDICT_NOT_VALIDATED` -- so a run reporting the truthful outcome
+  "nothing beat the starting point" would have unclaimed its arm.
+  `copro_best_so_far` was the blocker: a retaining step accepts nothing, so
+  the finalizing-step search came up empty and the invariant failed
+  unconditionally. It now judges the retention instead of waving it
+  through, requiring the retained ref to be the run's declared seed and the
+  seed's own measured reward to equal the maximum the run recorded -- a
+  vacuous pass would have retired best-so-far precisely where it does its
+  only interesting work. `copro_breadth_per_depth` and `copro_depth_steps`
+  gain the same declared-retention exemption alongside their existing
+  declared-terminal-failure one; both trip only on the early-terminal
+  variant, and neither is loosened for a genuine shape violation -- an
+  overfilled round and an undeclared short run still fail. New fixtures
+  cover both emission points, and a structurally perfect retention that
+  discarded a strictly better measured candidate is the negative control.
+
+### Changed
+
+- **Pinned `whetstone-ai` to 0.1.16** (from 0.1.15), which is what makes
+  COPRO's seed retention reachable at all.
+- **The protocol document's null-B rationale is corrected, and its digest
+  re-pinned** (revision item 22; `PROTOCOL_DOC_SHA256` now
+  `0c5c14b4...`, superseding `17ad9c01...`). §3.8 and §5.4 justified
+  null-B's shape partly by asserting that COPRO cannot terminalize
+  `seed_retained`, since only GEPA and MIPROv2 carried
+  `terminal_proposal_count`. whetstone-ai 0.1.16 makes that premise false.
+  **Null-B's design is unchanged**: it rests on `diff_check` rejecting a
+  no-op mutation, which holds under every optimizer, not on COPRO's
+  inability to retain. `optim/nulls.py`'s `NullIdentityTransport` docstring
+  carried the same false claim and is rewritten to state the mechanism
+  truthfully and to record why the conclusion survives it. No
+  pre-registered quantity moves.
+
 ## [0.2.9] - 2026-08-25
 
 ### Fixed

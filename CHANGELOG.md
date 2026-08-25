@@ -6,6 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two `whetstone-study run` processes can no longer drive one run
+  directory.** Run ids are deterministic on arm and seed, so two
+  invocations of a stage compute the same run directory, and the only
+  interlock was `run_dir.exists()` over a `mkdir(exist_ok=True)`. Existence
+  is a fact about the past, not about whether anyone is writing right now:
+  two processes launched seconds apart both saw no directory, both
+  proceeded, and their effects interleaved -- stranding an intent as
+  `leased` and writing off the run's paid work. The sqlite
+  `EffectLeaseAuthority` did detect the foreign writer, but only when a
+  lease renewal found its row taken, at terminalization and after the
+  spend. A run directory is now held under an exclusive `O_EXCL` lockfile
+  beside it, carrying the holder's pid, process start time, and hostname,
+  for as long as the arm is judged and driven. A conflict is resolved on
+  what is true now rather than on the file's mere presence: a **live**
+  holder is refused with a `StageError` naming it, before `run_optimizer`
+  is reached and so before anything is paid for, while a **dead** holder's
+  lockfile is crash residue that is cleared so the run proceeds -- leaving
+  the directory's own reusability to `--discard-stale-runs` as before. The
+  start time is what distinguishes the two, so a recycled pid neither
+  blocks a directory forever nor impersonates a live run; a lock from
+  another host, or one too corrupt to read, is treated as live rather than
+  guessed at. The lock is released on both the normal and the failing path.
+
 ## [0.2.8] - 2026-08-25
 
 ### Fixed

@@ -88,6 +88,10 @@ from whetstone_envs.optim.study.protocols import (
     GEPA_MAX_METRIC_CALLS,
     GEPA_REFLECTION_MINIBATCH_SIZE,
 )
+from whetstone_envs.optim.study.runlock import (
+    RunDirectoryLockedError,
+    run_directory_lock,
+)
 from whetstone_envs.optim.study.selection import (
     CandidateScore,
     HeldOutMeasurement,
@@ -552,6 +556,25 @@ class StudyOptimizerRunner:
                 f"which is neither a study optimizer {known} nor a null; "
                 "refusing rather than guessing how to run it"
             )
+        # Held across the whole judge-and-drive sequence, not just the
+        # dispatch: the reuse check reads the directory's artifacts, and a
+        # second process writing them underneath it would make that
+        # judgement about a directory that no longer exists as read. Run
+        # ids are deterministic, so two invocations of one stage compute
+        # this same directory -- existence alone never distinguished a
+        # finished run from one being written right now.
+        try:
+            with run_directory_lock(run_dir):
+                return self._run_locked(
+                    arm=arm, seed=seed, run_id=run_id, run_dir=run_dir
+                )
+        except RunDirectoryLockedError as conflict:
+            raise StageError(str(conflict)) from conflict
+
+    def _run_locked(
+        self, *, arm: ArmSpec, seed: int, run_id: str, run_dir: Path
+    ) -> ArmRunResult:
+        """Judge the run directory and drive it, under its lock."""
         if run_dir.exists() and not self._is_reusable(
             arm=arm, run_id=run_id, run_dir=run_dir
         ):

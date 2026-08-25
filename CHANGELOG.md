@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-08-25
+
 ### Fixed
 
 - **Reporting recomputes an evaluation's score the way whetstone-ai

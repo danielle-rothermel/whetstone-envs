@@ -9,6 +9,7 @@ itself is pinned here rather than assumed.
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -34,6 +35,10 @@ from whetstone_envs.optim.study.arms import (
     arm_run_directory,
 )
 from whetstone_envs.optim.study.manifest import DISCARD_STALE_RUNS_FLAG
+from whetstone_envs.optim.study.runlock import (
+    run_directory_lock,
+    run_lock_path,
+)
 from whetstone_envs.optim.study.spec import ArmKind, ArmSpec
 from whetstone_envs.optim.study.stages import StageError
 
@@ -469,6 +474,59 @@ def _fake_run_directory(tmp_path: Path) -> tuple[StudyOptimizerRunner, Path]:
     return runner, run_dir
 
 
+def test_a_run_directory_another_live_process_drives_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The incident: two invocations drove one run directory at once.
+
+    Run ids are deterministic on arm and seed, so two ``whetstone-study
+    run`` processes of one stage compute the same directory. Existence was
+    the only interlock, and existence does not distinguish a finished run
+    from one being written right now: both processes saw no directory, both
+    proceeded, and their effects interleaved until the effect-lease
+    authority refused at terminalization -- after the spend.
+
+    The refusal here happens before ``run_optimizer`` is reached, so the
+    second invocation has paid for nothing.
+    """
+    runner = _runner(tmp_path)
+    arm = _copro_arm()
+    run_dir = arm_run_directory(tmp_path, "copro-seed2000")
+
+    # Holding the lock as this process makes the holder live by
+    # construction -- there is nothing to wait for and no race to lose.
+    with (
+        run_directory_lock(run_dir),
+        patch(
+            "whetstone_envs.optim.study.arms.run_optimizer",
+            side_effect=AssertionError("a locked run must not dispatch"),
+        ),
+        pytest.raises(StageError) as refusal,
+    ):
+        runner(arm=arm, seed=2000, study_dir=tmp_path)
+
+    message = str(refusal.value)
+    # The study speaks its own refusal, naming the holder so the operator
+    # can tell their own second invocation from a stranger's.
+    assert str(run_dir) in message
+    assert str(os.getpid()) in message
+
+
+def test_a_run_directory_no_one_holds_still_runs(tmp_path: Path) -> None:
+    """The lock refuses the double-drive without refusing the ordinary.
+
+    A guard that also blocked the single-process path would be found out
+    only by a study that could no longer run at all.
+    """
+    result = _runner(tmp_path)(arm=_copro_arm(), seed=2000, study_dir=tmp_path)
+
+    assert result.record.transport == "fake"
+    # And it left no residue for the next invocation to reason about.
+    assert not run_lock_path(
+        arm_run_directory(tmp_path, result.record.run_id)
+    ).exists()
+
+
 def test_a_run_directory_from_another_transport_is_refused(
     tmp_path: Path,
 ) -> None:
@@ -694,6 +752,56 @@ def test_null_b_still_runs_no_optimizer(tmp_path: Path) -> None:
         == result.record.audit_ref
         == result.record.cost_ref
     )
+
+
+def test_null_b_writes_no_run_directory_to_contend_over(
+    tmp_path: Path,
+) -> None:
+    """Why null-B takes no run-directory lock: it has no run directory.
+
+    ``artifact_dir`` on a control's record is a *computed path*, not a
+    directory that was created -- ``_run_null`` writes one record to the
+    study's store and never reaches ``run_optimizer``,
+    ``prepare_output_root``, or a provider. So the resource the lock
+    protects does not exist on this path, and a lock here would guard
+    nothing while implying to a later reader that it guarded something.
+
+    This is pinned rather than assumed because it is the *premise* of that
+    omission. If null-B ever grows real artifacts, this test fails and
+    says exactly which decision has to be revisited.
+    """
+    result = _runner(tmp_path)(
+        arm=_null_b_arm(), seed=6000, study_dir=tmp_path
+    )
+
+    run_dir = arm_run_directory(tmp_path, result.record.run_id)
+    assert result.record.artifact_dir == str(run_dir)
+    # The recorded path was never created, so there is nothing on disk for
+    # a second invocation to interleave with.
+    assert not run_dir.exists()
+    assert not (tmp_path / "runs").exists()
+    # And no lock was taken or left behind for a directory that is absent.
+    assert not run_lock_path(run_dir).exists()
+
+
+def test_two_null_b_runs_of_one_arm_agree_rather_than_corrupting(
+    tmp_path: Path,
+) -> None:
+    """The double-drive is harmless here, which is the other half of it.
+
+    A control's record is a pure function of arm, seed, and template, and
+    the store is content-addressed -- so two invocations racing on one
+    control converge on the *same* evidence pointer instead of interleaving
+    into a corrupt one. Concurrency is safe on this path by construction
+    rather than by exclusion, and that is the property worth pinning.
+    """
+    arm = _null_b_arm()
+    first = _runner(tmp_path)(arm=arm, seed=6000, study_dir=tmp_path)
+    second = _runner(tmp_path)(arm=arm, seed=6000, study_dir=tmp_path)
+
+    assert first.record.result_ref == second.record.result_ref
+    assert first.candidate.template == second.candidate.template
+    assert first.record.run_id == second.record.run_id
 
 
 # --------------------------------------------------------------------------

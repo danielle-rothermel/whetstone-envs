@@ -88,6 +88,10 @@ from whetstone_envs.optim.study.protocols import (
     GEPA_MAX_METRIC_CALLS,
     GEPA_REFLECTION_MINIBATCH_SIZE,
 )
+from whetstone_envs.optim.study.runlock import (
+    RunDirectoryLockedError,
+    run_directory_lock,
+)
 from whetstone_envs.optim.study.selection import (
     CandidateScore,
     HeldOutMeasurement,
@@ -544,6 +548,17 @@ class StudyOptimizerRunner:
             # Null-B proposes nothing, so there is no search to drive and
             # no optimizer-fidelity invariant to audit. Its whole evidence
             # is the seed evaluated through the report harness.
+            #
+            # Deliberately outside the run-directory lock below: null-B
+            # never creates ``run_dir``. Its record's ``artifact_dir`` is a
+            # computed path, and ``_run_null`` writes one content-addressed
+            # record to the study's store without reaching ``run_optimizer``
+            # or a provider. There is no directory to contend over, and two
+            # invocations of one control converge on the same evidence
+            # pointer rather than interleaving. Locking here would guard
+            # nothing while implying to a later reader that it guarded
+            # something. ``test_null_b_writes_no_run_directory_to_contend_
+            # over`` pins that premise, so this stops being true loudly.
             return self._run_null(arm=arm, seed=seed, run_id=run_id)
         if arm.optimizer not in OPTIMIZER_ARM_IDS:
             known = sorted(OPTIMIZER_ARM_IDS)
@@ -552,6 +567,25 @@ class StudyOptimizerRunner:
                 f"which is neither a study optimizer {known} nor a null; "
                 "refusing rather than guessing how to run it"
             )
+        # Held across the whole judge-and-drive sequence, not just the
+        # dispatch: the reuse check reads the directory's artifacts, and a
+        # second process writing them underneath it would make that
+        # judgement about a directory that no longer exists as read. Run
+        # ids are deterministic, so two invocations of one stage compute
+        # this same directory -- existence alone never distinguished a
+        # finished run from one being written right now.
+        try:
+            with run_directory_lock(run_dir):
+                return self._run_locked(
+                    arm=arm, seed=seed, run_id=run_id, run_dir=run_dir
+                )
+        except RunDirectoryLockedError as conflict:
+            raise StageError(str(conflict)) from conflict
+
+    def _run_locked(
+        self, *, arm: ArmSpec, seed: int, run_id: str, run_dir: Path
+    ) -> ArmRunResult:
+        """Judge the run directory and drive it, under its lock."""
         if run_dir.exists() and not self._is_reusable(
             arm=arm, run_id=run_id, run_dir=run_dir
         ):

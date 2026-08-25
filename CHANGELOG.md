@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-08-25
+
 ### Fixed
 
 - **A COPRO run that honestly kept its own seed no longer fails its audit

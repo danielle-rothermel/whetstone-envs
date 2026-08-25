@@ -45,6 +45,41 @@ def test_reward_policy_is_single_exact_match_term() -> None:
     assert policy.terms[0].weight == 1.0
 
 
+def test_the_reward_policy_skips_missing_rows_rather_than_failing() -> None:
+    """**Fails-before: the policy inherited ``MissingDataPolicy.FAIL``.**
+
+    ``RewardPolicy`` defaults to FAIL, and this builder never set the
+    field -- so an in-search evaluation that lost any row voided its
+    reward entirely. That is the opposite of the choice the study already
+    made one layer up, where the aggregation runs ``missing_data="skip"``
+    with a 10% row tolerance precisely because a row can go missing for
+    reasons unrelated to the candidate. A minute-long provider outage
+    costing a tenth of one minibatch aborted an optimizer run the
+    aggregation was fully prepared to tolerate.
+
+    Pinned on the *built* policy rather than on the call, because the
+    default is what made this silent: the field is easy to omit and
+    nothing downstream says so.
+    """
+    from whetstone.experiment.reward import MissingDataPolicy
+
+    policy = reward_policy_for_exact_match()
+    assert policy.missing_data is MissingDataPolicy.SKIP
+    assert MissingDataPolicy.SKIP is not MissingDataPolicy.FAIL
+
+
+def test_the_prepared_experiment_carries_the_skip_policy() -> None:
+    """The policy the optimizer actually drives, not just the builder."""
+    from whetstone.experiment.reward import MissingDataPolicy
+
+    pool = _small_pool()
+    prepared = prepare_c19_experiment(pool, split_sizes=(2, 2, 0), num_seeds=1)
+    assert (
+        prepared.experiment.reward_policy.missing_data
+        is MissingDataPolicy.SKIP
+    )
+
+
 def test_prepare_c19_experiment_maps_split_to_eval_rows() -> None:
     pool = _small_pool()
     prepared = prepare_c19_experiment(pool, split_sizes=(2, 2, 0), num_seeds=1)

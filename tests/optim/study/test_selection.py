@@ -446,3 +446,143 @@ def test_a_measurement_without_row_counts_is_still_valid() -> None:
         completeness=1.0,
     )
     assert measurement.per_task_counts == ()
+
+
+# --------------------------------------------------------------------------
+# A refused evaluation settles its claim
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class _RefusingHeldOut:
+    """A held-out evaluator that reaches the provider and then refuses.
+
+    This is the shape the deadlock came from: the call happens, the spend
+    is real, and only then is the result judged unfit to report.
+    """
+
+    calls: list[str] = field(default_factory=list)
+
+    def __call__(
+        self, *, candidate_name: str, template: str
+    ) -> HeldOutMeasurement:
+        del template
+        self.calls.append(candidate_name)
+        raise RuntimeError("evaluation billed, then judged unreportable")
+
+
+def test_a_refused_evaluation_settles_its_claim() -> None:
+    """**Fails-before: the ledger had no way to record a refusal.**
+
+    A claim written before the call and never completed is
+    indistinguishable from a process that died mid-call, so a resume
+    could neither re-issue it nor write it off -- and the study wedged.
+    Recording the refusal makes the claim terminal.
+    """
+    scorer = _RecordingScorer({"run-a": 0.4, "run-b": 0.7, "run-c": 0.5})
+    refusing = _RefusingHeldOut()
+    log = SelectionLog()
+
+    with pytest.raises(RuntimeError, match="unreportable"):
+        report_arm(
+            arm_id="copro",
+            runs=_runs(),
+            score_official=scorer,
+            evaluate_held_out=refusing,
+            log=log,
+        )
+
+    # The evaluation really was issued, and the claim really was spent.
+    assert refusing.calls == ["copro"]
+    assert log.held_out_count("copro") == 1
+
+
+def test_an_anchor_refusal_also_settles_its_claim() -> None:
+    """Anchors reach held-out through the same path, so they settle too."""
+    refusing = _RefusingHeldOut()
+    log = SelectionLog()
+
+    with pytest.raises(RuntimeError, match="unreportable"):
+        report_reference_candidate(
+            candidate_name="naive",
+            template="naive {q}",
+            evaluate_held_out=refusing,
+            log=log,
+        )
+    assert log.held_out_count("naive") == 1
+
+
+def test_refusing_an_unclaimed_evaluation_is_a_caller_error() -> None:
+    """The claim is the thing being settled, so it has to exist first."""
+    log = SelectionLog()
+    with pytest.raises(SelectionError, match="never claimed"):
+        log.refuse_held_out("copro", "no such claim")
+
+
+# --------------------------------------------------------------------------
+# Zero-variance resamples
+# --------------------------------------------------------------------------
+
+
+def test_a_zero_variance_delta_yields_a_degenerate_but_finite_interval() -> (
+    None
+):
+    """Every resample identical must not produce NaN, a crash, or a claim.
+
+    A study can genuinely land here: a fake transport, a saturated
+    ceiling, or a task set where every task moves by the same amount. The
+    bootstrap then resamples a constant vector, so every resample is the
+    same number and the interval collapses onto the point estimate. What
+    matters is that this stays finite and ordered -- a NaN bound would
+    silently defeat the ``ci_low > 0`` claim test rather than answering it.
+    """
+    import math
+
+    arms = (
+        ArmDelta(
+            arm_id="copro",
+            arm_per_task=(0.5,) * 8,
+            naive_per_task=(0.0,) * 8,
+            completeness=1.0,
+        ),
+    )
+    statistic = analyze_arms(arms, resamples=200, seed=7, family_size=4)[0]
+
+    for value in (
+        statistic.delta,
+        statistic.ci_low,
+        statistic.ci_high,
+        statistic.p_bootstrap,
+    ):
+        assert math.isfinite(value)
+    assert statistic.ci_low <= statistic.delta <= statistic.ci_high
+    # A constant positive delta is a real, if degenerate, improvement.
+    assert statistic.delta == pytest.approx(0.5)
+    assert statistic.ci_low == pytest.approx(0.5)
+
+
+def test_an_all_zero_delta_is_finite_and_claims_nothing() -> None:
+    """The other zero-variance corner: no variance and no effect either.
+
+    ``p = 1.0`` and an interval sitting exactly on zero, which must read
+    as "no detected improvement" rather than as a divide-by-zero.
+    """
+    import math
+
+    arms = (
+        ArmDelta(
+            arm_id="null-identity",
+            arm_per_task=(0.0,) * 8,
+            naive_per_task=(0.0,) * 8,
+            completeness=1.0,
+        ),
+    )
+    statistic = analyze_arms(arms, resamples=200, seed=7, family_size=4)[0]
+
+    assert math.isfinite(statistic.p_bootstrap)
+    assert statistic.delta == pytest.approx(0.0)
+    assert statistic.ci_low == pytest.approx(0.0)
+    assert statistic.ci_high == pytest.approx(0.0)
+    # Zero is not excluded, so nothing is claimed.
+    assert not statistic.excludes_zero
+    assert not statistic.claimed

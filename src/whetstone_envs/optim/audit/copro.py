@@ -171,7 +171,7 @@ def _measured_ref(resolution: IntentResolution) -> TypedRef:
 
 
 def copro_breadth_per_depth(evidence: RunEvidence) -> AuditFinding:
-    """Every proposal round measured exactly ``control.breadth`` occurrences.
+    """Every proposal round measured between 1 and ``breadth`` occurrences.
 
     The occurrence count, not the proposal count: COPRO's seed round plans
     ``breadth - 1`` drafts and re-measures the initial candidate as the
@@ -180,10 +180,26 @@ def copro_breadth_per_depth(evidence: RunEvidence) -> AuditFinding:
     therefore report an honest seed round as short by one.
 
     Checking the *configured* breadth is deliberate. A non-default breadth is
-    a budget choice the study records in its manifest, not an infidelity; the
-    defect this catches is a round that did not fill the breadth it was
-    configured for, which is how a truncated search silently reports as a
-    completed one.
+    a budget choice the study records in its manifest, not an infidelity.
+
+    **The breadth is a ceiling, not an equality.** A round fills its slots
+    from what the proposer returned, and a draft can go missing for
+    reasons that say nothing about the search: an infra failure on one
+    proposer call, a draft that failed template validation, a duplicate of
+    a template already in the round. Demanding the exact count made one
+    such draft fatal to the whole run -- at breadth 6 and depth 3 that is
+    15 proposer calls per run, so a couple of percent of bad drafts
+    compounds into a majority chance of losing a Stage-2 arm outright.
+
+    So a short round is measurement, not infidelity: upstream records the
+    gap as ``proposal_shortfall`` and proceeds on what it realized. What
+    stays a defect is a round that measured *nothing* -- there was no
+    search that round -- or one that measured *more* than the configured
+    breadth, which is a round carrying candidates nobody budgeted for.
+    The round count against the configured depth stays exact and is
+    :func:`copro_search_depth`'s to check; the pre-registered breadth
+    remains what the design *requested*, and the realized count is what
+    the run measured.
     """
     invariant = InvariantId.COPRO_BREADTH_PER_DEPTH
     control = _control(evidence)
@@ -201,10 +217,15 @@ def copro_breadth_per_depth(evidence: RunEvidence) -> AuditFinding:
                 for resolution in entry.resolved_intents
             )
         )
-        if occurrences != control.breadth:
+        if occurrences > control.breadth:
             problems.append(
                 f"step {entry.index} measured {occurrences} occurrences, "
-                f"not the configured breadth {control.breadth}"
+                f"more than the configured breadth {control.breadth}"
+            )
+        elif occurrences < 1:
+            problems.append(
+                f"step {entry.index} measured no occurrence at all, so no "
+                f"search happened in that round"
             )
 
     if not rounds:
@@ -241,8 +262,26 @@ def copro_breadth_per_depth(evidence: RunEvidence) -> AuditFinding:
             invariant,
             AuditStatus.FAIL,
             (
-                f"{len(problems)} of {len(rounds)} proposal rounds did not "
-                f"measure the configured breadth: {_elide(problems)}"
+                f"{len(problems)} of {len(rounds)} proposal rounds measured "
+                f"an occurrence count outside 1..{control.breadth}: "
+                f"{_elide(problems)}"
+            ),
+            tuple(refs),
+        )
+    realized = [len(entry.resolved_intents) for entry in rounds]
+    short = [count for count in realized if count < control.breadth]
+    if short:
+        # Reported, not failed. The shortfall is a measurement the claim
+        # carries, so the reader sees a search that ran narrower than it
+        # asked to rather than a search that silently did.
+        return _finding(
+            invariant,
+            AuditStatus.PASS,
+            (
+                f"all {len(rounds)} proposal rounds measured within the "
+                f"configured breadth {control.breadth}, and {len(short)} "
+                f"realized fewer than requested "
+                f"(occurrences per round: {realized})"
             ),
             tuple(refs),
         )

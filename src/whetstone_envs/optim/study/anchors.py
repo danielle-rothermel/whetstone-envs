@@ -40,6 +40,7 @@ from whetstone_envs.optim.study.power import (
 )
 
 if TYPE_CHECKING:
+    from dr_store import ObjectStore
     from whetstone.eval.protocol import EvalEngine
     from whetstone.experiment.candidate import Candidate
 
@@ -158,6 +159,7 @@ def calibrate_role(  # noqa: PLR0913
     *,
     role: EvalRole,
     bind_engine: EngineBinder,
+    store: ObjectStore,
     naive_candidate: Candidate,
     ceiling_candidate: Candidate,
     task_ids: tuple[str, ...],
@@ -165,10 +167,21 @@ def calibrate_role(  # noqa: PLR0913
     k_cal: int,
     bootstrap_seed: int = 0,
 ) -> RoleCalibration:
-    """Calibrate one role's anchors at ``k_cal`` repeats."""
+    """Calibrate one role's anchors at ``k_cal`` repeats.
+
+    ``store`` is the study's own evidence store, and calibration reads it
+    rather than working from the aggregated evidence alone. Anchors are
+    balanced to a common samples-per-task ``k`` before their delta is
+    taken, and that balancing needs the individual output rows: a
+    ``per_task_values`` entry is already a mean over every present row for
+    that task, so two anchors that achieved different row counts cannot be
+    put on equal footing after the fact. Passing the store is what makes
+    the paired delta a comparison at equal depth.
+    """
     engine = bind_engine(role=role, num_seeds=k_cal)
     calibration = run_anchor_calibration(
         engine=engine,
+        store=store,
         baseline_candidate=naive_candidate,
         ceiling_candidate=ceiling_candidate,
         baseline_purpose=AnchorPurpose.NAIVE,
@@ -265,6 +278,7 @@ def run_stage0(  # noqa: PLR0913
     *,
     spec: StudySpec,
     bind_engine: EngineBinder,
+    store: ObjectStore,
     naive_candidate: Candidate,
     ceiling_candidate: Candidate,
     task_ids_by_role: dict[EvalRole, tuple[str, ...]],
@@ -287,6 +301,7 @@ def run_stage0(  # noqa: PLR0913
         calibrate_role(
             role=role,
             bind_engine=bind_engine,
+            store=store,
             naive_candidate=naive_candidate,
             ceiling_candidate=ceiling_candidate,
             task_ids=task_ids_by_role[role],

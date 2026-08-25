@@ -63,6 +63,7 @@ from whetstone_envs.optim.audit.registry import audit_evidence
 from whetstone_envs.optim.audit.schema import AUDIT_REPORT_SCHEMA
 from whetstone_envs.optim.completeness import (
     TaskCompletenessError,
+    TaskCompletenessEvidence,
     require_task_completeness,
 )
 from whetstone_envs.optim.concurrency import DEFAULT_PROVIDER_CONCURRENCY
@@ -109,6 +110,7 @@ __all__ = [
     "RoleScorer",
     "StudyOptimizerRunner",
     "arm_run_directory",
+    "measured_per_task",
 ]
 
 #: The two controls, re-exported from the transports that define them.
@@ -282,7 +284,7 @@ class RoleScorer:
         return CandidateScore(
             run_id=candidate.run_id,
             score=_mean_of(evidence),
-            per_task=_measured_per_task(evidence),
+            per_task=measured_per_task(evidence),
             eval_config_hash=str(evidence.eval_config_ref.config_hash),
             completeness=_completeness_of(evidence),
         )
@@ -303,7 +305,7 @@ class RoleScorer:
         )
         return HeldOutMeasurement(
             candidate_name=candidate_name,
-            per_task=_measured_per_task(evidence),
+            per_task=measured_per_task(evidence),
             mean=_mean_of(evidence),
             eval_config_hash=str(evidence.eval_config_ref.config_hash),
             repeats=evidence.num_seeds,
@@ -321,32 +323,48 @@ def _purpose_metadata(purpose: str) -> dict[str, str]:
     return {"purpose": purpose}
 
 
-def _measured_per_task(evidence: EvalEvidence) -> tuple[float, ...]:
-    """This evidence's per-task vector, with every task measured.
+def measured_per_task(
+    evidence: TaskCompletenessEvidence,
+) -> tuple[float, ...]:
+    """This evidence's per-task vector, with lost tasks held in place.
 
-    Since ``EvalEvidence`` v6 a task that lost every repeat reports
-    ``None`` rather than ``0.0``, so ``per_task_values`` is
-    ``tuple[float | None, ...]`` while every consumer downstream --
-    calibration anchors, the selection score, the held-out measurement --
-    requires real numbers and would otherwise fail on a ``None`` deep
-    inside an arithmetic it cannot explain.
+    Typed to the narrow evidence protocol rather than to ``EvalEvidence``,
+    because ``per_task_values`` is the only field this reads. That is the
+    same surface :mod:`~whetstone_envs.optim.completeness` names, and
+    stating it keeps the dependency auditable: a future field this started
+    relying on would have to be added to the protocol first.
 
-    Reaching this with a ``None`` present is a bug rather than a data
-    condition: :func:`~whetstone_envs.optim.completeness.
-    require_task_completeness` runs first on every path that produces one
-    of these vectors and refuses the evaluation outright. The check here
-    is therefore an assertion of that ordering, kept because the ordering
-    is what makes the narrowing sound -- if a future caller ever produced
-    a vector without passing the floor, this says so in those terms
-    instead of raising a ``TypeError`` several frames away.
+    A task that lost every repeat reports ``None`` rather than ``0.0``,
+    while every consumer downstream -- the selection score, the held-out
+    measurement, the paired delta -- needs real numbers and would fail on
+    a ``None`` deep inside an arithmetic it could not explain.
+
+    **The lost task keeps its position, at zero weight.** It is
+    substituted with ``0.0``, which is arithmetically inert here rather
+    than a fabricated score: the task's achieved row count is ``0``, so
+    O7's weighting in :func:`
+    ~whetstone_envs.optim.study.power.weighted_per_task_delta` multiplies
+    whatever sits in that slot by ``0 / k`` before it reaches the
+    bootstrap. The value never contributes; only the position does.
+
+    Holding the position is the point. Dropping the task instead would
+    shorten this vector, which breaks the two things the study depends on
+    downstream: the paired delta requires the arm's vector and the naive
+    anchor's to align task-for-task, and dropping a task silently shrinks
+    ``T`` so the interval looks tighter than the data supports. Keeping
+    it means the loss travels intact into the row's ``completeness``,
+    where the report reads it as ``VERDICT_INCOMPLETE`` -- the arm was
+    measured, and measured too shallowly to claim.
+
+    This replaces an assertion that a lost task could never arrive.
+    :func:`~whetstone_envs.optim.completeness.require_task_completeness`
+    no longer refuses the first one, because refusing killed the whole
+    stage over an infrastructure outcome; it now bounds only how many may
+    be lost before nothing can be reported at all.
     """
-    values = evidence.per_task_values
-    if any(value is None for value in values):
-        raise StageError(
-            "a per-task vector reached reporting with an unmeasured task, "
-            "which the completeness floor should have refused first"
-        )
-    return tuple(value for value in values if value is not None)
+    return tuple(
+        0.0 if value is None else value for value in evidence.per_task_values
+    )
 
 
 def _mean_of(evidence: EvalEvidence) -> float:
@@ -356,10 +374,20 @@ def _mean_of(evidence: EvalEvidence) -> float:
     persisted; the fallback exists so an evidence record whose aggregate
     could not be formed still reports the number its rows support rather
     than failing the whole stage.
+
+    The fallback averages over the tasks that produced a value, not over
+    :func:`measured_per_task`'s padded vector. The padding there is a
+    zero-weighted placeholder that exists to keep the vector aligned for
+    the paired delta; averaging it in would read a lost task as a task
+    that scored zero, which is the upward-bias error inverted -- a mean
+    dragged down by tasks nobody measured. The loss is already reported,
+    through completeness, as the incompleteness it is.
     """
     if evidence.aggregate_value is not None:
         return float(evidence.aggregate_value)
-    values = _measured_per_task(evidence)
+    values = tuple(
+        value for value in evidence.per_task_values if value is not None
+    )
     if not values:
         raise StageError("an evaluation produced no per-task values")
     return sum(values) / len(values)

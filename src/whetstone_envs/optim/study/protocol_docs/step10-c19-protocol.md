@@ -56,8 +56,9 @@ revision 1 said something different.
 | 15 | null-A | bypassed the runner → **routed through the ordinary runner with COPRO's shape** | note 25b |
 | 16 | §6 Codex evidence | unbounded → **one real Codex-direct run**, artifacts historical evidence only | note 20 |
 | 17 | L1's mechanical form | "the internal Eval Config ref" → **the evaluated task set is contained in the internal split**, checked on all three evaluation surfaces | this revision (2026-08-23), §3.2 |
-| 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**, paired with a **per-task completeness floor**: an evaluation is refused (`missing_data`) if any task lost every repeat, or if fewer than 90% of planned tasks were measured. The row tolerance alone cannot see a fully-lost task — at 76 tasks × 4 repeats one lost task is 1.3% of rows, inside the bound, yet it is dropped from the task mean's denominator and biases the reported mean upward. Paid transports additionally retry transient failures (429/5xx/timeout, **5 attempts total per logical call**, 2–32 s exponential backoff with jitter, `Retry-After` **delta-seconds** honoured and bounded at 120 s; the HTTP-date form is ignored by design, since resolving it against two clocks is least reliable exactly when it matters) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. The 5 attempts are spent inside the transport wrapper, which is the sole owner of the retry budget; whetstone's driver is pinned to a single attempt so the two loops cannot multiply. | this revision (2026-08-23), §3.9 and O7 |
+| 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**, paired with a **per-task completeness floor** at 90% of planned tasks measured to full depth. The row tolerance alone cannot see a fully-lost task — at 76 tasks × 4 repeats one lost task is 1.3% of rows, inside the bound, yet it is dropped from the task mean's denominator and biases the reported mean upward. (Item 20 later replaced this item's *unconditional* refusal on any fully-lost task with a degraded verdict; the 90% floor is unchanged.) Paid transports additionally retry transient failures (429/5xx/timeout, **5 attempts total per logical call**, 2–32 s exponential backoff with jitter, `Retry-After` **delta-seconds** honoured and bounded at 120 s; the HTTP-date form is ignored by design, since resolving it against two clocks is least reliable exactly when it matters) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. The 5 attempts are spent inside the transport wrapper, which is the sole owner of the retry budget; whetstone's driver is pinned to a single attempt so the two loops cannot multiply. | this revision (2026-08-23), §3.9 and O7 |
 | 19 | Task-model reasoning effort | unpinned ("this protocol accepts the spend and does not pin reasoning effort") → **pinned `minimal`** on the task route, hashed into the pre-registered design and **enforced**: every paid bind — the reporting pass and the in-search evaluations alike — reports its effort into the manifest, and a bind disagreeing with the design is refused before it bills. The proposer route stays unpinned. | Danielle, 2026-08-24 |
+| 20 | Tolerance for stochastic outcomes | Three gates demanded perfection of infrastructure and are relaxed to **degrade-and-record**, with every deterministic invariant left exact. (a) A fully-lost task no longer aborts its stage: it is carried at zero weight into the reported vector, lowers achieved completeness, and downgrades the arm to `incomplete (not claimed)`; the 90% floor still refuses an evaluation too thin to report from. (b) A COPRO round proceeds on the proposals it realized (1..`breadth`), recording `proposal_shortfall`; the round count against depth stays exact. (c) The in-search reward policy sets `missing_data="skip"` explicitly rather than inheriting `fail`. Alongside: GEPA's metric-call audit gains the declared-terminal-failure exemption COPRO already had, a held-out evaluation refused *after* billing settles its claim durably so a resume is no longer wedged, and the anchors gain the completed-claim resume path the arms already had. Blank generations become scored failing samples rather than missing rows, and anchor calibration floors at 90% presence and balance-subsets the two anchors to equal per-task depth. | Danielle, 2026-08-25 ("we can't require perfection from our infra"); audit `0009-perfection-gates-audit.md` |
 
 **On item 8.** Revision 1 derived per-mode trial counts from DSPy's
 `_recommended_num_trials(component_count=1, searches_demos, n)` at `n = 6`
@@ -197,7 +198,7 @@ commit `6f68dcdb…` (`optim/copro/control.py`).
 
 | id | Invariant | Evidence read |
 |---|---|---|
-| `COPRO_BREADTH_PER_DEPTH` | Every non-terminal step proposes exactly `control.breadth` candidates; the terminal step proposes `breadth` or terminalizes with `seed_retained` | `step.proposed_candidates`, `control.breadth` |
+| `COPRO_BREADTH_PER_DEPTH` | Every proposal round measures between 1 and `control.breadth` occurrences. `breadth` is the requested ceiling, not an equality: a round realizes what its proposer returned, records any `proposal_shortfall`, and proceeds. Overfilling — more occurrences than budgeted — and a round that measured nothing both fail | `step.resolved_intents`, `control.breadth` |
 | `COPRO_DEPTH_STEPS` | Step count is exactly `control.depth + 1` (depth search rounds plus the terminal report), or fewer only with a `terminal_failure` | `result.step_results`, `control.depth` |
 | `COPRO_INTERNAL_ONLY` | Every `IntentResolution.resolved_eval_config` equals the internal Eval Config ref and every `EvalEvidence.eval_role is INTERNAL` | `resolved_intents[*].resolved_eval_config`, dereferenced `EvalEvidence.eval_role` |
 | `COPRO_BEST_SO_FAR` | The candidate accepted at step *i* has internal reward ≥ every candidate evaluated at steps ≤ *i*; ties broken by the earlier candidate | `resolved_intents[*].reward_ref` dereferenced, `accepted_candidates` |
@@ -667,41 +668,79 @@ candidate.
   biased subset. The 10% bound is the complement of the 90% completeness
   backstop this section already pre-registers, so there is one threshold
   rather than two.
-- **A task that loses *every* repeat voids the evaluation**, whatever fraction
-  of rows it represents. The row tolerance above counts rows, and a fully-lost
-  task is dropped from the task mean's *denominator* rather than counted as a
-  zero — so at 76 tasks × 4 repeats one lost task is 4 of 304 rows (1.3%,
-  comfortably inside the 10% bound) and the evaluation would report a mean over
-  75 tasks as though it covered 76. The resulting bias is upward and
+- **A task that loses *every* repeat degrades the claim; it does not abort the
+  stage.** The row tolerance above counts rows, and a fully-lost task is
+  dropped from the task mean's *denominator* rather than counted as a zero — so
+  at 76 tasks × 4 repeats one lost task is 4 of 304 rows (1.3%, comfortably
+  inside the 10% bound) and an unguarded mean would cover 75 tasks while
+  reporting as though it covered 76. The resulting bias is upward and
   systematic, not noise: a task that loses every repeat is a slow,
-  long-generation one, which is the task that would have scored low. The
-  evaluation is therefore refused if any task has zero present rows, and
-  refused if fewer than **90%** of planned tasks were measured — the same
-  backstop this section already states, applied to tasks as well as rows.
-  Presence is read from the per-task vectors the evidence reports (a task
-  with no successful reduction reports no score and a count of zero), never
-  inferred from arithmetic that would assume a missing row scores 0.0. The
-  refusal is applied before an evaluation is accepted, so a fully-lost task
-  cannot reach calibration — which requires complete per-task counts for its
-  anchors and rejects an absent per-task value outright.
+  long-generation one, which is the task that would have scored low.
+
+  What the protocol requires is that this bias never be *hidden*, not that the
+  evaluation be perfect. A lost task therefore keeps its position in the
+  reported per-task vector with an achieved count of **zero**: O7's
+  completeness weighting (§8) drives its contribution to nothing, the vector
+  stays aligned with the naive anchor's so the paired delta is still paired,
+  and the loss lowers the row's achieved completeness. An arm whose
+  completeness falls below the **90%** backstop is reported as
+  `incomplete (not claimed)` — measured, stated, and excluded from the
+  efficacy claim. Presence is read from the per-task vectors the evidence
+  reports (a task with no successful reduction reports no score and a count of
+  zero), never inferred from arithmetic that would assume a missing row scores
+  0.0.
+
+  Refusing on the *first* lost task was the earlier rule, and it was the wrong
+  trade. Losses are correlated on exactly the tasks most likely to be slow, so
+  the rule fired often; and because it fired inside a reporting stage, it
+  discarded every other arm's already-paid evidence and left no manifest at
+  all. The reader learned nothing, having paid for everything. The **90%**
+  bound is what now bounds the loss: below it an evaluation is too thin to
+  report any number from and is refused, exactly as this section already
+  states for rows.
+
+- **Anchor calibration is stricter, deliberately.** An anchor is the reference
+  every arm's delta is measured against, so a naive anchor missing its hardest
+  tasks rescales the whole study rather than degrading one claim. Stage 0's
+  calibration requires each anchor to observe at least **90%** of its planned
+  rows with no wholly unobserved task, and then balances the two anchors to a
+  common samples-per-task depth — subsetting each task's rows to equal counts
+  by an outcome-blind rule (lowest seed index first), so the paired delta is a
+  comparison at equal depth rather than one anchor's deeper measurement against
+  the other's. A calibration that cannot meet the floor refuses, and Stage 0
+  refusing is correct: nothing downstream is measurable without it.
 - **The floor applies to every evaluation a claim is read from**, and only
   those: the official selection score, the held-out measurement, and the
   standalone `whetstone-eval` report all apply it through one shared owner, so
   the command that publishes a held-out number is subject to the same refusal
   as the stage that records one. Evaluations *inside* a search are deliberately
-  exempt. Under whetstone 0.1.13 a fully-lost task reports an absent per-task
-  value rather than a zero, and what a candidate is worth mid-search is the
-  optimizer's reward policy to decide; aborting a run over a transient loss the
-  search itself is entitled to tolerate would make the floor a stopping rule
-  rather than a reporting one.
+  exempt. A fully-lost task reports an absent per-task value rather than a
+  zero, and what a candidate is worth mid-search is the optimizer's reward
+  policy to decide; aborting a run over a transient loss the search itself is
+  entitled to tolerate would make the floor a stopping rule rather than a
+  reporting one. The reward policy is set to `missing_data="skip"` for exactly
+  that reason: inheriting its `fail` default would have put the stricter rule
+  *inside* the looser one, so a minute-long provider outage costing a tenth of
+  one minibatch would abort a run the aggregation layer was prepared to
+  tolerate.
 - **"Measured" means measured to depth.** The 90% bound counts tasks that
   produced a full `K_REPEAT` of present rows, not merely tasks that produced
-  something. Counting only fully-lost tasks would make the bound unreachable —
-  the zero-present rule above already refuses those, so the remaining fraction
-  would be 100% by construction and the 90% threshold could never bind. Counting
-  short tasks gives it the population it is written for: a split whose tasks
-  broadly ran three of four repeats is measured more shallowly than this
-  protocol pre-registers, even though every task contributed a value.
+  something. A fully-lost task is incomplete by construction — zero of its
+  repeats measured — so both kinds of shortfall accumulate against this one
+  bound rather than against two separate rules. That gives it the population it
+  is written for: a split whose tasks broadly ran three of four repeats is
+  measured more shallowly than this protocol pre-registers, even though every
+  task contributed a value, and a split that lost a tenth of its tasks
+  outright fails the same bound.
+- **A blank generation is a scored failing sample, not a missing row.** A model
+  that returns an empty completion answered the call; it simply answered
+  wrongly. Such a row is recorded as a success carrying the failure code
+  `blank-provider-generation` and scores as a failure, so it counts in both
+  the row tolerance's denominator and the task's achieved count. Treating it as
+  missing would have let a candidate that reliably blanks *improve* its
+  apparent completeness by failing, which inverts the incentive the
+  completeness weighting exists to create. Rows genuinely absent — a refusal,
+  a timeout, an exhausted retry budget — remain missing.
 - **Never resume a partial run.** Recorded memory: clean reruns over stale
   partials — never resume or repair pre-stabilization partial experiment runs.
 - **No mid-run design changes.** Per `1756`'s execution rules, the only
@@ -1307,6 +1346,19 @@ rounds. **Recommendation: (b)**, and record the deviation from DSPy's default
 explicitly in the fidelity report — `COPRO_BREADTH_PER_DEPTH` checks adherence
 to the *configured* breadth, so a non-default breadth is a budget choice, not an
 infidelity. Reviewer should confirm that framing is acceptable.
+
+Breadth 6 and depth 3 are the **requested** design and are what the
+pre-registration hash covers. What a run *realizes* is a measurement: a round
+fills its slots from the drafts its proposer returned, and a draft can be lost
+to an infra failure, a template that fails validation, or a duplicate of one
+already in the round. Such a round records its `proposal_shortfall` and
+proceeds on what it has; with no usable proposal at all it terminalizes on its
+best-so-far, or reports `copro_proposal_round_empty` when there is no measured
+history to fall back on. The round count against depth stays exact. Demanding
+the exact breadth per round was the earlier rule and it did not survive
+arithmetic: 15 proposer calls per run at breadth 6 / depth 3 means a couple of
+percent of bad drafts compounds into a majority chance of losing a Stage-2 arm
+to a single unlucky draft, which measures nothing about the optimizer.
 
 **O3 — Held-out evaluation path.** The envs eval CLI's `run --role` accepts only
 `internal|official` (`reporting/cli.py`), and `EvalConfigs` carries held-out as

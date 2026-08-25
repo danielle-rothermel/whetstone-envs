@@ -1061,9 +1061,22 @@ def run_stage0_into_manifest(
     amendment = _transport_change_amendment(
         manifest, environment=environment, replace_design=replace_design
     )
+    if environment.store is None:
+        # Anchor calibration balances the two anchors to a common
+        # samples-per-task depth, and that reads the individual output
+        # rows rather than the aggregated per-task means. Without a store
+        # there is nothing to balance from, and calibrating anyway would
+        # report a paired delta taken at two different depths.
+        raise StageError(
+            "stage0 calibrates its anchors from the study's own output "
+            "rows, so it needs the evidence store; bind the environment "
+            "through bound_stage_environment rather than supplying "
+            "collaborators piecemeal"
+        )
     result = run_stage0(
         spec=spec,
         bind_engine=environment.bind_engine,
+        store=environment.store,
         naive_candidate=environment.naive_candidate,
         ceiling_candidate=environment.ceiling_candidate,
         task_ids_by_role=environment.task_ids_by_role,
@@ -2133,6 +2146,21 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     official_scores = tuple(durable_scorer(run) for run in runs)
     claim = log.completed_claim_for(arm_id)
     if claim is None:
+        refusal = log.refused_claim_for(arm_id)
+        if refusal is not None:
+            # The evaluation ran, was billed, and was judged unfit to
+            # report. L3 is satisfied and spent, so it is not re-issued;
+            # the arm reaches the report with no held-out row, which is
+            # the unmeasured verdict the report already renders. Raising
+            # instead would stop the pass over an arm whose outcome is
+            # settled and recorded.
+            raise StageError(
+                f"arm {arm_id!r} already spent its held-out evaluation at "
+                f"{stage.value} and it was refused: {refusal}. The "
+                "evaluation is not re-issued -- it was billed once and L3 "
+                "allows one. Re-run this arm's stage in a fresh study "
+                "directory to measure it again."
+            )
         if log.held_out_count(arm_id) > 0:
             raise StageError(
                 f"arm {arm_id!r} claimed a held-out evaluation at "

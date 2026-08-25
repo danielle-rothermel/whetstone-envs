@@ -970,6 +970,82 @@ def test_completing_an_unclaimed_evaluation_is_refused(
         )
 
 
+def test_a_refused_claim_is_durable_and_terminal(tmp_path: Path) -> None:
+    """**Fails-before: the ledger could only record a measurement.**
+
+    An evaluation is billed before it is judged, so a refusal after the
+    provider call left the claim outstanding forever. A resume reads an
+    outstanding claim as an in-flight crash -- neither re-issuable nor
+    writable off -- so the study wedged with no recovery but a hand-edited
+    manifest. The refusal record makes that third outcome terminal.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
+    log.claim_held_out("naive")
+    log.refuse_held_out("naive", "TaskCompletenessError: too thin to report")
+
+    claim = read_study_manifest(study_dir).held_out_claims[0]
+    # Settled, but not measured: there is no number and there never will be.
+    assert claim.settled
+    assert not claim.completed
+    assert claim.mean is None
+    assert "too thin to report" in (claim.refusal or "")
+
+    # A fresh ledger over the same directory -- which is what a resumed
+    # stage holds -- reads the refusal rather than an ambiguous crash.
+    resumed = ManifestSelectionLog(
+        study_dir, transport=TransportName.FAKE.value
+    )
+    assert resumed.refused_claim_for("naive") is not None
+    assert resumed.completed_claim_for("naive") is None
+    # And L3 still holds: the one evaluation was spent.
+    with pytest.raises(SelectionError, match="already evaluated on held-out"):
+        resumed.claim_held_out("naive")
+
+
+def test_a_settled_claim_cannot_be_settled_twice(tmp_path: Path) -> None:
+    """Measured and refused are exclusive, and both are once-only."""
+    study_dir = _calibrated_study(tmp_path)
+    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
+    log.claim_held_out("naive")
+    log.refuse_held_out("naive", "first refusal")
+
+    with pytest.raises(SelectionError, match="already settled"):
+        log.refuse_held_out("naive", "second refusal")
+    with pytest.raises(SelectionError, match="already settled"):
+        log.complete_held_out(
+            HeldOutMeasurement(
+                candidate_name="naive",
+                per_task=(1.0,),
+                mean=1.0,
+                eval_config_hash=HELD_OUT_CONFIG,
+                repeats=3,
+                completeness=1.0,
+            )
+        )
+
+
+def test_a_resumed_stage_reports_a_refused_arm_rather_than_deadlocking(
+    tmp_path: Path,
+) -> None:
+    """**Fails-before: the resume raised the un-re-issuable-claim error.**
+
+    The recovery it named was "complete the outstanding entry in the
+    manifest by hand, or start a fresh study directory" -- after a Stage 2
+    of paid runs. Now the refusal is legible, so the resume says what
+    happened and names a recovery that does not involve editing JSON.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    log = ManifestSelectionLog(study_dir, transport=TransportName.FAKE.value)
+    log.claim_held_out("copro")
+    log.refuse_held_out("copro", "TaskCompletenessError: below the floor")
+
+    assert log.refused_claim_for("copro") is not None
+    # The refusal reason travels to whoever reads it, rather than being
+    # flattened into "an evaluation that never completed".
+    assert "below the floor" in (log.refused_claim_for("copro") or "")
+
+
 def test_an_arm_stage_leaves_a_completed_claim_per_arm(
     tmp_path: Path,
 ) -> None:
@@ -2557,13 +2633,13 @@ def test_an_authorized_width_change_reaches_dispatch(
     ``test_transport``; what this covers is that the flag reaches
     ``run_arm_stage`` and that the guard lets it through.
 
-    A resume of a *completed* Stage 1 is refused further down by the
-    held-out ledger, which measures each candidate exactly once. That is a
-    different guarantee and an older one, so it is what this asserts
-    against: reaching it proves the width guard did not fire.
+    A resume of a *completed* Stage 1 now runs to completion rather than
+    tripping the held-out ledger: every arm and both anchors rebuild from
+    their completed claims, so nothing is re-issued and nothing is
+    re-bought. That makes the recorded width itself the evidence -- the
+    stage row carries this invocation's 64 only if the guard let the
+    resume through at all.
     """
-    from whetstone_envs.optim.study.selection import SelectionError
-
     study_dir = _calibrated_study(tmp_path)
     spec = spec_from_manifest(read_study_manifest(study_dir))
     scores = {
@@ -2578,16 +2654,18 @@ def test_an_authorized_width_change_reaches_dispatch(
     )
     before = read_study_manifest(study_dir)
 
-    with pytest.raises(SelectionError, match="exactly once"):
-        run_arm_stage(
-            study_dir=study_dir,
-            stage=StageId.STAGE1,
-            environment=_Harness(study_dir, scores=scores).environment(
-                provider_concurrency=64, allow_width_change=True
-            ),
-        )
+    run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=_Harness(study_dir, scores=scores).environment(
+            provider_concurrency=64, allow_width_change=True
+        ),
+    )
 
     after = read_study_manifest(study_dir)
+    # Nothing was re-bought: the resume replayed every completed claim
+    # rather than issuing a second evaluation of any candidate.
+    assert len(after.held_out_claims) == len(before.held_out_claims)
     stage = next(
         entry for entry in after.stages if entry.stage == StageId.STAGE1.value
     )

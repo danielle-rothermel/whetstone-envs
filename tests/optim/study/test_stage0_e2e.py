@@ -104,7 +104,11 @@ def toy_study(tmp_path):
             built.append(engine)
             return engine
 
-        yield prepared, bind_engine, gold_by_prompt
+        # The store is yielded because calibration reads it: balancing the
+        # two anchors to a common samples-per-task depth needs the
+        # individual output rows, which the aggregated per-task means
+        # cannot be re-derived from.
+        yield prepared, bind_engine, gold_by_prompt, cast("ObjectStore", store)
 
 
 def _task_ids_by_role(prepared) -> dict[EvalRole, tuple[str, ...]]:
@@ -139,12 +143,13 @@ def _spec(k_cal: int = 4) -> StudySpec:
 def test_stage0_calibrates_all_three_roles_on_fake_transport(
     toy_study,
 ) -> None:
-    prepared, bind_engine, _ = toy_study
+    prepared, bind_engine, _, store = toy_study
     task_ids = _task_ids_by_role(prepared)
 
     result = run_stage0(
         spec=_spec(),
         bind_engine=bind_engine,
+        store=store,
         naive_candidate=c19_candidate(
             candidate_id="c19-naive", template=PROBES.naive_template
         ),
@@ -170,11 +175,12 @@ def test_stage0_calibrates_at_k_cal_not_at_the_design_repeat_count(
     toy_study,
 ) -> None:
     """K_CAL is a measurement input; conflating it with K biases the gate."""
-    prepared, bind_engine, _ = toy_study
+    prepared, bind_engine, _, store = toy_study
     spec = _spec(k_cal=4)
     result = run_stage0(
         spec=spec,
         bind_engine=bind_engine,
+        store=store,
         naive_candidate=c19_candidate(
             candidate_id="c19-naive", template=PROBES.naive_template
         ),
@@ -201,10 +207,11 @@ def test_the_gate_reads_held_out_and_reports_every_condition(
     toy_study,
 ) -> None:
     """Held-out is the split the study reports from, so it is the one gated."""
-    prepared, bind_engine, _ = toy_study
+    prepared, bind_engine, _, store = toy_study
     result = run_stage0(
         spec=_spec(),
         bind_engine=bind_engine,
+        store=store,
         naive_candidate=c19_candidate(
             candidate_id="c19-naive", template=PROBES.naive_template
         ),
@@ -238,13 +245,14 @@ def test_the_gate_reads_held_out_and_reports_every_condition(
 
 
 def test_a_missing_role_stops_stage0_before_it_spends(toy_study) -> None:
-    prepared, bind_engine, _ = toy_study
+    prepared, bind_engine, _, store = toy_study
     task_ids = _task_ids_by_role(prepared)
     del task_ids[EvalRole.HELD_OUT]
     with pytest.raises(ValueError, match="missing task ids"):
         run_stage0(
             spec=_spec(),
             bind_engine=bind_engine,
+            store=store,
             naive_candidate=c19_candidate(
                 candidate_id="c19-naive", template=PROBES.naive_template
             ),
@@ -258,10 +266,11 @@ def test_a_missing_role_stops_stage0_before_it_spends(toy_study) -> None:
 
 def test_stage0_splits_are_disjoint_by_task_hash(toy_study) -> None:
     """L5 over real derived splits, not over a hand-built fixture."""
-    prepared, bind_engine, _ = toy_study
+    prepared, bind_engine, _, store = toy_study
     result = run_stage0(
         spec=_spec(),
         bind_engine=bind_engine,
+        store=store,
         naive_candidate=c19_candidate(
             candidate_id="c19-naive", template=PROBES.naive_template
         ),
@@ -283,10 +292,11 @@ def test_stage0_splits_are_disjoint_by_task_hash(toy_study) -> None:
 
 def test_each_role_calibrates_under_its_own_eval_config(toy_study) -> None:
     """Three roles, three configs -- and one config within held-out (L4)."""
-    prepared, bind_engine, _ = toy_study
+    prepared, bind_engine, _, store = toy_study
     result = run_stage0(
         spec=_spec(),
         bind_engine=bind_engine,
+        store=store,
         naive_candidate=c19_candidate(
             candidate_id="c19-naive", template=PROBES.naive_template
         ),
@@ -371,33 +381,38 @@ class _LosesOneTask:
         return self._inner(request)
 
 
-def test_a_fully_lost_task_refuses_stage0_on_real_evidence(
+def test_a_fully_lost_task_stops_an_anchor_but_not_an_arm(
     tmp_path,
 ) -> None:
-    """A task losing every repeat cannot become a Stage-0 anchor.
+    """A lost task is fatal to an anchor and tolerable in an arm.
 
     Real loss, driven end to end: one task's calls are permanently
     refused, the engine runs, the rows persist, and whetstone reports the
     task with no per-task value at all under ``EvalEvidence`` v6.
 
-    **Stage 0 refuses in whetstone's own calibration**, which requires a
-    full ``per_task_counts`` for every anchor -- an anchor defines the
-    achievable range, so a partially measured one is not a weaker anchor
-    but a wrong one. That refusal is upstream's and fires before this
-    package sees the evidence, so the assertion here is that the loss is
-    *caught*, not that this package's floor is what catches it.
+    **Stage 0 refuses in whetstone's own calibration**, which requires
+    every anchor to observe at least 90% of its planned rows with no
+    wholly unobserved task -- an anchor defines the achievable range the
+    whole study is scaled against, so a partially measured one is not a
+    weaker anchor but a wrong one. That refusal is upstream's and fires
+    before this package sees the evidence, so the assertion here is that
+    the loss is *caught*, not that this package's floor catches it.
 
-    The floor is what covers the case calibration does not: an arm's
-    scored and held-out evaluations, which are not anchors and which
-    whetstone is content to aggregate over a shrunken denominator. This
-    test pins both halves against the same real evidence -- and pins that
-    the 0.1.13 upgrade did not quietly stop the floor from seeing a lost
-    task, since v6 spells it ``None`` where v5 spelled it ``0.0``.
+    **An arm's own evaluation is the opposite case, and it degrades.**
+    An arm is one measurement among many, so losing a task there costs
+    the study one downgraded claim rather than its whole frame of
+    reference. That evaluation is accepted, carries the loss as a zero
+    count, and reaches the report as incomplete. The asymmetry is the
+    point of this test: the same real loss is fatal to an anchor and
+    tolerable in an arm, and both halves are pinned against one piece of
+    genuinely-lost evidence.
     """
     from whetstone_envs.optim.completeness import (
         TaskCompletenessError,
         fully_lost_task_count,
+        require_task_completeness,
     )
+    from whetstone_envs.optim.study.arms import measured_per_task
 
     pool = generate_pool(n_per_stratum=1, seed_start=765_432)
     prepared = prepare_c19_experiment(
@@ -458,17 +473,16 @@ def test_a_fully_lost_task_refuses_stage0_on_real_evidence(
                 transport_factory=transport_factory,
             )
 
-        from whetstone_envs.optim.completeness import (
-            require_task_completeness,
-        )
-
         # Stage 0 refuses rather than anchoring on a shrunken population.
-        with pytest.raises(
-            ValueError, match="per-task sample counts"
-        ) as refused:
+        # Upstream states this as a presence floor: an anchor must observe
+        # at least 90% of its planned rows, and 20 of 24 is 0.833.
+        with pytest.raises(ValueError, match="below the required floor") as (
+            refused
+        ):
             run_stage0(
                 spec=_spec(),
                 bind_engine=bind_engine,
+                store=cast("ObjectStore", store),
                 naive_candidate=c19_candidate(
                     candidate_id="c19-naive", template=PROBES.naive_template
                 ),
@@ -485,10 +499,11 @@ def test_a_fully_lost_task_refuses_stage0_on_real_evidence(
         assert refusers
         assert any(refuser.refusals for refuser in refusers)
 
-        # And the same real loss, evaluated the way an arm evaluates rather
-        # than the way an anchor calibrates, is what the floor refuses. This
-        # is the path calibration does not cover: whetstone aggregates it
-        # happily, over a denominator one task smaller than it reports.
+        # And the same real loss, evaluated the way an arm evaluates
+        # rather than the way an anchor calibrates, is carried rather than
+        # refused. This is the path calibration does not cover: whetstone
+        # aggregates it happily, over a denominator one task smaller than
+        # it reports, and the study's job is to keep that visible.
         config = ReferenceEvalRuntimeConfig(
             split_role=SPLIT_ROLE_BY_EVAL_ROLE[EvalRole.HELD_OUT],
             transport_api_key_env="WHETSTONE_TOY_API_KEY",
@@ -510,9 +525,21 @@ def test_a_fully_lost_task_refuses_stage0_on_real_evidence(
         lost_evidence = outcome.evidence
 
     assert isinstance(lost_evidence, EvalEvidence)
-    # v6 spells a fully-lost task as an absent per-task value.
+    # A fully-lost task is spelled as an absent per-task value.
     assert any(value is None for value in lost_evidence.per_task_values)
     assert fully_lost_task_count(lost_evidence) == 1
 
-    with pytest.raises(TaskCompletenessError, match="lost every"):
+    # **Fails-before: raised on the ``None``.** The arm path keeps the
+    # lost task in position at zero weight, so the vector still covers
+    # every planned task and the paired delta stays aligned.
+    vector = measured_per_task(lost_evidence)
+    assert len(vector) == len(lost_evidence.per_task_values)
+
+    # The floor still bounds the loss. These toy splits hold 6 held-out
+    # tasks, so one lost leaves 5 of 6 measured -- 0.833, under the 0.90
+    # floor -- and this evaluation is too thin to report a number from.
+    # At the study's own 220-task held-out split the same single loss is
+    # 0.995, comfortably inside the floor, and degrades rather than
+    # refusing. The rule is the fraction, not the first lost task.
+    with pytest.raises(TaskCompletenessError, match="task-completeness floor"):
         require_task_completeness(lost_evidence, purpose="held_out:naive")

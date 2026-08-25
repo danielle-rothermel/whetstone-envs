@@ -242,6 +242,22 @@ class SelectionLedger(Protocol):
 
     def complete_held_out(self, measurement: HeldOutMeasurement) -> None: ...
 
+    def refuse_held_out(self, candidate_name: str, reason: str) -> None:
+        """Settle a claimed evaluation that produced no reportable number.
+
+        The counterpart to :meth:`complete_held_out`, for the case where
+        the provider was reached and billed but the result was judged
+        unfit to report. Both are terminal, and recording the refusal is
+        what makes it so: without it the claim stays outstanding, which a
+        resume must read as an evaluation that died in flight -- neither
+        re-issuable nor writable off.
+        """
+        ...
+
+    def refused_claim_for(self, candidate_name: str) -> str | None:
+        """The reason a settled claim recorded, if it was refused."""
+        ...
+
     def completed_claim_for(
         self, candidate_name: str
     ) -> HeldOutMeasurement | None:
@@ -337,6 +353,27 @@ class SelectionLog:
                 f"candidate {measurement.candidate_name!r} completed a "
                 "held-out evaluation it never claimed"
             )
+
+    def refuse_held_out(self, candidate_name: str, reason: str) -> None:
+        """Record that a claimed evaluation was refused.
+
+        Checked but not stored, for the same reason
+        :meth:`complete_held_out` is: a process holding this ledger cannot
+        outlive itself, so there is no resume to make the record legible
+        to. The claim check still runs, because refusing an evaluation
+        that was never claimed is a caller error either way.
+        """
+        del reason
+        if candidate_name not in self.held_out_measured:
+            raise SelectionError(
+                f"candidate {candidate_name!r} refused a held-out "
+                "evaluation it never claimed"
+            )
+
+    def refused_claim_for(self, candidate_name: str) -> str | None:
+        """Always None: this ledger keeps nothing across a process."""
+        del candidate_name
+        return None
 
     def completed_claim_for(
         self, candidate_name: str
@@ -456,8 +493,11 @@ def report_arm(  # noqa: PLR0913
     # evaluation without either colliding with the other.
     reported_name = candidate_name or arm_id
     log.claim_held_out(reported_name)
-    held_out = evaluate_held_out(
-        candidate_name=reported_name, template=representative.template
+    held_out = _evaluate_claimed(
+        candidate_name=reported_name,
+        template=representative.template,
+        evaluate_held_out=evaluate_held_out,
+        log=log,
     )
     # The claim is completed with what the evaluation returned, so a claim
     # left outstanding names a crashed evaluation rather than a missing one.
@@ -487,11 +527,44 @@ def report_reference_candidate(
     and L4 hold for the anchors too, rather than only for the arms.
     """
     log.claim_held_out(candidate_name)
-    measurement = evaluate_held_out(
-        candidate_name=candidate_name, template=template
+    measurement = _evaluate_claimed(
+        candidate_name=candidate_name,
+        template=template,
+        evaluate_held_out=evaluate_held_out,
+        log=log,
     )
     log.complete_held_out(measurement)
     return measurement
+
+
+def _evaluate_claimed(
+    *,
+    candidate_name: str,
+    template: str,
+    evaluate_held_out: HeldOutEvaluator,
+    log: SelectionLedger,
+) -> HeldOutMeasurement:
+    """Issue a claimed evaluation, settling the claim if it is refused.
+
+    The claim is written before the call, so between the two there is a
+    window where the candidate has spent its one evaluation and no record
+    says what came of it. A crash there is genuinely unrecoverable and
+    stays that way. A *refusal* is not: the call returned, the spend is
+    real and already ledgered, and the only thing missing was a reportable
+    number -- so the claim is settled as refused rather than left looking
+    like a crash, and the study resumes into a degraded verdict instead of
+    a dead end that only a hand-edited manifest could clear.
+
+    The exception still propagates. Settling the claim records what
+    happened; it does not decide that the caller should carry on.
+    """
+    try:
+        return evaluate_held_out(
+            candidate_name=candidate_name, template=template
+        )
+    except Exception as error:
+        log.refuse_held_out(candidate_name, f"{type(error).__name__}: {error}")
+        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -781,9 +854,9 @@ class ManifestSelectionLog:
                 "held-out evaluation it never claimed"
             )
         claims = list(manifest.held_out_claims)
-        if claims[index].completed:
+        if claims[index].settled:
             raise SelectionError(
-                f"candidate {measurement.candidate_name!r} already completed "
+                f"candidate {measurement.candidate_name!r} already settled "
                 "its held-out evaluation"
             )
         claims[index] = PersistedHeldOutClaim(
@@ -799,6 +872,47 @@ class ManifestSelectionLog:
         self._write(
             manifest.model_copy(update={"held_out_claims": tuple(claims)})
         )
+
+    def refuse_held_out(self, candidate_name: str, reason: str) -> None:
+        """Settle a claimed evaluation durably as refused.
+
+        Written for the same reason the claim itself is: the evaluation
+        was billed, and the fact that it produced nothing reportable has
+        to survive the process. Without this the claim stays outstanding
+        forever, and a resumed stage reads an outstanding claim as an
+        in-flight crash it cannot safely act on -- which is how a refused
+        evaluation used to wedge a study that had paid for everything
+        else.
+        """
+        manifest = self._read()
+        index = self._claim_index(manifest, candidate_name)
+        if index is None:
+            raise SelectionError(
+                f"candidate {candidate_name!r} refused a held-out "
+                "evaluation it never claimed"
+            )
+        claims = list(manifest.held_out_claims)
+        if claims[index].settled:
+            raise SelectionError(
+                f"candidate {candidate_name!r} already settled its held-out "
+                "evaluation"
+            )
+        claims[index] = PersistedHeldOutClaim(
+            candidate_name=candidate_name,
+            stage=self._stage,
+            refusal=reason,
+        )
+        self._write(
+            manifest.model_copy(update={"held_out_claims": tuple(claims)})
+        )
+
+    def refused_claim_for(self, candidate_name: str) -> str | None:
+        """The reason this candidate's claim recorded, if it was refused."""
+        manifest = self._read()
+        index = self._claim_index(manifest, candidate_name)
+        if index is None:
+            return None
+        return manifest.held_out_claims[index].refusal
 
     def completed_claim_for(
         self, candidate_name: str

@@ -45,7 +45,11 @@ from whetstone.experiment.env import Experiment
 from whetstone.experiment.graph.rollout_template import (
     build_single_llm_eval_graph,
 )
-from whetstone.experiment.reward import RewardPolicy, RewardTerm
+from whetstone.experiment.reward import (
+    MissingDataPolicy,
+    RewardPolicy,
+    RewardTerm,
+)
 from whetstone.experiment.sampling import (
     HELD_OUT,
     INTERNAL_EVAL,
@@ -165,10 +169,31 @@ class ExperimentContract:
         return candidate_reference(candidate).record
 
     def reward_policy(self) -> RewardPolicy:
-        """This family's single exact-match reward term."""
+        """This family's single exact-match reward term.
+
+        ``missing_data`` is set explicitly rather than inherited. The
+        policy's own default is ``FAIL``, which voids the reward whenever
+        any row of an in-search evaluation is missing -- and that is the
+        opposite of the choice this study already made one layer up.
+        :data:`MAX_SKIP_FRACTION` and the aggregation's
+        ``missing_data="skip"`` deliberately let an evaluation lose up to
+        10% of its rows and report the mean over what survived, because a
+        row can go missing for reasons that have nothing to do with the
+        candidate being measured. Inheriting ``FAIL`` here would put the
+        stricter rule *inside* the looser one: a minute-long provider
+        outage costing a tenth of one minibatch would abort an optimizer
+        run that the aggregation layer was fully prepared to tolerate.
+
+        ``SKIP`` states the same tolerance at the reward level, so the
+        aggregation's bound is the single place the study decides how much
+        row loss is too much. Beyond that bound the aggregate is ``None``
+        regardless, so this is a tolerance for the losses the study
+        already accepts rather than a removal of the floor.
+        """
         return RewardPolicy(
             policy_name=self.reward_policy_name,
             terms=(RewardTerm(name="score", weight=1.0),),
+            missing_data=MissingDataPolicy.SKIP,
         )
 
 

@@ -531,12 +531,27 @@ def gepa_metric_call_budget(evidence: RunEvidence) -> AuditFinding:
     It also requires ``total_metric_calls`` on the detailed result to equal
     the terminal checkpoint's counter, so the number the report prints is
     the number the harness accounted for.
+
+    **A declared terminal failure exempts the below-ceiling stop.** A run
+    that could not continue -- a provider that stopped answering, a
+    proposer that returned nothing usable -- terminalizes wherever it got
+    to, which is below the ceiling by definition. That is an infrastructure
+    outcome the run *declared*, not a budget the harness mismanaged, and
+    the same exemption already governs
+    :func:`~whetstone_envs.optim.audit.copro.copro_search_depth`'s short
+    search. Without it a declared failure is reported twice: once honestly
+    as the terminal failure it is, and once again here as a budget
+    violation, which downgrades the arm for the infrastructure's behaviour
+    rather than the harness's. The monotonicity and past-the-ceiling checks
+    are *not* exempted -- those remain things the harness controls whatever
+    upstream did.
     """
     invariant_id = InvariantId.GEPA_METRIC_CALL_BUDGET
     terminal = evidence.gepa_terminal
     if terminal is None:
         return _missing_terminal_artifact(invariant_id)
     refs = _artifact_refs(terminal)
+    declared_failure = evidence.result.terminal_failure
 
     ceilings = {
         entry.index: _resolved_ceiling(entry) for entry in evidence.steps
@@ -573,7 +588,12 @@ def gepa_metric_call_budget(evidence: RunEvidence) -> AuditFinding:
                 f"step {entry.index} reports {consumed} metric calls "
                 f"consumed, below step {entry.index - 1}'s {previous}"
             )
-        if checkpoint.terminal and consumed < ceiling and consumed != 0:
+        if (
+            checkpoint.terminal
+            and consumed < ceiling
+            and consumed != 0
+            and declared_failure is None
+        ):
             problems.append(
                 f"step {entry.index} terminalized at {consumed} metric "
                 f"calls, below the ceiling of {ceiling}"

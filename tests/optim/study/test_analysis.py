@@ -152,3 +152,136 @@ def test_an_unpaired_candidate_is_refused_rather_than_truncated() -> None:
             naive=_measurement("naive", (0.0, 0.0, 0.0)),
             k_repeat=3,
         )
+
+
+# --------------------------------------------------------------------------
+# A lost task degrades the claim rather than aborting the pass
+# --------------------------------------------------------------------------
+
+
+def test_a_fully_lost_task_pushes_the_delta_below_the_backstop() -> None:
+    """The whole point of carrying the loss: it must reach the verdict.
+
+    **Fails-before: the evaluation never got here.** The completeness
+    floor refused any fully-lost task upstream, so a stage died before a
+    manifest describing this state could be written. Now the loss travels
+    as a zero count into O7's weighting, the delta's completeness lands
+    under ``COMPLETENESS_BACKSTOP``, and ``_arm_verdict`` reads that as
+    ``VERDICT_INCOMPLETE`` -- an arm measured, and measured too shallowly
+    to claim.
+    """
+    # Eight tasks at three repeats; one lost every repeat, so 7 of 8.
+    counts = (3,) * 7 + (0,)
+    arm = _measurement(
+        "copro", (0.8,) * 8, counts=counts, completeness=21 / 24
+    )
+    naive = _measurement("naive", (0.5,) * 8, counts=(3,) * 8)
+
+    delta = _delta_for(
+        arm_id="copro", measurement=arm, naive=naive, k_repeat=3
+    )
+    # The lost task contributes nothing to the point estimate.
+    assert delta.arm_per_task[-1] == 0.0
+    assert delta.arm_per_task[0] == pytest.approx(0.3)
+    # And the loss shows up where the verdict reads it.
+    assert delta.completeness == pytest.approx(7 / 8)
+    assert delta.completeness < COMPLETENESS_BACKSTOP
+
+
+def test_a_single_loss_in_a_large_split_stays_claimable() -> None:
+    """The rule is the fraction, not the first lost task.
+
+    At the study's own held-out size one lost task is 0.995 complete,
+    comfortably inside the backstop -- which is exactly the outcome the
+    old unconditional refusal made impossible.
+    """
+    tasks = 220
+    counts = (4,) * (tasks - 1) + (0,)
+    arm = _measurement("copro", (0.8,) * tasks, counts=counts, repeats=4)
+    naive = _measurement(
+        "naive", (0.5,) * tasks, counts=(4,) * tasks, repeats=4
+    )
+
+    delta = _delta_for(
+        arm_id="copro", measurement=arm, naive=naive, k_repeat=4
+    )
+    assert delta.completeness == pytest.approx((tasks - 1) / tasks)
+    assert delta.completeness >= COMPLETENESS_BACKSTOP
+
+
+# --------------------------------------------------------------------------
+# Anchors resume from a completed claim
+# --------------------------------------------------------------------------
+
+
+def test_an_anchor_resumes_from_its_completed_claim() -> None:
+    """**Fails-before: anchors had no resume branch at all.**
+
+    ``completed_claim_for`` was consulted only for arms, and the anchor
+    pass runs *last* -- after every arm has been scored and measured. So a
+    crash anywhere in the reporting pass left the anchors in the one state
+    with no recovery: their L3 claims durable and refusing a second
+    evaluation, and nothing reading those claims back. The resumed pass
+    re-issued the call, was refused, and wedged a study that had already
+    paid for essentially all of its rows.
+    """
+    from whetstone_envs.optim.study.analysis import (
+        CEILING_CANDIDATE_NAME,
+        NAIVE_CANDIDATE_NAME,
+        measure_reference_candidates,
+    )
+    from whetstone_envs.optim.study.selection import SelectionLog
+
+    issued: list[str] = []
+
+    def evaluate(*, candidate_name: str, template: str):
+        del template
+        issued.append(candidate_name)
+        return _measurement(candidate_name, (1.0, 0.0))
+
+    class _ClaimedLog(SelectionLog):
+        """A ledger that already holds both anchors' completed claims."""
+
+        def completed_claim_for(self, candidate_name: str):
+            return _measurement(candidate_name, (0.9, 0.1))
+
+    references = measure_reference_candidates(
+        naive_template="naive {q}",
+        ceiling_template="ceiling {q}",
+        evaluate_held_out=evaluate,
+        log=_ClaimedLog(),
+    )
+
+    # Nothing was re-issued, and both anchors came back from their claims.
+    assert issued == []
+    assert set(references) == {NAIVE_CANDIDATE_NAME, CEILING_CANDIDATE_NAME}
+    assert references[NAIVE_CANDIDATE_NAME].per_task == (0.9, 0.1)
+
+
+def test_an_unclaimed_anchor_is_still_measured_normally() -> None:
+    """The resume branch costs nothing on a first run."""
+    from whetstone_envs.optim.study.analysis import (
+        CEILING_CANDIDATE_NAME,
+        NAIVE_CANDIDATE_NAME,
+        measure_reference_candidates,
+    )
+    from whetstone_envs.optim.study.selection import SelectionLog
+
+    issued: list[str] = []
+
+    def evaluate(*, candidate_name: str, template: str):
+        del template
+        issued.append(candidate_name)
+        return _measurement(candidate_name, (1.0, 0.0))
+
+    log = SelectionLog()
+    measure_reference_candidates(
+        naive_template="naive {q}",
+        ceiling_template="ceiling {q}",
+        evaluate_held_out=evaluate,
+        log=log,
+    )
+    assert issued == [NAIVE_CANDIDATE_NAME, CEILING_CANDIDATE_NAME]
+    # And each spent exactly its one claim (L3 is untouched).
+    assert log.held_out_count(NAIVE_CANDIDATE_NAME) == 1
+    assert log.held_out_count(CEILING_CANDIDATE_NAME) == 1

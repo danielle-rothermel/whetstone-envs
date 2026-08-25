@@ -14,6 +14,7 @@
       "terminal_output_contract": {
         "returned_proposal_count": 1,
         "terminal_proposal_count": null,
+        "min_returned_proposal_count": null,
         "require_distinct_bases": false
       },
       "template_render_contract": {
@@ -111,9 +112,9 @@
     },
     "record_ref": {
       "schema_name": "whetstone.optim_run",
-      "content_hash": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b"
+      "content_hash": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f"
     },
-    "config_hash": "e29c92681e68b06c3b53172b328b6607e66ea1fcc2b1b09b8d238547b03783d1"
+    "config_hash": "9179df336fe46994b1dc7a46ccd5a4834f8f25edee4a7061f73d5342fc0bd804"
   },
   "proposals": [
     {
@@ -156,6 +157,7 @@
                 "terminal_output_contract": {
                   "returned_proposal_count": 1,
                   "terminal_proposal_count": null,
+                  "min_returned_proposal_count": null,
                   "require_distinct_bases": false
                 },
                 "template_render_contract": {
@@ -253,9 +255,9 @@
               },
               "record_ref": {
                 "schema_name": "whetstone.optim_run",
-                "content_hash": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b"
+                "content_hash": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f"
               },
-              "config_hash": "e29c92681e68b06c3b53172b328b6607e66ea1fcc2b1b09b8d238547b03783d1"
+              "config_hash": "9179df336fe46994b1dc7a46ccd5a4834f8f25edee4a7061f73d5342fc0bd804"
             },
             "step_id": "codex-toy-run:codex:0",
             "kind": "tool",
@@ -294,12 +296,13 @@
             "step_output_contract": {
               "returned_proposal_count": 0,
               "terminal_proposal_count": 1,
+              "min_returned_proposal_count": null,
               "require_distinct_bases": false
             }
           },
           "record_ref": {
             "schema_name": "whetstone.optim_step_request",
-            "content_hash": "c6dd6de7eafefb08850b5b20898fc73ce16a8abe85beb7207948b1dc03d3700b"
+            "content_hash": "3559971ce96f297a4c8c5c2a816e3e9fd2eeee16ad9b48186de986c1a829694f"
           }
         },
         "proposed_candidates": [
@@ -415,7 +418,7 @@
                       "scope": "run",
                       "subject_ref": {
                         "schema_name": "whetstone.optim_run",
-                        "content_hash": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b"
+                        "content_hash": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f"
                       }
                     },
                     "args": {
@@ -429,16 +432,16 @@
                   },
                   "record_ref": {
                     "schema_name": "whetstone.tool_call",
-                    "content_hash": "dba43704321a67e67151fffa9f1acca03f9cf2cc182137e7e096c2a27336ae34"
+                    "content_hash": "c058e59a17cf8110c06d893220ce29bd70e22ba5c77d52a7deb955db86fd60a0"
                   }
                 },
                 "output": {
                   "evaluation_evidence_ref": {
-                    "content_hash": "2113b4b54e6ff2ff554bad34c4284b13de6412e9faecf37939308ca2266030db",
+                    "content_hash": "4cb2816cdd6527f3793e7b6a36b3636f1ad00926330c5f5d1b3595444fd0dee3",
                     "schema_name": "whetstone.eval_evidence"
                   },
                   "output_artifact_ref": {
-                    "content_hash": "c2139da272541881b97b7177533904f1b769d80496b4a7519707b3df8705eeb3",
+                    "content_hash": "903a2334d98512c6f79aba16186c716cf59cfbe0d0e50ba2e82c6d329a60f308",
                     "schema_name": "whetstone.eval_outputs"
                   },
                   "per_task_counts": [
@@ -462,7 +465,7 @@
                 "evaluation_evidence_refs": [
                   {
                     "schema_name": "whetstone.eval_evidence",
-                    "content_hash": "2113b4b54e6ff2ff554bad34c4284b13de6412e9faecf37939308ca2266030db"
+                    "content_hash": "4cb2816cdd6527f3793e7b6a36b3636f1ad00926330c5f5d1b3595444fd0dee3"
                   }
                 ],
                 "reward": {
@@ -494,14 +497,14 @@
                     "evidence_refs": [
                       {
                         "schema_name": "whetstone.eval_evidence",
-                        "content_hash": "2113b4b54e6ff2ff554bad34c4284b13de6412e9faecf37939308ca2266030db"
+                        "content_hash": "4cb2816cdd6527f3793e7b6a36b3636f1ad00926330c5f5d1b3595444fd0dee3"
                       }
                     ],
                     "provenance_ordinal": 1
                   },
                   "record_ref": {
                     "schema_name": "whetstone.reward",
-                    "content_hash": "f3f27aacdf3187033f3614762be4e1fa4be30630c8553dc0ffa80c480ad16be9"
+                    "content_hash": "df060ee818b74aab00f82e70dbf45218cd041dcb4049f5ff9f32ba3a78f0222a"
                   }
                 },
                 "provenance_note": null,
@@ -509,7 +512,7 @@
               },
               "record_ref": {
                 "schema_name": "whetstone.tool_result",
-                "content_hash": "86c3190f2b8c92591716927f042ef2d4a5d8ea7aa59ca1481033d4164c251f34"
+                "content_hash": "232dab4c81ce420553227012f3a4dbbc86d3e5789b8edc846a84d13eb23332ea"
               }
             },
             "store_entry": {
@@ -582,7 +585,7 @@
                     "scope": "run",
                     "subject_ref": {
                       "schema_name": "whetstone.optim_run",
-                      "content_hash": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b"
+                      "content_hash": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f"
                     }
                   },
                   "args": {
@@ -596,7 +599,7 @@
                 },
                 "record_ref": {
                   "schema_name": "whetstone.tool_call",
-                  "content_hash": "dba43704321a67e67151fffa9f1acca03f9cf2cc182137e7e096c2a27336ae34"
+                  "content_hash": "c058e59a17cf8110c06d893220ce29bd70e22ba5c77d52a7deb955db86fd60a0"
                 }
               },
               "tool_config": {
@@ -663,27 +666,27 @@
               },
               "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
               "capacity_scope": "run",
-              "capacity_scope_id": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b",
+              "capacity_scope_id": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f",
               "state": "completed",
               "capacity_debit_ordinal": 1,
               "refusal": null,
               "tool_result_ref": {
                 "schema_name": "whetstone.tool_result",
-                "content_hash": "86c3190f2b8c92591716927f042ef2d4a5d8ea7aa59ca1481033d4164c251f34"
+                "content_hash": "232dab4c81ce420553227012f3a4dbbc86d3e5789b8edc846a84d13eb23332ea"
               },
               "effect_terminal": {
                 "request": {
                   "semantic_key": "whetstone.tool_execution:a37e6b380308c7c16b8cdbb52aba1fdb1939996bbe6eb78e45f950870703930b",
-                  "request_hash": "3574ba1c16513ce4d961d2bbb2caa9c0faed2d8ffc05b611dcb8d3fbd46a61c7",
+                  "request_hash": "dd0cda79350dd9d2432ec30e2479c0fe5fc918c5d4eb7c593c73305d334ef6f3",
                   "replay_policy": "idempotent"
                 },
                 "outcome": "succeeded",
                 "owner_id": "codex-audit-fixture",
-                "attempt_id": "93801e1df6a64231b7fd016d1fafc9a1",
+                "attempt_id": "2e88e654d43640f8a63bde6a90306490",
                 "fence": 1,
                 "result_ref": {
                   "schema_name": "whetstone.tool_result",
-                  "content_hash": "86c3190f2b8c92591716927f042ef2d4a5d8ea7aa59ca1481033d4164c251f34"
+                  "content_hash": "232dab4c81ce420553227012f3a4dbbc86d3e5789b8edc846a84d13eb23332ea"
                 },
                 "failure": null
               }
@@ -761,7 +764,7 @@
                       "scope": "run",
                       "subject_ref": {
                         "schema_name": "whetstone.optim_run",
-                        "content_hash": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b"
+                        "content_hash": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f"
                       }
                     },
                     "args": {
@@ -775,16 +778,16 @@
                   },
                   "record_ref": {
                     "schema_name": "whetstone.tool_call",
-                    "content_hash": "bcc10444175092aaa88b158964e30c60f7b5f053926a0339f0e8f61bf1600486"
+                    "content_hash": "ca1a13bb6a27314dcf1b0d4835565183d49d775c8e629f5f85990f272bdfd3d1"
                   }
                 },
                 "output": {
                   "evaluation_evidence_ref": {
-                    "content_hash": "e0ed09b5bda772c3705590eee0a20fe8db2c2324ee545d1e0c63b8a52e35352f",
+                    "content_hash": "b7bce4f6b293e88955cd505b4366f8afec612e9e5fc441323261942a665a4e49",
                     "schema_name": "whetstone.eval_evidence"
                   },
                   "output_artifact_ref": {
-                    "content_hash": "5a7c985199a81b3b3b677b65f7db528fd19bc17572c871ae5e12cbc8cd423b3e",
+                    "content_hash": "a7f546bd5cd08b2eaf69e33c846a8aa302107c505a1197d36b0a529ea0e1f818",
                     "schema_name": "whetstone.eval_outputs"
                   },
                   "per_task_counts": [
@@ -808,7 +811,7 @@
                 "evaluation_evidence_refs": [
                   {
                     "schema_name": "whetstone.eval_evidence",
-                    "content_hash": "e0ed09b5bda772c3705590eee0a20fe8db2c2324ee545d1e0c63b8a52e35352f"
+                    "content_hash": "b7bce4f6b293e88955cd505b4366f8afec612e9e5fc441323261942a665a4e49"
                   }
                 ],
                 "reward": {
@@ -840,14 +843,14 @@
                     "evidence_refs": [
                       {
                         "schema_name": "whetstone.eval_evidence",
-                        "content_hash": "e0ed09b5bda772c3705590eee0a20fe8db2c2324ee545d1e0c63b8a52e35352f"
+                        "content_hash": "b7bce4f6b293e88955cd505b4366f8afec612e9e5fc441323261942a665a4e49"
                       }
                     ],
                     "provenance_ordinal": 2
                   },
                   "record_ref": {
                     "schema_name": "whetstone.reward",
-                    "content_hash": "1cb9c2dda75111133491d7f571e09884a496fd384e3bb6a86c3e4a4a7d939f3e"
+                    "content_hash": "99834a200a00171599c5781fe7693c974f8cec76a5fca29fade8b88a0f58dd92"
                   }
                 },
                 "provenance_note": null,
@@ -855,7 +858,7 @@
               },
               "record_ref": {
                 "schema_name": "whetstone.tool_result",
-                "content_hash": "85980bfdc1d2a7b32769fdd97c87cf87bbb87906fb60ab8991344428527ad248"
+                "content_hash": "2cb84edecba67f3f143cd728a1e66eb321420e60238d916d860971dbee35dd86"
               }
             },
             "store_entry": {
@@ -928,7 +931,7 @@
                     "scope": "run",
                     "subject_ref": {
                       "schema_name": "whetstone.optim_run",
-                      "content_hash": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b"
+                      "content_hash": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f"
                     }
                   },
                   "args": {
@@ -942,7 +945,7 @@
                 },
                 "record_ref": {
                   "schema_name": "whetstone.tool_call",
-                  "content_hash": "bcc10444175092aaa88b158964e30c60f7b5f053926a0339f0e8f61bf1600486"
+                  "content_hash": "ca1a13bb6a27314dcf1b0d4835565183d49d775c8e629f5f85990f272bdfd3d1"
                 }
               },
               "tool_config": {
@@ -1009,27 +1012,27 @@
               },
               "store_namespace_key": "mcp.whetstone.evaluate_candidate:codex-toy-run",
               "capacity_scope": "run",
-              "capacity_scope_id": "82687dc30f9440d5ec4bd614863082c3c949c816b4af323f3bd324e5d0dadb3b",
+              "capacity_scope_id": "77019193b2ee2584d09475af8972ab87825f1c9a4d6127b4f1e69259f2d6264f",
               "state": "completed",
               "capacity_debit_ordinal": 2,
               "refusal": null,
               "tool_result_ref": {
                 "schema_name": "whetstone.tool_result",
-                "content_hash": "85980bfdc1d2a7b32769fdd97c87cf87bbb87906fb60ab8991344428527ad248"
+                "content_hash": "2cb84edecba67f3f143cd728a1e66eb321420e60238d916d860971dbee35dd86"
               },
               "effect_terminal": {
                 "request": {
                   "semantic_key": "whetstone.tool_execution:8d2922025a20de3a29fc7a7f1b2b97d93abdc3245bf36c9434763bb7edfc1b84",
-                  "request_hash": "42e75736615a504d077bd7c99e72d55d2340c7f646b5e86caf9f9164b2216ddd",
+                  "request_hash": "664e0e0088aa772611aa95bb8a9e422d859315105e0ff75c2c053b73f91476b0",
                   "replay_policy": "idempotent"
                 },
                 "outcome": "succeeded",
                 "owner_id": "codex-audit-fixture",
-                "attempt_id": "7c9d4bd0c9b4475ebbb9aa55d3551eae",
+                "attempt_id": "b8e6b893af6c448b8cba677c0d2d04ca",
                 "fence": 1,
                 "result_ref": {
                   "schema_name": "whetstone.tool_result",
-                  "content_hash": "85980bfdc1d2a7b32769fdd97c87cf87bbb87906fb60ab8991344428527ad248"
+                  "content_hash": "2cb84edecba67f3f143cd728a1e66eb321420e60238d916d860971dbee35dd86"
                 },
                 "failure": null
               }
@@ -1064,7 +1067,7 @@
       },
       "record_ref": {
         "schema_name": "whetstone.optim_step_result",
-        "content_hash": "aaa20ca0cbb44a7ffc024f0811f00a7809ea52770900cbcac103f99a900a24e8"
+        "content_hash": "1c82e7d19b39d372a664b5b3e9488b2ffe007c523d44eabab63a44fc7d0e5f64"
       }
     }
   ],

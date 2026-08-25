@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 NEGATIVES = (
     (
         InvariantId.COPRO_BREADTH_PER_DEPTH,
-        copro_fixtures.short_of_configured_breadth,
+        copro_fixtures.over_configured_breadth,
     ),
     (
         InvariantId.COPRO_DEPTH_STEPS,

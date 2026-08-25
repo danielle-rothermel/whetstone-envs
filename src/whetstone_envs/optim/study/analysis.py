@@ -113,9 +113,28 @@ def measure_reference_candidates(
     construction -- so they skip the arg-max and keep the identical held-out
     procedure and the identical once-only ledger, which is what makes L3 and
     L4 hold for them and not only for the arms.
+
+    **An anchor already measured is rebuilt from its completed claim**,
+    exactly as :func:`~whetstone_envs.optim.study.stages.
+    report_arm_resumably` rebuilds an arm's. The anchors are the last thing
+    the reporting pass buys, after every arm has been scored and measured,
+    so a crash anywhere in the pass previously left them in the one state
+    the ledger cannot recover from: the L3 claim is durable and refuses a
+    second evaluation, but nothing read it back, so the resumed pass
+    re-issued the call and was refused -- wedging a study that had already
+    paid for essentially all of its rows. Consulting the completed claim
+    first costs nothing when there is none and is the whole recovery when
+    there is.
+
+    The once-only rule itself is untouched. A completed claim is *the*
+    measurement, replayed rather than re-bought; an outstanding one is
+    still refused by
+    :meth:`~whetstone_envs.optim.study.selection.SelectionLedger.
+    claim_held_out`, because a claim written with no result recorded
+    against it is an evaluation whose billing is not knowable from here.
     """
     return {
-        name: report_reference_candidate(
+        name: _reference_candidate_resumably(
             candidate_name=name,
             template=template,
             evaluate_held_out=evaluate_held_out,
@@ -126,6 +145,25 @@ def measure_reference_candidates(
             (CEILING_CANDIDATE_NAME, ceiling_template),
         )
     }
+
+
+def _reference_candidate_resumably(
+    *,
+    candidate_name: str,
+    template: str,
+    evaluate_held_out: HeldOutEvaluator,
+    log: SelectionLedger,
+) -> HeldOutMeasurement:
+    """One anchor's held-out measurement, replayed if already bought."""
+    completed = log.completed_claim_for(candidate_name)
+    if completed is not None:
+        return completed
+    return report_reference_candidate(
+        candidate_name=candidate_name,
+        template=template,
+        evaluate_held_out=evaluate_held_out,
+        log=log,
+    )
 
 
 def write_held_out_analysis(  # noqa: PLR0913
@@ -351,10 +389,21 @@ def _delta_for(
     achieved rows, which is conservative by construction: it can only
     lower a task's weight, never raise it.
     """
+    # Lost tasks do not shorten a vector. ``measured_per_task`` holds a
+    # fully-lost task in position at zero weight rather than dropping it,
+    # precisely so that losing tasks degrades a claim's completeness
+    # instead of silently unpairing it -- so unequal lengths here mean the
+    # two candidates were measured over genuinely different task *sets*,
+    # which is a design or wiring fault rather than an infrastructure
+    # outcome, and no weighting can repair it.
     if len(measurement.per_task) != len(naive.per_task):
         raise ValueError(
-            f"candidate {arm_id!r} and the naive anchor measured different "
-            "numbers of held-out tasks, so their comparison is not paired"
+            f"candidate {arm_id!r} measured {len(measurement.per_task)} "
+            f"held-out tasks against the naive anchor's "
+            f"{len(naive.per_task)}, so their comparison is not paired. A "
+            "task lost to the provider keeps its position at zero weight, "
+            "so this is a different task set rather than a shallower "
+            "measurement of the same one."
         )
     achieved = tuple(
         min(arm_count, naive_count)

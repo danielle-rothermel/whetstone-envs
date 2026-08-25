@@ -1610,6 +1610,21 @@ class HeldOutClaimRecord(_StrictModel):
     #: a completed claim, because the measurement itself treats it as
     #: optional and falls back to spreading completeness evenly.
     per_task_counts: tuple[StrictInt, ...] = ()
+    #: Why a claimed evaluation produced no reportable measurement.
+    #:
+    #: The third terminal state, and the one that closes the deadlock. An
+    #: evaluation is billed before it is judged, so a refusal *after* the
+    #: provider call leaves a claim that can never complete with a
+    #: measurement -- and a resume that finds it outstanding cannot tell it
+    #: from a process that died mid-call, so it refuses to re-issue and the
+    #: study wedges with no recovery but hand-editing this file.
+    #:
+    #: Recording the refusal makes that state legible and terminal: the
+    #: candidate spent its one evaluation, the spend is real and ledgered,
+    #: and there is no number to report. A resume reads it, declines to
+    #: re-issue exactly as L3 requires, and lets the arm reach the report
+    #: as unmeasured rather than stopping the pass.
+    refusal: StrictStr | None = None
 
     @model_validator(mode="after")
     def _validate_claim(self) -> HeldOutClaimRecord:
@@ -1654,12 +1669,34 @@ class HeldOutClaimRecord(_StrictModel):
             raise ValueError(
                 "an outstanding held-out claim has no per-task vector"
             )
+        if self.refusal is not None:
+            if not self.refusal.strip():
+                raise ValueError("a refused held-out claim states its reason")
+            if self.mean is not None:
+                # The two terminal states are exclusive: an evaluation
+                # either produced a measurement or was refused. Carrying
+                # both would leave "did this candidate report a number?"
+                # answerable two ways.
+                raise ValueError(
+                    "a held-out claim is measured or refused, not both"
+                )
         return self
 
     @property
     def completed(self) -> bool:
-        """Whether the claimed evaluation returned."""
+        """Whether the claimed evaluation returned a measurement."""
         return self.mean is not None
+
+    @property
+    def settled(self) -> bool:
+        """Whether the claimed evaluation reached any terminal state.
+
+        A claim is settled once it either measured or was refused. Only an
+        *unsettled* claim is the unrecoverable one -- the process died with
+        the evaluation in flight, so whether it was billed is unknowable
+        and it can be neither re-issued nor written off.
+        """
+        return self.completed or self.refusal is not None
 
 
 class HeldOutRecord(_StrictModel):

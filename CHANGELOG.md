@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-25
+
 ### Changed
 
 - **The Step 10 c19 task model's reasoning effort is re-pinned from

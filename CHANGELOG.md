@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-25
+
 ### Changed
 
 - **Stochastic and infrastructure outcomes degrade a claim instead of
@@ -116,7 +118,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   estimate, `p = 1.0` with no effect -- so no fix was needed, and tests now
   pin it.
 
+- **The reporting CLI's parser no longer reaches the `optim` extra.**
+  `build_parser` imported an optional dependency to spell the reasoning
+  effort's choices, which broke `whetstone-eval --help` on an extra-free
+  install -- exactly what the wheel smoke test runs. The choices are plain
+  strings checked against the enum at parse time, and a test exercises
+  `--help` under blocked optional imports.
+
 ### Added
+
+- **The Step 10 c19 task model is pinned to `minimal` reasoning effort.** A
+  reasoning effort changes the task model's capability, and therefore the
+  treatment every arm is measured under, so it is design rather than an
+  invocation setting: `TASK_REASONING_EFFORT` is a protocol constant and a
+  `StudyProtocol` field -- deliberately not a sized field, since the toy and
+  the real study run at the same effort or they are not the same protocol --
+  and `ModelsRecord.task_reasoning_effort` and
+  `PreRegistrationRecord.task_reasoning_effort` record it. The effort enters
+  `pre_registration_design_hash`, which is the point of the widening: a
+  design that could change the effort while keeping its hash would let the
+  effort be chosen after the anchors were visible.
+  `openrouter_seeded_call_config` binds it as `GenerationControls(reasoning=)`
+  on every task route -- the study environment, the Codex MCP runtime (whose
+  cross-process `task_model_identity_hash` guard would otherwise refuse the
+  rebuild), the in-search `RunSpec` every `StudyOptimizerRunner` arm builds,
+  the standalone runner, and the report projection -- while the proposer
+  route stays unpinned, because it writes candidates rather than answering
+  tasks and the study makes no claim about it. `--task-reasoning-effort`
+  covers the standalone paths.
+
+  Both paid paths report the effort they bound into one witness, and the
+  recording path **refuses** a paid bind whose effort disagrees with
+  `models.task_reasoning_effort` before the write, so a stage that would
+  measure an unpinned task model fails before it bills rather than leaving
+  the disagreement for a reader to notice afterwards. The in-search bind was
+  previously not recorded at all, so the record described only the reporting
+  half of the study. The fake transport is exempt: it binds whetstone's
+  reference default and never reaches a provider. Verification is
+  request-side -- billed reasoning tokens are not evidence a control was
+  honoured, since a provider may spend what it likes at any effort and
+  OpenRouter silently ignores `temperature` on nano routes -- so the tests
+  pin the built payload instead: a pinned config emits
+  `{"reasoning": {"effort": "minimal"}}` and an unpinned route sends no
+  `reasoning` key. Protocol document revision item 19 states the pin, its
+  cost consequence, and this verification method, replacing text that
+  pre-registered the opposite.
 
 - **Pins published whetstone-ai 0.1.15.** Blank generations are now scored
   failing samples: a `SUCCESS` row carrying failure code

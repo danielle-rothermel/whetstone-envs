@@ -66,6 +66,7 @@ from whetstone_envs.reporting.schema import (
     TrajectoryReport,
     TrajectoryResolution,
     TrajectoryStep,
+    two_stage_task_mean,
 )
 
 if TYPE_CHECKING:
@@ -248,6 +249,10 @@ def _summaries(
             if label in task_by_id[row.task_id].strata
         )
         accounting = _accounting(rows)
+        # Strata partition tasks, not rows, so a stratum's score gets the
+        # same two-stage treatment as the overall score: each task's
+        # repeats reduce to one value, then those are meaned across the
+        # stratum's tasks. ``numerator``/``denominator`` stay row-level.
         numerator = sum(row.score == 1.0 for row in rows)
         summaries.append(
             StratumSummary(
@@ -255,11 +260,7 @@ def _summaries(
                 numerator=numerator,
                 denominator=len(rows),
                 accounting=accounting,
-                score=(
-                    numerator / len(rows)
-                    if accounting.present == len(rows)
-                    else None
-                ),
+                score=two_stage_task_mean(rows),
             )
         )
     return tuple(summaries)
@@ -366,11 +367,14 @@ def _success_projection(
     if accounting != reported:
         raise ValueError("recomputed row accounting disagrees with evidence")
     numerator = sum(row.score == 1.0 for row in projected)
-    score = (
-        numerator / len(projected)
-        if accounting.present == len(projected)
-        else None
-    )
+    # Recomputed from the projected rows, deliberately *not* read off
+    # ``evidence.per_task_values``: this comparison is the independent
+    # check that the persisted aggregate matches the rows it claims to
+    # summarize, and sourcing the per-task values from the same evidence
+    # would make it compare evidence against itself. Independence belongs
+    # in the inputs, not the arithmetic -- the arithmetic must match
+    # whetstone-ai's ``unweighted_task_mean`` bit for bit.
+    score = two_stage_task_mean(projected)
     if evidence.aggregate_value != score:
         raise ValueError("recomputed aggregate disagrees with evidence")
     if (

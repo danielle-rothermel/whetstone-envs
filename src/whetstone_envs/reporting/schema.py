@@ -289,6 +289,47 @@ class Observation(_StrictModel):
         return self
 
 
+def two_stage_task_mean(
+    rows: tuple[Observation, ...],
+) -> StrictFloat | None:
+    """The reported score for ``rows``: per-task mean, then across tasks.
+
+    This is a *contract*, not a style choice. whetstone-ai persists every
+    evaluation aggregate through ``unweighted_task_mean``, which reduces
+    each task's repeats to one per-task value and then means those values
+    across tasks. This package's reporting projection is an independent
+    recompute of that same number, and it must be independent in the
+    *inputs* it reads -- the rows -- not in the arithmetic it applies.
+
+    The two orders are the same rational number and different floats. A
+    flat mean over all rows sums a different sequence of addends than the
+    two-stage reduction, and IEEE-754 addition is not associative: at
+    ``num_seeds=3`` the two disagree by 1 ULP for roughly half of all
+    evaluations (2 tasks scoring 2/3 and 3/3 already diverge). Recomputing
+    flat therefore made the check reject evidence that was correct, and
+    only ``num_seeds=1`` -- where each task has one row and the two
+    reductions are the same sum -- hid it.
+
+    Rows arrive in the persisted matrix order (task-major, seed-minor),
+    which the ``EvalReport`` validator enforces, so grouping by
+    ``task_index`` reproduces whetstone-ai's within-task addend order
+    exactly rather than approximately.
+
+    Returns ``None`` when any row is unscored: an incomplete stratum or
+    candidate reports no number at all rather than a mean over whichever
+    rows happened to land.
+    """
+    if not rows:
+        return None
+    by_task: dict[int, list[float]] = {}
+    for row in rows:
+        if row.score is None:
+            return None
+        by_task.setdefault(row.task_index, []).append(row.score)
+    task_means = [sum(scores) / len(scores) for scores in by_task.values()]
+    return sum(task_means) / len(task_means)
+
+
 class RowAccounting(_StrictModel):
     planned: StrictInt
     present: StrictInt
@@ -328,15 +369,24 @@ class StratumSummary(_StrictModel):
             raise ValueError("stratum denominator must equal planned rows")
         if self.numerator < 0 or self.numerator > self.accounting.present:
             raise ValueError("stratum numerator is outside present rows")
-        expected = (
-            self.numerator / self.denominator
-            if self.denominator and self.accounting.present == self.denominator
-            else None
+        # ``score`` is the two-stage per-task mean (see
+        # ``two_stage_task_mean``), so it is *not* ``numerator /
+        # denominator``: those stay the honest row-level pass count for
+        # display, and at ``num_seeds > 1`` the two-stage mean weights each
+        # task equally rather than each row. This validator therefore
+        # cannot re-derive the float from its own scalars -- the rows it
+        # would need are not here -- and checks the two properties that do
+        # survive isolation. ``EvalReport._validate_collections`` performs
+        # the full row-level recompute.
+        complete = bool(self.denominator) and (
+            self.accounting.present == self.denominator
         )
-        if self.score != expected:
+        if complete != (self.score is not None):
             raise ValueError(
                 "stratum score must preserve incomplete accounting"
             )
+        if self.score is not None and not 0.0 <= self.score <= 1.0:
+            raise ValueError("stratum score must be a unit-interval mean")
         return self
 
 
@@ -487,11 +537,10 @@ class EvalReport(_StrictModel):
                 invalid=states[ObservationState.INVALID],
             )
             numerator = sum(row.score == 1.0 for row in rows)
-            score = (
-                numerator / len(rows)
-                if rows and accounting.present == len(rows)
-                else None
-            )
+            # Row-level pass count for display; the score is the two-stage
+            # per-task mean and does not equal ``numerator / len(rows)``
+            # once a task carries more than one repeat.
+            score = two_stage_task_mean(rows)
             if (
                 result.accounting != accounting
                 or result.evidence.row_accounting != accounting
@@ -534,12 +583,7 @@ class EvalReport(_StrictModel):
                         numerator=stratum_numerator,
                         denominator=len(stratum_rows),
                         accounting=stratum_accounting,
-                        score=(
-                            stratum_numerator / len(stratum_rows)
-                            if stratum_rows
-                            and stratum_accounting.present == len(stratum_rows)
-                            else None
-                        ),
+                        score=two_stage_task_mean(stratum_rows),
                     )
                 )
             if result.strata != tuple(expected_strata):

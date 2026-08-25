@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Reporting recomputes an evaluation's score the way whetstone-ai
+  computes it: per task, then across tasks.** whetstone-ai persists every
+  aggregate through `unweighted_task_mean`, which reduces each task's
+  repeats to one value and means those across tasks. The reporting
+  projection re-derives that number from the rows as an independent check
+  on the persisted evidence, and it summed one flat mean over every row
+  instead. The two orders are the same rational number and different
+  floats -- IEEE-754 addition is not associative -- so at `k_repeat=3`
+  they disagreed by 1 ULP for half the evaluations in a stage, and
+  `_success_projection` rejected correct evidence with "recomputed
+  aggregate disagrees with evidence", failing the run at publication with
+  a `DurableRunError` after the work was paid for. The overall score, the
+  per-stratum scores, and both recompute sites in `EvalReport`'s validator
+  now apply the two-stage reduction over the persisted matrix order, which
+  reproduces whetstone-ai's addend order bit for bit. `numerator` and
+  `denominator` are unchanged and still report the row-level pass count.
+  `StratumSummary`, which validates in isolation and cannot see rows, now
+  checks the completeness rule and the unit interval rather than
+  re-deriving the float from its own scalars. The convention was invisible
+  at `num_seeds=1`, where each task has one row and the two reductions are
+  the same sum, and the whole reporting suite ran at one seed; regression
+  coverage now holds `num_seeds=3` on an arrangement pinned to diverge.
 - **Two `whetstone-study run` processes can no longer drive one run
   directory.** Run ids are deterministic on arm and seed, so two
   invocations of a stage compute the same run directory, and the only

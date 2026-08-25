@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from dr_providers import ProviderKind, ReasoningEffort
+from dr_providers import ProviderCallConfig, ProviderKind, ReasoningEffort
 from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     RegisteredRuntime,
@@ -28,6 +28,7 @@ from whetstone.coordination.runtime_bootstrap import (
     prepare_miprov2_run,
 )
 from whetstone.core.identity import (
+    IdentityRef,
     compute_identity_hash,
 )
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
@@ -80,7 +81,10 @@ from whetstone_envs.optim.codex import (
     resolve_codex_agent_model,
 )
 from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
-from whetstone_envs.optim.experiment import provider_call_config_ref
+from whetstone_envs.optim.experiment import (
+    provider_call_config_ref,
+    provider_config_ref,
+)
 from whetstone_envs.optim.families import (
     KNOWN_FAMILY_IDS,
     FamilyId,
@@ -569,15 +573,6 @@ def default_output_dir(run_id: str) -> Path:
     return DEFAULT_OUTPUT_ROOT / run_id
 
 
-def _provider_config_resolver(experiment: Experiment):
-    provider_config = experiment.rollout_graph.provider_call_config
-
-    def resolve(_ref: object):
-        return provider_config
-
-    return resolve
-
-
 def _proposal_contract(family: FamilySpec) -> CoproProposalContractRecord:
     placeholders = ", ".join(f"{{{field}}}" for field in family.prompt_fields)
     return CoproProposalContractRecord(
@@ -771,6 +766,7 @@ def _bind_optimizer(  # noqa: PLR0913
     copro_control: CoproControl,
     prompt_adapter: PlainPromptAdapter,
     proposer_transport: ProposerTransport | None,
+    proposer_config_ref: IdentityRef,
     output_dir: Path,
     sqlite_path: Path,
     codex_test_seam: CodexTestSeam | None = None,
@@ -862,6 +858,7 @@ def _bind_optimizer(  # noqa: PLR0913
             family=validated.family,
             run_id=run_id,
             proposer_transport=proposer_transport,
+            proposer_config_ref=proposer_config_ref,
             max_metric_calls=spec.gepa_max_metric_calls,
             reflection_minibatch_size=spec.gepa_reflection_minibatch_size,
             seed=GEPA_DEFAULT_SEED if spec.seed is None else spec.seed,
@@ -877,6 +874,7 @@ def _bind_optimizer(  # noqa: PLR0913
         engine=engine,
         experiment=experiment,
         family=validated.family,
+        proposer_config_ref=proposer_config_ref,
         demo_mode=validated.demo_mode,
         seed=MIPROV2_DEFAULT_SEED if spec.seed is None else spec.seed,
         minibatch=spec.miprov2_minibatch,
@@ -1214,20 +1212,23 @@ def run_optimizer(  # noqa: PLR0915
             concurrency=spec.provider_concurrency,
         )
         prompt_adapter = PlainPromptAdapter()
+        # One route object feeds both the reference the optimizer records
+        # and the record the transport resolves, so the two cannot name
+        # different configs.
+        proposer_route = _proposer_route(
+            experiment=experiment, proposer_model=spec.proposer_model
+        )
         proposer_transport = None
         if live_transport is not None:
             proposer_transport = ProviderProposerTransport(
-                resolve_provider_call_config=_proposer_config_resolver(
-                    experiment=experiment,
-                    proposer_model=spec.proposer_model,
-                ),
+                resolve_provider_call_config=proposer_route.resolver(),
                 transport=live_transport,
                 execution_policy=execution_policy,
                 prompt_adapter=prompt_adapter,
             )
         defaults = CoproInjectedDefaults(
             prompt_model=ProposerConfig(
-                provider_call_config=provider_call_config_ref(experiment),
+                provider_call_config=proposer_route.ref,
                 temperature=None,
             ),
             proposal_contract=_proposal_contract(family),
@@ -1260,6 +1261,7 @@ def run_optimizer(  # noqa: PLR0915
             copro_control=copro_control,
             prompt_adapter=prompt_adapter,
             proposer_transport=proposer_transport,
+            proposer_config_ref=proposer_route.ref,
             output_dir=resolved_output,
             sqlite_path=sqlite_path,
             codex_test_seam=codex_test_seam,
@@ -1322,26 +1324,55 @@ def run_optimizer(  # noqa: PLR0915
     return resolved_output
 
 
-def _proposer_config_resolver(
+@dataclass(frozen=True, slots=True)
+class _ProposerRoute:
+    """The one proposal route a run binds, reference and record together.
+
+    :class:`ProviderProposerTransport` resolves the reference its
+    ``ProposerConfig`` carries and then asserts the resolved record matches
+    that reference. The reference an optimizer's injected defaults carry and
+    the record this route's resolver returns must therefore name the same
+    config -- minting the reference from the *task* config while resolving
+    to a distinct *proposer* config fails that assertion at draft time, in
+    the middle of a durable run. Holding both on one object, derived from
+    one config, is what makes them impossible to disagree.
+    """
+
+    config: ProviderCallConfig
+    ref: IdentityRef
+
+    def resolver(self):
+        """The resolver :class:`ProviderProposerTransport` calls."""
+
+        def resolve(_ref: object) -> ProviderCallConfig:
+            return self.config
+
+        return resolve
+
+
+def _proposer_route(
     *,
     experiment: Experiment,
     proposer_model: str | None,
-):
-    """Resolve the proposal route, which may differ from the task route.
+) -> _ProposerRoute:
+    """Bind the proposal route, which may differ from the task route.
 
     A study runs a cheap task model against a stronger proposer, so the two
     routes are separable. ``None`` reuses the experiment's own route, which
     keeps a single-model run byte-identical to one that never named a
-    proposer.
+    proposer -- including its recorded reference hash.
+
+    A named proposer stays deliberately *unpinned*: the route carries no
+    reasoning controls, because the effort a study pins is a property of the
+    task model it measures, not of the proposer that writes prompts.
     """
     if proposer_model is None:
-        return _provider_config_resolver(experiment)
-    proposer_config = openrouter_seeded_call_config(model=proposer_model)
-
-    def resolve(_ref: object):
-        return proposer_config
-
-    return resolve
+        config = experiment.rollout_graph.provider_call_config
+        return _ProposerRoute(
+            config=config, ref=provider_call_config_ref(experiment)
+        )
+    config = openrouter_seeded_call_config(model=proposer_model)
+    return _ProposerRoute(config=config, ref=provider_config_ref(config))
 
 
 __all__ = [

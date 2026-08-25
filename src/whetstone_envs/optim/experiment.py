@@ -467,6 +467,24 @@ def prepare_c19_experiment(
     )
 
 
+def provider_config_ref(config: ProviderCallConfig) -> IdentityRef:
+    """The typed reference naming exactly ``config``.
+
+    A proposer transport resolves its route reference and then asserts the
+    resolved record matches the reference it was handed, so a reference and
+    the record a resolver returns must be derived from the *same* config. A
+    caller that mints this from one config and resolves to another fails
+    that assertion at draft time; deriving both from one config is what
+    makes a proposer route that differs from the task route representable.
+    """
+    payload = config.model_dump(mode="json")
+    record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
+    return IdentityRef(
+        record_ref=record_ref,
+        record_hash=record_ref.content_hash,
+    )
+
+
 def provider_call_config_ref(experiment: Experiment) -> IdentityRef:
     """The typed reference to this experiment's provider call config.
 
@@ -478,14 +496,7 @@ def provider_call_config_ref(experiment: Experiment) -> IdentityRef:
     config, so this reads the experiment alone: COPRO, GEPA, and MIPROv2
     bind one derivation rather than three copies.
     """
-    payload = experiment.rollout_graph.provider_call_config.model_dump(
-        mode="json"
-    )
-    record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
-    return IdentityRef(
-        record_ref=record_ref,
-        record_hash=record_ref.content_hash,
-    )
+    return provider_config_ref(experiment.rollout_graph.provider_call_config)
 
 
 def gold_by_task_hash(experiment: Experiment) -> dict[str, str]:
@@ -548,5 +559,6 @@ __all__ = [
     "prepare_experiment",
     "probe_candidates_from_templates",
     "provider_call_config_ref",
+    "provider_config_ref",
     "reward_policy_for_exact_match",
 ]

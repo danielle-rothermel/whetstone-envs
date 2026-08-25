@@ -7,15 +7,27 @@ run_c19_evaluation`, behind the standalone ``whetstone-eval`` command.
 Both are subject to the same loss and the same bias, so both apply the
 same floor from here rather than each carrying its own copy.
 
-**In-search evaluations are deliberately not covered.** Under whetstone
-0.1.13 a task that lost every repeat reports ``None`` for its per-task
-value rather than ``0.0``, and the optimizer's reward policy is what
-decides how a search treats that -- refusing mid-search would abort a run
-over a transient loss the search itself is entitled to tolerate. This
-floor guards the numbers a *claim* is made from: the official selection
-score, the held-out measurement, and the standalone report. What a
-candidate is worth during a search is the optimizer's question; what an
-evaluation is fit to report is this module's.
+**In-search evaluations are deliberately not covered.** A task that lost
+every repeat reports ``None`` for its per-task value rather than ``0.0``,
+and the optimizer's reward policy is what decides how a search treats
+that -- refusing mid-search would abort a run over a transient loss the
+search itself is entitled to tolerate. This floor guards the numbers a
+*claim* is made from: the official selection score, the held-out
+measurement, and the standalone report. What a candidate is worth during
+a search is the optimizer's question; what an evaluation is fit to
+report is this module's.
+
+**The floor bounds a claim; it does not demand a perfect evaluation.**
+Losing rows, and even whole tasks, is an infrastructure outcome the study
+tolerates: a lost task is carried at zero weight into the reported row,
+where it lowers the achieved completeness and the report downgrades the
+arm to ``VERDICT_INCOMPLETE`` rather than claiming it. What this module
+refuses is only the evaluation too thin to report any number from --
+below :data:`~whetstone_envs.optim.experiment.MIN_TASK_COMPLETENESS` of
+planned tasks measured to full depth. Aborting on the *first* lost task
+was the opposite trade: it discarded a whole stage's paid evidence to
+avoid publishing a number the report was already equipped to mark as
+incomplete.
 """
 
 from __future__ import annotations
@@ -131,7 +143,7 @@ def incomplete_task_count(evidence: TaskCompletenessEvidence) -> int:
 def require_task_completeness(
     evidence: TaskCompletenessEvidence, *, purpose: str
 ) -> None:
-    """Refuse an evaluation that lost whole tasks, not merely rows.
+    """Bound how shallowly an evaluation may be measured and still report.
 
     **The row tolerance cannot see this.** ``missing_data="skip"`` with a
     10% row bound is a floor against losing an evaluation to a handful of
@@ -149,19 +161,34 @@ def require_task_completeness(
     that would have pulled the mean down -- so the reported number is
     biased upward by exactly the tasks whose absence caused it.
 
-    Two conditions, because two different losses produce it:
+    **A fully-lost task degrades the claim; it does not abort the stage.**
+    A task with zero present rows is an infrastructure outcome -- the slow,
+    long-generation tasks are the ones that lose every repeat -- and the
+    study cannot require the provider to be perfect. What it *can* require
+    is that a mean over a shrunken population never be presented as though
+    it covered the whole one. So a lost task is carried, at zero weight,
+    all the way into the reported row: :func:`
+    ~whetstone_envs.optim.study.arms.measured_per_task` keeps its position
+    in the vector with a count of zero, O7's weighting drives its
+    contribution to nothing, and the resulting ``completeness`` falls below
+    :data:`~whetstone_envs.optim.study.manifest.COMPLETENESS_BACKSTOP` --
+    which the report reads as ``VERDICT_INCOMPLETE``, an arm measured but
+    not claimed.
 
-    * *Any* task with zero present rows refuses immediately, whatever the
-      fraction. A mean that silently changed which population it is over
-      is not a smaller measurement of the same thing, and a study that
-      compares arms cannot compare one arm's 76 tasks against another's
-      75. This rule is unconditional.
-    * *Complete* tasks -- those with a full ``num_seeds`` of present rows
-      -- below :data:`~whetstone_envs.optim.experiment.
-      MIN_TASK_COMPLETENESS` of planned tasks refuses as well. A task
-      that ran short still contributes a value, so the first rule lets it
-      pass; this one bounds how much of the split may be measured more
-      shallowly than the design specified.
+    That is strictly more informative than the abort it replaces. Raising
+    here killed the whole stage over one chronically slow task, discarding
+    every other arm's paid evaluation with it and leaving no manifest at
+    all -- so the reader learned nothing, having paid for everything. The
+    degraded verdict says exactly which arm was measured too shallowly to
+    claim, beside every arm that was not.
+
+    What remains a refusal is the *bound*: below :data:`
+    ~whetstone_envs.optim.experiment.MIN_TASK_COMPLETENESS` of planned
+    tasks measured to full depth, the evaluation is too thin to report a
+    number from at all, and it says so rather than emitting one. Losing
+    whole tasks pushes an evaluation toward that floor -- a fully-lost task
+    is incomplete by construction -- so the floor is what bounds the loss,
+    rather than a separate rule that fired on the first one.
 
     Implemented here rather than in the aggregation config because
     whetstone's ``AggregationConfig`` has no per-task completeness
@@ -171,15 +198,17 @@ def require_task_completeness(
     evidence before the evaluation is accepted -- at the seams every
     reporting evaluation already passes through.
 
-    It also has to *stay* first. Once per-task scores aggregate over
-    present rows, a fully-lost task reports ``None`` rather than a
-    number, and calibration rejects a ``None`` per-task value outright --
-    so refusing here keeps a lost task from reaching calibration at all,
-    with a message naming the completeness problem rather than a type
-    error further down. ``max_skip_fraction`` is what makes the row bound
-    tolerant in the first place: at ``0.0`` the first skipped row voids
-    the evaluation, and the 10% this study sets is the deliberate
-    loosening that this task-level floor then backstops.
+    ``max_skip_fraction`` is what makes the row bound tolerant in the
+    first place: at ``0.0`` the first skipped row voids the evaluation,
+    and the 10% this study sets is the deliberate loosening that this
+    task-level floor then backstops.
+
+    **Anchor calibration is not covered by this tolerance and should not
+    be.** An anchor is the reference every arm's delta is measured
+    against, so a naive anchor missing its hardest tasks rescales the
+    whole study rather than degrading one arm's claim. whetstone's own
+    calibration keeps its stricter presence requirement, and that
+    asymmetry is deliberate.
     """
     planned_tasks = len(evidence.task_hashes)
     if planned_tasks == 0:
@@ -187,28 +216,16 @@ def require_task_completeness(
             f"{purpose}: an evaluation planned no tasks at all"
         )
 
-    lost = fully_lost_task_count(evidence)
-    if lost:
-        raise TaskCompletenessError(
-            f"{purpose}: {lost} of {planned_tasks} tasks lost every "
-            f"repeat, so the reported aggregate "
-            f"({evidence.aggregate_value!r}, status "
-            f"{evidence.aggregate_status!r}) is a mean over "
-            f"{planned_tasks - lost} tasks presented as though it covered "
-            f"{planned_tasks}. The row tolerance does not catch this: a "
-            "fully-lost task is dropped from the task mean's denominator "
-            "rather than counted, and its rows are a small enough "
-            "fraction of the matrix to stay inside the row bound."
-        )
-
     incomplete = incomplete_task_count(evidence)
     complete = planned_tasks - incomplete
     achieved = complete / planned_tasks
     if achieved < MIN_TASK_COMPLETENESS:
+        lost = fully_lost_task_count(evidence)
         raise TaskCompletenessError(
             f"{purpose}: only {complete} of {planned_tasks} planned tasks "
             f"measured all {evidence.num_seeds} repeats ({achieved:.3f}), "
             f"below the {MIN_TASK_COMPLETENESS:.2f} task-completeness "
-            f"floor. {incomplete} task(s) ran short, so the split was "
-            "measured more shallowly than the design specified."
+            f"floor. {incomplete} task(s) ran short, of which {lost} lost "
+            "every repeat, so the split was measured more shallowly than "
+            "the design specified."
         )

@@ -29,6 +29,7 @@ would flatter a sloppy invariant.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +39,7 @@ pytest.importorskip("whetstone.experiment.env")
 
 from dr_store.sync import open_sqlite
 from whetstone.core.identity import TypedRef, compute_identity_hash
+from whetstone.optim.contracts import TerminalFailure
 from whetstone.optim.gepa.contracts import GepaCandidateComponent
 from whetstone.optim.gepa.harness_adapter import (
     GEPA_SKIPPED_MUTATIONS_KEY,
@@ -74,6 +76,7 @@ from whetstone_envs.optim.audit.gepa import (
     SKIPPED_MUTATION_EXHAUSTED_FIELD,
     SKIPPED_MUTATION_KEY_NAME,
     _as_skip_record,
+    gepa_metric_call_budget,
     gepa_repeats_as_recorded,
     gepa_terminal_artifact_present,
     gepa_train_val_disjoint,
@@ -1401,3 +1404,97 @@ def test_the_precondition_cites_the_whole_read_chain(gepa_run_dir) -> None:
         GEPA_DETAILED_RESULT_RECORD_SCHEMA,
         "whetstone.gepa.effect_transcript",
     }
+
+
+# --- 4b · the declared-terminal-failure exemption ---------------------------
+
+
+def _with_declared_failure(evidence: RunEvidence, message: str) -> RunEvidence:
+    """The same evidence, with a terminal failure declared on the result.
+
+    Substituted onto the loaded evidence rather than baked into a fixture
+    on disk: ``OptimResult`` requires a failed run to claim no proposals
+    at all, so a result.json that both searched and failed cannot be
+    built by mutating a healthy run. What this invariant reads is the
+    declaration, and this puts exactly that in place.
+    """
+    failed = evidence.result.model_copy(
+        update={
+            "terminal_failure": TerminalFailure(
+                code="provider_unavailable",
+                message=message,
+                details={},
+            )
+        }
+    )
+    return dataclasses.replace(evidence, result=failed)
+
+
+def _raised_ceiling_evidence(gepa_run_dir, tmp_path, ceiling: int):
+    """Evidence whose advertised ceiling sits above what it consumed."""
+    run_dir = copy_run(gepa_run_dir, tmp_path / f"ceiling-{ceiling}")
+    document = _read(run_dir)
+    for step in document["step_results"]:
+        hyper = step["record"]["request"]["record"]["hyperparameters"]
+        hyper[GEPA_MAX_METRIC_CALLS_HYPERPARAMETER] = ceiling
+    _write(run_dir, document)
+    return load_run_evidence(run_dir)
+
+
+def test_terminalizing_below_the_ceiling_fails_when_nothing_is_declared(
+    gepa_run_dir, tmp_path
+) -> None:
+    """The check the exemption sits inside still has to bite.
+
+    A ceiling far above what the run consumed makes its terminal step a
+    below-ceiling terminalization. Undeclared, that is exactly the silent
+    truncation this invariant exists to catch.
+    """
+    evidence = _raised_ceiling_evidence(gepa_run_dir, tmp_path, 10_000)
+    assert evidence.result.terminal_failure is None
+
+    finding = gepa_metric_call_budget(evidence)
+    assert finding.status is AuditStatus.FAIL
+    assert "below the ceiling" in finding.detail
+
+
+def test_a_declared_terminal_failure_exempts_the_short_stop(
+    gepa_run_dir, tmp_path
+) -> None:
+    """**Fails-before: flagged, with no exemption GEPA could offer.**
+
+    COPRO already exempts a short search that declares a terminal failure
+    (``copro_search_depth``); GEPA did not. So a run that stopped because
+    the provider stopped answering was reported twice -- once honestly as
+    its terminal failure, and again here as a budget violation, which
+    downgraded the arm to ``VERDICT_NOT_VALIDATED``. That is the audit
+    blaming the harness for the infrastructure's behaviour.
+
+    Same evidence as the test above, plus the declaration.
+    """
+    evidence = _with_declared_failure(
+        _raised_ceiling_evidence(gepa_run_dir, tmp_path, 10_000),
+        "the task model stopped answering mid-search",
+    )
+
+    finding = gepa_metric_call_budget(evidence)
+    assert finding.status is AuditStatus.PASS, finding.detail
+
+
+def test_the_exemption_does_not_excuse_continuing_past_the_ceiling(
+    gepa_run_dir, tmp_path
+) -> None:
+    """A declared failure covers stopping early, not overspending.
+
+    The past-the-ceiling check stays a thing the harness controls whatever
+    upstream did, so the exemption is scoped to the below-ceiling stop
+    alone. A ceiling of 1 makes the run's own steps overshoot it.
+    """
+    evidence = _with_declared_failure(
+        _raised_ceiling_evidence(gepa_run_dir, tmp_path, 1),
+        "declared, but the run still overspent",
+    )
+
+    finding = gepa_metric_call_budget(evidence)
+    assert finding.status is AuditStatus.FAIL
+    assert "at or past the ceiling" in finding.detail

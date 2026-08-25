@@ -12,12 +12,17 @@ They are **committed rather than generated at test time** so the audit's
 read paths are exercised against a real recorded run without the audit's
 own tests depending on a whetstone-ai source checkout being present.
 
-Because they are recorded, they carry a pinned `EvalEvidence` schema
-version and must be **regenerated whenever whetstone-ai changes it** —
-the audit validates the stored records, so a fixture written under an
-older version fails `reported_numbers_resolve` with "cites
-whetstone.eval_evidence which is not eval evidence". They currently carry
-v6 (whetstone-ai 0.1.13).
+Because they are recorded, they carry pinned schema versions and must be
+**regenerated whenever whetstone-ai changes one**. Two ways they break:
+
+- an `EvalEvidence` version bump fails `reported_numbers_resolve` with
+  "cites whetstone.eval_evidence which is not eval evidence";
+- an `OPTIM_RUN` or `STEP_REQUEST` version bump changes the content hash
+  a record self-addresses by, so `result.json` fails to validate at all
+  with "Optimization Run record_ref must address the exact run".
+
+They currently carry `EvalEvidence` v6 and `OPTIM_RUN`/`STEP_REQUEST` v4
+(whetstone-ai 0.1.15).
 
 ## Regenerating
 

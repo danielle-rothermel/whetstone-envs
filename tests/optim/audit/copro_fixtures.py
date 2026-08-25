@@ -139,9 +139,34 @@ def with_control_field(
     return _save(run_dir, document)
 
 
-def short_of_configured_breadth(source: Path, destination: Path) -> Path:
-    """A run whose rounds measured fewer occurrences than breadth."""
-    return with_control_field(source, destination, breadth=5)
+def over_configured_breadth(source: Path, destination: Path) -> Path:
+    """A run whose round measured more occurrences than breadth allows.
+
+    Overfilling is the defect, not underfilling. A round that realized
+    fewer drafts than it requested is a stochastic outcome the audit
+    records and passes -- a proposer call can fail, a draft can be
+    rejected -- but a round carrying *more* occurrences than the
+    configured breadth measured candidates nobody budgeted for, which no
+    infrastructure failure produces.
+
+    The extra occurrence is added to the round rather than subtracted
+    from the control, because lowering ``breadth`` would also shrink the
+    proposal budget that ``COPRO_DEPTH_STEPS`` and ``COPRO_INTERNAL_ONLY``
+    read -- and a fixture that trips three invariants cannot show that
+    this one owns the defect.
+
+    The copy gets its own request id: a Step Result refuses duplicate Eval
+    Request IDs, so a verbatim duplicate would fail schema validation
+    rather than reach the audit as the overfilled round it is meant to be.
+    """
+
+    def overfill(intents: list[Any]) -> list[Any]:
+        extra = json.loads(json.dumps(intents[-1]))
+        request = extra["optim_eval_request"]["eval_request"]
+        request["request_id"] = f"{request['request_id']}:overfill"
+        return [*intents, extra]
+
+    return mutate_run(source, destination, FIRST_STEP_INTENTS, overfill)
 
 
 def short_of_configured_depth(source: Path, destination: Path) -> Path:
@@ -286,9 +311,9 @@ __all__ = [
     "LOSING_INTENT_REWARD",
     "evaluation_off_the_internal_split",
     "evaluation_recorded_as_search",
+    "over_configured_breadth",
     "round_missing_an_occurrence",
     "seed_the_search_never_used",
-    "short_of_configured_breadth",
     "short_of_configured_depth",
     "two_proposals_sharing_one_base",
     "unselected_candidate_scored_higher",

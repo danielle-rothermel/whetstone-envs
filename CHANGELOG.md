@@ -6,6 +6,143 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Stochastic and infrastructure outcomes degrade a claim instead of
+  aborting a stage.** Under the standing ruling that the study cannot
+  require perfection from its infrastructure, three gates that demanded
+  exactness of provider behaviour are relaxed to record-and-degrade. Every
+  deterministic invariant -- pre-registration and design hashes, L2/L3
+  once-only selection and held-out claims, split disjointness, ledger
+  conservation -- is unchanged and still exact.
+
+  A task that lost every repeat no longer refuses its evaluation. It keeps
+  its position in the reported per-task vector with an achieved count of
+  zero, so O7's completeness weighting drives its contribution to nothing,
+  the vector stays aligned with the naive anchor's and the paired delta
+  stays paired, and the loss lowers the row's achieved completeness until
+  the report reads it as `VERDICT_INCOMPLETE`. The 90% task-completeness
+  floor is unchanged and is now what bounds the loss: a fully-lost task is
+  incomplete by construction, so both kinds of shortfall accumulate against
+  one bound rather than two rules, and an evaluation below it still refuses
+  to report a number. The previous rule fired on the *first* lost task, and
+  because it fired inside a reporting stage it discarded every other arm's
+  already-paid evidence and left no manifest at all. `measured_per_task`
+  (renamed from `_measured_per_task`) and the analysis pass's paired-length
+  check follow the same change; `_mean_of`'s fallback averages only the
+  tasks that produced a value, so the zero-weight placeholder never reads
+  as a task that scored zero.
+
+  Anchor calibration is deliberately *not* relaxed. An anchor is the
+  reference every arm's delta is measured against, so Stage 0 still refuses
+  a calibration that cannot meet its presence floor.
+
+- **The COPRO breadth audit accepts a realized round.**
+  `COPRO_BREADTH_PER_DEPTH` checked every round for exactly
+  `control.breadth` occurrences; it now accepts 1..`breadth` and reports the
+  realized counts, because a draft can be lost to an infra failure, a
+  template that fails validation, or a duplicate. Overfilling and a round
+  that measured nothing still fail, and the round count against
+  `control.depth` stays exact. At the pinned breadth 6 / depth 3 the old
+  equality made a couple of percent of bad drafts a majority chance of
+  losing a Stage-2 arm to one unlucky draft.
+
+- **The in-search reward policy sets `missing_data="skip"` explicitly.** It
+  previously inherited `RewardPolicy`'s `fail` default, which put the
+  stricter rule inside the looser one: a minute-long provider outage
+  costing a tenth of one minibatch aborted an optimizer run that the
+  aggregation layer -- already at `skip` with a 10% row tolerance -- was
+  prepared to tolerate.
+
+- **The GEPA metric-call audit exempts a declared terminal failure.** A run
+  that terminalized below its ceiling having declared why is no longer
+  flagged, matching the exemption `copro_search_depth` already had. Without
+  it a declared failure was reported twice, the second time as a budget
+  violation that downgraded the arm for the infrastructure's behaviour. The
+  monotonicity and past-the-ceiling checks are not exempted.
+
+### Fixed
+
+- **A held-out evaluation refused after billing no longer wedges the
+  study.** The claim is written before the provider call, so a refusal
+  *after* the call left it outstanding forever -- indistinguishable, on
+  resume, from a process that died mid-call, and therefore neither
+  re-issuable nor writable off. Recovery was hand-editing `study.json` or
+  discarding a Stage 2 of paid runs. `HeldOutClaimRecord` gains a `refusal`
+  field and a `settled` property, the ledger gains `refuse_held_out` and
+  `refused_claim_for`, and a refused evaluation settles its claim durably
+  with its reason.
+
+  A resumed arm whose claim was settled as refused is **returned** with
+  `ArmReport.held_out = None` rather than raised over: it keeps its
+  selection and official scores, contributes no held-out row, and the
+  report renders it `VERDICT_UNMEASURED`, so the pass finishes and every
+  other arm still reports the number it was paid for. `held_out` is
+  therefore `HeldOutMeasurement | None`, and `_measurements_by_name` skips
+  an arm without one rather than substituting a placeholder.
+
+  Only a **deterministic post-billing judgement** settles a claim. The new
+  `HeldOutRefusalError` is raised by `RoleScorer.evidence_for` after pricing,
+  and it is the only exception `_evaluate_claimed` writes off. A transient
+  failure -- a connection reset, a 503, an OOM -- may never have reached
+  the provider and could well succeed on the next attempt, so it
+  propagates untouched and leaves the claim outstanding and resumable;
+  `KeyboardInterrupt` and other `BaseException`s escape without settling by
+  design rather than by inheritance. L3's once-only rule is untouched: a
+  settled claim is still spent, and an outstanding one is still refused.
+
+- **The anchors resume from their claims, completed or refused.**
+  `completed_claim_for` was consulted only for arms, while the anchor pass
+  runs *last* -- after every arm has been scored and measured. A crash
+  anywhere in the reporting pass therefore left the anchors with durable L3
+  claims that refused a second evaluation and no code path reading them
+  back, so the resumed pass re-issued the call, was refused, and wedged a
+  study that had already paid for essentially all of its rows. The resume
+  now reads both states: a completed claim replays, and a refused one is
+  omitted from the returned mapping rather than re-issued into
+  `claim_held_out`'s any-claim rejection -- which stays as it is, since
+  that rejection is L3 working correctly.
+
+  A refused **ceiling** anchor is narrow: no arm's delta is measured
+  against it, so every arm still reports against naive and the study simply
+  carries no ceiling row. A refused **naive** anchor is fatal and says so
+  -- every delta is measured against it, so there is nothing to degrade to,
+  and the refusal names the consequence and the recovery instead of reading
+  as an anchor nobody got around to measuring.
+
+- Verified `bootstrap_paired_delta_ci` and `holm_adjust` on all-identical
+  (zero-variance) resample sets, an unverified gap in the audit. Both are
+  well behaved -- finite, ordered intervals collapsing onto the point
+  estimate, `p = 1.0` with no effect -- so no fix was needed, and tests now
+  pin it.
+
+### Added
+
+- **Pins published whetstone-ai 0.1.15.** Blank generations are now scored
+  failing samples: a `SUCCESS` row carrying failure code
+  `blank-provider-generation`, rather than a missing row, so a candidate
+  that reliably blanks can no longer improve its apparent completeness by
+  failing. `ExecutedRowState.INVALID` remains reachable through provider
+  refusals, and `Observation.trace_state` already admits it. Anchor
+  calibration gains a 0.9 presence floor and deterministic balanced
+  subsetting to equal per-task depth -- `run_anchor_calibration` takes a
+  `store` to read the row-level outputs balancing needs, threaded through
+  `run_stage0` and `calibrate_role`. COPRO gains shortfall tolerance,
+  recording `proposal_shortfall`, terminalizing on best-so-far, and adding
+  `copro_proposal_round_empty`; `OPTIM_RUN`/`STEP_REQUEST` go schema v3→v4,
+  which changes the content hash a record self-addresses by, so the
+  committed Codex audit fixtures are regenerated. MIPROv2 replay
+  memoization is a behavioural no-op.
+
+- Protocol document revision item 20 (2026-08-25) states the tolerance in
+  the pre-registration itself: §3.9 on degrading rather than aborting, on
+  blank generations as scored failures, and on anchor calibration's floor
+  and balancing; the invariant table on 1..`breadth`. The pre-registered
+  quantities -- breadth 6, depth 3, the K values, the 90% floor -- are
+  unchanged and remain what the design *requests*, with realized counts
+  recorded as measurement. `PROTOCOL_DOC_SHA256` is re-pinned to
+  `ec650113...`; `0dfd0c47...` is historical.
+
 ## [0.2.5] - 2026-08-24
 
 ### Added

@@ -136,8 +136,20 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: request correctness, read off the manifest's recorded provider call
 #: config and enforced as a refusal before a paid bind is written, rather
 #: than billed reasoning tokens, which no provider guarantees.
+#: ``0dfd0c47...`` is historical in turn: item 20 (2026-08-25) states the
+#: study's tolerance for stochastic and infrastructure outcomes, under
+#: Danielle's ruling that the protocol cannot require perfection from its
+#: infra. §3.9 now says a fully-lost task degrades the claim to
+#: ``incomplete (not claimed)`` rather than aborting its stage, that blank
+#: generations are scored failing samples rather than missing rows, and
+#: that anchor calibration floors at 90% presence and balance-subsets the
+#: two anchors to equal per-task depth; the COPRO breadth invariant now
+#: reads 1..``breadth`` with the shortfall recorded. The pre-registered
+#: quantities are unchanged -- breadth 6, depth 3, the K values, and the
+#: 90% floor are still what the design *requests*, and realized counts are
+#: measurement.
 PROTOCOL_DOC_SHA256 = (
-    "0dfd0c47b9ebc909a4832a19536fcf6a7cd5121abb4b0feb586722d3f952769b"
+    "ec6501136e5a87884399c403cf8f26ec74239887bdcf68e7854c95bd4cad1d53"
 )
 
 

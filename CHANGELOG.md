@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   blocks a directory forever nor impersonates a live run; a lock from
   another host, or one too corrupt to read, is treated as live rather than
   guessed at. The lock is released on both the normal and the failing path.
+  The `null-identity` control deliberately stays outside the lock: it
+  creates no run directory at all -- its record's `artifact_dir` is a
+  computed path, and it writes one content-addressed record without
+  reaching `run_optimizer` or a provider -- so two invocations of one
+  control converge on the same evidence pointer instead of contending. That
+  premise is now pinned by a test rather than assumed.
 
 ## [0.2.8] - 2026-08-25
 

@@ -548,6 +548,17 @@ class StudyOptimizerRunner:
             # Null-B proposes nothing, so there is no search to drive and
             # no optimizer-fidelity invariant to audit. Its whole evidence
             # is the seed evaluated through the report harness.
+            #
+            # Deliberately outside the run-directory lock below: null-B
+            # never creates ``run_dir``. Its record's ``artifact_dir`` is a
+            # computed path, and ``_run_null`` writes one content-addressed
+            # record to the study's store without reaching ``run_optimizer``
+            # or a provider. There is no directory to contend over, and two
+            # invocations of one control converge on the same evidence
+            # pointer rather than interleaving. Locking here would guard
+            # nothing while implying to a later reader that it guarded
+            # something. ``test_null_b_writes_no_run_directory_to_contend_
+            # over`` pins that premise, so this stops being true loudly.
             return self._run_null(arm=arm, seed=seed, run_id=run_id)
         if arm.optimizer not in OPTIMIZER_ARM_IDS:
             known = sorted(OPTIMIZER_ARM_IDS)

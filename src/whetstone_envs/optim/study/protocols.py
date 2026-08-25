@@ -148,8 +148,15 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: quantities are unchanged -- breadth 6, depth 3, the K values, and the
 #: 90% floor are still what the design *requests*, and realized counts are
 #: measurement.
+#: ``ec650113...`` is historical in turn, and unlike the digests above it
+#: was a digest a study actually ran against: it is the revision in force
+#: for attempt 3 of Stage 0, the ``minimal`` probe. Item 21 (2026-08-25)
+#: supersedes it by re-pinning the task model's reasoning effort from
+#: ``minimal`` to ``low`` on the evidence that probe produced -- a gate
+#: failure on ceiling capability rather than on power -- and by recording
+#: that probe's numbers in the document as the provenance for the change.
 PROTOCOL_DOC_SHA256 = (
-    "ec6501136e5a87884399c403cf8f26ec74239887bdcf68e7854c95bd4cad1d53"
+    "17ad9c013b8772caf282a441d63efa8a4d254213dd4c5e056a1dd64dc2ae4ed0"
 )
 
 
@@ -203,7 +210,19 @@ PROPOSER_MODEL = "openai/gpt-5.4-nano"
 #: :func:`~whetstone_envs.optim.study.manifest.pre_registration_design_hash`
 #: and it is **not** a sized field: the toy and the real study run the same
 #: effort or they are not the same protocol.
-TASK_REASONING_EFFORT = ReasoningEffort.MINIMAL
+#:
+#: ``minimal`` is historical (item 19, 2026-08-24). It was probed and its
+#: Stage-0 gate failed on task-model capability rather than on power: the
+#: ceiling anchor scored 0.1977 against the 0.30 floor and left 0.1897 of
+#: headroom against the 0.20 minimum, while the naive anchor (0.008) and
+#: the measured MDE (0.0446) both passed. The contrast that identifies the
+#: cause is attempt 2, run at the route's default effort, whose ceiling was
+#: 0.8068 on the same design -- a task the model can do, made undoable by
+#: the effort it was asked to spend. Item 21 (2026-08-25) therefore re-pins
+#: the effort to ``low`` and probes Stage 0 again. Re-pinning is a design
+#: change: it moves the pre-registration's design hash, so a study
+#: initialised under ``minimal`` cannot be continued under this value.
+TASK_REASONING_EFFORT = ReasoningEffort.LOW
 
 #: What a projection with no Codex arm appends to the study id, so a
 #: rehearsal's artifacts can never be mistaken for the study's.

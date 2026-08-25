@@ -6,6 +6,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The Step 10 c19 task model's reasoning effort is re-pinned from
+  `minimal` to `low`** (protocol revision item 21). The `minimal` pin was
+  probed and its Stage-0 gate failed on the task model's *capability*
+  rather than on the design's power: the ceiling anchor scored **0.1977**
+  against the gate's 0.30 floor, leaving **0.1897** of headroom against the
+  0.20 minimum, while the two conditions that speak to power both passed --
+  naive at **0.008** and the measured MDE at **0.0446**. Attempt 2 of the
+  same design at the route's default effort measured a ceiling of
+  **0.8068**, which is what identifies the effort rather than the task as
+  the cause.
+
+  Everything the original pin established is unchanged: the effort is still
+  design rather than an invocation setting, still hashed into
+  `pre_registration_design_hash`, still not a sized field, and still
+  enforced as a refusal before any paid bind is written. Only the value
+  moves. Because it is hashed, the re-pin moves the design hash, so a study
+  initialised under `minimal` cannot be continued under this one. The
+  protocol document records the probe's numbers as the provenance for the
+  change and `PROTOCOL_DOC_SHA256` is re-pinned accordingly, with
+  `ec650113...` -- the revision in force for the `minimal` probe -- kept as
+  a historical digest.
+
+### Added
+
+- **Stage 0's gate verdict is persisted, as `stage0_gate`.** The manifest
+  previously carried only the three numbers the gate *consumed*
+  (`mde_measured`, `tau_sq`, `sigma_sq`, all on the design block) and never
+  the verdict those numbers produced, nor the two held-out anchor means its
+  most consequential conditions are read off. Stage 0 deliberately does not
+  abort on a failed gate, so a failed calibration and a passed one left
+  manifests distinguishable only by values a reader had to re-derive the
+  gate from -- which is the gate's own arithmetic, repeated against the raw
+  evidence store by whoever is least placed to do it.
+
+  The record carries `passed`, `naive_mean`, `ceiling_mean`, `headroom`,
+  `mde_measured`, and one row per gate condition with its name, verdict,
+  observed value, threshold, and the gate's own detail sentence. It is
+  written in the same manifest update as `design`, and `passed` is recorded
+  whether or not it did. `whetstone-study plan` renders it as a `stage0
+  gate` block showing PASS/FAIL per condition with each margin, so the
+  verdict is readable without loading the manifest in a Python session. The
+  no-abort semantics are unchanged.
+
+  Manifest schema **v13**. Recorded rather than hashed, on the same line
+  `mde_measured` already sits on: it is what Stage 0 measured about the
+  design, not what the design pre-registered, so two studies of one design
+  that calibrate to different anchors still pre-register identically.
+
 ## [0.2.6] - 2026-08-25
 
 ### Changed

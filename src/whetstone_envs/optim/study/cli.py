@@ -13,18 +13,20 @@ its call budget. That keeps the pre-spend answer ("what is this about to
 cost?") available before the harness exists and without touching a
 provider.
 
-Injection is by protocol, not by import. All three collaborators default
-to the real implementations -- :func:`load_study_spec` over the study's own
-manifest, :func:`run_stage` over the stage harness, and
-:func:`default_report_generator` over the report package. Tests pass their
-own collaborators, which is how the ordering and the wiring are verified
-separately.
+Injection is by protocol, not by import. Every collaborator defaults to the
+real implementation -- :func:`load_study_spec` over the study's own
+manifest, :func:`default_stage_ledger` and :func:`default_stage0_gate` over
+what that manifest has recorded, :func:`run_stage` over the stage harness,
+and :func:`default_report_generator` over the report package. Tests pass
+their own collaborators, which is how the ordering and the wiring are
+verified separately.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -78,6 +80,7 @@ from whetstone_envs.optim.study.manifest import (
     LeakageCheckRecord,
     RunSpendRecord,
     SplitName,
+    Stage0GateRecord,
     StageId,
     StageRecord,
     TransportName,
@@ -191,6 +194,32 @@ def default_stage_ledger(study_dir: Path) -> tuple[StageRecord, ...]:
         return read_study_manifest(study_dir).stages
     except (OSError, ValueError, DocumentFileError):
         return ()
+
+
+class Stage0GateLoader(Protocol):
+    """Load Stage 0's recorded gate verdict, or ``None``.
+
+    Separate from :class:`StageLedgerLoader` for the reason that one is:
+    the stage ledger says what a stage *bought*, and the gate says what
+    Stage 0 *concluded*. A caller stubbing the ledger is not thereby
+    asserting a verdict, and ``plan`` before the first stage has neither.
+    """
+
+    def __call__(self, study_dir: Path) -> Stage0GateRecord | None: ...
+
+
+def default_stage0_gate(study_dir: Path) -> Stage0GateRecord | None:
+    """The study's own recorded gate verdict, or ``None``.
+
+    ``None`` on a missing or unreadable manifest, on the same terms as
+    :func:`default_stage_ledger`: ``plan`` is the command run *before*
+    Stage 0, and a study that has not calibrated has no verdict rather
+    than a broken one.
+    """
+    try:
+        return read_study_manifest(study_dir).stage0_gate
+    except (OSError, ValueError, DocumentFileError):
+        return None
 
 
 class StageRunner(Protocol):
@@ -657,6 +686,80 @@ def stage_spend_lines(
     return tuple(lines)
 
 
+#: How the gate block is labelled. ``MEASURED`` on the same terms as the
+#: spend table above it: these are Stage 0's anchor measurements and the
+#: verdict they produced, not the design's pre-registered projections.
+STAGE0_GATE_HEADING = (
+    "stage0 gate (MEASURED at calibration; all four conditions must hold):"
+)
+
+#: What ``plan`` prints before Stage 0 has run. Not an error: ``plan`` is
+#: the command an operator runs to decide whether to *buy* Stage 0.
+NO_STAGE0_GATE = "stage0 has not run; no gate verdict recorded"
+
+
+@verify(UNIQUE)
+class GateVerdict(StrEnum):
+    """The two words the gate block prints, as one closed group.
+
+    An enum rather than two constants because they are read together and
+    only ever together: a block that printed a third word, or spelled one
+    of these differently in one place, would be describing a verdict the
+    gate does not have. Explicit values -- the rendering is upper-case and
+    the member names are not.
+    """
+
+    PASS = "PASS"  # noqa: S105 - a gate verdict, not a credential
+    FAIL = "FAIL"
+
+    @classmethod
+    def of(cls, *, passed: bool) -> GateVerdict:
+        return cls.PASS if passed else cls.FAIL
+
+
+#: The two verdict words, exposed as literals so a caller comparing
+#: rendered output does not reach into the enum.
+GATE_PASS = GateVerdict.PASS.value
+GATE_FAIL = GateVerdict.FAIL.value
+
+
+def stage0_gate_lines(gate: Stage0GateRecord | None) -> tuple[str, ...]:
+    """Stage 0's recorded verdict, condition by condition.
+
+    Printed because a gate failure is the finding that decides whether the
+    next stage is worth buying, and Stage 0 deliberately does not abort on
+    one: without this block an operator reading ``plan`` cannot tell a
+    calibrated, powered study from a calibrated, underpowered one.
+
+    Each condition prints its observed value against its threshold rather
+    than its verdict alone. A gate that failed by 0.0001 and one that
+    failed by 0.4 call for different decisions, and the margin is the whole
+    of that difference.
+    """
+    lines = ["", STAGE0_GATE_HEADING]
+    if gate is None:
+        lines.extend((f"  {NO_STAGE0_GATE}", ""))
+        return tuple(lines)
+    lines.extend(
+        (
+            f"  verdict: {GateVerdict.of(passed=gate.passed)}",
+            f"  naive={gate.naive_mean:.4f}  "
+            f"ceiling={gate.ceiling_mean:.4f}  "
+            f"headroom={gate.headroom:.4f}  "
+            f"MDE={gate.mde_measured:.4f}",
+            f"  {'condition':<24}{'':<6}{'observed':>12}{'threshold':>12}",
+        )
+    )
+    lines.extend(
+        f"  {condition.name:<24}"
+        f"{GateVerdict.of(passed=condition.passed):<6}"
+        f"{condition.observed:>12.4f}{condition.threshold:>12.4f}"
+        for condition in gate.conditions
+    )
+    lines.append("")
+    return tuple(lines)
+
+
 # --------------------------------------------------------------------------
 # subcommand bodies
 # --------------------------------------------------------------------------
@@ -764,6 +867,7 @@ def _run_plan(
     study_dir: Path,
     load_spec: StudySpecLoader | None,
     load_stages: StageLedgerLoader,
+    load_stage0_gate: Stage0GateLoader,
 ) -> int:
     if load_spec is None:
         print(
@@ -777,6 +881,9 @@ def _run_plan(
     # two are printed together because that is the comparison an operator
     # authorizing the next stage is making.
     _emit(stage_spend_lines(load_stages(study_dir)))
+    # And then whether the design the budget prices is powered enough to
+    # be worth buying, which is the other half of that decision.
+    _emit(stage0_gate_lines(load_stage0_gate(study_dir)))
     return EXIT_OK
 
 
@@ -1478,11 +1585,12 @@ def default_report_generator(
     return generate_study_report(manifest=manifest, out_dir=out_dir)
 
 
-def _dispatch(
+def _dispatch(  # noqa: PLR0913
     arguments: argparse.Namespace,
     *,
     load_spec: StudySpecLoader,
     load_stages: StageLedgerLoader,
+    load_stage0_gate: Stage0GateLoader,
     run_stage: StageRunner,
     generate_report: ReportGenerator,
 ) -> int:
@@ -1506,6 +1614,7 @@ def _dispatch(
             study_dir=arguments.study_dir,
             load_spec=load_spec,
             load_stages=load_stages,
+            load_stage0_gate=load_stage0_gate,
         )
     if arguments.command == "run":
         return _run_stage(
@@ -1535,21 +1644,23 @@ def _dispatch(
     return _run_manifest_check(path=arguments.path, store_path=arguments.store)
 
 
-def main(
+def main(  # noqa: PLR0913
     argv: Sequence[str] | None = None,
     *,
     load_spec: StudySpecLoader | None = None,
     load_stages: StageLedgerLoader | None = None,
+    load_stage0_gate: Stage0GateLoader | None = None,
     run_stage: StageRunner | None = None,
     generate_report: ReportGenerator | None = None,
 ) -> int:
     """Dispatch one study subcommand.
 
-    All three collaborators default to the real implementations -- the
-    manifest-backed spec loader, the stage harness, and the report package's
-    generator -- so the CLI is the study's actual entry point rather than a
-    shell around one. Tests pass their own collaborators, which is how the
-    ordering is verified independently of the wiring.
+    Every collaborator defaults to the real implementation -- the
+    manifest-backed spec loader, the stage ledger and gate readers, the
+    stage harness, and the report package's generator -- so the CLI is the
+    study's actual entry point rather than a shell around one. Tests pass
+    their own collaborators, which is how the ordering is verified
+    independently of the wiring.
 
     Three exit codes, and the distinction between the last two matters to a
     caller scripting the stages: ``0`` the command did what was asked,
@@ -1564,6 +1675,7 @@ def main(
             arguments,
             load_spec=load_spec or load_study_spec,
             load_stages=load_stages or default_stage_ledger,
+            load_stage0_gate=load_stage0_gate or default_stage0_gate,
             run_stage=run_stage or default_stage_runner,
             generate_report=generate_report or default_report_generator,
         )
@@ -1596,6 +1708,8 @@ __all__ = [
     "EXIT_CHECK_FAILED",
     "EXIT_ERROR",
     "EXIT_OK",
+    "GATE_FAIL",
+    "GATE_PASS",
     "MDE_HEADING",
     "MDE_TAU_SQ_CASES",
     "MEASURED_LABEL",
@@ -1603,21 +1717,26 @@ __all__ = [
     "MIXED_RUN_WIDTHS",
     "NOT_CHECKED",
     "NO_RECORDED_SPEND",
+    "NO_STAGE0_GATE",
     "NO_STAGES_RUN",
     "OPTIMIZER_BUDGET_HEADING",
     "PROGRAM_NAME",
+    "STAGE0_GATE_HEADING",
     "STAGE_SPEND_HEADING",
     "UNLEDGERED_SPEND",
     "ReportGenerator",
+    "Stage0GateLoader",
     "StageLedgerLoader",
     "StageRunner",
     "StudySpecLike",
     "StudySpecLoader",
     "build_parser",
     "default_report_generator",
+    "default_stage0_gate",
     "default_stage_ledger",
     "default_stage_runner",
     "main",
     "plan_lines",
+    "stage0_gate_lines",
     "stage_spend_lines",
 ]

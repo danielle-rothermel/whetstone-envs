@@ -147,6 +147,93 @@ def test_stage0_records_a_failed_gate_rather_than_erasing_it(
     assert read_study_manifest(study_dir).design is not None
 
 
+def test_stage0_persists_its_gate_verdict(tmp_path: Path) -> None:
+    """The verdict reaches ``study.json``, not only the returned result.
+
+    Before this, the design block carried the three numbers the gate
+    *consumed* -- ``mde_measured``, ``tau_sq``, ``sigma_sq`` -- and the
+    verdict itself lived only in the Stage-0 process. Establishing whether
+    a study was powered meant re-deriving the gate from the raw evidence
+    store, which is the gate's own arithmetic done a second time by
+    whoever is least placed to do it.
+
+    Fails-before: ``StudyManifest`` had no ``stage0_gate`` field at all, so
+    every assertion below raised or read ``None``.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        result = run_stage0_into_manifest(
+            study_dir=study_dir, environment=environment
+        )
+    assert result.stage0 is not None
+
+    # Read back off disk, not off the in-memory copy: durability is the
+    # whole point, and an assertion on the returned object would pass
+    # against a manifest that never wrote the record.
+    gate = read_study_manifest(study_dir).stage0_gate
+    assert gate is not None
+    assert gate.passed == result.stage0.gate.passed
+    assert gate.headroom == result.stage0.gate.headroom
+    assert gate.mde_measured == result.stage0.gate.mde_measured
+    # The two anchor means live on the gate's *inputs* rather than on its
+    # verdict, and three of the four conditions are read off them, so a
+    # record without them states verdicts whose subject is unrecoverable.
+    assert gate.naive_mean == result.stage0.inputs.naive_mean
+    assert gate.ceiling_mean == result.stage0.inputs.ceiling_mean
+    # All four conditions, in the gate's own order, with their margins.
+    assert [condition.name for condition in gate.conditions] == [
+        "headroom",
+        "naive_not_saturated",
+        "ceiling_not_floored",
+        "mde_resolves_headroom",
+    ]
+    assert [condition.passed for condition in gate.conditions] == [
+        outcome.passed for outcome in result.stage0.gate.outcomes
+    ]
+    for condition, outcome in zip(
+        gate.conditions, result.stage0.gate.outcomes, strict=True
+    ):
+        assert condition.observed == outcome.observed
+        assert condition.threshold == outcome.threshold
+        assert condition.detail == outcome.detail
+
+
+def test_a_failed_gate_is_recorded_without_aborting_stage0(
+    tmp_path: Path,
+) -> None:
+    """``passed=false`` is written, and Stage 0 still completes.
+
+    The no-abort semantics are the existing contract: a failed gate is an
+    underpowered design, which the study reports rather than treats as an
+    error, and the calibration it just paid for is not discarded. Adding
+    the record must not turn a failure into a refusal, so this asserts
+    both halves -- the verdict is false, *and* the design, the
+    pre-registration, and the stage record all landed anyway.
+
+    On the fake transport both anchors score identically, so the gate is
+    genuinely refused rather than made to fail by a stub.
+
+    Fails-before: nothing persisted ``passed`` at all, so a failed Stage 0
+    and a passed one left indistinguishable manifests.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        run_stage0_into_manifest(study_dir=study_dir, environment=environment)
+
+    manifest = read_study_manifest(study_dir)
+    gate = manifest.stage0_gate
+    assert gate is not None
+    assert gate.passed is False
+    assert any(not condition.passed for condition in gate.conditions)
+    # Stage 0 completed: it did not raise above, and everything it records
+    # is on the manifest beside the failed verdict.
+    assert manifest.design is not None
+    assert manifest.pre_registration is not None
+    assert [entry.stage for entry in manifest.stages] == ["stage0"]
+
+
 def test_stage0_refuses_a_study_that_declared_no_arms(
     tmp_path: Path,
 ) -> None:

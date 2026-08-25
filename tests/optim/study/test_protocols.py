@@ -95,11 +95,15 @@ def test_the_protocol_pins_the_task_models_reasoning_effort() -> None:
     the task model's capability, so an effort chosen after Stage 0 measured
     the anchors would change the treatment under a pre-registration that
     had already named it. Pinned as a literal here so the value cannot
-    drift silently -- ``minimal`` is what Danielle ratified, and a change
-    to it is a change to the study.
+    drift silently -- ``low`` is what Danielle ratified, and a change to it
+    is a change to the study.
+
+    ``minimal`` is historical (item 19). Its Stage-0 probe failed the gate
+    on capability rather than power -- ceiling 0.1977 against the 0.30
+    floor -- so item 21 re-pinned the effort to ``low``.
     """
-    assert TASK_REASONING_EFFORT is ReasoningEffort.MINIMAL
-    assert TASK_REASONING_EFFORT.value == "minimal"
+    assert TASK_REASONING_EFFORT is ReasoningEffort.LOW
+    assert TASK_REASONING_EFFORT.value == "low"
     assert STEP10_C19.task_reasoning_effort is TASK_REASONING_EFFORT
 
 

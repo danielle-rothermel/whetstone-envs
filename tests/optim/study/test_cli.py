@@ -33,14 +33,18 @@ from whetstone_envs.optim.study.cli import (
     EXIT_CHECK_FAILED,
     EXIT_ERROR,
     EXIT_OK,
+    GATE_FAIL,
+    GATE_PASS,
     MEASURED_BASIS_BY_ARM,
     MEASURED_BASIS_DEFAULT,
     MEASURED_LABEL,
     MEASURED_TASK_CALLS_BY_ARM,
     NO_ESTIMATE,
+    NO_STAGE0_GATE,
     NOT_CHECKED,
     OPTIMIZER_BUDGET_HEADING,
     PROGRAM_NAME,
+    STAGE0_GATE_HEADING,
     build_parser,
     main,
     plan_lines,
@@ -785,6 +789,62 @@ def test_plan_reads_the_design_stage0_measured(tmp_path: Path, capsys) -> None:
     assert "splits: internal=4 official=4 held_out=6" in out
     assert "copro" in out
     assert "null-identity" in out
+
+
+def test_plan_renders_the_recorded_stage0_gate(tmp_path: Path, capsys) -> None:
+    """The verdict is readable from ``plan``, without reading code.
+
+    A gate failure is the finding that decides whether the next stage is
+    worth buying, and Stage 0 does not abort on one. Before this, the only
+    way to establish it was to load ``study.json`` in a Python session or
+    re-derive the gate from the evidence store.
+
+    The fake transport scores both anchors identically, so this exercises
+    a real ``FAIL`` rather than a stubbed one, and the per-condition rows
+    are what say *which* condition failed.
+
+    Fails-before: ``plan`` printed no gate block at all.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    main(["run", "--study-dir", str(study_dir), "--stage", "stage0"])
+    capsys.readouterr()
+
+    assert main(["plan", "--study-dir", str(study_dir)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert STAGE0_GATE_HEADING in out
+    assert f"verdict: {GATE_FAIL}" in out
+    # Every condition the gate ran, named, so the block says which one
+    # refused rather than only that something did.
+    for name in (
+        "headroom",
+        "naive_not_saturated",
+        "ceiling_not_floored",
+        "mde_resolves_headroom",
+    ):
+        assert name in out
+    # The margins, not merely the verdicts: a gate that failed by 0.0001
+    # and one that failed by 0.4 call for different decisions.
+    assert "observed" in out
+    assert "threshold" in out
+
+
+def test_plan_before_stage0_says_there_is_no_gate_yet(
+    tmp_path: Path, capsys
+) -> None:
+    """An uncalibrated study has no verdict, which is not an error.
+
+    ``plan`` is the command an operator runs to decide whether to *buy*
+    Stage 0, so a missing verdict is stated rather than fabricated or
+    treated as a failure.
+    """
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    assert main(["plan", "--study-dir", str(study_dir)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert STAGE0_GATE_HEADING in out
+    assert NO_STAGE0_GATE in out
+    assert GATE_PASS not in out
 
 
 def test_plan_labels_the_optimizer_budget_as_an_estimate(

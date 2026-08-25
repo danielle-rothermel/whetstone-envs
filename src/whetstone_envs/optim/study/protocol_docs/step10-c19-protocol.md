@@ -57,8 +57,18 @@ revision 1 said something different.
 | 16 | §6 Codex evidence | unbounded → **one real Codex-direct run**, artifacts historical evidence only | note 20 |
 | 17 | L1's mechanical form | "the internal Eval Config ref" → **the evaluated task set is contained in the internal split**, checked on all three evaluation surfaces | this revision (2026-08-23), §3.2 |
 | 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**, paired with a **per-task completeness floor** at 90% of planned tasks measured to full depth. The row tolerance alone cannot see a fully-lost task — at 76 tasks × 4 repeats one lost task is 1.3% of rows, inside the bound, yet it is dropped from the task mean's denominator and biases the reported mean upward. (Item 20 later replaced this item's *unconditional* refusal on any fully-lost task with a degraded verdict; the 90% floor is unchanged.) Paid transports additionally retry transient failures (429/5xx/timeout, **5 attempts total per logical call**, 2–32 s exponential backoff with jitter, `Retry-After` **delta-seconds** honoured and bounded at 120 s; the HTTP-date form is ignored by design, since resolving it against two clocks is least reliable exactly when it matters) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. The 5 attempts are spent inside the transport wrapper, which is the sole owner of the retry budget; whetstone's driver is pinned to a single attempt so the two loops cannot multiply. | this revision (2026-08-23), §3.9 and O7 |
-| 19 | Task-model reasoning effort | unpinned ("this protocol accepts the spend and does not pin reasoning effort") → **pinned `minimal`** on the task route, hashed into the pre-registered design and **enforced**: every paid bind — the reporting pass and the in-search evaluations alike — reports its effort into the manifest, and a bind disagreeing with the design is refused before it bills. The proposer route stays unpinned. | Danielle, 2026-08-24 |
+| 19 | Task-model reasoning effort | unpinned ("this protocol accepts the spend and does not pin reasoning effort") → **pinned `minimal`** on the task route, hashed into the pre-registered design and **enforced**: every paid bind — the reporting pass and the in-search evaluations alike — reports its effort into the manifest, and a bind disagreeing with the design is refused before it bills. The proposer route stays unpinned. (The *value* is superseded by item 21; the pin, the hashing, and the enforcement are unchanged.) | Danielle, 2026-08-24 |
 | 20 | Tolerance for stochastic outcomes | Three gates demanded perfection of infrastructure and are relaxed to **degrade-and-record**, with every deterministic invariant left exact. (a) A fully-lost task no longer aborts its stage: it is carried at zero weight into the reported vector, lowers achieved completeness, and downgrades the arm to `incomplete (not claimed)`; the 90% floor still refuses an evaluation too thin to report from. (b) A COPRO round proceeds on the proposals it realized (1..`breadth`), recording `proposal_shortfall`; the round count against depth stays exact. (c) The in-search reward policy sets `missing_data="skip"` explicitly rather than inheriting `fail`. Alongside: GEPA's metric-call audit gains the declared-terminal-failure exemption COPRO already had; a held-out evaluation refused *after* billing settles its claim durably, so the resumed pass reports that arm as unmeasured and continues rather than discarding every other arm's paid evidence; and the anchors gain the resume path the arms already had, reading both completed and refused claims (a refused ceiling narrows the report, a refused naive anchor voids every delta and says so). Only a deterministic post-billing judgement settles a claim — a transient failure leaves it outstanding and resumable, because a burnt claim over a dropped connection is the same intolerance in another place. Blank generations become scored failing samples rather than missing rows, and anchor calibration floors at 90% presence and balance-subsets the two anchors to equal per-task depth. | Danielle, 2026-08-25 ("we can't require perfection from our infra"); audit `0009-perfection-gates-audit.md` |
+| 21 | Task-model reasoning effort (value) | **`minimal` → `low`** on the task route. `minimal`'s Stage 0 failed the §7 gate on the task model's *capability*, not on the design's power: ceiling anchor **0.1977** against the 0.30 floor, leaving **0.1897** headroom against the 0.20 minimum, while naive (**0.008**) and the measured MDE (**0.0446**) both passed. Attempt 2 of the same design at the route's default effort measured a ceiling of **0.8068**, which is what identifies the effort rather than the task as the cause. Everything item 19 established — the pin, its place in the design hash, and the pre-bind refusal — is unchanged; only the pinned value moves. The re-pin moves the design hash and so requires a fresh `study_id`. | Danielle, 2026-08-25 |
+
+**On item 21.** The design's own rule is that an effort chosen after Stage 0
+saw the anchors is a post-hoc adjustment. This revision *is* such an
+adjustment, and it is recorded as one rather than presented as the original
+pin: the `minimal` probe's numbers are stated above, the pin's value is dated,
+and the design hash it produces is different from the one the `minimal` study
+pre-registered. No result measured under `minimal` is carried forward, and §5.4
+states the standing rule that a gate failure is a finding for humans rather than
+an automatic escalation to a higher effort.
 
 **On item 8.** Revision 1 derived per-mode trial counts from DSPy's
 `_recommended_num_trials(component_count=1, searches_demos, n)` at `n = 6`
@@ -950,7 +960,7 @@ is an order-of-magnitude figure measured at toy prompt sizes, not a quote. The
 consequence is registered rather than hidden: the study is a **$152–$176** run,
 not a small-tens-of-dollars one.
 
-**The task model's `reasoning.effort` is pinned to `minimal` (item 19).** A
+**The task model's `reasoning.effort` is pinned to `low` (item 21).** A
 reasoning effort changes the task model's capability, so it changes the thing
 being measured — which is exactly why it is fixed **before** Stage 0 measures
 the anchors and hashed into the pre-registered design rather than chosen once
@@ -962,8 +972,27 @@ The measured rate above was taken at the route's *default* effort. The pin is
 expected to reduce it, but the protocol registers **no cost prediction from the
 pin**: the figures in §5.3 stand as the pre-registered upper bound, and what
 Stage 0 actually bills is what the manifest records. If Stage 0's gate fails
-under `minimal`, that is a finding for humans to act on, not a condition the
-protocol resolves automatically — there is no fallback to a higher effort.
+under the pinned effort, that is a finding for humans to act on, not a condition
+the protocol resolves automatically — there is no automatic fallback to a higher
+effort, and a human re-pin is a new pre-registration with a new design hash.
+
+**Why `low` and not `minimal` (provenance for item 21).** `minimal` was the
+pinned effort under item 19 and it was probed. Its Stage 0 **failed the §7
+gate**, and it failed on the task model's capability rather than on the design's
+power: the **ceiling anchor scored 0.1977** against the gate's 0.30 floor, which
+left **0.1897 of headroom** against the 0.20 minimum, while the two conditions
+that speak to power both passed — the naive anchor at **0.008** (well under the
+saturation bound) and the **measured MDE at 0.0446** (under half the headroom).
+The contrast that identifies the cause is attempt 2 of the same design at the
+route's *default* effort, whose **ceiling was 0.8068**: the same tasks, the same
+splits, the same model, and a ceiling four times higher. A ceiling near the floor
+under `minimal` is therefore a statement about what the task model can do when
+asked to spend no reasoning, not a statement that the task is too hard. Danielle
+ratified `low` as the next probe on that evidence. This is a pre-registration
+change made with the anchors visible, which is exactly the post-hoc adjustment
+the pre-registration exists to constrain — so it is recorded here as a dated
+revision, it moves the design hash, and it forces a fresh `study_id` rather than
+a continuation of the `minimal` study.
 
 **How the pin is verified: request correctness, not token statistics.** A
 provider is free to spend whatever reasoning it likes at any effort, and
@@ -993,7 +1022,7 @@ this study sends. Two artifacts carry it:
 - The request body itself is pinned by a unit test over the same translation
   the live transport uses: the OpenRouter chat preset declares
   `ReasoningRequestShape.REASONING_OBJECT`, so a pinned effort is emitted as
-  `{"reasoning": {"effort": "minimal"}}` and an unpinned route sends no
+  `{"reasoning": {"effort": "low"}}` and an unpinned route sends no
   `reasoning` key at all.
 
 The outgoing HTTP body is not itself persisted by a study run, so
@@ -1024,7 +1053,8 @@ require a new decision mid-run.
   (`openrouter_seeded_call_config`). Note this changes from the 0.1.2 reruns'
   `openai/gpt-4.1-nano`, which scored 0.0 on both anchors at a 2-task split —
   Stage 0 exists to confirm gpt-5-nano is not also at the floor.
-- **Task-model reasoning effort:** **`minimal`, pinned** (item 19). Carried as
+- **Task-model reasoning effort:** **`low`, pinned** (item 21; `minimal` under
+  item 19 is historical, see §5.4). Carried as
   `TASK_REASONING_EFFORT` in `protocols.py`, recorded as
   `models.task_reasoning_effort` in the manifest, and hashed into
   `pre_registration_design_hash` — a design that changed the effort could not

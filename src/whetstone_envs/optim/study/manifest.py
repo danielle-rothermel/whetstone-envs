@@ -185,7 +185,24 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: ``--allow-width-change`` writes, so a stage whose runs really do span two
 #: widths says so on its own record instead of leaving a reader to diff the
 #: runs.
-STUDY_MANIFEST_SCHEMA_VERSION = 12
+#: v13 records Stage 0's gate verdict, as ``stage0_gate``.
+#:
+#: v12 and earlier persisted only the three numbers the gate *consumed* --
+#: ``mde_measured``, ``tau_sq``, ``sigma_sq``, all on the design block --
+#: and never the verdict those numbers produced, nor the two held-out
+#: anchor means the gate's two most consequential conditions read off.
+#: Stage 0 deliberately does not abort on a failed gate, so a failed
+#: calibration and a passed one left manifests that differed only in
+#: values a reader had to re-derive the gate from: establishing that a
+#: study was underpowered meant redoing the gate's own arithmetic against
+#: the raw evidence store, which is exactly the check the stage already
+#: performed and the one a reader is least placed to reproduce.
+#:
+#: Recorded rather than hashed. It is what Stage 0 *measured* about the
+#: design, not what the design pre-registered -- the same line
+#: ``mde_measured`` already sits on -- so two studies of one design that
+#: calibrate to different anchors still pre-register identically.
+STUDY_MANIFEST_SCHEMA_VERSION = 13
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -241,6 +258,7 @@ class ManifestKey(StrEnum):
     PRE_REGISTRATION = "pre_registration"
     AMENDMENTS = "amendments"
     DESIGN = "design"
+    STAGE0_GATE = "stage0_gate"
     STAGES = "stages"
     REPORT_SPEND = "report_spend"
     OFFICIAL_SCORES = "official_scores"
@@ -1151,6 +1169,100 @@ class DesignRecord(_StrictModel):
             raise ValueError("the completeness backstop is in (0, 1]")
         if not self.completeness_rule.strip():
             raise ValueError("the design states its completeness rule")
+        return self
+
+
+class GateConditionRecord(_StrictModel):
+    """One Stage-0 gate condition and whether it held.
+
+    The wire form of :class:`~whetstone_envs.optim.study.power.GateOutcome`,
+    field for field. ``observed`` and ``threshold`` are both recorded
+    because a verdict without its margin cannot be re-read: "headroom
+    failed" and "headroom failed by 0.0103" are different findings, and
+    only the second one tells a reader whether the next probe is worth
+    buying.
+
+    ``detail`` is the sentence the gate itself composed, kept verbatim
+    rather than recomposed by a reader, so the manifest states the reason
+    in the same words the refusal printed.
+    """
+
+    name: StrictStr
+    passed: StrictBool
+    observed: StrictFloat
+    threshold: StrictFloat
+    detail: StrictStr
+
+    @model_validator(mode="after")
+    def _validate_condition(self) -> GateConditionRecord:
+        if not self.name.strip():
+            raise ValueError("a gate condition names itself")
+        if not self.detail.strip():
+            raise ValueError("a gate condition states its detail")
+        return self
+
+
+class Stage0GateRecord(_StrictModel):
+    """Stage 0's gate verdict, durable beside the design it qualifies.
+
+    Stage 0 already recorded the three *numbers* the gate consumed --
+    ``mde_measured``, ``tau_sq``, ``sigma_sq`` land in
+    :class:`DesignRecord` -- but not the verdict itself, nor the two anchor
+    means the two most consequential conditions are read off. A reader who
+    wanted to know whether the design was powered had to re-derive the gate
+    from the raw evidence store, which is both the arithmetic the gate
+    already did and the one place a reader is least able to check
+    themselves.
+
+    ``passed`` is recorded whether or not it did, on the same terms as
+    :class:`CallCountGateRecord`: a failed gate is a finding the study
+    reports -- an underpowered design, stated as such -- not an absence.
+    Stage 0 does not abort on a failure, so without this record a failed
+    Stage 0 and a passed one leave the manifest looking identical apart
+    from their numbers.
+
+    ``naive_mean`` and ``ceiling_mean`` are the held-out anchor means the
+    gate was evaluated on, and ``headroom`` is their floored difference.
+    They are recorded rather than recomputed because the anchors the gate
+    saw are a Stage-0 measurement: a later reader recomputing them from the
+    store would be reading whatever the store holds *now*, which an
+    amendment or a resumed pass may have changed.
+
+    ``mde_measured`` duplicates the design block's field deliberately. The
+    design records it as a property of the design; the gate records the
+    value its own fourth condition compared, so the record is readable as
+    one verdict without joining it to another section.
+    """
+
+    passed: StrictBool
+    naive_mean: StrictFloat
+    ceiling_mean: StrictFloat
+    headroom: StrictFloat
+    mde_measured: StrictFloat
+    conditions: tuple[GateConditionRecord, ...]
+
+    @model_validator(mode="after")
+    def _validate_stage0_gate(self) -> Stage0GateRecord:
+        if not self.conditions:
+            # A verdict with no conditions behind it asserts a judgement
+            # nothing supports, which is worse than recording none.
+            raise ValueError("a stage0 gate records the conditions it ran")
+        names = [condition.name for condition in self.conditions]
+        if len(set(names)) != len(names):
+            raise ValueError("each gate condition appears once")
+        if self.headroom < 0.0:
+            raise ValueError("headroom is floored at zero")
+        if self.mde_measured < 0.0:
+            raise ValueError("a measured MDE is non-negative")
+        if self.passed != all(
+            condition.passed for condition in self.conditions
+        ):
+            # The verdict is the conjunction of its conditions. A record
+            # that could disagree with its own rows would let a passed
+            # gate be written over failing evidence.
+            raise ValueError(
+                "a stage0 gate passes exactly when every condition passed"
+            )
         return self
 
 
@@ -2441,6 +2553,11 @@ class StudyManifest(_StrictModel):
     #: held, so removing one would erase the very fact it exists to keep.
     amendments: tuple[AmendmentRecord, ...] = ()
     design: DesignRecord | None = None
+    #: Stage 0's gate verdict, written in the same update as ``design``.
+    #: ``None`` until Stage 0 has run, on the same terms as ``design``: a
+    #: study that has not calibrated has no verdict, and a placeholder
+    #: would read as one.
+    stage0_gate: Stage0GateRecord | None = None
     stages: tuple[StageRecord, ...] = ()
     #: Every reporting evaluation this study has paid for, in issue order.
     #: Durable as it is bought rather than folded at the end of the pass,
@@ -2911,6 +3028,7 @@ __all__ = [
     "EvidencePointer",
     "EvidenceStore",
     "FanoutCheckRecord",
+    "GateConditionRecord",
     "GepaSizingRecord",
     "HeldOutClaimRecord",
     "HeldOutRecord",
@@ -2933,6 +3051,7 @@ __all__ = [
     "SplitName",
     "SplitRecord",
     "SplitsRecord",
+    "Stage0GateRecord",
     "StageId",
     "StageRecord",
     "StudyManifest",

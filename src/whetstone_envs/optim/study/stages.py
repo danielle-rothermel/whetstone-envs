@@ -70,11 +70,13 @@ from whetstone_envs.optim.study.manifest import (
     ArmRecord,
     CallCountGateRecord,
     DesignRecord,
+    GateConditionRecord,
     PreRegistrationRecord,
     ReportSpendEntry,
     RunRecord,
     RunSpendRecord,
     SplitsRecord,
+    Stage0GateRecord,
     StageRecord,
     StudyManifest,
     TransportName,
@@ -1097,6 +1099,12 @@ def run_stage0_into_manifest(
     updated = base.model_copy(
         update={
             "design": design,
+            # The verdict, in the same update as the design it qualifies.
+            # A design recorded without the gate that judged it is the
+            # ambiguity this record exists to remove: Stage 0 does not
+            # abort on a failed gate, so a manifest carrying one and a
+            # manifest carrying none are otherwise indistinguishable.
+            "stage0_gate": _stage0_gate_record(result),
             "pre_registration": pre_registration,
             # What this calibration ran on, and what it cost. Written in
             # the same update as the design, because a design recorded
@@ -1519,6 +1527,39 @@ def _design_record(spec: StudySpec, result: Stage0Result) -> DesignRecord:
         sigma_sq=result.inputs.sigma_sq,
         completeness_rule=COMPLETENESS_RULE,
         completeness_backstop=COMPLETENESS_BACKSTOP,
+    )
+
+
+def _stage0_gate_record(result: Stage0Result) -> Stage0GateRecord:
+    """The gate's verdict, in the form the manifest keeps it.
+
+    A direct projection of :class:`~...power.Stage0Gate` plus the two
+    anchor means it was evaluated on, which live on
+    :class:`~...power.Stage0Inputs` rather than on the verdict. The means
+    are what the ``headroom``, ``naive_not_saturated``, and
+    ``ceiling_not_floored`` conditions are read off, so a record without
+    them states three verdicts whose subject a reader cannot recover.
+
+    Written whether or not the gate passed. Stage 0 does not abort on a
+    failure -- a failed gate is an underpowered design, which is a finding
+    the study reports -- so this is the only place the failure is durable.
+    """
+    return Stage0GateRecord(
+        passed=result.gate.passed,
+        naive_mean=result.inputs.naive_mean,
+        ceiling_mean=result.inputs.ceiling_mean,
+        headroom=result.gate.headroom,
+        mde_measured=result.gate.mde_measured,
+        conditions=tuple(
+            GateConditionRecord(
+                name=outcome.name,
+                passed=outcome.passed,
+                observed=outcome.observed,
+                threshold=outcome.threshold,
+                detail=outcome.detail,
+            )
+            for outcome in result.gate.outcomes
+        ),
     )
 
 

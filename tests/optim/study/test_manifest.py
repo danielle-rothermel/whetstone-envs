@@ -43,6 +43,7 @@ from whetstone_envs.optim.study.manifest import (
     DesignRecord,
     EvidencePointer,
     FanoutCheckRecord,
+    GateConditionRecord,
     GepaSizingRecord,
     HeldOutClaimRecord,
     HeldOutRecord,
@@ -63,6 +64,7 @@ from whetstone_envs.optim.study.manifest import (
     SplitName,
     SplitRecord,
     SplitsRecord,
+    Stage0GateRecord,
     StageId,
     StageRecord,
     StudyManifest,
@@ -202,6 +204,29 @@ def _full_manifest() -> StudyManifest:
                 sigma_sq=0.05,
                 completeness_rule="achieved-count weighted per task",
                 completeness_backstop=COMPLETENESS_BACKSTOP,
+            ),
+            "stage0_gate": Stage0GateRecord(
+                passed=False,
+                naive_mean=0.008,
+                ceiling_mean=0.1977,
+                headroom=0.1897,
+                mde_measured=0.0446,
+                conditions=(
+                    GateConditionRecord(
+                        name="headroom",
+                        passed=False,
+                        observed=0.1897,
+                        threshold=0.20,
+                        detail="held-out ceiling minus naive",
+                    ),
+                    GateConditionRecord(
+                        name="naive_not_saturated",
+                        passed=True,
+                        observed=0.008,
+                        threshold=0.60,
+                        detail="naive anchor is not already good",
+                    ),
+                ),
             ),
             "amendments": (
                 AmendmentRecord(
@@ -368,8 +393,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 12
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v12"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 13
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v13"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -395,6 +420,7 @@ def test_manifest_wire_keys_are_pinned() -> None:
         "pre_registration",
         "amendments",
         "design",
+        "stage0_gate",
         "stages",
         "report_spend",
         "official_scores",
@@ -477,6 +503,21 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "sigma_sq",
         "completeness_rule",
         "completeness_backstop",
+    ]
+    assert list(payload["stage0_gate"]) == [
+        "passed",
+        "naive_mean",
+        "ceiling_mean",
+        "headroom",
+        "mde_measured",
+        "conditions",
+    ]
+    assert list(payload["stage0_gate"]["conditions"][0]) == [
+        "name",
+        "passed",
+        "observed",
+        "threshold",
+        "detail",
     ]
     assert list(payload["stages"][0]) == [
         "stage",
@@ -728,6 +769,85 @@ def test_manifest_rejects_nonfinite_numbers() -> None:
     payload["design"]["mde_measured"] = float("nan")
     with pytest.raises(ValidationError):
         StudyManifest.model_validate(payload)
+
+
+def _gate() -> Stage0GateRecord:
+    gate = _full_manifest().stage0_gate
+    assert gate is not None
+    return gate
+
+
+def test_a_stage0_gate_passes_exactly_when_its_conditions_did() -> None:
+    """The verdict is the conjunction, and cannot be written over it.
+
+    The gate is the study's own statement about whether the design is
+    powered, so a record whose ``passed`` could disagree with the rows
+    beneath it would let a passed gate be stored against failing evidence
+    -- the one error this record exists to make impossible.
+    """
+    gate = _gate()
+    # The fixture's `headroom` condition failed; claiming the gate passed
+    # over that row is refused.
+    assert not all(condition.passed for condition in gate.conditions)
+    with pytest.raises(ValidationError, match="every condition passed"):
+        Stage0GateRecord(
+            passed=True,
+            naive_mean=gate.naive_mean,
+            ceiling_mean=gate.ceiling_mean,
+            headroom=gate.headroom,
+            mde_measured=gate.mde_measured,
+            conditions=gate.conditions,
+        )
+
+
+def test_a_stage0_gate_records_the_conditions_it_ran() -> None:
+    """A verdict with nothing behind it asserts an unsupported judgement."""
+    gate = _gate()
+    with pytest.raises(ValidationError, match="conditions it ran"):
+        Stage0GateRecord(
+            passed=gate.passed,
+            naive_mean=gate.naive_mean,
+            ceiling_mean=gate.ceiling_mean,
+            headroom=gate.headroom,
+            mde_measured=gate.mde_measured,
+            conditions=(),
+        )
+
+
+def test_a_stage0_gate_names_each_condition_once() -> None:
+    """Two rows for one condition make the verdict unreadable."""
+    gate = _gate()
+    first = gate.conditions[0]
+    with pytest.raises(ValidationError, match="appears once"):
+        Stage0GateRecord(
+            passed=gate.passed,
+            naive_mean=gate.naive_mean,
+            ceiling_mean=gate.ceiling_mean,
+            headroom=gate.headroom,
+            mde_measured=gate.mde_measured,
+            conditions=(first, first),
+        )
+
+
+def test_a_gate_condition_names_itself_and_its_reason() -> None:
+    """A blank name or detail is a row a reader cannot act on."""
+    condition = _gate().conditions[0]
+
+    def rebuilt(*, name: str, detail: str) -> GateConditionRecord:
+        return GateConditionRecord(
+            name=name,
+            passed=condition.passed,
+            observed=condition.observed,
+            threshold=condition.threshold,
+            detail=detail,
+        )
+
+    # The unedited pair builds, so each failure below is the edit's doing.
+    assert rebuilt(name=condition.name, detail=condition.detail) == condition
+    with pytest.raises(ValidationError, match="names itself"):
+        rebuilt(name="  ", detail=condition.detail)
+    with pytest.raises(ValidationError, match="states its detail"):
+        rebuilt(name=condition.name, detail="  ")
 
 
 # --------------------------------------------------------------------------

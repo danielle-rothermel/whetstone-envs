@@ -1771,7 +1771,7 @@ wheels = [
 
 [[package]]
 name = "whetstone-ai"
-version = "0.1.15"
+version = "0.1.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-exec" },
@@ -1787,9 +1787,9 @@ dependencies = [
     { name = "typer" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/c7/ddb3a17983461eeca41988242ea45e9e9cb19aaab9549fe42a885e740a16/whetstone_ai-0.1.15.tar.gz", hash = "sha256:b028bd9d49be49098d8876737fc8686cc0e200f8267c7fe7848c9e5f48f76f60", size = 443388, upload-time = "2026-08-25T05:37:30.855Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/25/97583caca5aa3364209a7b0862751061268ea769b01cb1e54464e4db2592/whetstone_ai-0.1.16.tar.gz", hash = "sha256:33d7a559cc4f60782b9b8e29e425f0b7e24a1a782d5d606fd501fdd17991aca4", size = 444516, upload-time = "2026-08-25T21:57:36.419Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/15/529fa1df47e1c8f9e97b416223d2504cb8776a7a140f699d6803ca5a2f61/whetstone_ai-0.1.15-py3-none-any.whl", hash = "sha256:eea04ffc2a357375f329d32ed2a646c1c2e06d4960e2d6ee5bbf6d0f792ddaa3", size = 553882, upload-time = "2026-08-25T05:37:29.358Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/17/19a07761b8c54088665b5b6b66fd1b1d4e344b5cb82fb588929081105798/whetstone_ai-0.1.16-py3-none-any.whl", hash = "sha256:3114b7af604c2e5b68fdea9b7c45c135f5836570803f6da971a15234039ff438", size = 555070, upload-time = "2026-08-25T21:57:34.932Z" },
 ]
 
 [[package]]
@@ -1850,7 +1850,7 @@ requires-dist = [
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "rich", marker = "extra == 'optim'", specifier = "==15.0.0" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.15" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.16" },
 ]
 provides-extras = ["c18", "optim"]
 

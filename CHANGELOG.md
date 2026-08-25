@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Pinned `whetstone-ai` to 0.1.16** (from 0.1.15), which is what makes
+  COPRO's seed retention reachable at all.
 - **The protocol document's null-B rationale is corrected, and its digest
   re-pinned** (revision item 22; `PROTOCOL_DOC_SHA256` now
   `0c5c14b4...`, superseding `17ad9c01...`). §3.8 and §5.4 justified

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from dr_providers import ReasoningEffort
 
 from whetstone_envs.optim.codex import CODEX_DEFAULT_AGENT_MODEL
 from whetstone_envs.optim.study.spec import (
@@ -429,6 +430,7 @@ def _pinned_study(tmp_path: Path) -> Path:
     unrelated refusal whether or not the pinned-split check existed.
     """
     pytest.importorskip("whetstone.experiment.env")
+
     from whetstone_envs.optim.study.environment import bound_stage_environment
     from whetstone_envs.optim.study.manifest import (
         ArmRecord,
@@ -718,6 +720,7 @@ def test_the_batch_size_reaches_the_runner_spec(tmp_path: Path) -> None:
         n_per_stratum=1,
         pool_seed_start=1,
         task_model="openai/gpt-4.1-nano",
+        task_reasoning_effort=ReasoningEffort.MINIMAL,
         proposer_model="openai/gpt-4.1-nano",
         num_seeds=1,
         naive_template="naive {input}",
@@ -765,6 +768,7 @@ def test_the_pinned_copro_shape_reaches_the_runner_spec(
         n_per_stratum=1,
         pool_seed_start=1,
         task_model="openai/gpt-4.1-nano",
+        task_reasoning_effort=ReasoningEffort.MINIMAL,
         proposer_model="openai/gpt-4.1-nano",
         num_seeds=1,
         naive_template="naive {input}",
@@ -808,6 +812,7 @@ def test_the_pinned_gepa_reflection_batch_reaches_the_runner_spec(
         n_per_stratum=1,
         pool_seed_start=1,
         task_model="openai/gpt-4.1-nano",
+        task_reasoning_effort=ReasoningEffort.MINIMAL,
         proposer_model="openai/gpt-4.1-nano",
         num_seeds=1,
         naive_template="naive {input}",
@@ -852,6 +857,7 @@ def test_the_pinned_codex_cap_reaches_the_run_from_the_design(
         n_per_stratum=1,
         pool_seed_start=1,
         task_model="openai/gpt-4.1-nano",
+        task_reasoning_effort=ReasoningEffort.MINIMAL,
         proposer_model="openai/gpt-4.1-nano",
         num_seeds=1,
         naive_template="naive {input}",

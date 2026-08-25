@@ -134,10 +134,10 @@ PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
 #: model's reasoning effort to ``minimal``, which the text had previously
 #: declined to pin. That revision also states how the pin is verified --
 #: request correctness, read off the manifest's recorded provider call
-#: config, rather than billed reasoning tokens, which no provider
-#: guarantees.
+#: config and enforced as a refusal before a paid bind is written, rather
+#: than billed reasoning tokens, which no provider guarantees.
 PROTOCOL_DOC_SHA256 = (
-    "3d1a8e5f336fb610d0e87266c9e43f8f49541ed9bd76d5f689547690da94a3fe"
+    "0dfd0c47b9ebc909a4832a19536fcf6a7cd5121abb4b0feb586722d3f952769b"
 )
 
 

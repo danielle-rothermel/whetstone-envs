@@ -57,7 +57,7 @@ revision 1 said something different.
 | 16 | §6 Codex evidence | unbounded → **one real Codex-direct run**, artifacts historical evidence only | note 20 |
 | 17 | L1's mechanical form | "the internal Eval Config ref" → **the evaluated task set is contained in the internal split**, checked on all three evaluation surfaces | this revision (2026-08-23), §3.2 |
 | 18 | Missing-row handling | aggregation `missing_data="propagate"` (one failed row voids the whole evaluation) → **`"skip"` with `max_skip_fraction = 0.10`**, paired with a **per-task completeness floor**: an evaluation is refused (`missing_data`) if any task lost every repeat, or if fewer than 90% of planned tasks were measured. The row tolerance alone cannot see a fully-lost task — at 76 tasks × 4 repeats one lost task is 1.3% of rows, inside the bound, yet it is dropped from the task mean's denominator and biases the reported mean upward. Paid transports additionally retry transient failures (429/5xx/timeout, **5 attempts total per logical call**, 2–32 s exponential backoff with jitter, `Retry-After` **delta-seconds** honoured and bounded at 120 s; the HTTP-date form is ignored by design, since resolving it against two clocks is least reliable exactly when it matters) and raise the per-call timeout 30 s → 300 s to cover reasoning-token calls. The 5 attempts are spent inside the transport wrapper, which is the sole owner of the retry budget; whetstone's driver is pinned to a single attempt so the two loops cannot multiply. | this revision (2026-08-23), §3.9 and O7 |
-| 19 | Task-model reasoning effort | unpinned ("this protocol accepts the spend and does not pin reasoning effort") → **pinned `minimal`** on the task route, hashed into the pre-registered design. The proposer route stays unpinned. | Danielle, 2026-08-24 |
+| 19 | Task-model reasoning effort | unpinned ("this protocol accepts the spend and does not pin reasoning effort") → **pinned `minimal`** on the task route, hashed into the pre-registered design and **enforced**: every paid bind — the reporting pass and the in-search evaluations alike — reports its effort into the manifest, and a bind disagreeing with the design is refused before it bills. The proposer route stays unpinned. | Danielle, 2026-08-24 |
 
 **On item 8.** Revision 1 derived per-mode trial counts from DSPy's
 `_recommended_num_trials(component_count=1, searches_demos, n)` at `n = 6`
@@ -934,11 +934,23 @@ control was honoured, and a token comparison could not distinguish "the pin was
 not sent" from "the pin was sent and ignored". What is checkable is the request
 this study sends. Two artifacts carry it:
 
-- The bound provider call config is recorded verbatim in the manifest at
-  `models.provider_calls[].reasoning`, per transport, before any stage
-  aggregates. A stage that bound the task route without the pin records a value
-  disagreeing with `models.task_reasoning_effort`, and a reader sees the
-  disagreement without rerunning anything.
+- **The bind is refused, not merely recorded.** Every paid task route this
+  study binds is reported into the manifest at
+  `models.provider_calls[].reasoning`, and the recording path checks it against
+  `models.task_reasoning_effort` first: a paid bind whose effort disagrees with
+  the pre-registered one raises before the write, so the stage fails *before it
+  bills* rather than leaving a discrepancy for a reader to notice afterwards.
+  Recording alone would not be enough — it makes a mismatch visible, but the
+  looking happens after the spend.
+- **Both paid paths report themselves**, which is what makes that refusal
+  cover the study rather than a corner of it. The reporting pass (the two
+  scored evaluations and the held-out verdict) binds through the stage
+  environment; the *in-search* evaluations — the `K_REPEAT`-multiplied majority
+  of the study's calls, driven by COPRO, MIPROv2, GEPA, null-A, and the Codex
+  arm — bind through a `RunSpec` the study's optimizer runner builds per arm.
+  Both report into the same witness, so both are gated. The fake transport is
+  exempt: it binds whetstone's reference default and never reaches a provider,
+  so its recorded effort is not a claim about the study's treatment.
 - The request body itself is pinned by a unit test over the same translation
   the live transport uses: the OpenRouter chat preset declares
   `ReasoningRequestShape.REASONING_OBJECT`, so a pinned effort is emitted as
@@ -946,8 +958,8 @@ this study sends. Two artifacts carry it:
   `reasoning` key at all.
 
 The outgoing HTTP body is not itself persisted by a study run, so
-`models.provider_calls[].reasoning` is the artifact a runner reads to confirm
-what a live stage bound.
+`models.provider_calls[].reasoning` — and the refusal that guards it — is what
+a runner relies on to know a live stage bound the design's effort.
 
 ```
 ~105,000 calls × $0.00168 ≈ $176 (task model, gpt-5-nano, measured)

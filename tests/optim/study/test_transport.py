@@ -105,6 +105,7 @@ from whetstone_envs.reporting.study_report import (
 from .conftest import toy_manifest
 
 if TYPE_CHECKING:
+    from dr_providers.modeling.call import ProviderCallConfig
     from dr_store import ObjectStore
     from whetstone.eval.schema import EvalEvidence
     from whetstone.experiment.candidate import Candidate
@@ -332,6 +333,141 @@ def test_every_paid_role_binds_the_manifests_reasoning_effort(
     pinned = _rebuilt_task_identity(study_dir, effort=ReasoningEffort.MINIMAL)
     assert pinned != unpinned
     assert bound == pinned
+
+
+def test_the_in_search_route_binds_the_pinned_effort(
+    study_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The optimizers' own evaluations run pinned, not just the report pass.
+
+    This is the path the engines bound by ``bound_stage_environment`` do
+    **not** cover. ``StudyOptimizerRunner`` builds its own ``RunSpec`` per
+    arm, and the in-search evaluations that spec drives are the
+    K_REPEAT-multiplied majority of the study's paid calls -- so an effort
+    that reached the reporting engines and not the runner would leave most
+    of the study measuring a task model the pre-registration does not name.
+
+    Asserted on the route the runner reports for a real arm spec, which is
+    the same config ``run_optimizer`` builds from that spec.
+
+    Fails-before: ``StudyOptimizerRunner`` had no effort field at all, so
+    every ``RunSpec`` it built carried ``task_reasoning_effort=None`` and
+    the bound control was ``None``.
+    """
+    from dr_providers import ReasoningEffort
+
+    monkeypatch.setenv(OPENROUTER_API_KEY_ENV, "test-key-not-a-real-secret")
+    manifest = read_study_manifest(study_dir)
+
+    from whetstone_envs.optim.study.arms import StudyOptimizerRunner
+    from whetstone_envs.optim.study.spec import ArmKind, ArmSpec
+
+    recorded: list[ProviderCallConfig] = []
+    with bound_stage_environment(
+        study_dir, transport=OPENROUTER_TRANSPORT
+    ) as environment:
+        # The concrete runner, not the ``OptimizerRunner`` protocol the
+        # environment is typed against: this test is about the study's own
+        # runner carrying the pin into the specs it builds.
+        runner = cast("StudyOptimizerRunner", environment.run_optimizer)
+        assert runner is not None
+        # The runner carries the design's effort, not a default.
+        assert runner.task_reasoning_effort == ReasoningEffort(
+            manifest.models.task_reasoning_effort
+        )
+
+        # And it reaches the ``RunSpec`` every arm actually runs from --
+        # which is what ``run_optimizer`` binds the in-search route out of.
+        arm = ArmSpec(
+            arm_id="copro",
+            optimizer="copro",
+            kind=ArmKind.REAL,
+            k_run=1,
+            seeds=(1,),
+            copro_breadth=2,
+            copro_depth=1,
+        )
+        spec = runner._spec_for(arm, seed=1, run_dir=study_dir / "run")
+        assert spec.task_reasoning_effort is ReasoningEffort.MINIMAL
+
+        # The route that spec reports into the manifest's witness carries
+        # it too, which is what puts the in-search bind under the refusal.
+        from dataclasses import replace
+
+        probe = replace(
+            runner,
+            record_provider_call=lambda config, _policy: recorded.append(
+                config
+            ),
+        )
+        probe._record_in_search_route(spec)
+
+    (bound,) = recorded
+    assert bound.controls.reasoning is ReasoningEffort.MINIMAL
+
+
+def test_a_paid_bind_at_an_unpinned_effort_is_refused(
+    study_dir: Path,
+) -> None:
+    """The disagreement is a refusal, not a note for a reader.
+
+    Recording the bound effort makes a mismatch *visible*; it does not
+    make it *safe*, because seeing it requires a reader and the reading
+    happens after the stage has spent. This turns the same comparison into
+    a gate: a paid stage whose task route does not carry the
+    pre-registered effort fails before it bills.
+
+    Fails-before: ``_record_provider_call_config`` wrote the disagreeing
+    record and returned normally.
+    """
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    from whetstone_envs.optim.provider import (
+        hardened_execution_policy,
+        openrouter_seeded_call_config,
+    )
+    from whetstone_envs.optim.study.environment import (
+        _record_provider_call_config,
+    )
+    from whetstone_envs.optim.study.stages import StageError
+
+    policy = hardened_execution_policy(
+        ReferenceEvalRuntimeConfig(
+            transport_api_key_env="OPENROUTER_API_KEY",
+        ).execution_policy
+    )
+    manifest = read_study_manifest(study_dir)
+    with pytest.raises(StageError, match="pre-registered reasoning effort"):
+        _record_provider_call_config(
+            study_dir,
+            transport=OPENROUTER_TRANSPORT,
+            # The defect the gate exists to catch: a task route bound
+            # without the design's effort.
+            config=openrouter_seeded_call_config(
+                model=manifest.models.task_model
+            ),
+            policy=policy,
+        )
+    # Refused before the write, so the manifest is untouched.
+    assert read_study_manifest(study_dir) == manifest
+
+
+def test_the_fake_transport_is_not_held_to_the_pin(
+    study_dir: Path,
+) -> None:
+    """The refusal is about paid routes, not about every bind.
+
+    The fake transport binds whetstone's reference default and never
+    reaches a provider, so its recorded effort is not a claim about the
+    study's treatment. Holding it to the pin would refuse every free
+    rehearsal of a study that pre-registers one.
+    """
+    with bound_stage_environment(study_dir):
+        pass
+    (record,) = read_study_manifest(study_dir).models.provider_calls
+    assert record.transport == FAKE_TRANSPORT
+    assert record.reasoning == PROVIDER_CONTROL_UNSET
 
 
 # --------------------------------------------------------------------------

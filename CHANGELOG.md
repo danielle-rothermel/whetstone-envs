@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-08-25
+
 ### Fixed
 
 - **A run naming a `proposer_model` distinct from its task model no longer

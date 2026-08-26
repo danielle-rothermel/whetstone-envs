@@ -97,6 +97,7 @@ from whetstone_envs.optim.study.power import (
 from whetstone_envs.optim.study.protocols import (
     PROTOCOL_IDS,
     SIZED_FIELDS,
+    STEP10_C18_ID,
     STEP10_C19_ID,
     StudyProtocol,
     study_protocol,
@@ -1308,13 +1309,17 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--study-dir", type=Path, required=True)
     init.add_argument(
         "--protocol",
-        choices=(STEP10_C19_ID,),
+        choices=(STEP10_C19_ID, STEP10_C18_ID),
         required=True,
         help=(
             "Which committed protocol to author. The design is a module, "
             "not a set of flags: every value it pins is in "
             "whetstone_envs.optim.study.protocols, so two initialisations "
-            "of the same protocol produce the same manifest."
+            "of the same protocol produce the same manifest. "
+            f"{STEP10_C19_ID!r} is the powered primary study; "
+            f"{STEP10_C18_ID!r} is the C3 second family, which section 4.1 "
+            "of the same document pre-registers at one run per arm over "
+            "c18's own population."
         ),
     )
     init.add_argument(

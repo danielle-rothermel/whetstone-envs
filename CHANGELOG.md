@@ -6,6 +6,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The `step10-c18` protocol: the study's C3 second family, runnable.**
+  Section 4.1 of the registered protocol document pre-registers a second
+  family — c18 PrOntoQA through the identical `run_optimizer`, over its own
+  120-task pool (4 depth strata at `n_per_stratum=30`, seeded from
+  `1_000_000_000`), splits `(24, 48, 48)`, `K_REPEAT = 3`, and `K_RUN = 1`
+  for every arm — and nothing could run it. `--protocol` offered
+  `step10-c19` as its only choice, so the design was unreachable from the
+  command line; `k_run_for` read the run count off the stage alone, so a
+  c18 study would have inherited c19's powered two-then-five ladder and
+  bought four times the runs it registered; and `C18Record` was a manifest
+  shape nothing in `src` ever constructed, so a c18 study could spend its
+  whole budget and leave a report saying no second family had been run.
+  `step10-c18` and `step10-c18-toy` are now registered, built by the *same*
+  builder as the c19 pair from the *same* module constants — one task
+  model, one reasoning effort, one proposer, one Codex agent and cap, one
+  COPRO/GEPA/MIPROv2 control shape, the same eight arms including both
+  MIPROv2 fidelity modes — which is the mechanical content of the
+  generality claim: only the population, the splits, the train/val
+  partition (12/12 of the internal 24), the minibatch setting and the run
+  count are parameters, and each is a value section 4.1 states
+  differently. MIPROv2 runs unbatched because c18's internal 24 is smaller
+  than the pinned batch of 35, so a batched arm would draw more than it
+  has. Both protocols reference the same document at the same frozen
+  digest, since section 4.1 is part of that text.
+- **A c18 study now records its C3 evidence.** An arm stage over a c18
+  population writes the manifest's `c18` block: the stage's runs, and an
+  adapter-swap verdict computed at record time by the new
+  `whetstone_envs.optim.study.adapter_swap` over the shipped optimizer
+  package — no shared-path module imports a family's package or spells a
+  family's name outside the adapter set. Keyed on the recorded population
+  rather than a flag, so a c19 study never grows one. The verdict lives in
+  `src` rather than in the test that owned it because the artifact has to
+  carry the claim: a manifest citing a green CI job at an unrecorded
+  commit cites evidence it does not hold. `test_c18_adapter_swap` now
+  delegates its two source-level assertions to that function instead of
+  keeping a second copy of the rule, so the check and the recorded verdict
+  cannot be computed differently.
+- **`ArmRecord.design_k_run` (manifest schema v15).** A protocol's own
+  per-arm run count now survives being persisted. Every stage after Stage 0
+  rebuilds its runnable spec from the arm record, so a count that lived
+  only in the protocol module was lost the moment the design was written —
+  the same failure mode `minibatch` and the COPRO search shape were added
+  for. `None` on every c19 arm, where the staged ladder *is* the design, so
+  a c19 manifest is unchanged.
+
 ### Fixed
 
 - **A role that reached no provider no longer withholds a stage's whole

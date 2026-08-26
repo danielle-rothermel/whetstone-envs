@@ -109,6 +109,8 @@ from whetstone_envs.optim.study.power import (
     within_variance_divergence,
 )
 from whetstone_envs.optim.study.protocols import (
+    STEP10_C18,
+    STEP10_C18_TOY,
     STEP10_C19,
     STEP10_C19_TOY,
     ArmDesign,
@@ -142,6 +144,7 @@ from whetstone_envs.optim.study.spec import (
     HOLM_FAMILY_SIZE,
     K_CAL_CAP,
     K_CAL_INITIAL,
+    K_RUN_C18,
     K_RUN_NULL_A,
     K_RUN_NULL_B,
     K_RUN_PILOT,
@@ -188,6 +191,7 @@ __all__ = [
     "HOLM_FAMILY_SIZE",
     "K_CAL_CAP",
     "K_CAL_INITIAL",
+    "K_RUN_C18",
     "K_RUN_NULL_A",
     "K_RUN_NULL_B",
     "K_RUN_PILOT",
@@ -218,6 +222,8 @@ __all__ = [
     "SELECTION_RULE",
     "STAGE0_TRANSPORT_STAGE",
     "STAGE1_CALL_COUNT_TOLERANCE",
+    "STEP10_C18",
+    "STEP10_C18_TOY",
     "STEP10_C19",
     "STEP10_C19_TOY",
     "AnchorPurpose",

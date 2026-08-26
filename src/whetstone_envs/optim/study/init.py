@@ -170,6 +170,10 @@ def _arm_records(protocol: StudyProtocol) -> tuple[ArmRecord, ...]:
             copro_depth=arm.copro_depth,
             miprov2_num_trials=arm.miprov2_num_trials,
             miprov2_num_candidates=arm.miprov2_num_candidates,
+            # The protocol's own run count, on the record for the same
+            # reason: it is design, and a stage rebuilding the spec
+            # without it takes the staged ladder instead.
+            design_k_run=arm.design_k_run,
             control_identity_hash=_control_identity_hash(protocol, arm),
             seed_note=_seed_note(arm),
             runs=(),

@@ -36,11 +36,13 @@ from dr_store import ObjectStore
 from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate
 
+from whetstone_envs.optim.families import FamilyId
 from whetstone_envs.optim.nulls import NULL_IDENTITY_OPTIMIZER
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
     PROVIDER_CONCURRENCY_FLAG,
 )
+from whetstone_envs.optim.study.adapter_swap import adapter_swap_record
 from whetstone_envs.optim.study.analysis import (
     AnalysisResult,
     measure_reference_candidates,
@@ -68,9 +70,11 @@ from whetstone_envs.optim.study.manifest import (
     STUDY_STORE_NAME,
     AmendmentRecord,
     ArmRecord,
+    C18Record,
     CallCountGateRecord,
     DesignRecord,
     GateConditionRecord,
+    ManifestKey,
     PreRegistrationRecord,
     ReportSpendEntry,
     RunRecord,
@@ -113,7 +117,7 @@ from whetstone_envs.optim.study.spend import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from whetstone.eval.schema import EvalEvidence
 
@@ -539,7 +543,14 @@ def _surviving_runs_of_stage(
     surviving: set[str] = set()
     for arm in manifest.arms:
         try:
-            seeds = set(arm_seeds(arm.arm_id, stage=stage))
+            # The arm's recorded run count, when its protocol pinned one:
+            # a c18 arm dispatches one seed, so a width refusal that
+            # listed five would name runs the stage will never reuse.
+            seeds = set(
+                arm_seeds(
+                    arm.arm_id, stage=stage, design_k_run=arm.design_k_run
+                )
+            )
         except ValueError:
             continue
         surviving.update(
@@ -1995,11 +2006,97 @@ def run_arm_stage(
     _record_report_spend(
         study_dir=study_dir, stage=stage, environment=environment
     )
+    # Last, and from the manifest on disk rather than the one read at the
+    # top: everything above has written, so the in-memory copy is stale by
+    # several blocks. The c18 record is the study's C3 evidence and it is
+    # written only by a study whose population *is* the second family --
+    # see :func:`_record_c18_evidence`.
+    _record_c18_evidence(study_dir=study_dir, run_results=run_results)
     return StageResult(
         stage=stage,
         manifest=read_study_manifest(study_dir),
         arms=reports,
         analysis=analysis,
+    )
+
+
+def _record_c18_evidence(
+    *, study_dir: Path, run_results: Mapping[str, tuple[ArmRunResult, ...]]
+) -> None:
+    """Write the C3 block, for a study whose population is c18.
+
+    **The record is the study's generality evidence, so it is written by
+    the study rather than asserted about it.** Until now ``C18Record`` was
+    a shape the report could render and nothing produced: a c18 study ran
+    its arms, spent its budget, and left a manifest whose generality
+    section said "no second family was run" -- which was true of the
+    artifact and false of the study.
+
+    Two things go in, and they are the two things section 4.1 asks for.
+    The **runs** are this stage's own, exactly the records the arms block
+    already carries, because C3's runtime half is that every optimizer
+    completed on the second family through the shared runner. They are
+    copied rather than referenced so the block is readable on its own,
+    which is what the report and ``manifest check`` both do with it.
+
+    The **adapter-swap assertion** is
+    :func:`~whetstone_envs.optim.study.adapter_swap.adapter_swap_record`'s
+    verdict over the shipped optimizer package. Computed here, at the
+    moment the evidence is recorded, rather than copied from a test run:
+    a manifest citing a green CI job at an unrecorded commit would be
+    citing evidence the artifact does not carry. It reaches no provider
+    and costs nothing, so it runs on every c18 arm stage.
+
+    **Keyed on the population, not on a flag.** A study is the second
+    family's study exactly when its population says so, and reading it
+    anywhere else would let a c19 study be handed a c18 block or a c18
+    study quietly skip one. This is the manifest's own recorded family,
+    which ``init`` wrote from the protocol and no later stage may move.
+
+    A failed run is included. Its record carries the failure, and an arm
+    that failed on c18 is C3 evidence of exactly the kind the claim is
+    about -- dropping it would let the block report a generality the
+    study did not observe.
+    """
+    manifest = read_study_manifest(study_dir)
+    if manifest.population.family != FamilyId.C18.value:
+        return
+    runs = tuple(
+        result.record
+        for arm_id in sorted(run_results)
+        for result in run_results[arm_id]
+    )
+    if not runs:
+        # An invocation that executed nothing -- a resume of a completed
+        # stage -- has no new evidence to add, and rewriting the block
+        # with an empty run list would erase what an earlier invocation
+        # recorded.
+        return
+    recorded = manifest.c18
+    # Merged on run id, keeping what is already there: Stage 1 and Stage 2
+    # both run c18's arms, and the block is the study's whole C3 evidence
+    # rather than the last stage's. Later wins on a repeated id, because a
+    # rerun run directory is the one this invocation measured.
+    merged = {run.run_id: run for run in (recorded.runs if recorded else ())}
+    merged.update({run.run_id: run for run in runs})
+    write_study_manifest(
+        study_dir,
+        manifest.model_copy(
+            update={
+                # The manifest's own key constant, not the literal. The
+                # key is stored identity that ``test_manifest`` golden-pins
+                # against :class:`ManifestKey`, and spelling it here would
+                # both duplicate that ownership and put a family name on
+                # the shared optimizer path, which
+                # :mod:`~whetstone_envs.optim.study.adapter_swap` reads as
+                # the very leak this block is recording the absence of.
+                ManifestKey.C18.value: C18Record(
+                    runs=tuple(merged[run_id] for run_id in sorted(merged)),
+                    adapter_swap=adapter_swap_record(),
+                )
+            }
+        ),
+        replace=True,
     )
 
 
@@ -2411,7 +2508,18 @@ def _run_every_arm(  # noqa: PLR0913
     # the study spent.
     executed: list[RunRecord] = []
     for arm in spec.arms:
-        stage_seeds = arm_seeds(arm.arm_id, stage=stage)
+        # Recomputed at *this* stage rather than read off ``arm.seeds``,
+        # which is the full pre-registration: the spec is built at the
+        # design's own count, and Stage 1 spends a prefix of it. Reading
+        # the spec's seeds here would make the pilot dispatch Stage 2's
+        # whole run set.
+        #
+        # ``design_k_run`` is forwarded so a protocol that pins its own
+        # count keeps it. Without it a c18 arm took the staged ladder and
+        # ran five times at Stage 2 under a design block saying one.
+        stage_seeds = arm_seeds(
+            arm.arm_id, stage=stage, design_k_run=arm.design_k_run
+        )
         existing = by_arm_id.get(arm.arm_id)
         existing_runs = () if existing is None else existing.runs
         done = {run.seed for run in existing_runs if run.seed is not None}
@@ -2682,6 +2790,11 @@ def _arm_record(
         copro_depth=arm.copro_depth,
         miprov2_num_trials=arm.miprov2_num_trials,
         miprov2_num_candidates=arm.miprov2_num_candidates,
+        # Carried for the search shape's reason: this function *replaces*
+        # the record after every stage, so omitting it would drop the
+        # pinned count to None the moment Stage 1 finished and let Stage 2
+        # run c19's ladder over a c18 design.
+        design_k_run=arm.design_k_run,
         control_identity_hash=control_identity_hash,
         seed_note=_seed_note(arm),
         runs=runs,

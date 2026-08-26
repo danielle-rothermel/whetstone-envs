@@ -220,7 +220,20 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: run hit its wall is what that execution *did*, not what the design
 #: pre-registered, so a study whose runs all completed and one whose Codex
 #: arm failed still pre-register identically.
-STUDY_MANIFEST_SCHEMA_VERSION = 14
+#:
+#: v15 records a protocol's own per-arm run count, as
+#: ``ArmRecord.design_k_run``, so a design that pins ``K_RUN`` rather than
+#: taking the staged ladder survives being persisted. The Step 10 c18
+#: protocol pre-registers one run per arm (section 4.1); read back without
+#: this field it took c19's powered two-then-five, which is a study buying
+#: four times the runs it registered under a pre-registration that says
+#: otherwise. ``None`` on every c19 arm, where the ladder *is* the design.
+#:
+#: Design, and hashed -- through ``pre_registration.k_run_by_arm``, which
+#: already covered the resolved count. What v15 adds is the ability to
+#: *recover* that count before Stage 0 has written a design block, which is
+#: what ``plan`` and the pre-Stage-0 spec read.
+STUDY_MANIFEST_SCHEMA_VERSION = 15
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -1642,6 +1655,21 @@ class ArmRecord(_StrictModel):
     #: registered 10.
     miprov2_num_trials: StrictInt | None = None
     miprov2_num_candidates: StrictInt | None = None
+    #: The protocol's own per-arm run count, when the protocol pins one
+    #: rather than taking the staged ladder.
+    #:
+    #: Recorded for exactly the reason ``minibatch`` and the search shape
+    #: are: every stage after Stage 0 rebuilds its runnable spec from this
+    #: record, and a count that lived only in the protocol module would be
+    #: lost the moment the design was persisted. A c18 study read back
+    #: without it took c19's powered ladder -- five runs per arm at Stage
+    #: 2 -- under a pre-registration that says one, which is the study
+    #: buying four times the runs it registered.
+    #:
+    #: ``None`` on every c19 arm, where the ladder *is* the design, so the
+    #: c19 manifest is byte-identical to what it was before this field
+    #: existed.
+    design_k_run: StrictInt | None = None
     control_identity_hash: StrictStr
     seed_note: StrictStr
     runs: tuple[RunRecord, ...]

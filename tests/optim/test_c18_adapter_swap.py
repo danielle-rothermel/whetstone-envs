@@ -14,9 +14,13 @@ So the assertions here are structural:
   the family-adapter file set. A c19 branch anywhere in the runner, a c18
   special case in ``provider.py``, or a second GEPA builder would each show
   up as a differing call outside that set.
-* :func:`test_only_the_family_adapter_names_a_family` reads the package
-  source and asserts no module outside that set names either family, so a
-  leak that happens not to execute on this fixture is still caught.
+* :func:`test_no_shared_module_names_or_imports_a_family` delegates to
+  :func:`~whetstone_envs.optim.study.adapter_swap.differing_modules`, which
+  reads the package source and reports any module outside that set naming
+  or importing either family -- so a leak that happens not to execute on
+  this fixture is still caught. That function is also what a c18 study
+  records into its manifest's C3 block, so the check here and the recorded
+  verdict cannot be computed under different rules.
 * :func:`test_no_private_whetstone_import_was_needed_for_c18` re-runs the
   public-import guard over the c18 adapter, because "we added c18 by
   reaching into whetstone's internals" would be a finding, not a success.
@@ -28,7 +32,6 @@ rather than one representative.
 
 from __future__ import annotations
 
-import ast
 import sys
 from collections import Counter
 from pathlib import Path
@@ -39,36 +42,17 @@ pytest.importorskip("whetstone.experiment.env")
 
 from whetstone.optim.contracts import OptimResult
 
-from whetstone_envs.optim import run as run_module
 from whetstone_envs.optim.families import KNOWN_FAMILY_IDS, family_spec
 from whetstone_envs.optim.run import OPTIMIZERS, RunSpec, run_optimizer
+from whetstone_envs.optim.study.adapter_swap import (
+    ALLOWED_FAMILY_DEFAULTS,
+    FAMILY_ADAPTER_FILES,
+    FAMILY_CONTRACT_FILES,
+    OPTIM_ROOT,
+    adapter_swap_record,
+    differing_modules,
+)
 from whetstone_envs.reporting.publication import load_trajectory_report
-
-OPTIM_ROOT = Path(run_module.__file__).parent
-
-#: The only two files a second family is permitted to add or change. The
-#: registry entry lives in ``families.py`` by construction -- that module is
-#: the registry -- and everything else about c18 lives in its own adapter.
-#: A differing call or a family name outside this set is the C3 finding.
-FAMILY_ADAPTER_FILES = frozenset({"c18_experiment.py", "families.py"})
-
-#: Files that legitimately name a family for a reason other than driving it.
-#: ``experiment.py`` owns C19's own contract, mirroring ``c18_experiment.py``,
-#: and ``scoring_runner.py`` owns C19's eval-node runner the same way
-#: ``c18_experiment.py`` owns C18's -- the registry binds one to each family
-#: and nothing else uses either as a default. They are family-adapter code
-#: that predates the c18 split and kept its own module, so a call appearing
-#: in one family's trace and not the other's is the adapter swap working
-#: rather than a leak.
-#:
-#: ``scoring_runner.py`` stays exempt after the per-family *scoring rules*
-#: moved to :mod:`whetstone_envs.scoring.families`, which is outside
-#: ``OPTIM_ROOT`` and so out of this guard's scope entirely. What remains
-#: here is the c19 eval-node runner, which still names its own family to
-#: look its rule up -- a family adapter naming its family, which is the
-#: exemption working rather than a leak. Verified by deleting it from this
-#: set: the source-level guard then reports ``scoring_runner.py: ['c19']``.
-FAMILY_CONTRACT_FILES = frozenset({"experiment.py", "scoring_runner.py"})
 
 #: Split sizes small enough to keep a fake-transport run a smoke run, and
 #: pool sizes that yield at least four instances in each family.
@@ -200,115 +184,80 @@ def test_the_shared_runner_is_the_single_entry_point(
         assert trace.count(entry) == 1
 
 
-def _family_package_imports(path: Path) -> set[str]:
-    """Every ``whetstone_envs.<family>`` module one file imports."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module)
-        elif isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-    return {
-        module
-        for module in modules
-        if any(
-            module == f"whetstone_envs.{family}"
-            or module.startswith(f"whetstone_envs.{family}.")
-            for family in KNOWN_FAMILY_IDS
-        )
-    }
-
-
-def test_only_the_family_adapter_imports_a_family_package() -> None:
-    """No module on the shared path reaches into a family's own package.
+def test_no_shared_module_names_or_imports_a_family() -> None:
+    """The source-level half of the assertion, over the shipped package.
 
     A branch that never executes on this fixture would slip past the traced
-    comparison, so the source is checked too. Importing ``whetstone_envs
-    .c18`` or ``whetstone_envs.c19`` is the mechanical signature of
-    family-specific knowledge, and it is confined to the three adapter
-    files: each family's own contract module plus the registry that binds
-    them.
+    comparison, so the source is checked too. Two signatures count as
+    family-specific knowledge: importing ``whetstone_envs.c18`` or
+    ``whetstone_envs.c19``, and spelling either name as a bare string --
+    an ``if family == "c18"`` branch, a c19 template inlined into the
+    runner, or a c18 special case in the fake transport would each show up
+    as one.
+
+    Delegated to :func:`differing_modules` rather than recomputed here.
+    That function is what a c18 study *records* into its manifest, so a
+    check that kept its own copy of the rule could pass while the recorded
+    verdict was computed under a different one -- and the manifest's claim,
+    not this test's, is the study's evidence.
     """
-    exempt = FAMILY_ADAPTER_FILES | FAMILY_CONTRACT_FILES
-    offenders = {
-        str(path.relative_to(OPTIM_ROOT)): sorted(imported)
-        for path in sorted(OPTIM_ROOT.rglob("*.py"))
-        if path.name not in exempt
-        and (imported := _family_package_imports(path))
-    }
-    assert offenders == {}, (
-        "the shared optimizer path imports a task family's package; every "
-        f"family import belongs in its own adapter: {offenders}"
+    assert differing_modules() == ()
+
+
+def test_the_recorded_verdict_is_the_one_this_test_checks() -> None:
+    """The manifest's C3 block says what the guard above found.
+
+    The record is the artifact a reader trusts, so its ``passed`` must be
+    the guard's own conjunction and its module list the guard's own
+    output. A record that could report a pass while the guard found a leak
+    would make the study's generality claim unfalsifiable from the
+    artifact.
+    """
+    record = adapter_swap_record()
+    assert record.differing_modules == differing_modules()
+    assert record.passed is (record.differing_modules == ())
+    assert record.passed
+
+
+def test_the_guard_reports_a_planted_leak(tmp_path) -> None:
+    """Fails-loudly evidence: the guard is not vacuously green.
+
+    A guard that returned ``()`` unconditionally would pass every test
+    above on every tree. Planting each signature in a throwaway package
+    shows the guard reads them, and that an exempt filename really is
+    exempt rather than merely absent.
+    """
+    (tmp_path / "leaky_branch.py").write_text(
+        'FAMILY = "c18"\n', encoding="utf-8"
+    )
+    (tmp_path / "leaky_import.py").write_text(
+        "from whetstone_envs.c19 import PROBES\n", encoding="utf-8"
+    )
+    # An adapter file may do both; that is what makes it the adapter.
+    (tmp_path / "c18_experiment.py").write_text(
+        'from whetstone_envs.c18 import PROBES\nF = "c18"\n', encoding="utf-8"
+    )
+    # A docstring naming a family is prose, not a branch.
+    (tmp_path / "prose.py").write_text('"""About c18."""\n', encoding="utf-8")
+    assert differing_modules(root=tmp_path) == (
+        "leaky_branch.py",
+        "leaky_import.py",
     )
 
 
-def _family_string_literals(path: Path) -> set[str]:
-    """Family identifiers appearing as bare string values in one module.
+def test_every_shared_path_exemption_is_still_in_use() -> None:
+    """An exemption for a file that no longer needs one is dead licence.
 
-    Docstrings and comments are excluded: prose naming a family explains
-    the shared path, it does not branch on one.
+    Each entry in :data:`ALLOWED_FAMILY_DEFAULTS` widens what the shared
+    path may spell, so an entry that stopped being load-bearing should be
+    deleted rather than left standing to cover a future leak silently.
     """
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
-    docstrings = {
-        ast.get_docstring(node, clean=False)
-        for node in ast.walk(tree)
-        if isinstance(
-            node,
-            (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
-        )
-    }
-    return {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and node.value not in docstrings
-        and node.value in set(KNOWN_FAMILY_IDS)
-    }
-
-
-#: Where the shared path may name a family, and why each is not a branch.
-#:
-#: ``cli.py``: the CLI's default choice of which family an unparameterised
-#: run drives. A default is not a branch -- ``run_optimizer`` resolves it
-#: through ``family_spec`` like any other value -- but it is still a family
-#: literal, so it is enumerated here rather than tolerated by a loose rule.
-#: ``RunSpec.family`` defaults to ``FamilyId.C19.value``, a reference to the
-#: registry's own enumeration rather than an inlined string, so it does not
-#: appear here.
-#:
-#: ``manifest.py``: the study manifest's ``c18`` block, which records the
-#: C3 generalization evidence. This is a *persisted wire key*, not a
-#: dispatch on family: nothing in the manifest branches on it, and it names
-#: the block rather than selecting an adapter. It is spelled as a literal
-#: on purpose -- ``tests/optim/study/test_manifest.py`` golden-pins the
-#: block names, and deriving a persisted key from an enum elsewhere is how
-#: a stored format drifts silently when that enum is renamed.
-ALLOWED_FAMILY_DEFAULTS = {"cli.py": {"c19"}, "manifest.py": {"c18"}}
-
-
-def test_the_shared_path_names_a_family_only_as_a_default() -> None:
-    """Beyond that one default, no shared module carries a family literal.
-
-    A ``if family == "c18"`` branch, a c19 template inlined into the
-    runner, or a c18 special case in the fake transport would each add a
-    literal here and fail.
-    """
-    exempt = FAMILY_ADAPTER_FILES | FAMILY_CONTRACT_FILES
-    offenders = {
-        name: sorted(found - ALLOWED_FAMILY_DEFAULTS.get(name, set()))
-        for path in sorted(OPTIM_ROOT.rglob("*.py"))
-        if path.name not in exempt
-        and (found := _family_string_literals(path))
-        and found - ALLOWED_FAMILY_DEFAULTS.get(path.name, set())
-        for name in (path.name,)
-    }
-    assert offenders == {}, (
-        "the shared optimizer path names a task family outside its "
-        f"documented defaults: {offenders}"
-    )
+    for name, allowed in ALLOWED_FAMILY_DEFAULTS.items():
+        matches = [
+            path for path in OPTIM_ROOT.rglob("*.py") if path.name == name
+        ]
+        assert matches, f"{name} is exempted but not on the shared path"
+        assert allowed, f"{name} is exempted for no identifier"
 
 
 def test_the_runner_default_family_is_a_registered_family() -> None:

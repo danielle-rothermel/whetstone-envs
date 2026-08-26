@@ -393,8 +393,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 14
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v14"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 15
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v15"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -602,6 +602,9 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "copro_depth",
         "miprov2_num_trials",
         "miprov2_num_candidates",
+        # v15: the protocol's own per-arm run count, for a design that
+        # pins one rather than taking the staged ladder.
+        "design_k_run",
         "control_identity_hash",
         "seed_note",
         "runs",

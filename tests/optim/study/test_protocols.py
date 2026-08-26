@@ -17,6 +17,7 @@ pytest.importorskip("whetstone.experiment.env")
 
 from pathlib import Path
 
+from whetstone_envs.optim.c18_experiment import C18_PROTOCOL_SPLIT_SIZES
 from whetstone_envs.optim.study.manifest import CODEX_AGENT_OMITTED
 from whetstone_envs.optim.study.protocols import (
     CODEX_AGENT_MODEL,
@@ -29,6 +30,8 @@ from whetstone_envs.optim.study.protocols import (
     PROTOCOL_DOC_SHA256,
     PROTOCOL_IDS,
     SIZED_FIELDS,
+    STEP10_C18,
+    STEP10_C18_TOY,
     STEP10_C19,
     STEP10_C19_TOY,
     TASK_MODEL,
@@ -42,6 +45,7 @@ from whetstone_envs.optim.study.spec import (
     CODEX_EVALUATE_CALL_CAP,
     FIDELITY_ARM_IDS,
     HOLM_FAMILY_SIZE,
+    K_RUN_C18,
     PROTOCOL_SPLIT_SIZES,
     PROTOCOL_TRAIN_SIZE,
     PROTOCOL_VAL_SIZE,
@@ -80,6 +84,109 @@ def test_the_population_is_described_by_the_family_that_generated_it() -> None:
     )
     assert manifest.generator_version == "c19-custom-v2"
     assert len(manifest.stratum_counts) == 22
+
+
+def test_the_c18_protocol_pins_section_4_1s_values() -> None:
+    """Every value section 4.1 fixes for the second family, as literals.
+
+    Pinned here rather than merely read from the c18 adapter, because the
+    adapter's ``DEFAULT_CONFIG`` is a *generation* default that a family
+    change could legitimately move. These are what the study
+    pre-registered, and a generator change that moved them should fail
+    loudly rather than silently resize the study.
+    """
+    assert STEP10_C18.family == "c18"
+    assert STEP10_C18.split_sizes == (24, 48, 48) == C18_PROTOCOL_SPLIT_SIZES
+    assert STEP10_C18.n_per_stratum == 30
+    assert STEP10_C18.pool_seed_start == 1_000_000_000
+    # 12/12 is the even halving of the internal 24, which is what GEPA
+    # requires train+val to cover exactly.
+    assert (STEP10_C18.train_size, STEP10_C18.val_size) == (12, 12)
+    assert STEP10_C18.train_size + STEP10_C18.val_size == 24
+
+
+def test_the_c18_protocol_runs_every_arm_once() -> None:
+    """``K_RUN = 1`` for every arm, at every stage that runs arms.
+
+    Section 4.1 gives c18 no power analysis, so there is no pilot for a
+    later stage to extend: one run per optimizer is the whole design. The
+    single-run arms are single-run for their own reason and agree.
+    """
+    assert K_RUN_C18 == 1
+    for stage in (StageId.STAGE1, StageId.STAGE2):
+        counts = {
+            arm.arm_id: arm.k_run for arm in STEP10_C18.arm_specs(stage=stage)
+        }
+        assert set(counts.values()) == {1}, stage
+        assert len(counts) == 8, stage
+
+
+def test_the_c18_protocol_does_not_minibatch() -> None:
+    """C18's internal split is smaller than the pinned minibatch.
+
+    24 < 35, so a batched c18 MIPROv2 arm would draw a larger batch than
+    the validation split holds -- ``configure_miprov2`` refuses it. The
+    design is pre-registered unbatched rather than at a resized batch,
+    which would make the two families' MIPROv2 arms different searches.
+    """
+    assert STEP10_C18.miprov2_minibatch is False
+    assert STEP10_C19.miprov2_minibatch is True
+    assert STEP10_C18.internal_size < MIPROV2_MINIBATCH_SIZE
+    for arm in STEP10_C18.arms:
+        if arm.optimizer == "miprov2":
+            assert arm.miprov2_minibatch is False
+            # An unbatched arm carries no batch size: recording one would
+            # pin a number no run reads into the design hash.
+            assert arm.miprov2_minibatch_size is None
+
+
+def test_the_two_protocols_share_every_unpopulation_pin() -> None:
+    """C3's mechanical content: the same machine, a different family.
+
+    Everything the generality claim says is *unchanged* between the two
+    families is compared directly. A c18 study that ran a different task
+    model, a different reasoning effort, a different proposer, a different
+    Codex agent or cap, or different COPRO/GEPA/MIPROv2 control shapes
+    would not be evidence that the machinery carried -- it would be a
+    second study.
+    """
+    shared = (
+        "task_model",
+        "task_reasoning_effort",
+        "proposer_model",
+        "codex_agent_model",
+        "temperature",
+        "provider",
+        "seed_control",
+        "protocol_doc_path",
+        "copro_breadth",
+        "copro_depth",
+        "gepa_max_metric_calls",
+        "gepa_reflection_minibatch_size",
+        "codex_evaluate_call_cap",
+        "miprov2_num_trials",
+        "miprov2_num_candidates",
+    )
+    for name in shared:
+        assert getattr(STEP10_C18, name) == getattr(STEP10_C19, name), name
+    # And the same eight arms, in the same order, on the same optimizers.
+    assert tuple((a.arm_id, a.optimizer, a.kind) for a in STEP10_C18.arms) == (
+        tuple((a.arm_id, a.optimizer, a.kind) for a in STEP10_C19.arms)
+    )
+
+
+def test_both_protocols_reference_the_same_frozen_document() -> None:
+    """Section 4.1 is part of the c19 document, so c18 cites it.
+
+    A second document would be a second pre-registration, and the digest
+    that pins the text would no longer cover the section the c18 study
+    runs under.
+    """
+    assert STEP10_C18.protocol_doc_path == STEP10_C19.protocol_doc_path
+    assert (
+        protocol_doc_sha256(Path(STEP10_C18.protocol_doc_path))
+        == PROTOCOL_DOC_SHA256
+    )
 
 
 def test_the_real_protocol_pins_its_models() -> None:
@@ -220,7 +327,23 @@ def _arm_shape(
     )
 
 
-def test_the_toy_differs_from_the_real_design_only_in_sized_fields() -> None:
+#: Every registered protocol beside its own toy.
+#:
+#: The sized-field guards run **within** a pair, never across two. c19 and
+#: c18 are different designs -- different populations, splits, run counts
+#: and minibatch settings -- so comparing them under ``SIZED_FIELDS`` would
+#: assert a sameness the pre-registration deliberately does not claim. What
+#: each guard checks is that a *toy* rehearses the study it stands in for.
+PROTOCOL_PAIRS = (
+    pytest.param(STEP10_C19, STEP10_C19_TOY, id="c19"),
+    pytest.param(STEP10_C18, STEP10_C18_TOY, id="c18"),
+)
+
+
+@pytest.mark.parametrize(("real", "toy"), PROTOCOL_PAIRS)
+def test_the_toy_differs_from_the_real_design_only_in_sized_fields(
+    real: StudyProtocol, toy: StudyProtocol
+) -> None:
     """The load-bearing guard: a toy cannot rehearse a different study.
 
     Anything the toy is allowed to differ on is named in ``SIZED_FIELDS``.
@@ -228,6 +351,12 @@ def test_the_toy_differs_from_the_real_design_only_in_sized_fields() -> None:
     the two -- a model, a control pin, the correction, an arm -- fails
     here rather than silently making the tests measure a design the real
     study does not run.
+
+    Run for each protocol against its own toy. A c18 toy that batched when
+    the c18 study does not, or that ran its arms a different number of
+    times, would be rehearsing a design the second family never registered
+    -- and would fail here on ``miprov2_minibatch`` or ``design_k_run``,
+    neither of which is a sized field.
     """
     unsized = [
         field.name
@@ -235,32 +364,46 @@ def test_the_toy_differs_from_the_real_design_only_in_sized_fields() -> None:
         if field.name not in SIZED_FIELDS and field.name != "arms"
     ]
     for name in unsized:
-        assert getattr(STEP10_C19, name) == getattr(STEP10_C19_TOY, name), name
+        assert getattr(real, name) == getattr(toy, name), name
     # ``arms`` carries the sized train/val and minibatch inside it, so it
     # is compared on the shape that is *not* sized: which arms exist, what
     # each one optimizes, and every flag that is design rather than size.
-    assert _arm_shape(STEP10_C19) == _arm_shape(STEP10_C19_TOY)
+    assert _arm_shape(real) == _arm_shape(toy)
 
 
-def test_every_sized_field_actually_differs() -> None:
+@pytest.mark.parametrize(("real", "toy"), PROTOCOL_PAIRS)
+def test_every_sized_field_actually_differs(
+    real: StudyProtocol, toy: StudyProtocol
+) -> None:
     """A field licensed to differ that does not is licence without use."""
-    real = STEP10_C19.sized_values()
-    toy = STEP10_C19_TOY.sized_values()
-    assert set(real) == set(SIZED_FIELDS)
+    real_values = real.sized_values()
+    toy_values = toy.sized_values()
+    assert set(real_values) == set(SIZED_FIELDS)
     for name in SIZED_FIELDS:
-        assert real[name] != toy[name], name
+        assert real_values[name] != toy_values[name], name
 
 
-def test_the_toy_is_sized_for_a_test() -> None:
-    assert STEP10_C19_TOY.split_sizes == (4, 4, 6)
-    assert (STEP10_C19_TOY.train_size, STEP10_C19_TOY.val_size) == (2, 2)
+@pytest.mark.parametrize(("real", "toy"), PROTOCOL_PAIRS)
+def test_the_toy_is_sized_for_a_test(
+    real: StudyProtocol, toy: StudyProtocol
+) -> None:
+    """Both toys shrink to the same test-affordable size.
+
+    The toy sizes are a property of what a unit test can run, not of the
+    family, so the two toys agree here while the two studies do not.
+    """
+    assert toy.split_sizes == (4, 4, 6)
+    assert (toy.train_size, toy.val_size) == (2, 2)
+    assert real.split_sizes != toy.split_sizes
 
 
 def test_study_protocol_selects_the_variant_of_one_protocol() -> None:
     assert study_protocol("step10-c19") is STEP10_C19
     assert study_protocol("step10-c19", toy=True) is STEP10_C19_TOY
+    assert study_protocol("step10-c18") is STEP10_C18
+    assert study_protocol("step10-c18", toy=True) is STEP10_C18_TOY
     with pytest.raises(ValueError, match="unknown protocol"):
-        study_protocol("step10-c18")
+        study_protocol("step10-c17")
 
 
 # --------------------------------------------------------------------------

@@ -13,7 +13,8 @@ lands beside the result it projects.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -29,13 +30,17 @@ from whetstone_envs.optim.run_cost import (
     RUN_COST_SCHEMA_NAME,
     RUN_COST_SCHEMA_VERSION,
     RunCostDocument,
+    project_run_cost,
     read_run_cost,
     write_run_cost,
 )
 from whetstone_envs.optim.study.manifest import RunSpendRecord
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
+
+    from whetstone.optim.contracts import OptimResult
 
 
 # --------------------------------------------------------------------------
@@ -165,6 +170,107 @@ def test_a_foreign_schema_version_is_refused() -> None:
 
 
 # --------------------------------------------------------------------------
+# What the projection declines to write
+# --------------------------------------------------------------------------
+
+
+def _result_with_cost(payload: Mapping[str, object]) -> object:
+    """The one thing ``project_run_cost`` reads off an ``OptimResult``."""
+    return SimpleNamespace(cost=SimpleNamespace(to_json=lambda: payload))
+
+
+def test_a_run_with_no_cost_report_projects_to_nothing() -> None:
+    """An empty cost object is "unmeasured", not "free"."""
+    assert (
+        project_run_cost(
+            cast("OptimResult", _result_with_cost({})), run_id="r"
+        )
+        is None
+    )
+
+
+def test_a_run_that_reached_no_role_projects_to_nothing() -> None:
+    """No roles is not a document this format can say.
+
+    A Codex run whose one tool call is rejected after admission debits
+    capacity and mints no evidence, so both roles come back all-zero and
+    every row is omitted. Raising on the empty document would put a
+    single wasted tool call back inside the durable run boundary and cost
+    the run its ``result.json`` -- the regression
+    ``test_codex_a_call_rejected_after_admission_still_publishes``
+    exists to prevent. Writing nothing is the same answer a run with no
+    cost report gets, and both callers already handle it.
+    """
+    empty_role = {
+        "calls": 0,
+        "cached_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "priced_calls": 0,
+        "unpriced_calls": 0,
+        "rows_missing_token_breakdown": 0,
+        "usd": None,
+    }
+    payload = {
+        "schema_version": 1,
+        "task_model": dict(empty_role),
+        "proposer": dict(empty_role),
+    }
+    result = cast("OptimResult", _result_with_cost(payload))
+    assert project_run_cost(result, run_id="r") is None
+
+    # One role reached, and only that role is written.
+    payload["task_model"] = {
+        **empty_role,
+        "calls": 3,
+        "unpriced_calls": 3,
+    }
+    document = project_run_cost(result, run_id="r")
+    assert document is not None
+    assert [entry.role for entry in document.spend] == ["task_model"]
+
+
+def test_a_cached_only_role_is_still_reported() -> None:
+    """A prompt-cache hit is a measurement, even though it is not billed.
+
+    ``usd`` of ``0`` beside a cached call is the truth: the role was
+    measured and this run owes nothing for it. Omitting the row would
+    lose the cache hit the study reads to tell a cheap run from a small
+    one, so the omission rule is keyed on "reached no provider at all",
+    not on "was not billed".
+    """
+    payload = {
+        "schema_version": 1,
+        "task_model": {
+            "calls": 0,
+            "cached_calls": 2,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "priced_calls": 0,
+            "unpriced_calls": 0,
+            "rows_missing_token_breakdown": 0,
+            "usd": None,
+        },
+        "proposer": {
+            "calls": 0,
+            "cached_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "priced_calls": 0,
+            "unpriced_calls": 0,
+            "rows_missing_token_breakdown": 0,
+            "usd": None,
+        },
+    }
+    document = project_run_cost(
+        cast("OptimResult", _result_with_cost(payload)), run_id="r"
+    )
+    assert document is not None
+    assert [entry.role for entry in document.spend] == ["task_model"]
+    assert document.spend[0].cached_calls == 2
+
+
+# --------------------------------------------------------------------------
 # Writing and reading
 # --------------------------------------------------------------------------
 
@@ -273,3 +379,54 @@ def test_the_honesty_split_survives_a_real_unpriced_run(
     assert task_model.calls > 0
     assert task_model.unpriced_calls == task_model.calls
     assert task_model.usd is None
+
+
+@pytest.fixture(scope="module")
+def proposerless_run_dir(tmp_path_factory) -> Path:
+    """A real run of the one optimizer here that proposes nothing itself.
+
+    null-A substitutes a local transport for the proposer, so its run
+    reaches a provider for the task model alone. That is the shape the
+    document's role-omission rule exists for, and only a real run proves
+    the upstream report really reports an all-zero proposer for it.
+    """
+    from whetstone_envs.optim.run import (
+        NULL_RANDOM_OPTIMIZER,
+        RunSpec,
+        run_optimizer,
+    )
+
+    output = tmp_path_factory.mktemp("run-cost-null") / "null-random-run"
+    return run_optimizer(
+        RunSpec(
+            optimizer=NULL_RANDOM_OPTIMIZER,
+            transport="fake",
+            split_sizes=(2, 2, 0),
+            run_id="c19-null-random-run-cost",
+            output_dir=output,
+        )
+    )
+
+
+def test_a_role_the_run_never_reached_is_left_out(
+    proposerless_run_dir: Path,
+) -> None:
+    """An optimizer with no proposer writes no proposer row.
+
+    The all-zero row this replaces was not merely redundant. Its ``usd``
+    was absent because nothing was priceable, and the stage fold read that
+    as an unknown bill -- so an arm stage that bought every one of its
+    calls at a real price rendered as ``unpriced``. Reporting only the
+    roles the run reached is what makes an absent ``usd`` mean one thing.
+    """
+    result = json.loads(
+        (proposerless_run_dir / "result.json").read_text(encoding="utf-8")
+    )
+    proposer = result["cost"]["proposer"]
+    assert proposer["calls"] == 0
+    assert proposer["cached_calls"] == 0
+    assert proposer["usd"] is None
+
+    document = read_run_cost(proposerless_run_dir)
+    assert [entry.role for entry in document.spend] == ["task_model"]
+    assert document.spend[0].calls > 0

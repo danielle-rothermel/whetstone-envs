@@ -19,7 +19,8 @@ counting a call twice and would let the stage row and the run rows
 disagree about one set of calls. The fold re-applies the honesty rule to
 the total rather than carrying it from the parts, so a single unpriced run
 withholds the whole role's total exactly as a single unpriced call does
-within one run.
+within one run -- while a run that made no call at all withholds nothing,
+having measured no spend to be uncertain about.
 
 **Reporting evaluations are the third route, and it is this module's
 too.** Official-selection scoring and held-out evaluation reach the
@@ -218,12 +219,20 @@ def run_spend_records(
     The honesty rules survive the fold because they are re-applied to the
     total rather than carried from the parts:
 
-    * ``usd`` is ``None`` for a role as soon as *any* contributing run left
-      it ``None``. A sum over the priced runs alone would look
-      authoritative while understating the role's bill, which is the same
-      rule ``RunSpendRecord`` enforces within one run.
+    * ``usd`` is ``None`` for a role as soon as any contributing run that
+      *made a call* left it ``None``. A sum over the priced runs alone
+      would look authoritative while understating the role's bill, which
+      is the same rule ``RunSpendRecord`` enforces within one run.
+    * A **zero-call** record is the one exception, and it is not one of
+      substance: a role that reached no provider has no bill to withhold,
+      and its absent ``usd`` says "nothing was measured" rather than
+      "something priceable went unpriced". Counting it as unknowable
+      would null a role's whole total on the strength of a record whose
+      every counter is zero -- which is what made an arm stage whose
+      optimizer has no proposer report its task model as unpriced.
     * The counters add, so ``priced_calls + unpriced_calls == calls``
-      continues to hold and the model's own validator re-checks it.
+      continues to hold and the model's own validator re-checks it. A
+      zero-call record contributes zeros to them either way.
 
     Roles are returned in first-seen order, so a stage whose arms ran in a
     fixed order renders deterministically.
@@ -249,6 +258,15 @@ def run_spend_records(
             )
         ):
             running[index] += value
+        if entry.calls == 0 and entry.usd is None:
+            # A role that made no billable call evidences no spend, so it
+            # has none to withhold. Its ``usd`` is absent because there was
+            # nothing to price, not because something priceable went
+            # unpriced -- and treating the two alike nulls a role's whole
+            # total on the strength of a record whose every counter is
+            # zero. The guard is on ``calls``, not on ``usd`` alone, so a
+            # run with genuinely unpriced calls still withholds.
+            continue
         known = usd_by_role[entry.role]
         usd_by_role[entry.role] = (
             None if known is None or entry.usd is None else known + entry.usd

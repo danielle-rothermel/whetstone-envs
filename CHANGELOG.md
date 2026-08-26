@@ -6,6 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A role that reached no provider no longer withholds a stage's whole
+  bill.** An arm stage's USD is the fold of its runs' per-role records,
+  and the fold nulled a role's total as soon as any contributing record
+  left `usd` absent. An optimizer with no proposer of its own -- `codex`,
+  `null-random` -- reported an all-zero proposer row whose `usd` was
+  absent because nothing was priceable, not because something priceable
+  went unpriced; folding the two alike made a stage that bought every one
+  of its calls at a real price render as `unpriced (0/N calls)`. Stage 0
+  never hit this because `stage_spend_records` already omits a role it
+  measured nothing for. Both halves now say one thing: the fold skips a
+  record's USD contribution when it made no call, and `project_run_cost`
+  omits a zero-call role from `cost.json` entirely rather than writing an
+  all-zero row, matching the observed-roles-only convention the stage
+  projection already followed. The guard is on `calls`, never on an
+  absent `usd` alone -- a run whose calls genuinely went unpriced still
+  withholds the role's total, exactly as one unpriced call does within a
+  run. A run that reached *no* role -- a Codex run whose one tool call was
+  rejected after admission -- projects to no `cost.json` at all, the same
+  answer a run carrying no cost report already got, rather than an empty
+  document the format cannot validate. Stage-1-shaped ledgers now price;
+  manifests already written keep their recorded rows as-is.
+
 ## [0.2.12] - 2026-08-26
 
 ### Fixed

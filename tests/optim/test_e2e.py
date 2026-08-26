@@ -648,6 +648,12 @@ def test_codex_reports_run_spend_from_tool_evidence(tmp_path) -> None:
     model spend is not on the study's key (OQ1). An aggregator reading
     only the intent path would report a Codex run as having cost nothing,
     so this asserts the task-model side is non-zero.
+
+    The proposer is **absent** rather than reported as an all-zero row.
+    The row used to be written, and its ``usd`` was absent because there
+    was nothing to price rather than because something priceable went
+    unpriced -- which the study's stage fold read as an unknown bill and
+    let withhold the arm's whole, fully priced total.
     """
     output = _codex_run(
         tmp_path=tmp_path,
@@ -657,14 +663,16 @@ def test_codex_reports_run_spend_from_tool_evidence(tmp_path) -> None:
     )
     cost = json.loads((output / "cost.json").read_text(encoding="utf-8"))
     by_role = {row["role"]: row for row in cost["spend"]}
-    # The two roles the cost report knows. Per OQ1 there is no
-    # ``codex_agent`` role: the agent's own model runs on the Codex
-    # subscription rather than the study's key, so whetstone has no
-    # evidence to price it with and does not invent a field it cannot
-    # populate.
-    assert set(by_role) == {"task_model", "proposer"}
+    # The one role this run reached. Per OQ1 there is no ``codex_agent``
+    # role either: the agent's own model runs on the Codex subscription
+    # rather than the study's key, so whetstone has no evidence to price
+    # it with and does not invent a field it cannot populate.
+    assert set(by_role) == {"task_model"}
     assert by_role["task_model"]["calls"] > 0
-    assert by_role["proposer"]["calls"] == 0
+    # The upstream report still carries the role; it is the projection
+    # that declines to write a row for a role nothing was measured for.
+    result = json.loads((output / "result.json").read_text(encoding="utf-8"))
+    assert result["cost"]["proposer"]["calls"] == 0
 
 
 @requires_codex_sandbox

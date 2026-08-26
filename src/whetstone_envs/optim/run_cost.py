@@ -17,6 +17,10 @@ authoritative while understating spend.
 
 A run whose result carries no cost report writes no ``cost.json``. Writing
 an all-zero document would claim the run was free rather than unmeasured.
+A role the run never reached is omitted from the document for the same
+reason: an optimizer without a proposer has no proposer spend to report,
+and an all-zero row would claim one was measured and found free. A run
+that reached no role at all writes nothing, like one with no cost report.
 """
 
 from __future__ import annotations
@@ -129,18 +133,41 @@ def project_run_cost(
     ``OptimResult.cost`` travels as a serialized ``RunCostReport``; an empty
     object means the run recorded no cost report at all, which is a
     different fact from a run that spent nothing.
+
+    A role that reached no provider is omitted rather than reported as an
+    all-zero row, matching what ``stage_spend_records`` does with a stage
+    that evidenced no call: reporting the role would claim the run measured
+    a proposer and found it free, when an optimizer without a proposer --
+    ``codex``, ``null-random`` -- has none to measure. The zero row was not
+    merely noise: its absent ``usd`` read as an unknown bill and withheld
+    the run's real task-model total when the study folded it.
+
+    A run that reached **no** role -- a Codex run whose one tool call was
+    rejected after admission, so capacity was debited and no evaluation
+    ever ran -- projects to ``None``, the same answer as a result carrying
+    no cost report. A document with no roles is not a thing this format
+    can say, and raising here would put a wasted tool call back inside the
+    durable run boundary that ``result.json`` and the trajectory report
+    are published from.
     """
     payload = result.cost.to_json()
     if not payload:
         return None
     report = RunCostReport.model_validate(payload)
+    spend = tuple(
+        _spend_record(role, cost)
+        for role, cost in (
+            (CostRole.TASK_MODEL, report.task_model),
+            (CostRole.PROPOSER, report.proposer),
+        )
+        if cost.calls or cost.cached_calls
+    )
+    if not spend:
+        return None
     return RunCostDocument(
         run_id=run_id,
         cost_report_schema_version=report.schema_version,
-        spend=(
-            _spend_record(CostRole.TASK_MODEL, report.task_model),
-            _spend_record(CostRole.PROPOSER, report.proposer),
-        ),
+        spend=spend,
     )
 
 

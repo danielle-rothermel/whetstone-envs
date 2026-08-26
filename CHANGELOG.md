@@ -6,7 +6,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The `step10-c18` protocol: the study's C3 second family, runnable.**
+  Section 4.1 of the registered protocol document pre-registers a second
+  family — c18 PrOntoQA through the identical `run_optimizer`, over its own
+  120-task pool (4 depth strata at `n_per_stratum=30`, seeded from
+  `1_000_000_000`), splits `(24, 48, 48)`, `K_REPEAT = 3`, and `K_RUN = 1`
+  for every arm — and nothing could run it. `--protocol` offered
+  `step10-c19` as its only choice, so the design was unreachable from the
+  command line; `k_run_for` read the run count off the stage alone, so a
+  c18 study would have inherited c19's powered two-then-five ladder and
+  bought four times the runs it registered; and `C18Record` was a manifest
+  shape nothing in `src` ever constructed, so a c18 study could spend its
+  whole budget and leave a report saying no second family had been run.
+  `step10-c18` and `step10-c18-toy` are now registered, built by the *same*
+  builder as the c19 pair from the *same* module constants — one task
+  model, one reasoning effort, one proposer, one Codex agent and cap, one
+  COPRO/GEPA/MIPROv2 control shape, the same eight arms including both
+  MIPROv2 fidelity modes — which is the mechanical content of the
+  generality claim: only the population, the splits, the train/val
+  partition (12/12 of the internal 24), the minibatch setting and the run
+  count are parameters, and each is a value section 4.1 states
+  differently. MIPROv2 runs unbatched because c18's internal 24 is smaller
+  than the pinned batch of 35, so a batched arm would draw more than it
+  has. Both protocols reference the same document at the same frozen
+  digest, since section 4.1 is part of that text.
+- **A c18 study now records its C3 evidence.** An arm stage over a c18
+  population writes the manifest's `c18` block: the stage's runs, and an
+  adapter-swap verdict computed at record time by the new
+  `whetstone_envs.optim.study.adapter_swap` over the shipped optimizer
+  package — no shared-path module imports a family's package or spells a
+  family's name outside the adapter set. Keyed on the recorded population
+  rather than a flag, so a c19 study never grows one. The verdict lives in
+  `src` rather than in the test that owned it because the artifact has to
+  carry the claim: a manifest citing a green CI job at an unrecorded
+  commit cites evidence it does not hold. `test_c18_adapter_swap` now
+  delegates its two source-level assertions to that function instead of
+  keeping a second copy of the rule, so the check and the recorded verdict
+  cannot be computed differently.
+- **`ArmRecord.design_k_run` (manifest schema v15).** A protocol's own
+  per-arm run count now survives being persisted. Every stage after Stage 0
+  rebuilds its runnable spec from the arm record, so a count that lived
+  only in the protocol module was lost the moment the design was written —
+  the same failure mode `minibatch` and the COPRO search shape were added
+  for. `None` on every c19 arm, where the staged ladder *is* the design, so
+  a c19 manifest is unchanged.
+- **A one-version-back read migration for the study manifest.** A study is
+  a durable work document that outlives the code that wrote it, and the
+  completed c19 study on disk is a v14 document carrying 28 paid runs.
+  `read_study_manifest` now accepts exactly the previous schema version
+  when the delta is additive-with-a-default — v15's added field defaults to
+  `None`, which is what every v14 arm meant — upgrades the schema string in
+  memory, and leaves the file's bytes alone until something writes it;
+  every write emits the current version. Without this the v15 bump would
+  have stranded that study on `plan`, `report`, `manifest check`, and
+  resume, and the refusal was self-sealing: `write_study_manifest(replace=True)`
+  re-reads the file it is about to replace, so even an in-place migration
+  could not have run. Anything older than one version back stays refused
+  and keeps the manual-migration precedent.
+
 ### Fixed
+
+- **MIPROv2's pre-spend estimate now reads the design's own shape.** It was
+  hardcoded to c19's batched 44-task valset and 35-task minibatch, so a c18
+  arm was priced at c19's 1210–3118 band and `plan` printed a "1050
+  minibatch" volume for a design whose manifest says `minibatch: false`;
+  the honest cost of the registered c18 search is 360 rows (10 trials × 12
+  val × 3 repeats). `estimate_optimizer_calls` takes the arm's `val_size`
+  and `miprov2_minibatch_size`, both defaulting to c19's registered values,
+  so the c19 band is byte-identical and golden-pinned. This also restores
+  the Stage-1 fan-out gate on c18, which had roughly six times more slack
+  than the design warranted — enough to wave a genuine six-fold fan-out
+  through into Stage 2.
+- **The C3 leak guard could be switched off by a docstring.** Docstrings
+  were excluded from the family-literal scan by *value*, so a module whose
+  docstring was the single word `c18` exempted every bare `"c18"` literal
+  in it, including a live `family == "c18"` dispatch — two files with
+  identical branches got opposite verdicts. Docstrings are now identified
+  by node identity, which is the question the exemption always meant to
+  ask.
+- **`AdapterSwapRecord` enforces that its verdict matches its evidence.**
+  `passed` must be exactly "no differing modules", so a record cannot
+  claim a pass beside a named leak or fail while naming nothing — either
+  would make the report's C3 section unfalsifiable from the artifact. Two
+  fixtures encoded the opposite reading (listing the exempt adapter files
+  as "differing" while passing) and were corrected.
+- **An unparseable module fails the C3 verdict instead of raising.** The
+  guard runs at the end of an arm stage, after the last paid operation, so
+  an exception would have abandoned the c18 block — losing the recorded
+  generality evidence for runs the study had already paid for — over a
+  syntax error in an unrelated file. Such a module is now named in the
+  verdict with its reason.
 
 - **A role that reached no provider no longer withholds a stage's whole
   bill.** An arm stage's USD is the fold of its runs' per-role records,

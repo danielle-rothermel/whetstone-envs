@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 import rfc8785
 from dr_store import ObjectNotFoundError, ObjectReference
+from dr_store.document_file.canonical_json import CanonicalJsonFile
 from dr_store.document_file.errors import DocumentReadError
 from pydantic import ValidationError
 
@@ -23,6 +24,7 @@ from whetstone_envs.optim.study.manifest import (
     COMPLETENESS_BACKSTOP,
     CORRECTION_FAMILY_SIZE,
     CORRECTION_HOLM_BONFERRONI,
+    MAX_MANIFEST_BYTES,
     PROVENANCE_AMENDED,
     PROVENANCE_ORIGINAL,
     PROVIDER_CONTROL_UNSET,
@@ -30,6 +32,8 @@ from whetstone_envs.optim.study.manifest import (
     STAGE_IDS,
     STUDY_MANIFEST_NAME,
     STUDY_MANIFEST_SCHEMA,
+    STUDY_MANIFEST_SCHEMA_MIGRATABLE,
+    STUDY_MANIFEST_SCHEMA_MIGRATABLE_VERSION,
     STUDY_MANIFEST_SCHEMA_NAME,
     STUDY_MANIFEST_SCHEMA_VERSION,
     TRANSPORT_NAMES,
@@ -377,9 +381,11 @@ def _full_manifest() -> StudyManifest:
             ),
             "c18": C18Record(
                 runs=(_run("c18-copro-1", result="9", audit="a", cost="b"),),
+                # A passing verdict names no modules: the adapter files
+                # are *exempt*, so they are never offenders, and
+                # ``differing_modules`` returns only what leaked.
                 adapter_swap=AdapterSwapRecord(
-                    passed=True,
-                    differing_modules=("c18_experiment.py", "families.py"),
+                    passed=True, differing_modules=()
                 ),
             ),
         }
@@ -393,9 +399,127 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 14
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v14"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 15
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v15"
     assert STUDY_MANIFEST_NAME == "study.json"
+
+
+def test_exactly_one_version_back_is_migratable() -> None:
+    """The read migration's licence is one version, stated as a literal."""
+    assert STUDY_MANIFEST_SCHEMA_MIGRATABLE_VERSION == 14
+    assert (
+        STUDY_MANIFEST_SCHEMA_MIGRATABLE == "whetstone_envs.step10_study/v14"
+    )
+    assert (
+        STUDY_MANIFEST_SCHEMA_MIGRATABLE_VERSION
+        == STUDY_MANIFEST_SCHEMA_VERSION - 1
+    )
+
+
+# --------------------------------------------------------------------------
+# The one-back read migration
+# --------------------------------------------------------------------------
+
+
+def _v14_payload(manifest: StudyManifest) -> dict:
+    """``manifest`` as a v14 document: current bytes, older schema string.
+
+    v15's delta is purely additive-with-a-default, so a v14 document is a
+    v15 document minus the added key and with the older schema string.
+    Building it this way rather than pasting a fixture keeps the test
+    honest about what "one version back" means here.
+    """
+    payload = json.loads(manifest.model_dump_json(by_alias=True))
+    payload["schema"] = STUDY_MANIFEST_SCHEMA_MIGRATABLE
+    for arm in payload["arms"]:
+        arm.pop("design_k_run", None)
+    return payload
+
+
+def test_a_one_version_back_manifest_still_reads(tmp_path: Path) -> None:
+    """A v14 study is readable, not stranded.
+
+    Fails before this change: ``_validate_manifest`` exact-matched the
+    schema string, so the completed c19 study on disk -- a v14 document
+    carrying every paid run -- was refused by plan, report, resume, and
+    manifest check alike. And because ``write_study_manifest(replace=True)``
+    re-reads the file it is about to replace, even an in-place migration
+    could not have run.
+    """
+    original = _minimal_manifest()
+    document = CanonicalJsonFile(
+        tmp_path, STUDY_MANIFEST_NAME, max_bytes=MAX_MANIFEST_BYTES
+    )
+    document.publish(_v14_payload(original))
+    assert (
+        json.loads(
+            (tmp_path / STUDY_MANIFEST_NAME).read_text(encoding="utf-8")
+        )["schema"]
+        == STUDY_MANIFEST_SCHEMA_MIGRATABLE
+    )
+
+    loaded = read_study_manifest(tmp_path)
+    # Upgraded in memory, and nothing else moved.
+    assert loaded.schema_ == STUDY_MANIFEST_SCHEMA
+    assert loaded.study_id == original.study_id
+    assert len(loaded.arms) == len(original.arms)
+    # The added field defaults to what every v14 arm meant: no pinned
+    # count, so the staged ladder -- which is what those studies ran.
+    assert all(arm.design_k_run is None for arm in loaded.arms)
+
+
+def test_reading_a_v14_document_does_not_rewrite_it(tmp_path: Path) -> None:
+    """The upgrade is in memory; the file keeps its bytes until written."""
+    document = CanonicalJsonFile(
+        tmp_path, STUDY_MANIFEST_NAME, max_bytes=MAX_MANIFEST_BYTES
+    )
+    document.publish(_v14_payload(_minimal_manifest()))
+    before = (tmp_path / STUDY_MANIFEST_NAME).read_bytes()
+    read_study_manifest(tmp_path)
+    assert (tmp_path / STUDY_MANIFEST_NAME).read_bytes() == before
+
+
+def test_a_write_after_a_migrated_read_emits_the_current_version(
+    tmp_path: Path,
+) -> None:
+    """Every write emits v15, so a v14 study migrates on first write.
+
+    The pre-registration byte-preservation check runs across this upgrade
+    and must not trip: it compares the ``pre_registration`` block, which
+    the migration never touches, not the schema string.
+    """
+    document = CanonicalJsonFile(
+        tmp_path, STUDY_MANIFEST_NAME, max_bytes=MAX_MANIFEST_BYTES
+    )
+    document.publish(_v14_payload(_minimal_manifest()))
+
+    loaded = read_study_manifest(tmp_path)
+    write_study_manifest(tmp_path, loaded, replace=True)
+
+    on_disk = json.loads(
+        (tmp_path / STUDY_MANIFEST_NAME).read_text(encoding="utf-8")
+    )
+    assert on_disk["schema"] == STUDY_MANIFEST_SCHEMA
+    assert read_study_manifest(tmp_path).study_id == loaded.study_id
+
+
+def test_a_two_version_back_manifest_is_still_refused(
+    tmp_path: Path,
+) -> None:
+    """The licence is one version, and older documents stay refused.
+
+    Anything older predates deltas that were not additive, so a silent
+    read-time reinterpretation would be a guess about what the document
+    meant. Those get the manual-migration precedent instead.
+    """
+    payload = _v14_payload(_minimal_manifest())
+    payload["schema"] = f"{STUDY_MANIFEST_SCHEMA_NAME}/v13"
+    document = CanonicalJsonFile(
+        tmp_path, STUDY_MANIFEST_NAME, max_bytes=MAX_MANIFEST_BYTES
+    )
+    document.publish(payload)
+    with pytest.raises(ValidationError, match="expected schema"):
+        read_study_manifest(tmp_path)
 
 
 def test_persisted_vocabulary_literals_are_pinned() -> None:
@@ -602,6 +726,9 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "copro_depth",
         "miprov2_num_trials",
         "miprov2_num_candidates",
+        # v15: the protocol's own per-arm run count, for a design that
+        # pins one rather than taking the staged ladder.
+        "design_k_run",
         "control_identity_hash",
         "seed_note",
         "runs",

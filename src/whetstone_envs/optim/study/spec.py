@@ -50,6 +50,7 @@ __all__ = [
     "HOLM_FAMILY_SIZE",
     "K_CAL_CAP",
     "K_CAL_INITIAL",
+    "K_RUN_C18",
     "K_RUN_NULL_A",
     "K_RUN_NULL_B",
     "K_RUN_PILOT",
@@ -99,6 +100,18 @@ K_RUN_STAGE2 = 5
 #: says everything a second would.
 K_RUN_NULL_A = 5
 K_RUN_NULL_B = 1
+
+#: The C3 second family's run count, for every one of its arms (section
+#: 4.1). One run, at every stage that runs arms.
+#:
+#: This is not a smaller version of the ladder above -- it is the absence
+#: of one. C19's two-then-five shape is what its power analysis bought: the
+#: pilot's two runs estimate the between-run variance the Stage-1 gate
+#: reads, and five is the count the MDE arithmetic priced. Section 4.1
+#: gives c18 no power analysis at all; its claim is that the machinery
+#: carries, and one run per optimizer either carries or does not. So the
+#: count is pre-registered as one rather than derived from a stage.
+K_RUN_C18 = 1
 
 #: The Codex arm's admitted evaluate-call cap (D2).
 CODEX_EVALUATE_CALL_CAP = 8
@@ -221,7 +234,9 @@ NULL_ARM_IDS: tuple[str, ...] = ("null-random", "null-identity")
 FIDELITY_ARM_IDS: tuple[str, ...] = ("miprov2-zeroshot", "miprov2-ground_only")
 
 
-def k_run_for(arm_id: str, *, stage: StageId) -> int:
+def k_run_for(
+    arm_id: str, *, stage: StageId, design_k_run: int | None = None
+) -> int:
     """Runs this arm gets at ``stage``.
 
     Named by **arm**, because run count is a property of the arm rather
@@ -232,9 +247,30 @@ def k_run_for(arm_id: str, *, stage: StageId) -> int:
     The single-run arms are the exception at every stage: one run is their
     whole contribution, so a pilot does not run them twice and Stage 2
     does not run them five times.
+
+    ``design_k_run`` is the **protocol's** own run count, for a protocol
+    that pre-registers one rather than taking the staged ladder above.
+    The c19 study's ladder -- two runs at the pilot, five at the full
+    design, with the pilot's runs counted toward it -- exists because c19
+    is powered: the pilot buys a variance estimate the Stage-1 gate reads,
+    and the five runs are what the MDE arithmetic priced. The c18 study is
+    C3 only. Section 4.1 pre-registers it at ``K_RUN = 1`` with no power
+    analysis, so there is no pilot to be a prefix of and no five-run design
+    for it to be a prefix *of*; every stage that runs its arms runs them
+    once. Passing the count makes that a property of the protocol rather
+    than of the stage, which is the only way one function can serve both.
+
+    ``None`` -- the default, and every c19 call site -- takes the staged
+    ladder unchanged. The single-run arms stay single-run under an explicit
+    count too: an override is the design saying how many runs a *multi-run*
+    arm gets, and null-B's one run is not a number the design chose.
     """
     if arm_id in SINGLE_RUN_ARM_IDS:
         return K_RUN_NULL_B
+    if design_k_run is not None:
+        if stage not in (StageId.STAGE1, StageId.STAGE2):
+            raise ValueError(f"stage {stage.value!r} runs no optimizers")
+        return design_k_run
     if stage is StageId.STAGE1:
         return K_RUN_PILOT
     if stage is StageId.STAGE2:
@@ -242,19 +278,25 @@ def k_run_for(arm_id: str, *, stage: StageId) -> int:
     raise ValueError(f"stage {stage.value!r} runs no optimizers")
 
 
-def arm_seeds(arm_id: str, *, stage: StageId) -> tuple[int, ...]:
+def arm_seeds(
+    arm_id: str, *, stage: StageId, design_k_run: int | None = None
+) -> tuple[int, ...]:
     """The seeds this arm runs at ``stage``, from its own range.
 
     Stage 2 returns the full seed set including Stage 1's, because Stage 1's
     runs count toward Stage 2 rather than being repeated. A caller that has
     already run Stage 1 executes the difference; the seeds are the same
     either way, which is what makes "reused" checkable rather than asserted.
+
+    ``design_k_run`` is forwarded to :func:`k_run_for`, so a protocol that
+    pre-registers its own run count draws exactly that many seeds from the
+    arm's range rather than the staged ladder's.
     """
     try:
         base = SEED_RANGE_BY_ARM[arm_id]
     except KeyError as error:
         raise ValueError(f"unknown arm {arm_id!r}") from error
-    runs = k_run_for(arm_id, stage=stage)
+    runs = k_run_for(arm_id, stage=stage, design_k_run=design_k_run)
     return tuple(base + offset for offset in range(runs))
 
 
@@ -337,6 +379,12 @@ class ArmSpec:
     #: trained and scored on between pre-registration and the run.
     train_size: int | None = None
     val_size: int | None = None
+    #: The protocol's own per-arm run count, when it pins one rather than
+    #: taking the staged ladder. ``k_run`` above is the *resolved* count at
+    #: one stage; this is the design value that produced it, carried so
+    #: that a stage rebuilding the arm's record does not drop the pin.
+    #: ``None`` on every c19 arm. See :func:`k_run_for`.
+    design_k_run: int | None = None
 
     def _validate_miprov2(self) -> None:
         """Refuse MIPROv2 settings this arm could not honestly claim.
@@ -699,6 +747,29 @@ class StudySpec:
         }
 
     @property
+    def miprov2_shape_by_arm(self) -> dict[str, tuple[int | None, int | None]]:
+        """Each arm's ``(val_size, minibatch_size)``, for pricing MIPROv2.
+
+        The exact counterpart of :attr:`copro_shape_by_arm`, and for the
+        same reason: MIPROv2's per-run cost is its trials over its *own*
+        validation split, batched or not. An estimate taken at c19's 44/35
+        prices a c18 arm's 12-task unbatched search as though it batched 35
+        tasks it does not have.
+
+        ``minibatch_size`` is ``None`` on an unbatched arm -- which is what
+        the arm records -- and the pair is ``(None, None)`` on an arm with
+        no MIPROv2 shape at all.
+        """
+        return {
+            arm.arm_id: (
+                (arm.val_size, arm.miprov2_minibatch_size)
+                if arm.optimizer == "miprov2"
+                else (None, None)
+            )
+            for arm in self.arms
+        }
+
+    @property
     def real_arms(self) -> tuple[ArmSpec, ...]:
         """The hypotheses, in Holm-family order."""
         return tuple(arm for arm in self.arms if arm.kind is ArmKind.REAL)
@@ -802,6 +873,10 @@ def spec_from_manifest(
             copro_depth=arm.copro_depth,
             miprov2_num_trials=arm.miprov2_num_trials,
             miprov2_num_candidates=arm.miprov2_num_candidates,
+            # Read back for the search shape's reason: it is design, and a
+            # spec rebuilt without it takes the staged ladder while the
+            # pinned block says the protocol chose its own count.
+            design_k_run=arm.design_k_run,
         )
         for arm in manifest.arms
     )
@@ -1072,10 +1147,16 @@ def _k_run_from(
     -- and never from ``len(arm.runs)``: how many runs an arm has executed
     is progress, not design, and reading it as design makes an unstarted
     study look like a one-run-per-arm study.
+
+    The arm's own ``design_k_run`` is forwarded to that table. A protocol
+    that pins its own run count records it per arm, and a pre-Stage-0
+    manifest -- which has no ``design`` block yet -- would otherwise be
+    read back under the staged ladder: a c18 study would plan and run at
+    c19's two-then-five, four times the runs section 4.1 registers.
     """
     if design is not None and arm.arm_id in design.k_run_by_arm:
         return design.k_run_by_arm[arm.arm_id]
-    return k_run_for(arm.arm_id, stage=stage)
+    return k_run_for(arm.arm_id, stage=stage, design_k_run=arm.design_k_run)
 
 
 def load_study_spec(

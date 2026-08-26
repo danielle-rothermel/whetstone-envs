@@ -1,30 +1,44 @@
-"""The committed pre-registration: every design value the study fixes.
+"""The committed pre-registration: every design value the studies fix.
 
 A study's design is only a pre-registration if it existed, in full, before
-any provider was reached. This module is where the Step 10 c19 design is
+any provider was reached. This module is where the Step 10 designs are
 written down -- as named constants with one authoring path, not as flags a
 launch command happens to carry -- so ``whetstone-study init`` mints the
 same ``study.json`` every time and a reviewer can diff the design against
 the protocol document rather than against a shell history.
 
-Two protocols are registered, and they are the *same* protocol at two
-sizes. :data:`STEP10_C19` is the real study; :data:`STEP10_C19_TOY` is the
-sized-down variant the tests and the dry runs use. Both are built by
-:func:`_step10_c19` from one body of pinned values, so the only fields that
-can differ between them are the sized ones -- splits, per-arm train/val,
-the pool's ``n_per_stratum`` and seed, the MIPROv2 minibatch size, and
-COPRO's breadth and depth.
-:data:`SIZED_FIELDS` names exactly those, and a golden test asserts nothing
-else drifts. A toy that could disagree with the real design on ``K_REPEAT``,
-on the arm list, or on the correction rule would be a toy that tests a
-different study than the one that spends.
+**Four registrations, two designs, one builder.** :data:`STEP10_C19` is the
+powered primary study and :data:`STEP10_C18` is the C3 second family, which
+section 4.1 of the same document pre-registers over c18's own population at
+one run per arm. Each has a sized-down toy -- :data:`STEP10_C19_TOY` and
+:data:`STEP10_C18_TOY` -- that the tests and dry runs use.
 
-What this module does **not** own: run counts and seeds, which
-:mod:`whetstone_envs.optim.study.spec` already pins per stage and which
-would be a second source of truth if restated here; and the values Stage 0
-*measures* rather than declares -- ``tau^2``, ``sigma^2``, the realized
-MDE. Declaring a measurement would make the manifest state a result before
-the study had one.
+All four are built by :func:`_step10`, and that is load-bearing rather than
+tidy. Every value the generality claim says is *unchanged* between the two
+families -- the task model and its reasoning effort, the proposer, the
+Codex agent and its call cap, the COPRO, GEPA and MIPROv2 control shapes,
+the arm list, the correction rule, the protocol document and its digest --
+is a module constant read inside that builder rather than a parameter, so
+there is no argument by which a c18 study could disagree with the c19 study
+about them. What *is* parameterised is exactly what section 4.1 states
+differently: the population, the splits, the per-arm train/val partition,
+whether MIPROv2 minibatches, and the run count. A parameter added there is
+a claim that the two designs may legitimately differ on it.
+
+Within a pair, only the sized fields may differ:
+:data:`SIZED_FIELDS` names them, and a golden test compares each protocol
+against *its own* toy. A toy that could disagree with the design it stands
+in for on ``K_REPEAT``, on the arm list, or on the correction rule would be
+a toy that tests a different study than the one that spends. The guard is
+never run across the two protocols, which differ by design.
+
+What this module does **not** own: the staged run-count ladder and the seed
+ranges, which :mod:`whetstone_envs.optim.study.spec` already pins and which
+would be a second source of truth if restated here -- a protocol that pins
+its own count states it as ``design_k_run`` and ``spec`` still resolves it;
+and the values Stage 0 *measures* rather than declares -- ``tau^2``,
+``sigma^2``, the realized MDE. Declaring a measurement would make the
+manifest state a result before the study had one.
 """
 
 from __future__ import annotations
@@ -36,11 +50,17 @@ from typing import TYPE_CHECKING
 
 from dr_providers import ReasoningEffort
 
+from whetstone_envs.optim.c18_experiment import (
+    C18_DEFAULT_N_PER_STRATUM,
+    C18_DEFAULT_POOL_SEED_START,
+    C18_PROTOCOL_SPLIT_SIZES,
+)
 from whetstone_envs.optim.families import FamilyId
 from whetstone_envs.optim.study.manifest import CODEX_AGENT_OMITTED
 from whetstone_envs.optim.study.protocol_docs import STEP10_C19_PROTOCOL_DOC
 from whetstone_envs.optim.study.spec import (
     CODEX_EVALUATE_CALL_CAP,
+    K_RUN_C18,
     PROTOCOL_SPLIT_SIZES,
     PROTOCOL_TRAIN_SIZE,
     PROTOCOL_VAL_SIZE,
@@ -59,6 +79,12 @@ if TYPE_CHECKING:
 _PROTOCOL_DOC_PACKAGE = "whetstone_envs.optim.study.protocol_docs"
 
 __all__ = [
+    "C18_FAMILY",
+    "C18_N_PER_STRATUM",
+    "C18_POOL_SEED_START",
+    "C18_SPLIT_SIZES",
+    "C18_TRAIN_SIZE",
+    "C18_VAL_SIZE",
     "CODEX_AGENT_MODEL",
     "COPRO_BREADTH",
     "COPRO_DEPTH",
@@ -72,12 +98,18 @@ __all__ = [
     "PROTOCOL_DOC_SHA256",
     "PROTOCOL_IDS",
     "SIZED_FIELDS",
+    "STEP10_C18",
+    "STEP10_C18_ID",
+    "STEP10_C18_TOY",
+    "STEP10_C18_TOY_ID",
     "STEP10_C19",
     "STEP10_C19_ID",
     "STEP10_C19_TOY",
     "STEP10_C19_TOY_ID",
     "TASK_MODEL",
     "TASK_REASONING_EFFORT",
+    "TOY_C18_N_PER_STRATUM",
+    "TOY_C18_POOL_SEED_START",
     "TOY_COPRO_BREADTH",
     "TOY_COPRO_DEPTH",
     "TOY_MIPROV2_MINIBATCH_SIZE",
@@ -98,10 +130,26 @@ __all__ = [
 # Identity
 # --------------------------------------------------------------------------
 
-#: The protocol this module encodes, by name.
+#: The protocols this module encodes, by name.
+#:
+#: Two designs, at two sizes each. ``step10-c19`` is the powered primary
+#: study; ``step10-c18`` is the C3 second family, which the protocol
+#: document pre-registers in section 4.1 as one run per optimizer over
+#: c18's own population. They are separate registrations rather than one
+#: protocol with a family flag because they pre-register different
+#: populations, different splits, and different run counts -- and a design
+#: hash that could not tell them apart would let a c18 study be reported as
+#: the c19 study's evidence.
 STEP10_C19_ID = "step10-c19"
 STEP10_C19_TOY_ID = "step10-c19-toy"
-PROTOCOL_IDS: tuple[str, ...] = (STEP10_C19_ID, STEP10_C19_TOY_ID)
+STEP10_C18_ID = "step10-c18"
+STEP10_C18_TOY_ID = "step10-c18-toy"
+PROTOCOL_IDS: tuple[str, ...] = (
+    STEP10_C19_ID,
+    STEP10_C19_TOY_ID,
+    STEP10_C18_ID,
+    STEP10_C18_TOY_ID,
+)
 
 #: The digest of the registered pre-registration text, pinned as a golden.
 #:
@@ -269,6 +317,44 @@ FAMILY = FamilyId.C19.value
 N_PER_STRATUM = 32
 POOL_SEED_START = 1_000_000
 
+#: The C3 second family, named through the same registry identifier for the
+#: same reason :data:`FAMILY` is.
+C18_FAMILY = FamilyId.C18.value
+
+#: C18's pinned population, read from the family's own module rather than
+#: restated here.
+#:
+#: Section 4.1 pre-registers c18 at ``DEFAULT_CONFIG``'s own sizes -- four
+#: depth strata at ``n_per_stratum=30``, seeded from ``1_000_000_000`` --
+#: and the splits that ``default_split_sizes`` yields from them. Restating
+#: any of the three as a literal here would create a second owner: the
+#: adapter already pins them, a test already checks the pin against the
+#: generator, and a study whose population disagreed with the family's own
+#: default would be a study over tasks the adapter does not generate.
+#:
+#: **The splits consume the whole pool: 24 + 48 + 48 = 120, with no
+#: unassigned tail.** C19 keeps a 44-task tail above its 660 assigned
+#: tasks; c18 keeps none. That is worth stating because one Stage-0
+#: remedy depends on it: a study whose gate fails on power can grow its
+#: held-out split from the tail, and on c18 there is no tail to grow it
+#: from. Enlarging c18's held-out split would mean regenerating the pool
+#: at a larger ``n_per_stratum``, which is a different population and so a
+#: different pre-registration. Section 4.1 never powered c18 -- it is C3
+#: evidence, descriptive at T=48 -- so this is a recorded property of the
+#: design rather than a gap in it.
+C18_N_PER_STRATUM = C18_DEFAULT_N_PER_STRATUM
+C18_POOL_SEED_START = C18_DEFAULT_POOL_SEED_START
+C18_SPLIT_SIZES: tuple[int, int, int] = C18_PROTOCOL_SPLIT_SIZES
+
+#: C18's per-arm train/val partition of its internal split.
+#:
+#: The internal split is 24 and GEPA requires ``train + val`` to cover it
+#: exactly, so the partition is 12/12 -- the even halving, which is what
+#: c19's 44/44 is of its own 88. Stated here because the partition is
+#: design: an arm rerun at a different one measures a different thing.
+C18_TRAIN_SIZE = 12
+C18_VAL_SIZE = 12
+
 # --------------------------------------------------------------------------
 # Per-optimizer control pins
 # --------------------------------------------------------------------------
@@ -348,10 +434,30 @@ TOY_MIPROV2_MINIBATCH_SIZE = 2
 TOY_COPRO_BREADTH = 2
 TOY_COPRO_DEPTH = 1
 
-#: Exactly the fields :data:`STEP10_C19` and :data:`STEP10_C19_TOY` are
+#: The c18 toy's own population. Its splits, train/val, minibatch size and
+#: COPRO shape are the c19 toy's -- the toy sizes are a property of what a
+#: test can afford, not of the family -- but the pool is generated by c18's
+#: generator, whose stratum count and seed floor are its own.
+#:
+#: ``4`` rather than the c19 toy's ``1`` because c18 has four depth strata
+#: to c19's twenty-two: at one instance each the pool holds 4 tasks and the
+#: toy splits want 14. Four per stratum yields 16, which covers the splits
+#: with the same unassigned tail the real design leaves.
+#:
+#: C18's ``seed_start`` must exceed the family's reserved range, so the toy
+#: seed is offset from the real one rather than being a small round number
+#: -- ``GenerationConfig`` refuses anything at or below the reserved max.
+TOY_C18_N_PER_STRATUM = 4
+TOY_C18_POOL_SEED_START = C18_DEFAULT_POOL_SEED_START + 765_432
+
+#: Exactly the fields the real and toy variants of one protocol are
 #: permitted to differ on. The golden test reads this tuple, so adding a
 #: field here is a deliberate widening of the toy's licence to diverge and
 #: shows up in review as one.
+#:
+#: Read within a protocol, never across two: c19 and c18 are different
+#: designs and differ on far more than size. The golden compares each
+#: protocol against *its own* toy.
 SIZED_FIELDS: tuple[str, ...] = (
     "protocol_id",
     "study_id",
@@ -391,6 +497,12 @@ class ArmDesign:
     miprov2_num_candidates: int | None = None
     miprov2_minibatch: bool = False
     miprov2_minibatch_size: int | None = None
+    #: The protocol's own run count for this arm, when the protocol
+    #: pre-registers one instead of taking :mod:`spec`'s staged ladder.
+    #: ``None`` on every c19 arm, which is what keeps the powered study's
+    #: two-then-five shape exactly where it was. See
+    #: :func:`~whetstone_envs.optim.study.spec.k_run_for`.
+    design_k_run: int | None = None
 
     def to_spec(self, *, stage: StageId) -> ArmSpec:
         """The runnable arm at ``stage``, with that stage's run count.
@@ -406,8 +518,12 @@ class ArmDesign:
             arm_id=self.arm_id,
             optimizer=self.optimizer,
             kind=self.kind,
-            k_run=k_run_for(self.arm_id, stage=stage),
-            seeds=arm_seeds(self.arm_id, stage=stage),
+            k_run=k_run_for(
+                self.arm_id, stage=stage, design_k_run=self.design_k_run
+            ),
+            seeds=arm_seeds(
+                self.arm_id, stage=stage, design_k_run=self.design_k_run
+            ),
             demo_mode=self.demo_mode,
             copro_breadth=self.copro_breadth,
             copro_depth=self.copro_depth,
@@ -417,6 +533,7 @@ class ArmDesign:
             miprov2_minibatch_size=self.miprov2_minibatch_size,
             train_size=self.train_size,
             val_size=self.val_size,
+            design_k_run=self.design_k_run,
         )
 
 
@@ -456,7 +573,21 @@ class StudyProtocol:
     codex_evaluate_call_cap: int
     miprov2_num_trials: int
     miprov2_num_candidates: int
+    #: Whether MIPROv2's arms minibatch their validation evaluations.
+    #:
+    #: Design, and the one control the second family's split moves.
+    #: Minibatching draws ``miprov2_minibatch_size`` tasks from the
+    #: validation split per trial; c18's internal split is 24 and the
+    #: pinned size is 35, so a batched c18 arm would draw more than it has.
+    #: The protocol therefore pre-registers c18 unbatched -- full-valset
+    #: evaluations -- rather than resizing the batch, which would make the
+    #: two families' MIPROv2 arms different searches.
+    miprov2_minibatch: bool
     miprov2_minibatch_size: int
+    #: The protocol's own per-arm run count, or ``None`` to take
+    #: :mod:`spec`'s staged ladder. See
+    #: :func:`~whetstone_envs.optim.study.spec.k_run_for`.
+    design_k_run: int | None
     arms: tuple[ArmDesign, ...]
 
     def __post_init__(self) -> None:
@@ -464,6 +595,11 @@ class StudyProtocol:
             raise ValueError(
                 f"unknown protocol id {self.protocol_id!r}; "
                 f"registered protocols are {PROTOCOL_IDS}"
+            )
+        if self.design_k_run is not None and self.design_k_run < 1:
+            raise ValueError(
+                f"{self.protocol_id}: a pre-registered run count is at "
+                f"least one run, got {self.design_k_run}"
             )
         internal, official, held_out = self.split_sizes
         if min(self.split_sizes) < 1:
@@ -481,7 +617,14 @@ class StudyProtocol:
                 f"{self.val_size} must equal the internal split "
                 f"{internal}, which is what the GEPA arm requires"
             )
-        if self.miprov2_minibatch_size > self.val_size:
+        if self.miprov2_minibatch and self.miprov2_minibatch_size > (
+            self.val_size
+        ):
+            # Only when the arms actually batch. An unbatched design
+            # evaluates the whole validation split, so the pinned size is
+            # a number no run reads -- and refusing it would refuse the
+            # very design section 4.1 registers for c18, whose internal
+            # split is smaller than the shared pinned batch.
             raise ValueError(
                 f"{self.protocol_id}: MIPROv2 minibatch "
                 f"{self.miprov2_minibatch_size} exceeds the validation "
@@ -519,13 +662,15 @@ class StudyProtocol:
         return {name: getattr(self, name) for name in SIZED_FIELDS}
 
 
-def _arms(
+def _arms(  # noqa: PLR0913
     *,
     train_size: int,
     val_size: int,
+    minibatch: bool,
     minibatch_size: int,
     copro_breadth: int,
     copro_depth: int,
+    design_k_run: int | None,
 ) -> tuple[ArmDesign, ...]:
     """The study's arms, in report order: four real, then the two nulls.
 
@@ -534,6 +679,20 @@ def _arms(
     ground-only-deviation invariants, and they are declared here so that
     which mode carries the efficacy claim is pre-registered rather than
     chosen once the deltas are visible (R2).
+
+    The same eight arms serve both protocols. C3's claim is that the
+    machinery carries to a second family, and an arm list that shrank for
+    c18 would be testing a smaller machine: section 4.1 asks for one run
+    per optimizer, and "per optimizer" includes MIPROv2's two fidelity
+    modes, whose audit invariants are exactly the machinery under test.
+
+    ``minibatch`` is a parameter rather than a constant because it is the
+    one control the second family's split forces. C18's internal split is
+    24 and MIPROv2's pinned ``minibatch_size`` is 35, so a batched c18 arm
+    would ask for a batch larger than the set it draws from --
+    ``configure_miprov2`` refuses it, and :class:`StudyProtocol` refuses it
+    one step earlier. C18 therefore evaluates the full validation split,
+    which is what the protocol document's section 5.3 pre-registers.
     """
 
     def miprov2(demo_mode: str) -> ArmDesign:
@@ -553,8 +712,12 @@ def _arms(
             val_size=val_size,
             miprov2_num_trials=MIPROV2_NUM_TRIALS,
             miprov2_num_candidates=MIPROV2_NUM_CANDIDATES,
-            miprov2_minibatch=True,
-            miprov2_minibatch_size=minibatch_size,
+            miprov2_minibatch=minibatch,
+            # An unbatched arm carries no batch size. Recording one would
+            # pin a number no run reads, and it would enter the design hash
+            # as though the arm had batched at it.
+            miprov2_minibatch_size=minibatch_size if minibatch else None,
+            design_k_run=design_k_run,
         )
 
     return (
@@ -564,6 +727,7 @@ def _arms(
             kind=ArmKind.REAL,
             copro_breadth=copro_breadth,
             copro_depth=copro_depth,
+            design_k_run=design_k_run,
         ),
         miprov2(MIPROV2_EFFICACY_DEMO_MODE),
         *(miprov2(mode) for mode in MIPROV2_FIDELITY_DEMO_MODES),
@@ -573,8 +737,14 @@ def _arms(
             kind=ArmKind.REAL,
             train_size=train_size,
             val_size=val_size,
+            design_k_run=design_k_run,
         ),
-        ArmDesign(arm_id="codex", optimizer="codex", kind=ArmKind.REAL),
+        ArmDesign(
+            arm_id="codex",
+            optimizer="codex",
+            kind=ArmKind.REAL,
+            design_k_run=design_k_run,
+        ),
         # null-A takes COPRO's shape, because it is COPRO's search with an
         # uninformative proposer. A control at a different breadth or depth
         # would control for a search the study never ran.
@@ -584,39 +754,56 @@ def _arms(
             kind=ArmKind.NULL,
             copro_breadth=copro_breadth,
             copro_depth=copro_depth,
+            design_k_run=design_k_run,
         ),
         ArmDesign(
             arm_id="null-identity",
             optimizer="null-identity",
             kind=ArmKind.NULL,
+            design_k_run=design_k_run,
         ),
     )
 
 
-def _step10_c19(  # noqa: PLR0913
+def _step10(  # noqa: PLR0913
     *,
     protocol_id: str,
     study_id: str,
+    family: str,
     n_per_stratum: int,
     pool_seed_start: int,
     split_sizes: tuple[int, int, int],
     train_size: int,
     val_size: int,
+    miprov2_minibatch: bool,
     miprov2_minibatch_size: int,
     copro_breadth: int,
     copro_depth: int,
+    design_k_run: int | None,
 ) -> StudyProtocol:
-    """Build one size of the Step 10 c19 design.
+    """Build one size of one Step 10 design.
 
-    Every unsized value is a module constant read here rather than a
-    parameter, which is what makes the toy and the real study the same
-    protocol: there is no argument by which they could disagree on the
-    models, the arm list, or the control pins.
+    **One builder, four registrations.** Every value that is *shared* --
+    the models, the reasoning effort, the arm list, the Codex pins, the
+    COPRO and GEPA and MIPROv2 control shapes, the protocol document and
+    its digest -- is a module constant read here rather than a parameter,
+    which is what makes the two families the same protocol run twice and
+    each toy the same design as the study it stands in for. There is no
+    argument by which a c18 study could disagree with the c19 study on the
+    task model, on ``K_REPEAT``, on the correction rule, or on what an arm
+    is.
+
+    The parameters are exactly the values section 4.1 pre-registers
+    *differently* for the second family -- its population, its splits, its
+    train/val partition, its minibatch setting, and its run count -- plus
+    the sized fields each toy shrinks. A parameter added here is a claim
+    that the two designs may legitimately differ on it, and shows up in
+    review as one.
     """
     return StudyProtocol(
         protocol_id=protocol_id,
         study_id=study_id,
-        family=FAMILY,
+        family=family,
         n_per_stratum=n_per_stratum,
         pool_seed_start=pool_seed_start,
         split_sizes=split_sizes,
@@ -637,48 +824,102 @@ def _step10_c19(  # noqa: PLR0913
         codex_evaluate_call_cap=CODEX_EVALUATE_CALL_CAP,
         miprov2_num_trials=MIPROV2_NUM_TRIALS,
         miprov2_num_candidates=MIPROV2_NUM_CANDIDATES,
+        miprov2_minibatch=miprov2_minibatch,
         miprov2_minibatch_size=miprov2_minibatch_size,
+        design_k_run=design_k_run,
         arms=_arms(
             train_size=train_size,
             val_size=val_size,
+            minibatch=miprov2_minibatch,
             minibatch_size=miprov2_minibatch_size,
             copro_breadth=copro_breadth,
             copro_depth=copro_depth,
+            design_k_run=design_k_run,
         ),
     )
 
 
 #: The real Step 10 c19 study.
-STEP10_C19 = _step10_c19(
+STEP10_C19 = _step10(
     protocol_id=STEP10_C19_ID,
     study_id=STEP10_C19_ID,
+    family=FAMILY,
     n_per_stratum=N_PER_STRATUM,
     pool_seed_start=POOL_SEED_START,
     split_sizes=PROTOCOL_SPLIT_SIZES,
     train_size=PROTOCOL_TRAIN_SIZE,
     val_size=PROTOCOL_VAL_SIZE,
+    miprov2_minibatch=True,
     miprov2_minibatch_size=MIPROV2_MINIBATCH_SIZE,
     copro_breadth=COPRO_BREADTH,
     copro_depth=COPRO_DEPTH,
+    design_k_run=None,
 )
 
 #: The same design at test size.
-STEP10_C19_TOY = _step10_c19(
+STEP10_C19_TOY = _step10(
     protocol_id=STEP10_C19_TOY_ID,
     study_id=STEP10_C19_TOY_ID,
+    family=FAMILY,
     n_per_stratum=TOY_N_PER_STRATUM,
     pool_seed_start=TOY_POOL_SEED_START,
     split_sizes=TOY_SPLIT_SIZES,
     train_size=TOY_TRAIN_SIZE,
     val_size=TOY_VAL_SIZE,
+    miprov2_minibatch=True,
     miprov2_minibatch_size=TOY_MIPROV2_MINIBATCH_SIZE,
     copro_breadth=TOY_COPRO_BREADTH,
     copro_depth=TOY_COPRO_DEPTH,
+    design_k_run=None,
+)
+
+#: The real Step 10 c18 study: the C3 second family (section 4.1).
+#:
+#: Its population, splits, train/val partition, minibatch setting and run
+#: count are its own; everything else is read from the same constants the
+#: c19 study reads, which is the mechanical content of the generality
+#: claim. It carries the same eight arms at one run each, and it
+#: references the same protocol document at the same digest -- section 4.1
+#: is part of that document, so a c18 study pre-registers against the very
+#: text the c19 study does.
+STEP10_C18 = _step10(
+    protocol_id=STEP10_C18_ID,
+    study_id=STEP10_C18_ID,
+    family=C18_FAMILY,
+    n_per_stratum=C18_N_PER_STRATUM,
+    pool_seed_start=C18_POOL_SEED_START,
+    split_sizes=C18_SPLIT_SIZES,
+    train_size=C18_TRAIN_SIZE,
+    val_size=C18_VAL_SIZE,
+    miprov2_minibatch=False,
+    miprov2_minibatch_size=MIPROV2_MINIBATCH_SIZE,
+    copro_breadth=COPRO_BREADTH,
+    copro_depth=COPRO_DEPTH,
+    design_k_run=K_RUN_C18,
+)
+
+#: The same c18 design at test size.
+STEP10_C18_TOY = _step10(
+    protocol_id=STEP10_C18_TOY_ID,
+    study_id=STEP10_C18_TOY_ID,
+    family=C18_FAMILY,
+    n_per_stratum=TOY_C18_N_PER_STRATUM,
+    pool_seed_start=TOY_C18_POOL_SEED_START,
+    split_sizes=TOY_SPLIT_SIZES,
+    train_size=TOY_TRAIN_SIZE,
+    val_size=TOY_VAL_SIZE,
+    miprov2_minibatch=False,
+    miprov2_minibatch_size=TOY_MIPROV2_MINIBATCH_SIZE,
+    copro_breadth=TOY_COPRO_BREADTH,
+    copro_depth=TOY_COPRO_DEPTH,
+    design_k_run=K_RUN_C18,
 )
 
 _BY_ID: dict[str, StudyProtocol] = {
     STEP10_C19.protocol_id: STEP10_C19,
     STEP10_C19_TOY.protocol_id: STEP10_C19_TOY,
+    STEP10_C18.protocol_id: STEP10_C18,
+    STEP10_C18_TOY.protocol_id: STEP10_C18_TOY,
 }
 
 

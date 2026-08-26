@@ -220,9 +220,57 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: run hit its wall is what that execution *did*, not what the design
 #: pre-registered, so a study whose runs all completed and one whose Codex
 #: arm failed still pre-register identically.
-STUDY_MANIFEST_SCHEMA_VERSION = 14
+#:
+#: v15 records a protocol's own per-arm run count, as
+#: ``ArmRecord.design_k_run``, so a design that pins ``K_RUN`` rather than
+#: taking the staged ladder survives being persisted. The Step 10 c18
+#: protocol pre-registers one run per arm (section 4.1); read back without
+#: this field it took c19's powered two-then-five, which is a study buying
+#: four times the runs it registered under a pre-registration that says
+#: otherwise. ``None`` on every c19 arm, where the ladder *is* the design.
+#:
+#: Design, and hashed -- through ``pre_registration.k_run_by_arm``, which
+#: already covered the resolved count. What v15 adds is the ability to
+#: *recover* that count before Stage 0 has written a design block, which is
+#: what ``plan`` and the pre-Stage-0 spec read.
+STUDY_MANIFEST_SCHEMA_VERSION = 15
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
+)
+
+#: The one older schema :func:`read_study_manifest` still accepts.
+#:
+#: **Exactly one version back, and only for an additive-defaulted delta.**
+#: A study is a durable work document that outlives the code that wrote
+#: it: the completed c19 study on disk is a v14 document carrying 28 paid
+#: runs, and a version bump that refused it would strand every ``plan``,
+#: ``report``, ``manifest check``, and resume against the one artifact the
+#: whole study exists to produce. Worse, the refusal is self-sealing --
+#: ``write_study_manifest(replace=True)`` re-reads the file it is about to
+#: replace, so even an in-place migration could not run.
+#:
+#: The migration is legal precisely when the delta is *additive with a
+#: default*: v15 adds ``ArmRecord.design_k_run``, which defaults to
+#: ``None``, and ``None`` is what every v14 arm meant -- those studies took
+#: the staged ladder, which is what ``None`` selects. So upgrading the
+#: schema string in memory and letting the model default the field yields
+#: the same manifest the v14 document always described. Nothing is
+#: guessed, and no recorded value changes.
+#:
+#: The upgrade happens on **read** and every write emits the current
+#: version, so a v14 study migrates the first time a stage writes it. The
+#: pre-registration byte-preservation check is unaffected: it compares the
+#: ``pre_registration`` block, which this migration never touches, not the
+#: schema string.
+#:
+#: Anything older than one version back is refused and stays refused. Those
+#: documents predate deltas that were not additive, and the precedent for
+#: them is a deliberate manual migration rather than a silent read-time
+#: one -- a study whose design a reader cannot reconstruct honestly should
+#: fail loudly rather than be quietly reinterpreted.
+STUDY_MANIFEST_SCHEMA_MIGRATABLE_VERSION = STUDY_MANIFEST_SCHEMA_VERSION - 1
+STUDY_MANIFEST_SCHEMA_MIGRATABLE = (
+    f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_MIGRATABLE_VERSION}"
 )
 
 #: The manifest's filename inside a study directory.
@@ -1642,6 +1690,21 @@ class ArmRecord(_StrictModel):
     #: registered 10.
     miprov2_num_trials: StrictInt | None = None
     miprov2_num_candidates: StrictInt | None = None
+    #: The protocol's own per-arm run count, when the protocol pins one
+    #: rather than taking the staged ladder.
+    #:
+    #: Recorded for exactly the reason ``minibatch`` and the search shape
+    #: are: every stage after Stage 0 rebuilds its runnable spec from this
+    #: record, and a count that lived only in the protocol module would be
+    #: lost the moment the design was persisted. A c18 study read back
+    #: without it took c19's powered ladder -- five runs per arm at Stage
+    #: 2 -- under a pre-registration that says one, which is the study
+    #: buying four times the runs it registered.
+    #:
+    #: ``None`` on every c19 arm, where the ladder *is* the design, so the
+    #: c19 manifest is byte-identical to what it was before this field
+    #: existed.
+    design_k_run: StrictInt | None = None
     control_identity_hash: StrictStr
     seed_note: StrictStr
     runs: tuple[RunRecord, ...]
@@ -1992,6 +2055,18 @@ class AdapterSwapRecord(_StrictModel):
             raise ValueError("differing module names are nonblank")
         if len(set(self.differing_modules)) != len(self.differing_modules):
             raise ValueError("differing modules are listed once each")
+        if self.passed != (not self.differing_modules):
+            # The verdict *is* the module list being empty, exactly as a
+            # leakage report's verdict is the conjunction of its checks. A
+            # record free to say ``passed`` beside a named leak -- or to
+            # fail while naming nothing -- would make the report's C3
+            # section unfalsifiable from the artifact: a reader could not
+            # tell which of the two fields to believe.
+            raise ValueError(
+                "the adapter-swap verdict is whether any module differed; "
+                f"passed={self.passed} with "
+                f"{len(self.differing_modules)} differing module(s)"
+            )
         return self
 
 
@@ -2938,8 +3013,34 @@ def _require_valid_amendment(
         )
 
 
+def _migrated_schema(raw: object) -> object:
+    """``raw`` with a one-version-back schema string upgraded in place.
+
+    Returned unchanged unless the document names exactly
+    :data:`STUDY_MANIFEST_SCHEMA_MIGRATABLE`. The only edit is the schema
+    string: every field v15 added carries a default that reproduces what
+    the older document meant, so the model supplies them and no recorded
+    value is invented or altered. See
+    :data:`STUDY_MANIFEST_SCHEMA_MIGRATABLE` for why one version back is
+    the whole licence.
+    """
+    if (
+        not isinstance(raw, dict)
+        or raw.get(ManifestKey.SCHEMA) != STUDY_MANIFEST_SCHEMA_MIGRATABLE
+    ):
+        return raw
+    return {**raw, ManifestKey.SCHEMA.value: STUDY_MANIFEST_SCHEMA}
+
+
 def read_study_manifest(study_dir_or_file: Path) -> StudyManifest:
-    """Load and validate the manifest at ``study_dir_or_file``."""
+    """Load and validate the manifest at ``study_dir_or_file``.
+
+    A document one schema version back is upgraded on read rather than
+    refused, because a study outlives the code that wrote it and the
+    completed c19 study on disk is such a document. The upgrade is
+    in-memory only; the file keeps its bytes until something writes it,
+    and every write emits the current version.
+    """
     path = study_dir_or_file.resolve()
     directory, filename = (
         (path.parent, path.name)
@@ -2949,7 +3050,7 @@ def read_study_manifest(study_dir_or_file: Path) -> StudyManifest:
     raw = CanonicalJsonFile(
         directory, filename, max_bytes=MAX_MANIFEST_BYTES
     ).read()
-    return StudyManifest.model_validate_json(json.dumps(raw))
+    return StudyManifest.model_validate_json(json.dumps(_migrated_schema(raw)))
 
 
 # --------------------------------------------------------------------------
@@ -3076,6 +3177,8 @@ __all__ = [
     "STAGE_IDS",
     "STUDY_MANIFEST_NAME",
     "STUDY_MANIFEST_SCHEMA",
+    "STUDY_MANIFEST_SCHEMA_MIGRATABLE",
+    "STUDY_MANIFEST_SCHEMA_MIGRATABLE_VERSION",
     "STUDY_MANIFEST_SCHEMA_NAME",
     "STUDY_MANIFEST_SCHEMA_VERSION",
     "STUDY_STORE_NAME",

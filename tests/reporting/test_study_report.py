@@ -430,12 +430,10 @@ def reported_manifest(stage0_manifest: StudyManifest) -> StudyManifest:
             ),
             "c18": C18Record(
                 runs=(_run("c18-copro", seed=1000, passed=True),),
+                # Passing means nothing leaked, so the list is empty; the
+                # adapter's own files are exempt rather than "differing".
                 adapter_swap=AdapterSwapRecord(
-                    passed=True,
-                    differing_modules=(
-                        "whetstone_envs.optim.c18_experiment",
-                        "whetstone_envs.optim.families",
-                    ),
+                    passed=True, differing_modules=()
                 ),
             ),
         }
@@ -762,9 +760,47 @@ def test_the_report_shows_the_stage_and_gate_history(
 def test_the_report_shows_the_second_family_and_its_swap(
     reported_manifest: StudyManifest,
 ) -> None:
+    """A passing C3 verdict renders as a pass naming no modules.
+
+    The fixture's verdict passes, and a passing adapter-swap assertion has
+    an empty module list by construction -- the adapter's own files are
+    *exempt* from the guard, so they are never "differing modules". This
+    used to assert the report named ``c18_experiment``, which read the
+    record backwards: it would have required a passing study to publish a
+    leak in the very file the leak is measured against.
+    """
     markdown = render_markdown(build_study_report(reported_manifest))
     assert "second task family" in markdown
-    assert "whetstone_envs.optim.c18_experiment" in markdown
+    assert "adapter-swap assertion" in markdown
+    assert "passed" in markdown
+    assert "differing modules: none" in markdown
+
+
+def test_the_report_names_the_module_that_leaked(
+    reported_manifest: StudyManifest,
+) -> None:
+    """A failing verdict publishes *which* module leaked.
+
+    That name is the C3 finding, which is why the record persists a list
+    rather than a boolean -- section 4.1 says a leak is reported with the
+    module named, not silently absorbed.
+    """
+    assert reported_manifest.c18 is not None
+    leaked = reported_manifest.model_copy(
+        update={
+            "c18": reported_manifest.c18.model_copy(
+                update={
+                    "adapter_swap": AdapterSwapRecord(
+                        passed=False,
+                        differing_modules=("provider.py",),
+                    )
+                }
+            )
+        }
+    )
+    markdown = render_markdown(build_study_report(leaked))
+    assert "FAILED" in markdown
+    assert "provider.py" in markdown
 
 
 def test_the_report_names_the_threats_the_assignment_requires(

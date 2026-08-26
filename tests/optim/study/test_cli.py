@@ -66,6 +66,8 @@ from whetstone_envs.optim.study.manifest import (
 from whetstone_envs.optim.study.protocols import (
     COPRO_BREADTH,
     COPRO_DEPTH,
+    MIPROV2_MINIBATCH_SIZE,
+    PROTOCOL_VAL_SIZE,
 )
 
 from .conftest import toy_manifest
@@ -116,6 +118,25 @@ class _Spec:
                 (COPRO_BREADTH, COPRO_DEPTH)
                 if arm_id in COPRO_SHAPED_OPTIMIZERS
                 else None
+            )
+            for arm_id in self.arm_ids
+        }
+
+    @property
+    def miprov2_shape_by_arm(
+        self,
+    ) -> Mapping[str, tuple[int | None, int | None]]:
+        """Each arm's ``(val_size, minibatch_size)``, at c19's own values.
+
+        Derived from ``arm_ids`` for ``copro_shape_by_arm``'s reason. Only
+        the MIPROv2 arm carries a shape; the pair is ``(None, None)``
+        elsewhere, which is what ``plan`` reads as "no MIPROv2 shape here".
+        """
+        return {
+            arm_id: (
+                (PROTOCOL_VAL_SIZE, MIPROV2_MINIBATCH_SIZE)
+                if arm_id == "miprov2"
+                else (None, None)
             )
             for arm_id in self.arm_ids
         }

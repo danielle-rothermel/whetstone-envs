@@ -97,6 +97,7 @@ from whetstone_envs.optim.study.power import (
 from whetstone_envs.optim.study.protocols import (
     PROTOCOL_IDS,
     SIZED_FIELDS,
+    STEP10_C18_ID,
     STEP10_C19_ID,
     StudyProtocol,
     study_protocol,
@@ -153,6 +154,11 @@ class StudySpecLike(Protocol):
 
     @property
     def copro_shape_by_arm(self) -> Mapping[str, tuple[int, int] | None]: ...
+
+    @property
+    def miprov2_shape_by_arm(
+        self,
+    ) -> Mapping[str, tuple[int | None, int | None]]: ...
 
     @property
     def k_repeat(self) -> int: ...
@@ -467,9 +473,11 @@ def _optimizer_budget_lines(
     total_high = 0
     optimizers = spec.optimizer_by_arm
     shapes = spec.copro_shape_by_arm
+    miprov2_shapes = spec.miprov2_shape_by_arm
     for arm_id in spec.arm_ids:
         k_run = spec.k_run_by_arm[arm_id]
         shape = shapes[arm_id]
+        val_size, minibatch_size = miprov2_shapes[arm_id]
         try:
             estimate = estimate_optimizer_calls(
                 optimizers[arm_id],
@@ -477,6 +485,16 @@ def _optimizer_budget_lines(
                 k_repeat=k_repeat,
                 official_size=official_size,
                 held_out_size=held_out_size,
+                # The arm's own validation split and batch, for the
+                # reason the COPRO shape below is passed: an estimate
+                # taken at c19's 44/35 prices a search a c18 arm does
+                # not run, and prints a minibatch volume it never issues.
+                #
+                # ``val_size=None`` is how a non-MIPROv2 arm says it has
+                # no such shape, and the estimator reads it as "use the
+                # registered default", so it is passed straight through.
+                val_size=val_size,
+                miprov2_minibatch_size=minibatch_size,
                 # The arm's own pinned shape, not the estimator's
                 # default. COPRO's whole per-run cost is
                 # ``breadth x depth x T_int x K_REPEAT``, so an estimate
@@ -1308,13 +1326,17 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--study-dir", type=Path, required=True)
     init.add_argument(
         "--protocol",
-        choices=(STEP10_C19_ID,),
+        choices=(STEP10_C19_ID, STEP10_C18_ID),
         required=True,
         help=(
             "Which committed protocol to author. The design is a module, "
             "not a set of flags: every value it pins is in "
             "whetstone_envs.optim.study.protocols, so two initialisations "
-            "of the same protocol produce the same manifest."
+            "of the same protocol produce the same manifest. "
+            f"{STEP10_C19_ID!r} is the powered primary study; "
+            f"{STEP10_C18_ID!r} is the C3 second family, which section 4.1 "
+            "of the same document pre-registers at one run per arm over "
+            "c18's own population."
         ),
     )
     init.add_argument(

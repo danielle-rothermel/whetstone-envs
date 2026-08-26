@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-08-26
+
 ### Added
 
 - **The `step10-c18` protocol: the study's C3 second family, runnable.**

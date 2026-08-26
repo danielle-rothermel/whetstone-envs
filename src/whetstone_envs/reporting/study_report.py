@@ -529,12 +529,28 @@ def _arm_verdict(
     whole measurement procedure, so it outranks even a passing fidelity
     audit: an arm measured correctly against a contaminated split still
     reports a number nobody may claim. Fidelity comes next -- an arm with no
-    runs, or with any run whose audit failed, is *not validated* -- and only
-    then does the interval decide between an improvement and none.
+    runs, with any run whose audit failed, or with any run that terminalized
+    without producing a candidate, is *not validated* -- and only then does
+    the interval decide between an improvement and none.
+
+    **A terminally-failed run downgrades its arm even though its audit
+    passes.** The two say different things and the difference is the point:
+    the audit asks whether the run behaved honestly, and a run that hit its
+    wall budget and recorded the spend it had incurred did behave honestly
+    -- it passes. The verdict asks whether the arm's ``K_RUN`` runs are the
+    evidence the design pre-registered, and an arm that lost one of them to
+    a budget stop selected its representative from a smaller arg-max than
+    the design specified. That is a weaker result, and reporting it at full
+    strength because the failure was well-behaved would be exactly
+    backwards.
     """
     if leakage_failed:
         return VERDICT_INVALID
-    if not arm.runs or not all(run.audit_passed for run in arm.runs):
+    if (
+        not arm.runs
+        or not all(run.audit_passed for run in arm.runs)
+        or any(run.terminal_failure is not None for run in arm.runs)
+    ):
         return VERDICT_NOT_VALIDATED
     if row is None:
         return VERDICT_UNMEASURED

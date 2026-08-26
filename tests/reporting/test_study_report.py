@@ -659,6 +659,59 @@ def test_fidelity_gates_efficacy(
     )
 
 
+def test_a_terminally_failed_run_degrades_its_arm(
+    reported_manifest: StudyManifest,
+) -> None:
+    """An arm that lost a run to a budget stop is not validated.
+
+    The failed run's *audit* passes -- a wall stop that recorded the spend
+    it had incurred behaved honestly, which is all the audit asks -- so the
+    downgrade cannot come from ``audit_passed``. It comes from the run
+    having produced no candidate: the arm's arg-max ran over fewer runs
+    than the design pre-registered, which is a weaker result, and reporting
+    it at full strength because the failure was well-behaved would be
+    exactly backwards.
+
+    Fails-before: ``RunRecord`` had no ``terminal_failure`` field, so a
+    failed run was unrepresentable and this arm could not exist.
+    """
+    from whetstone_envs.optim.study.manifest import RunFailureRecord
+    from whetstone_envs.reporting.study_report import _arm_verdict
+
+    manifest = reported_manifest
+    by_id = {arm.arm_id: arm for arm in manifest.arms}
+    rows = {row.candidate_name: row for row in manifest.held_out}
+    copro = by_id["copro"]
+    # Baseline: this arm and this row are ``validated`` untouched.
+    assert (
+        _arm_verdict(arm=copro, row=rows["copro"], backstop=0.9)
+        == VERDICT_VALIDATED
+    )
+
+    degraded = copro.model_copy(
+        update={
+            "runs": (
+                copro.runs[0].model_copy(
+                    update={
+                        "terminal_failure": RunFailureRecord(
+                            code="codex_wall_budget_exceeded",
+                            message="the run exceeded its wall budget",
+                        )
+                    }
+                ),
+                *copro.runs[1:],
+            )
+        }
+    )
+    assert all(run.audit_passed for run in degraded.runs), (
+        "the downgrade must not come from the audit, which passes"
+    )
+    assert (
+        _arm_verdict(arm=degraded, row=rows["copro"], backstop=0.9)
+        == VERDICT_NOT_VALIDATED
+    )
+
+
 def test_the_title_separates_unvalidated_from_no_improvement(
     reported_manifest: StudyManifest,
 ) -> None:

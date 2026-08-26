@@ -161,11 +161,49 @@ class ArmRunResult:
     ``candidate`` is what selection scores; ``record`` is what the manifest
     stores. Keeping both means the harness never has to re-open a run
     directory to remember what a run produced.
+
+    ``candidate`` is ``None`` for a **failed run**: one that terminalized
+    with a ``terminal_failure`` and so ended on no prompt. §3.9 pre-registers
+    such a run as recorded rather than retried, and the record is the whole
+    of what it contributes -- its spend, its artifacts, and why it stopped.
+    It is not scored on official, cannot be an arg-max representative, and
+    is never issued a held-out claim, because there is no terminal prompt to
+    measure. Selection therefore skips it and the arm degrades; the stage
+    runs its remaining seeds and its remaining arms.
+
+    ``record.terminal_failure is not None`` is the single authority for
+    which of the two a result is, and :meth:`failed` is how callers ask.
     """
 
-    candidate: RunCandidate
+    candidate: RunCandidate | None
     record: RunRecord
     observed_task_calls: int
+
+    def __post_init__(self) -> None:
+        if (self.candidate is None) != (
+            self.record.terminal_failure is not None
+        ):
+            raise ValueError(
+                f"run {self.record.run_id!r} must carry a terminal candidate "
+                "or a recorded terminal failure, and exactly one: a run with "
+                "neither has no result and no explanation, and a run with "
+                "both claims to have failed and produced a prompt at once"
+            )
+
+    @property
+    def failed(self) -> bool:
+        """Whether this run ended in a recorded terminal failure."""
+        return self.record.terminal_failure is not None
+
+    @property
+    def seed(self) -> int | None:
+        """This run's seed, from the record rather than the candidate.
+
+        A failed run has no candidate to read it off, and the seed is what
+        the resume path keys on, so it is read from the record -- which
+        carries it for every run this harness produces, failed or not.
+        """
+        return self.record.seed
 
 
 class RecordedRunLoader(Protocol):
@@ -1914,15 +1952,27 @@ def run_arm_stage(
         study_dir=study_dir, stage=stage, environment=environment
     )
     reports = tuple(
-        _report_or_rebuild_arm(
-            arm_id=arm.arm_id,
-            runs=tuple(result.candidate for result in run_results[arm.arm_id]),
-            score_official=_require(environment.score_official),
-            evaluate_held_out=_require(environment.evaluate_held_out),
-            log=log,
-            stage=stage,
-        )
+        report
         for arm in spec.arms
+        # A failed run contributes no candidate, so ``_selectable`` is
+        # where §3.9's "recorded as a failed run" becomes a selection rule:
+        # the run stays on the manifest with its spend and its failure, and
+        # the arg-max runs over the runs that actually produced a prompt.
+        # An arm whose runs *all* failed selects nothing at all and reports
+        # ``None`` -- it is skipped here and rendered by the report from
+        # its records, which is the only honest description of an arm with
+        # no measurable candidate.
+        if (
+            report := _report_or_rebuild_arm(
+                arm_id=arm.arm_id,
+                runs=_selectable(run_results[arm.arm_id]),
+                score_official=_require(environment.score_official),
+                evaluate_held_out=_require(environment.evaluate_held_out),
+                log=log,
+                stage=stage,
+            )
+        )
+        is not None
     )
     # The anchors and the statistics are a second pass on purpose: a
     # Holm-corrected p-value is a whole-study computation that cannot exist
@@ -2121,6 +2171,23 @@ class _DurableOfficialScorer:
         return score
 
 
+def _selectable(
+    results: tuple[ArmRunResult, ...],
+) -> tuple[RunCandidate, ...]:
+    """The terminal candidates among these runs, failed runs omitted.
+
+    §3.9's "recorded as a failed run" means recorded *and not selected
+    over*. A run that terminalized carries no terminal prompt, so there is
+    nothing to score it on official with and nothing a held-out evaluation
+    could measure -- and substituting anything for it would report a number
+    that arm never produced. It stays on the manifest with its spend, its
+    artifacts, and its failure code; it just is not a candidate.
+    """
+    return tuple(
+        result.candidate for result in results if result.candidate is not None
+    )
+
+
 def _report_or_rebuild_arm(  # noqa: PLR0913
     *,
     arm_id: str,
@@ -2129,8 +2196,19 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     evaluate_held_out: HeldOutEvaluator,
     log: ManifestSelectionLog,
     stage: StageId,
-) -> ArmReport:
+) -> ArmReport | None:
     """Report this arm, or rebuild the report it already produced.
+
+    ``None`` for an arm with **no selectable runs**: every run it has
+    terminalized with a failure, so there is no candidate to take an
+    arg-max over and no prompt a held-out evaluation could measure. No
+    selection is persisted and no provider call is made -- issuing either
+    would be inventing a result for an arm that produced none. The arm's
+    failed runs stay on the manifest, and the report renders it from those
+    records as ``VERDICT_NOT_VALIDATED``, which is what an arm with no
+    completed run is. Returning rather than raising is the same rule the
+    refused-claim branch below follows, for the same reason: one arm's
+    failure must not discard every other arm's paid evidence.
 
     ``report_arm`` persists each arm's selection as it goes and the ledger
     refuses a second selection per arm per stage, so a stage that crashed
@@ -2174,6 +2252,8 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     failure lands here rather than being written off; see
     :class:`~whetstone_envs.optim.study.selection.HeldOutRefusalError`.
     """
+    if not runs:
+        return None
     durable_scorer = _DurableOfficialScorer(
         arm_id=arm_id, log=log, score_official=score_official
     )
@@ -2403,16 +2483,25 @@ def _check_call_counts(
     ``gated=False``: its agent chooses how much of its cap to spend, and a
     bug detector pointed at a non-deterministic agent invites a false abort
     (OQ3). It is gated on capacity respect and audit pass instead.
+
+    A **failed** run is not gated either, and for a reason of the same
+    shape. Its call count is a count of what it got through before it
+    stopped, not of what its search would have driven, so holding a
+    truncated number to the full run's bound tests nothing: it can only
+    ever pass, and a pass on evidence that was cut short is not the
+    assurance the gate exists to give. The run's failure is already on its
+    record; the gate reports on the runs that completed.
     """
     if stage is not StageId.STAGE1:
         return
     internal_size = spec.internal.size
     overruns = tuple(
-        f"{arm.arm_id}/{result.candidate.run_id}: "
+        f"{arm.arm_id}/{result.record.run_id}: "
         f"{result.observed_task_calls} calls"
         for arm in spec.arms
         for result in run_results.get(arm.arm_id, ())
-        if not call_count_within_estimate(
+        if not result.failed
+        and not call_count_within_estimate(
             optimizer=arm.optimizer,
             observed_task_calls=result.observed_task_calls,
             internal_size=internal_size,
@@ -2506,7 +2595,11 @@ def _candidates_for(
     "loaded then fresh", so the arg-max's tie-break -- earliest run wins --
     means the earliest *seed*, whichever stage happened to execute it.
     """
-    by_seed = {result.candidate.seed: result for result in fresh}
+    # Keyed off the *record*'s seed, not the candidate's: a failed run has
+    # no candidate to read one from, and it still occupies its seed. A
+    # resume must see it as done rather than re-running -- and re-paying
+    # for -- a seed whose failure is already recorded evidence.
+    by_seed = {result.seed: result for result in fresh}
     missing_artifacts: list[int] = []
     unloadable: list[int] = []
     for run in existing_runs:

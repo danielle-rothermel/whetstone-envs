@@ -236,6 +236,57 @@ def test_the_studys_capacity_cap_reaches_the_codex_arm(
     assert spec.codex_capacity == CODEX_EVALUATE_CALL_CAP
 
 
+def test_the_studys_wall_budget_reaches_the_codex_arm(
+    tmp_path: Path,
+) -> None:
+    """The wall is design too, and it must be carried like the cap.
+
+    Fails-before: ``StudyOptimizerRunner`` had no wall field and the
+    ``RunSpec`` it built left ``codex_wall_seconds=None``, so every Codex
+    run fell back to whetstone-ai's 600s default -- less than the ~960s the
+    pre-registered eight evaluate-calls need at ~120s each.
+    """
+    from dataclasses import replace
+
+    from whetstone_envs.optim.study.spec import CODEX_WALL_SECONDS
+
+    runner = replace(_runner(tmp_path), codex_wall_seconds=CODEX_WALL_SECONDS)
+    spec = runner._spec_for(_codex_arm(), seed=4000, run_dir=tmp_path / "run")
+    assert spec.codex_wall_seconds == CODEX_WALL_SECONDS
+
+
+def test_the_bound_stage_environment_pins_the_codex_wall(
+    tmp_path: Path,
+) -> None:
+    """The wall reaches the runner the *stage* builds, not just a test's.
+
+    ``codex_capacity`` was forwarded here and the wall was not, which is
+    precisely how a pinned cap ended up paired with an unpinned wall in the
+    run that broke.
+
+    Fails-before: ``bound_stage_environment`` passed no wall, so the field
+    was ``None`` on every runner a real stage used.
+    """
+    from tests.optim.study.conftest import toy_manifest
+    from whetstone_envs.optim.study.environment import bound_stage_environment
+    from whetstone_envs.optim.study.manifest import write_study_manifest
+    from whetstone_envs.optim.study.spec import (
+        CODEX_EVALUATE_CALL_CAP,
+        CODEX_WALL_SECONDS,
+    )
+
+    study_dir = tmp_path / "study"
+    write_study_manifest(study_dir, toy_manifest())
+    with bound_stage_environment(study_dir) as environment:
+        runner = environment.run_optimizer
+
+    assert isinstance(runner, StudyOptimizerRunner)
+    assert runner.codex_wall_seconds == CODEX_WALL_SECONDS
+    # Named together because they are one decision: the cap says how many
+    # calls the agent may buy, the wall says whether it has time to.
+    assert runner.codex_capacity == CODEX_EVALUATE_CALL_CAP
+
+
 def test_the_capacity_cap_is_not_forwarded_to_another_arm(
     tmp_path: Path,
 ) -> None:
@@ -712,6 +763,7 @@ def test_null_a_terminal_template_comes_from_its_own_search(
     runner = _runner(tmp_path)
     result = runner(arm=_null_a_arm(), seed=5000, study_dir=tmp_path)
 
+    assert result.candidate is not None, "null-A completes and has a prompt"
     assert "(variant 5000)" not in result.candidate.template
     assert result.candidate.template != runner.naive_template
 
@@ -728,6 +780,8 @@ def test_null_a_is_resumable_from_its_recorded_run(tmp_path: Path) -> None:
 
     reloaded = runner.load_recorded_run(arm=arm, run=first.record)
     assert reloaded is not None
+    assert reloaded.candidate is not None
+    assert first.candidate is not None
     assert reloaded.candidate.template == first.candidate.template
     assert reloaded.observed_task_calls == first.observed_task_calls
 
@@ -742,6 +796,7 @@ def test_null_b_still_runs_no_optimizer(tmp_path: Path) -> None:
     runner = _runner(tmp_path)
     result = runner(arm=_null_b_arm(), seed=6000, study_dir=tmp_path)
 
+    assert result.candidate is not None, "null-B is a control, never a failure"
     assert result.candidate.template == runner.naive_template
     assert result.observed_task_calls == 0
     assert result.record.spend == ()
@@ -800,6 +855,8 @@ def test_two_null_b_runs_of_one_arm_agree_rather_than_corrupting(
     second = _runner(tmp_path)(arm=arm, seed=6000, study_dir=tmp_path)
 
     assert first.record.result_ref == second.record.result_ref
+    assert first.candidate is not None
+    assert second.candidate is not None
     assert first.candidate.template == second.candidate.template
     assert first.record.run_id == second.record.run_id
 

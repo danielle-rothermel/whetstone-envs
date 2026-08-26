@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-08-25
+
 ### Fixed
 
 - **The Codex arm now gets a wall budget big enough to spend its

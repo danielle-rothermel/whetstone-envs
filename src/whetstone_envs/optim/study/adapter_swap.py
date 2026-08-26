@@ -47,6 +47,7 @@ __all__ = [
     "FAMILY_ADAPTER_FILES",
     "FAMILY_CONTRACT_FILES",
     "OPTIM_ROOT",
+    "UNREADABLE_DETAIL",
     "adapter_swap_record",
     "differing_modules",
 ]
@@ -96,6 +97,11 @@ ALLOWED_FAMILY_DEFAULTS: dict[str, frozenset[str]] = {
 #: The families this guard looks for, as a set for membership tests.
 _FAMILY_IDS = frozenset(KNOWN_FAMILY_IDS)
 
+#: How an unreadable or unparseable module is named in the verdict. A file
+#: the guard could not clear is reported as an offender rather than raised
+#: past a stage that has already spent, so the reason is part of the name.
+UNREADABLE_DETAIL = "unreadable"
+
 
 def _family_package_imports(path: Path) -> set[str]:
     """Every ``whetstone_envs.<family>`` module one file imports."""
@@ -117,28 +123,56 @@ def _family_package_imports(path: Path) -> set[str]:
     }
 
 
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    """The identity of every node that *is* a docstring in ``tree``.
+
+    Identified by position in the tree rather than by value, which is the
+    whole point. Excluding by value asks "does this string equal some
+    docstring in this file", and a module whose docstring is the single
+    word ``c18`` then exempts every bare ``"c18"`` literal in it --
+    including a live ``if family == "c18"`` branch. One line of prose
+    would switch the guard off for the file it is guarding.
+
+    Excluding by identity asks "is this string node the docstring", which
+    is the question the exemption was always meant to ask: prose naming a
+    family explains the shared path, and a literal in an expression
+    branches on one, no matter that the two spell the same characters.
+    """
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node,
+            (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            continue
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            docstrings.add(id(first.value))
+    return docstrings
+
+
 def _family_string_literals(path: Path) -> set[str]:
     """Family identifiers appearing as bare string values in one module.
 
-    Docstrings are excluded: prose naming a family explains the shared
-    path, it does not branch on one.
+    Docstrings are excluded -- by node identity, never by value; see
+    :func:`_docstring_nodes` for why that distinction is load-bearing.
     """
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
-    docstrings = {
-        ast.get_docstring(node, clean=False)
-        for node in ast.walk(tree)
-        if isinstance(
-            node,
-            (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
-        )
-    }
+    docstrings = _docstring_nodes(tree)
     return {
         node.value
         for node in ast.walk(tree)
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
-        and node.value not in docstrings
+        and id(node) not in docstrings
         and node.value in _FAMILY_IDS
     }
 
@@ -155,21 +189,40 @@ def differing_modules(*, root: Path | None = None) -> tuple[str, ...]:
     the manifest can open the offending file without knowing where the
     package was installed.
     """
+    base = root or OPTIM_ROOT
     exempt = FAMILY_ADAPTER_FILES | FAMILY_CONTRACT_FILES
     offenders: set[str] = set()
-    for path in sorted((root or OPTIM_ROOT).rglob("*.py")):
+    for path in sorted(base.rglob("*.py")):
         if path.name in exempt:
             continue
+        name = str(path.relative_to(base))
         allowed = ALLOWED_FAMILY_DEFAULTS.get(path.name, frozenset())
-        # Both halves, unioned rather than short-circuited: a module that
-        # leaks an import and a literal is one offender either way, but a
-        # module whose import leak masked its literal leak would be
-        # reported as clean the moment the import was removed.
-        leaked = _family_package_imports(path) | (
-            _family_string_literals(path) - allowed
-        )
+        try:
+            # Both halves, unioned rather than short-circuited: a module
+            # that leaks an import and a literal is one offender either
+            # way, but a module whose import leak masked its literal leak
+            # would be reported as clean the moment the import was removed.
+            leaked = _family_package_imports(path) | (
+                _family_string_literals(path) - allowed
+            )
+        except (OSError, SyntaxError, ValueError) as error:
+            # A file this guard cannot read or parse is a file it cannot
+            # clear, and it is named as such rather than raised.
+            #
+            # This runs at the end of an arm stage, after the last paid
+            # operation. An exception here would abandon the c18 block
+            # entirely -- the study would lose its recorded C3 evidence
+            # over a syntax error in some unrelated module, having already
+            # paid for every run the block was going to cite. Recording
+            # "this module could not be cleared" is both honest and
+            # non-destructive: the verdict fails, the reason is legible,
+            # and the runs are still written.
+            offenders.add(
+                f"{name} ({UNREADABLE_DETAIL}: {type(error).__name__})"
+            )
+            continue
         if leaked:
-            offenders.add(str(path.relative_to(root or OPTIM_ROOT)))
+            offenders.add(name)
     return tuple(sorted(offenders))
 
 

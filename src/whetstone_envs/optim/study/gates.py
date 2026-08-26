@@ -105,6 +105,7 @@ __all__ = [
     "gepa_task_call_ceiling",
     "miprov2_full_eval_rows",
     "miprov2_minibatch_rows",
+    "miprov2_task_call_bounds",
     "null_identity_report_rows",
 ]
 
@@ -205,18 +206,31 @@ MIPROV2_FULL_EVAL_PASSES_MIN = 1
 MIPROV2_FULL_EVAL_PASSES_MAX = MIPROV2_FULL_EVAL_PASSES_ISSUED
 
 
-def miprov2_full_eval_rows(passes: int, k_repeat: int) -> int:
-    """Rows ``passes`` full-valset passes cost at ``k_repeat`` repeats."""
-    return passes * MIPROV2_VALSET_TASKS * k_repeat
+def miprov2_full_eval_rows(
+    passes: int, k_repeat: int, *, val_size: int = MIPROV2_VALSET_TASKS
+) -> int:
+    """Rows ``passes`` full-valset passes cost at ``k_repeat`` repeats.
+
+    ``val_size`` is the arm's own validation split. It defaults to c19's
+    44 so every existing caller and pinned constant is unchanged.
+    """
+    return passes * val_size * k_repeat
 
 
-def miprov2_minibatch_rows(k_repeat: int) -> int:
+def miprov2_minibatch_rows(
+    k_repeat: int, *, minibatch_size: int = MIPROV2_MINIBATCH_SIZE
+) -> int:
     """Rows the minibatch trials cost at ``k_repeat`` repeats.
 
     One minibatch evaluation per trial, each over ``minibatch_size``
     tasks. These never deduplicate: the sampled batch differs per trial.
+
+    Zero for an **unbatched** design, which has no minibatch trials at
+    all: its trials are full-valset passes, counted by
+    :func:`miprov2_full_eval_rows` instead. Callers express that by
+    passing ``minibatch_size=0`` rather than by a second function.
     """
-    return MIPROV2_NUM_TRIALS * MIPROV2_MINIBATCH_SIZE * k_repeat
+    return MIPROV2_NUM_TRIALS * minibatch_size * k_repeat
 
 
 #: The design's repeat count, which the constants below are pinned at.
@@ -245,6 +259,65 @@ MIPROV2_FEWSHOT_TASK_CALL_CEILING = (
     + MIPROV2_FULL_EVAL_CALLS_MAX
     + MIPROV2_BOOTSTRAP_ROWS_WORST_CASE
 )
+
+
+def miprov2_task_call_bounds(
+    *, k_repeat: int, val_size: int, minibatch_size: int | None
+) -> tuple[int, int, str]:
+    """MIPROv2's per-run task-row floor, ceiling, and basis at one shape.
+
+    The decomposition is the same one the 2b run records confirmed --
+    ``bootstrap + minibatch + full-valset`` -- read at the arm's *own*
+    validation split and minibatch setting rather than at c19's.
+
+    Both terms move with the design, and for a registered study they move
+    together. A batched arm spends ``num_trials`` minibatch evaluations of
+    ``minibatch_size`` tasks plus the deduplicating full-valset passes. An
+    **unbatched** arm has no minibatch term at all: every trial is a
+    full-valset pass, so the trials land in the pass count instead. That is
+    c18's shape (§4.1), and reading it off c19's constants priced a 1,050-row
+    minibatch volume that a c18 run never issues -- and reported it in the
+    basis string, so ``plan`` printed "1050 minibatch" for a design whose
+    manifest says ``minibatch: false``.
+
+    ``minibatch_size`` is ``None`` on an unbatched arm, which is exactly
+    what :class:`~...manifest.ArmRecord` records for one.
+    """
+    batched = bool(minibatch_size)
+    if batched:
+        assert minibatch_size is not None
+        minibatch_calls = miprov2_minibatch_rows(
+            k_repeat, minibatch_size=minibatch_size
+        )
+        # The promotion schedule is what issues full-valset passes, and it
+        # is a function of the trial count, not of the split size.
+        passes_min = MIPROV2_FULL_EVAL_PASSES_MIN
+        passes_max = MIPROV2_FULL_EVAL_PASSES_MAX
+    else:
+        minibatch_calls = 0
+        # Unbatched: every trial evaluates the whole valset, plus the
+        # baseline's own pass. Deduplication still applies at the floor --
+        # a trial re-proposing an unchanged candidate resolves to the
+        # record the previous one wrote.
+        passes_min = MIPROV2_FULL_EVAL_PASSES_MIN
+        passes_max = MIPROV2_NUM_TRIALS + 1
+    full_min = miprov2_full_eval_rows(passes_min, k_repeat, val_size=val_size)
+    full_max = miprov2_full_eval_rows(passes_max, k_repeat, val_size=val_size)
+    low = minibatch_calls + full_min + MIPROV2_BOOTSTRAP_ROWS_BEST_CASE
+    high = minibatch_calls + full_max + MIPROV2_BOOTSTRAP_ROWS_WORST_CASE
+    minibatch_note = (
+        f"{minibatch_calls} minibatch + "
+        if batched
+        else "unbatched (no minibatch trials) + "
+    )
+    basis = (
+        f"{minibatch_note}{full_min}-{full_max} full-valset "
+        f"({passes_min}-{passes_max} passes over {val_size} val tasks, "
+        f"F11) + {MIPROV2_BOOTSTRAP_ROWS_BEST_CASE}-"
+        f"{MIPROV2_BOOTSTRAP_ROWS_WORST_CASE} bootstrap rows (F10)"
+    )
+    return low, high, basis
+
 
 # --------------------------------------------------------------------------
 # GEPA
@@ -314,6 +387,8 @@ def estimate_optimizer_calls(  # noqa: PLR0913
     copro_depth: int = COPRO_DEFAULT_DEPTH,
     official_size: int = 0,
     held_out_size: int = 0,
+    val_size: int | None = None,
+    miprov2_minibatch_size: int | None = MIPROV2_MINIBATCH_SIZE,
 ) -> OptimizerCallEstimate:
     """Estimated evaluation calls for one run of ``optimizer``.
 
@@ -328,8 +403,15 @@ def estimate_optimizer_calls(  # noqa: PLR0913
     ``breadth`` candidates, each scored over the whole internal split at
     ``K_REPEAT`` repeats. ``null-random`` perturbs the anchor but still
     drives the same selection machinery, so it shares COPRO's shape.
-    MIPROv2 and GEPA carry their own internal budgets, so their estimates
-    are the pinned constants above rather than a function of the splits.
+    MIPROv2's budget follows from its *own* pinned shape rather than from
+    the internal split: ``val_size`` is the arm's validation partition and
+    ``miprov2_minibatch_size`` its batch, ``None`` on an unbatched arm.
+    Both default to c19's registered values, so a caller that passes
+    neither gets exactly the band this module has always returned. A
+    caller that passes the arm's recorded shape gets that arm's cost --
+    which is the difference between pricing c18's unbatched 10x12x3 search
+    and pricing c19's batched one for it. GEPA carries a pinned metric-call
+    ceiling, so its estimate remains a constant.
 
     ``null-identity`` is the exception: it runs **no optimizer at all**, so
     its estimate is the report harness's official and held-out passes, which
@@ -379,19 +461,20 @@ def estimate_optimizer_calls(  # noqa: PLR0913
             ),
         )
     if optimizer == "miprov2":
-        return OptimizerCallEstimate(
-            optimizer=optimizer,
-            low=MIPROV2_FEWSHOT_TASK_CALL_FLOOR,
-            high=MIPROV2_FEWSHOT_TASK_CALL_CEILING,
-            basis=(
-                f"{MIPROV2_MINIBATCH_CALLS} minibatch + "
-                f"{MIPROV2_FULL_EVAL_CALLS_MIN}-"
-                f"{MIPROV2_FULL_EVAL_CALLS_MAX} full-valset "
-                f"({MIPROV2_FULL_EVAL_PASSES_MIN}-"
-                f"{MIPROV2_FULL_EVAL_PASSES_MAX} passes, F11) + "
-                f"{MIPROV2_BOOTSTRAP_ROWS_BEST_CASE}-"
-                f"{MIPROV2_BOOTSTRAP_ROWS_WORST_CASE} bootstrap rows (F10)"
+        # ``val_size is None`` means the caller supplied no shape at all,
+        # so the whole shape falls back to c19's registered one -- batch
+        # included. Reading only half the default would price an
+        # *unbatched* c19 arm, which is not a design anything registers.
+        shaped = val_size is not None
+        low, high, basis = miprov2_task_call_bounds(
+            k_repeat=k_repeat,
+            val_size=val_size if shaped else MIPROV2_VALSET_TASKS,
+            minibatch_size=(
+                miprov2_minibatch_size if shaped else MIPROV2_MINIBATCH_SIZE
             ),
+        )
+        return OptimizerCallEstimate(
+            optimizer=optimizer, low=low, high=high, basis=basis
         )
     if optimizer == "gepa":
         ceiling = gepa_task_call_ceiling(k_repeat)

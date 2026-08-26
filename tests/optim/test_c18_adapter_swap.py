@@ -49,6 +49,7 @@ from whetstone_envs.optim.study.adapter_swap import (
     FAMILY_ADAPTER_FILES,
     FAMILY_CONTRACT_FILES,
     OPTIM_ROOT,
+    UNREADABLE_DETAIL,
     adapter_swap_record,
     differing_modules,
 )
@@ -243,6 +244,44 @@ def test_the_guard_reports_a_planted_leak(tmp_path) -> None:
         "leaky_branch.py",
         "leaky_import.py",
     )
+
+
+def test_a_docstring_cannot_exempt_a_files_own_literals(tmp_path) -> None:
+    """A one-word docstring must not switch the guard off for its file.
+
+    Fails before this change. The exclusion compared each string's
+    *value* against the set of docstring values, so a module whose
+    docstring was the single word ``c18`` exempted every bare ``"c18"``
+    literal in it -- including a live dispatch. The two files here carry
+    the identical branch and differ only in that docstring, so a guard
+    that reads values gives them opposite verdicts.
+    """
+    (tmp_path / "honest.py").write_text('F = "c18"\n', encoding="utf-8")
+    (tmp_path / "poisoned.py").write_text(
+        '"""c18"""\nF = "c18"\n', encoding="utf-8"
+    )
+    assert differing_modules(root=tmp_path) == ("honest.py", "poisoned.py")
+
+
+def test_an_unreadable_module_fails_the_verdict_rather_than_raising(
+    tmp_path,
+) -> None:
+    """A file the guard cannot parse is named, not raised past.
+
+    This runs at the end of an arm stage, after the last paid operation.
+    Raising would abandon the c18 block over a syntax error in an
+    unrelated module, losing the recorded C3 evidence for runs the study
+    had already paid for.
+    """
+    (tmp_path / "broken.py").write_text("def (\n", encoding="utf-8")
+    modules = differing_modules(root=tmp_path)
+    assert len(modules) == 1
+    assert modules[0].startswith("broken.py")
+    assert UNREADABLE_DETAIL in modules[0]
+    # And the record built from it is a *failed* verdict, not an error.
+    record = adapter_swap_record(root=tmp_path)
+    assert record.passed is False
+    assert record.differing_modules == modules
 
 
 def test_every_shared_path_exemption_is_still_in_use() -> None:

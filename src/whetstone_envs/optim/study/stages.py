@@ -2618,6 +2618,12 @@ def _check_call_counts(
             held_out_size=spec.held_out.size,
             copro_breadth=arm.copro_breadth,
             copro_depth=arm.copro_depth,
+            # The arm's own MIPROv2 shape, for the reason the COPRO shape
+            # above is passed: gating a c18 arm's unbatched 12-task search
+            # against c19's batched 44/35 band leaves ~6x of slack, which
+            # is a fan-out detector that would wave a 6x overrun through.
+            val_size=arm.val_size,
+            miprov2_minibatch_size=arm.miprov2_minibatch_size,
         )
     )
     manifest = read_study_manifest(study_dir)
@@ -2852,6 +2858,8 @@ def call_count_within_estimate(  # noqa: PLR0913
     held_out_size: int = 0,
     copro_breadth: int | None = None,
     copro_depth: int | None = None,
+    val_size: int | None = None,
+    miprov2_minibatch_size: int | None = None,
 ) -> bool:
     """Whether a run's measured calls land near its pre-spend estimate.
 
@@ -2886,6 +2894,12 @@ def call_count_within_estimate(  # noqa: PLR0913
     into the estimate, because COPRO's whole per-run cost follows from
     them. Gating a 6x3 run against a 2x1 estimate would flag every healthy
     COPRO run as a fourfold overrun.
+
+    ``val_size``/``miprov2_minibatch_size`` do the same for MIPROv2, and
+    the failure they prevent runs the other way: gating a c18 arm's
+    unbatched 12-task search against c19's batched 44/35 band leaves the
+    detector roughly six times more slack than the design warrants, so a
+    genuine six-fold fan-out would pass the gate and carry into Stage 2.
     """
     estimate = estimate_optimizer_calls(
         optimizer,
@@ -2899,6 +2913,14 @@ def call_count_within_estimate(  # noqa: PLR0913
             else {
                 "copro_breadth": copro_breadth,
                 "copro_depth": copro_depth,
+            }
+        ),
+        **(
+            {}
+            if val_size is None
+            else {
+                "val_size": val_size,
+                "miprov2_minibatch_size": miprov2_minibatch_size,
             }
         ),
     )

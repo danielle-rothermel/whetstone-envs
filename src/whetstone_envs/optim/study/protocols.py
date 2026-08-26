@@ -331,6 +331,17 @@ C18_FAMILY = FamilyId.C18.value
 #: adapter already pins them, a test already checks the pin against the
 #: generator, and a study whose population disagreed with the family's own
 #: default would be a study over tasks the adapter does not generate.
+#:
+#: **The splits consume the whole pool: 24 + 48 + 48 = 120, with no
+#: unassigned tail.** C19 keeps a 44-task tail above its 660 assigned
+#: tasks; c18 keeps none. That is worth stating because one Stage-0
+#: remedy depends on it: a study whose gate fails on power can grow its
+#: held-out split from the tail, and on c18 there is no tail to grow it
+#: from. Enlarging c18's held-out split would mean regenerating the pool
+#: at a larger ``n_per_stratum``, which is a different population and so a
+#: different pre-registration. Section 4.1 never powered c18 -- it is C3
+#: evidence, descriptive at T=48 -- so this is a recorded property of the
+#: design rather than a gap in it.
 C18_N_PER_STRATUM = C18_DEFAULT_N_PER_STRATUM
 C18_POOL_SEED_START = C18_DEFAULT_POOL_SEED_START
 C18_SPLIT_SIZES: tuple[int, int, int] = C18_PROTOCOL_SPLIT_SIZES

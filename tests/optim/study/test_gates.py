@@ -286,12 +286,81 @@ def test_the_harness_formula_refuses_impossible_inputs(
         )
 
 
-def test_miprov2_carries_its_own_budget_not_the_splits() -> None:
-    """MIPROv2's volume is its control's, so the splits do not move it."""
-    small = estimate_optimizer_calls("miprov2", internal_size=8, k_repeat=1)
-    large = estimate_optimizer_calls("miprov2", internal_size=88, k_repeat=3)
-    assert (small.low, small.high) == (large.low, large.high)
-    assert large.high == MIPROV2_FEWSHOT_TASK_CALL_CEILING
+def test_miprov2_does_not_read_the_internal_split() -> None:
+    """MIPROv2 evaluates its *validation* partition, not the whole split.
+
+    The narrow true statement the old test overshot. Its budget does not
+    follow from ``internal_size`` -- but it does follow from the arm's own
+    ``val_size`` and minibatch, which is the next test.
+    """
+    at_24 = estimate_optimizer_calls(
+        "miprov2", internal_size=24, k_repeat=3, val_size=44
+    )
+    at_88 = estimate_optimizer_calls(
+        "miprov2", internal_size=88, k_repeat=3, val_size=44
+    )
+    assert (at_24.low, at_24.high) == (at_88.low, at_88.high)
+
+
+def test_the_miprov2_estimate_tracks_the_designs_own_shape() -> None:
+    """The estimate is the arm's search, not a constant.
+
+    Pinned at the two registered shapes. The c19 band must not move --
+    it is what the Stage-1 gate has always divided by -- and the c18 band
+    must reflect a design that runs ten trials over a twelve-task valset
+    with no minibatch at all.
+
+    Fails before this change: MIPROv2's estimate ignored both parameters,
+    so a c18 arm was priced at c19's 1210-3118 and the plan printed a
+    "1050 minibatch" volume for a design whose manifest says
+    ``minibatch: false``.
+    """
+    c19 = estimate_optimizer_calls(
+        "miprov2",
+        internal_size=88,
+        k_repeat=3,
+        val_size=44,
+        miprov2_minibatch_size=35,
+    )
+    assert (
+        (c19.low, c19.high)
+        == (
+            MIPROV2_FEWSHOT_TASK_CALL_FLOOR,
+            MIPROV2_FEWSHOT_TASK_CALL_CEILING,
+        )
+        == (1210, 3118)
+    )
+    assert "1050 minibatch" in c19.basis
+
+    c18 = estimate_optimizer_calls(
+        "miprov2",
+        internal_size=24,
+        k_repeat=3,
+        val_size=12,
+        miprov2_minibatch_size=None,
+    )
+    assert (c18.low, c18.high) != (c19.low, c19.high)
+    # The honest per-run cost of the registered c18 search -- ten trials
+    # over the twelve-task valset at three repeats -- lands inside its band.
+    assert c18.low <= MIPROV2_NUM_TRIALS * 12 * 3 <= c18.high
+    # And the basis says what the design does rather than naming a
+    # minibatch volume no c18 run issues.
+    assert "unbatched" in c18.basis
+    assert "minibatch +" not in c18.basis
+    assert "12 val tasks" in c18.basis
+
+
+def test_the_default_miprov2_estimate_is_c19s_registered_band() -> None:
+    """A caller passing no shape still gets exactly the c19 band.
+
+    The constants and every existing call site are unchanged by the
+    parameterisation, which is what keeps the c19 study's gate identical.
+    """
+    default = estimate_optimizer_calls("miprov2", internal_size=88, k_repeat=3)
+    assert (default.low, default.high) == (
+        MIPROV2_FEWSHOT_TASK_CALL_FLOOR,
+        MIPROV2_FEWSHOT_TASK_CALL_CEILING,
+    )
 
 
 def test_gepa_is_estimated_in_task_rows_at_the_pinned_budget() -> None:

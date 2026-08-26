@@ -747,6 +747,29 @@ class StudySpec:
         }
 
     @property
+    def miprov2_shape_by_arm(self) -> dict[str, tuple[int | None, int | None]]:
+        """Each arm's ``(val_size, minibatch_size)``, for pricing MIPROv2.
+
+        The exact counterpart of :attr:`copro_shape_by_arm`, and for the
+        same reason: MIPROv2's per-run cost is its trials over its *own*
+        validation split, batched or not. An estimate taken at c19's 44/35
+        prices a c18 arm's 12-task unbatched search as though it batched 35
+        tasks it does not have.
+
+        ``minibatch_size`` is ``None`` on an unbatched arm -- which is what
+        the arm records -- and the pair is ``(None, None)`` on an arm with
+        no MIPROv2 shape at all.
+        """
+        return {
+            arm.arm_id: (
+                (arm.val_size, arm.miprov2_minibatch_size)
+                if arm.optimizer == "miprov2"
+                else (None, None)
+            )
+            for arm in self.arms
+        }
+
+    @property
     def real_arms(self) -> tuple[ArmSpec, ...]:
         """The hypotheses, in Holm-family order."""
         return tuple(arm for arm in self.arms if arm.kind is ArmKind.REAL)

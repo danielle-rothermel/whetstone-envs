@@ -52,8 +52,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the same failure mode `minibatch` and the COPRO search shape were added
   for. `None` on every c19 arm, where the staged ladder *is* the design, so
   a c19 manifest is unchanged.
+- **A one-version-back read migration for the study manifest.** A study is
+  a durable work document that outlives the code that wrote it, and the
+  completed c19 study on disk is a v14 document carrying 28 paid runs.
+  `read_study_manifest` now accepts exactly the previous schema version
+  when the delta is additive-with-a-default — v15's added field defaults to
+  `None`, which is what every v14 arm meant — upgrades the schema string in
+  memory, and leaves the file's bytes alone until something writes it;
+  every write emits the current version. Without this the v15 bump would
+  have stranded that study on `plan`, `report`, `manifest check`, and
+  resume, and the refusal was self-sealing: `write_study_manifest(replace=True)`
+  re-reads the file it is about to replace, so even an in-place migration
+  could not have run. Anything older than one version back stays refused
+  and keeps the manual-migration precedent.
 
 ### Fixed
+
+- **MIPROv2's pre-spend estimate now reads the design's own shape.** It was
+  hardcoded to c19's batched 44-task valset and 35-task minibatch, so a c18
+  arm was priced at c19's 1210–3118 band and `plan` printed a "1050
+  minibatch" volume for a design whose manifest says `minibatch: false`;
+  the honest cost of the registered c18 search is 360 rows (10 trials × 12
+  val × 3 repeats). `estimate_optimizer_calls` takes the arm's `val_size`
+  and `miprov2_minibatch_size`, both defaulting to c19's registered values,
+  so the c19 band is byte-identical and golden-pinned. This also restores
+  the Stage-1 fan-out gate on c18, which had roughly six times more slack
+  than the design warranted — enough to wave a genuine six-fold fan-out
+  through into Stage 2.
+- **The C3 leak guard could be switched off by a docstring.** Docstrings
+  were excluded from the family-literal scan by *value*, so a module whose
+  docstring was the single word `c18` exempted every bare `"c18"` literal
+  in it, including a live `family == "c18"` dispatch — two files with
+  identical branches got opposite verdicts. Docstrings are now identified
+  by node identity, which is the question the exemption always meant to
+  ask.
+- **`AdapterSwapRecord` enforces that its verdict matches its evidence.**
+  `passed` must be exactly "no differing modules", so a record cannot
+  claim a pass beside a named leak or fail while naming nothing — either
+  would make the report's C3 section unfalsifiable from the artifact. Two
+  fixtures encoded the opposite reading (listing the exempt adapter files
+  as "differing" while passing) and were corrected.
+- **An unparseable module fails the C3 verdict instead of raising.** The
+  guard runs at the end of an arm stage, after the last paid operation, so
+  an exception would have abandoned the c18 block — losing the recorded
+  generality evidence for runs the study had already paid for — over a
+  syntax error in an unrelated file. Such a module is now named in the
+  verdict with its reason.
 
 - **A role that reached no provider no longer withholds a stage's whole
   bill.** An arm stage's USD is the fold of its runs' per-role records,

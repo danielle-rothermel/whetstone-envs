@@ -6,6 +6,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A single unscoreable row no longer collapses an evaluation's whole
+  recomputed aggregate.** `two_stage_task_mean` reduces per task and then
+  across tasks to mirror whetstone-ai's `unweighted_task_mean` bit for bit,
+  but it required *every* row to carry a score and returned `None`
+  otherwise. Upstream does not: it reduces each task through `aggregate()`
+  under this package's aggregation config (`reduction=mean`,
+  `missing_data=skip`), which means over the **present** rows only, so a
+  task whose 3 repeats land 2 scored and 1 invalid contributes the mean of
+  those 2 at full weight. Stage 2's first evaluation with partial presence
+  -- `miprov2-seed2004`, internal role, `planned=132`, `present=131`,
+  `invalid=1` from one provider refusal on task 17 seed 1 -- therefore
+  recomputed `None` against a persisted `0.18181818181818182`, and
+  `_success_projection` raised "recomputed aggregate disagrees with
+  evidence" into a `DurableRunError`. Presence, not completeness, now
+  selects the addends at every site that consumes the reduction. A task
+  with *zero* present rows is dropped from the across-task mean rather
+  than contributing a zero, matching upstream's `NOT_APPLICABLE` (all
+  invalid) and `ZERO_DENOMINATOR` (all missing/failed) paths, both of
+  which leave the task out of the outer mean while keeping its position;
+  the overall result is `None` only when nothing anywhere was scored.
+  `StratumSummary` correspondingly requires a score iff some row was
+  scored, rather than iff the stratum was complete. #41 closed the
+  "no test above `num_seeds=1`" gap and left "no test below full
+  presence" open; a `{complete, one-invalid, one-missing,
+  zero-present-task} x {K=1, K=3}` matrix now closes both dimensions,
+  and the fix is verified to reproduce seed2004's persisted aggregate
+  bit for bit from its own rows.
+
 ## [0.2.11] - 2026-08-25
 
 ### Fixed

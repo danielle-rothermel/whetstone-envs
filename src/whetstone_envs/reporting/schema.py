@@ -315,18 +315,49 @@ def two_stage_task_mean(
     ``task_index`` reproduces whetstone-ai's within-task addend order
     exactly rather than approximately.
 
-    Returns ``None`` when any row is unscored: an incomplete stratum or
-    candidate reports no number at all rather than a mean over whichever
-    rows happened to land.
+    **Presence, not completeness, selects the addends.** A row is present
+    iff it carries a score. Upstream reaches each per-task value through
+    ``aggregate()`` under this package's aggregation config (``reduction
+    =mean``, ``missing_data=skip``, ``zero_denominator=not_applicable``),
+    which means over the *present* values only: a task whose three repeats
+    landed 2 scored and 1 invalid contributes the mean of those 2, at the
+    same full weight as any other task. Requiring full presence here made
+    a single provider refusal anywhere in a 132-row matrix collapse the
+    whole evaluation's recompute to ``None``, and the projection then
+    rejected evidence that was correct.
+
+    A task with *zero* present rows is **dropped from the across-task
+    mean entirely** -- it changes the denominator, it does not contribute
+    a zero. Upstream reaches this two ways, and both land outside the
+    outer mean: an all-invalid task aggregates to ``NOT_APPLICABLE`` and
+    is fed forward as ``applicable=False``; an all-missing/failed task
+    aggregates to ``ZERO_DENOMINATOR`` and is fed forward as
+    ``applicable=True, value=None``, which the outer ``skip`` policy then
+    excludes from ``present``. Either way the task is absent from both
+    the numerator and the denominator, so this function reproduces both
+    by simply skipping empty tasks. Positions are still *kept* upstream
+    -- the task stays in ``per_task_counts`` with a count of 0 -- which
+    is what the zero-weighted position-keeping downstream of #34 relies
+    on; only the mean drops it.
+
+    Returns ``None`` only when no row anywhere is present, matching the
+    outer ``ZERO_DENOMINATOR`` that upstream reports as no value at all.
     """
     if not rows:
         return None
     by_task: dict[int, list[float]] = {}
     for row in rows:
-        if row.score is None:
-            return None
-        by_task.setdefault(row.task_index, []).append(row.score)
-    task_means = [sum(scores) / len(scores) for scores in by_task.values()]
+        # Insertion order is the persisted task-major order, so an
+        # entirely unscored task still takes its position here and keeps
+        # the later grouping aligned with ``per_task_counts``.
+        scores = by_task.setdefault(row.task_index, [])
+        if row.score is not None:
+            scores.append(row.score)
+    task_means = [
+        sum(scores) / len(scores) for scores in by_task.values() if scores
+    ]
+    if not task_means:
+        return None
     return sum(task_means) / len(task_means)
 
 
@@ -378,12 +409,15 @@ class StratumSummary(_StrictModel):
         # would need are not here -- and checks the two properties that do
         # survive isolation. ``EvalReport._validate_collections`` performs
         # the full row-level recompute.
-        complete = bool(self.denominator) and (
-            self.accounting.present == self.denominator
-        )
-        if complete != (self.score is not None):
+        # A score exists iff *some* row was present, not iff every row
+        # was: partial presence still reports a number, because
+        # ``two_stage_task_mean`` means over present rows the way
+        # whetstone-ai's aggregation does. Only a stratum with nothing
+        # scored anywhere reports no number.
+        scored_anything = self.accounting.present > 0
+        if scored_anything != (self.score is not None):
             raise ValueError(
-                "stratum score must preserve incomplete accounting"
+                "stratum score must be present iff some row was scored"
             )
         if self.score is not None and not 0.0 <= self.score <= 1.0:
             raise ValueError("stratum score must be a unit-interval mean")

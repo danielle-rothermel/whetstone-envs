@@ -44,6 +44,7 @@ __all__ = [
     "CI_LEVEL",
     "CODEX_ARM_ID",
     "CODEX_EVALUATE_CALL_CAP",
+    "CODEX_WALL_SECONDS",
     "CORRECTION_RULE",
     "FIDELITY_ARM_IDS",
     "HOLM_FAMILY_SIZE",
@@ -101,6 +102,43 @@ K_RUN_NULL_B = 1
 
 #: The Codex arm's admitted evaluate-call cap (D2).
 CODEX_EVALUATE_CALL_CAP = 8
+
+#: The Codex arm's pre-registered per-run wall budget, in seconds.
+#:
+#: **This is design, in exactly the sense the cap above is design.** The cap
+#: says the agent may buy eight evaluate-calls; the wall says it has time to
+#: buy them. A wall that admits fewer calls than the cap does not bound a
+#: runaway agent -- it silently redefines the arm's eval budget to whatever
+#: fits, which is the one thing D12's equalization exists to prevent. So the
+#: two are pinned together and forwarded together.
+#:
+#: Sized from the measurement, not from a round number. On the c19 design an
+#: admitted evaluate-call scores 88 internal tasks at ``K_REPEAT = 3``
+#: repeats, and the observed cost of one such call is **~120 s**. Eight of
+#: them is ~960 s of evaluation alone, before the agent's own selection turns
+#: between calls. 1500 s carries that ~960 s plus ~540 s of headroom for the
+#: agent's reasoning turns and for calls that run slower than the mean --
+#: roughly a 55% margin over the measured floor.
+#:
+#: The value this replaces was never chosen for this arm at all: whetstone-ai's
+#: ``CODEX_DEFAULT_WALL_SECONDS`` is 600 s, and 600 < 960 makes the
+#: pre-registered eight calls *structurally impossible*. The Stage-1 Codex arm
+#: completed six of its eight calls and was killed mid-seventh. A default that
+#: happens to fit is not a pin, and a default that does not fit is a design
+#: error the study cannot see -- which is the whole reason this constant is
+#: named here rather than left to the dependency.
+#:
+#: **Not hashed**, and deliberately, where the cap is. The cap enters the
+#: per-arm ``control_identity_hash``
+#: (:func:`~whetstone_envs.optim.study.init._control_identity_hash`) because it
+#: changes what the agent may *buy* -- two studies at different caps bought
+#: different amounts of evidence and are not comparable. The wall changes only
+#: how long the arm may take to buy the same eight calls: no optimizer reads
+#: it, it enters no control record, and a run that completed its cap under a
+#: 1500 s wall and one that completed it under a 3000 s wall produced the same
+#: evidence. That puts it with the transport and the provider concurrency --
+#: execution properties recorded but never hashed -- rather than with the cap.
+CODEX_WALL_SECONDS = 1500.0
 
 #: Bootstrap interval settings, pre-registered so the interval is not chosen
 #: after seeing the deltas.

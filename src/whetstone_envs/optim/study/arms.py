@@ -82,6 +82,7 @@ from whetstone_envs.optim.study.fanout import planned_rows_in_directory
 from whetstone_envs.optim.study.manifest import (
     DISCARD_STALE_RUNS_FLAG,
     EvidencePointer,
+    RunFailureRecord,
     RunRecord,
 )
 from whetstone_envs.optim.study.protocols import (
@@ -482,6 +483,14 @@ class StudyOptimizerRunner:
     naive_template: str
     store_path: Path
     codex_capacity: int | None = None
+    #: The Codex arm's pre-registered per-run wall budget, in seconds.
+    #:
+    #: Carried beside ``codex_capacity`` because the two are one decision:
+    #: the cap says how many evaluate-calls the agent may buy and the wall
+    #: says whether it has time to buy them, so a wall left to a default is
+    #: a cap silently redefined. See
+    #: :data:`~whetstone_envs.optim.study.spec.CODEX_WALL_SECONDS`.
+    codex_wall_seconds: float | None = None
     #: The run-time half of the real-Codex spend authorization, carried
     #: from ``whetstone-study run --allow-real-codex``.
     #:
@@ -839,6 +848,17 @@ class StudyOptimizerRunner:
                 if arm.optimizer == "codex" and self.codex_capacity is not None
                 else {}
             ),
+            # The wall rides with the cap for the reason the field's
+            # comment gives: eight admitted calls the run has no time to
+            # make is not the pre-registered budget, it is a smaller one
+            # nobody chose. Scoped to the Codex arm because it is the only
+            # optimizer with a wall to set.
+            **(
+                {"codex_wall_seconds": self.codex_wall_seconds}
+                if arm.optimizer == "codex"
+                and self.codex_wall_seconds is not None
+                else {}
+            ),
             # Scoped to the Codex arm because every other optimizer refuses
             # the setting outright; forwarding it unconditionally would turn
             # one authorized stage into a validation failure on every arm.
@@ -852,11 +872,23 @@ class StudyOptimizerRunner:
     def _result_from(
         self, *, arm: ArmSpec, seed: int, run_dir: Path
     ) -> ArmRunResult:
-        """Read one completed run directory into the manifest's record.
+        """Read one run directory into the manifest's record.
 
         Split out from the run itself so a resumed stage reads a directory
         it already paid for by exactly the path a fresh run takes -- there
         is one projection from artifacts to record, not two.
+
+        **A run that terminalized is recorded, not raised on.** §3.9
+        pre-registers that a run exceeding its wall or eval-budget cap
+        "terminalizes with ``terminal_failure`` and is recorded as a failed
+        run, not retried silently", and this is where the recording half
+        happens: a result carrying a ``terminal_failure`` produces a record
+        with no candidate and the failure's own code and message, so its
+        spend and artifacts stay on the manifest, its siblings still run,
+        and the arms after it still run. Reaching for a terminal prompt it
+        does not have -- which is what this did before -- turned an
+        expected, pre-registered outcome into a stage-wide abort that
+        discarded every other arm's paid evidence.
         """
         result = _read_optim_result(run_dir)
         # Loaded once and audited from, rather than calling ``audit_run``:
@@ -865,7 +897,18 @@ class StudyOptimizerRunner:
         # artifacts they are describing, and the store is opened once.
         evidence = load_run_evidence(run_dir)
         report = audit_evidence(evidence)
-        template = _terminal_template(result, run_dir=run_dir)
+        failure = result.terminal_failure
+        # The template is read only for a run that claims to have produced
+        # one. ``_terminal_template`` raises when it finds none, and that
+        # raise is still the right answer for a run with no declared
+        # failure: such a run says it succeeded and has nothing to show for
+        # it, which is a real invariant violation and not something to
+        # record as a tidy failure.
+        template = (
+            None
+            if failure is not None
+            else _terminal_template(result, run_dir=run_dir)
+        )
         cost = project_run_cost(result, run_id=report.run_id)
         pointers = self._copy_evidence(
             run_dir=run_dir,
@@ -876,11 +919,15 @@ class StudyOptimizerRunner:
             ),
         )
         return ArmRunResult(
-            candidate=RunCandidate(
-                run_id=report.run_id,
-                seed=seed,
-                candidate_name=f"{arm.arm_id}-{report.run_id}",
-                template=template,
+            candidate=(
+                None
+                if template is None
+                else RunCandidate(
+                    run_id=report.run_id,
+                    seed=seed,
+                    candidate_name=f"{arm.arm_id}-{report.run_id}",
+                    template=template,
+                )
             ),
             record=RunRecord(
                 run_id=report.run_id,
@@ -891,6 +938,17 @@ class StudyOptimizerRunner:
                 cost_ref=pointers["cost"],
                 audit_passed=report.passed,
                 spend=(() if cost is None else tuple(cost.spend)),
+                # Copied from the run's own result rather than restated:
+                # the run is the only witness to why it stopped, and a
+                # stage that paraphrased it would be a second, disagreeing
+                # account of the same event.
+                terminal_failure=(
+                    None
+                    if failure is None
+                    else RunFailureRecord(
+                        code=str(failure.code), message=str(failure.message)
+                    )
+                ),
                 # The run's own transport, not the stage's. A resumed
                 # stage keeps runs an earlier invocation paid for, so the
                 # stage row and its runs can disagree -- and the
@@ -1129,6 +1187,16 @@ def _terminal_template(result: OptimResult, *, run_dir: Path) -> str:
     retained candidate: an optimizer that accepted nothing still ends on
     the seed it retained, and reporting *that* is the honest description of
     what the run produced.
+
+    **The raise below is deliberately kept, and is reached only by a run
+    with no declared ``terminal_failure``.** A run that terminalized has a
+    reason for having no prompt and is recorded as a failed run
+    (:meth:`StudyOptimizerRunner._result_from`, §3.9), so it never gets
+    here. A run that reaches here claims it *completed* and yet accepted
+    and retained nothing -- an unexplained absence, which is a genuine
+    invariant violation in the optimizer or its artifacts and not an
+    outcome to file away quietly. Recording that as a tidy failure would
+    convert a bug into a data point; it must still abort.
     """
     template: str | None = None
     for step_ref in result.step_results:

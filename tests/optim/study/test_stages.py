@@ -18,6 +18,7 @@ from whetstone.core.roles import EvalRole
 pytest.importorskip("whetstone.experiment.env")
 
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
+from whetstone.optim.codex.adapter import CODEX_WALL_BUDGET_EXCEEDED_CODE
 from whetstone.optim.cost import CostRole
 
 from whetstone_envs.optim.provider import DEFAULT_PROVIDER_CONCURRENCY
@@ -35,6 +36,7 @@ from whetstone_envs.optim.study.manifest import (
     EvidencePointer,
     OfficialScoreEntry,
     ReportSpendEntry,
+    RunFailureRecord,
     RunRecord,
     RunSpendRecord,
     StageRecord,
@@ -295,10 +297,16 @@ class _Harness:
         search_num_seeds: int | None = HARNESS_K_REPEAT,
         refuse: frozenset[str] = frozenset(),
         raise_transient: frozenset[str] = frozenset(),
+        fail_runs: frozenset[str] = frozenset(),
     ) -> None:
         self.study_dir = study_dir
         self.scores = scores
         self.task_calls = task_calls
+        #: Run ids that terminalize with a ``terminal_failure`` -- the
+        #: pre-registered §3.9 outcome of a run that exceeds its wall or
+        #: eval-budget cap. Such a run is *recorded*, contributes no
+        #: candidate, and must not stop its siblings or the arms after it.
+        self.fail_runs = fail_runs
         #: Candidates whose held-out evaluation returns, is billed, and is
         #: then judged unfit to report -- the deterministic post-billing
         #: refusal that may settle a claim.
@@ -320,12 +328,17 @@ class _Harness:
         del study_dir
         run_id = f"{arm.arm_id}-{seed}"
         self.events.append(f"run:{run_id}")
+        failed = run_id in self.fail_runs
         return ArmRunResult(
-            candidate=RunCandidate(
-                run_id=run_id,
-                seed=seed,
-                candidate_name=run_id,
-                template="{grid} {command} {question}",
+            candidate=(
+                None
+                if failed
+                else RunCandidate(
+                    run_id=run_id,
+                    seed=seed,
+                    candidate_name=run_id,
+                    template="{grid} {command} {question}",
+                )
             ),
             record=RunRecord(
                 run_id=run_id,
@@ -334,10 +347,24 @@ class _Harness:
                 result_ref=_pointer("1"),
                 audit_ref=_pointer("2"),
                 cost_ref=_pointer("3"),
+                # A wall stop is an honest exit: the run recorded the spend
+                # it had incurred, which is what its audit checks, so it
+                # passes. The arm still degrades -- see the verdict test.
                 audit_passed=True,
                 transport=TransportName.FAKE.value,
                 spend=(),
                 search_num_seeds=self.search_num_seeds,
+                terminal_failure=(
+                    RunFailureRecord(
+                        code=CODEX_WALL_BUDGET_EXCEEDED_CODE,
+                        message=(
+                            "the run exceeded its 600.0s wall budget after "
+                            "6 of 8 admitted evaluate-calls"
+                        ),
+                    )
+                    if failed
+                    else None
+                ),
             ),
             observed_task_calls=self.task_calls,
         )
@@ -525,6 +552,180 @@ def test_stage1_runs_every_arm_then_selects_then_measures(
     for report in result.arms:
         assert report.selection.selected_run_id == report.representative.run_id
         assert report.selection.rule == "argmax-official"
+
+
+def _stage1_scores(study_dir: Path) -> dict[str, float]:
+    spec = spec_from_manifest(read_study_manifest(study_dir))
+    return {
+        f"{arm.arm_id}-{seed}": 0.1 * index
+        for arm in spec.arms
+        for index, seed in enumerate(arm.seeds, start=1)
+    }
+
+
+def test_a_terminally_failed_run_is_recorded_and_the_stage_completes(
+    tmp_path: Path,
+) -> None:
+    """§3.9's "recorded as a failed run" -- the half never implemented.
+
+    The Stage-1 Codex arm's agent made 6 of its 8 pre-registered
+    evaluate-calls before whetstone-ai's 600s default wall killed it, and
+    whetstone-ai correctly terminalized with ``codex_wall_budget_exceeded``.
+    The stage then reached for a terminal prompt the run does not have and
+    raised, before the two null arms had run at all.
+
+    Fails-before: ``_result_from`` called ``_terminal_template``
+    unconditionally, so the ``StageError`` it raises ("accepted and retained
+    no candidate") escaped the whole stage and discarded every other arm's
+    already-paid evidence. ``ArmRunResult`` and ``RunRecord`` could not
+    represent a failed run at all.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    harness = _Harness(
+        study_dir,
+        scores=_stage1_scores(study_dir),
+        # One of the first arm's two seeds, exactly as the incident: the arm
+        # keeps a run and still degrades, and a *later* arm must still run.
+        fail_runs=frozenset({"copro-1000"}),
+    )
+
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=harness.environment(),
+    )
+
+    # The stage reached its end rather than dying at the failed run, and
+    # both the failed run's sibling and the arm *after* it still ran. That
+    # is the whole point: one run's budget stop must not take the study's
+    # remaining evidence with it.
+    ran = {event.removeprefix("run:") for event in harness.events}
+    assert {"copro-1001", "null-identity-6000"} <= ran
+    assert {report.arm_id for report in result.arms} == {
+        arm.arm_id
+        for arm in spec_from_manifest(read_study_manifest(study_dir)).arms
+    }
+
+    # The failed run is on the manifest with its code and message intact --
+    # recorded, not dropped, not paraphrased.
+    manifest = read_study_manifest(study_dir)
+    arm = next(arm for arm in manifest.arms if arm.arm_id == "copro")
+    failed = next(run for run in arm.runs if run.run_id == "copro-1000")
+    assert failed.terminal_failure is not None
+    assert failed.terminal_failure.code == CODEX_WALL_BUDGET_EXCEEDED_CODE
+    assert "8 admitted evaluate-calls" in failed.terminal_failure.message
+    # Its sibling is unaffected and carries no failure.
+    sibling = next(run for run in arm.runs if run.run_id == "copro-1001")
+    assert sibling.terminal_failure is None
+
+
+def test_a_terminally_failed_run_is_never_selected_or_claimed(
+    tmp_path: Path,
+) -> None:
+    """A failed run has no prompt, so it may not be scored or measured.
+
+    Selection over it would take an arg-max including a candidate that does
+    not exist, and a held-out claim for it would report a number nobody
+    measured -- the exact fabrication the ledger's one-claim rule exists to
+    prevent.
+
+    Fails-before: unreachable, because the stage aborted before selection.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    scores = _stage1_scores(study_dir)
+    # The failed run is given the *winning* score, so a selection that did
+    # not skip it would visibly pick it.
+    scores["copro-1000"] = 99.0
+    harness = _Harness(
+        study_dir, scores=scores, fail_runs=frozenset({"copro-1000"})
+    )
+
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=harness.environment(),
+    )
+
+    assert "official:copro-1000" not in harness.events
+    assert "held_out:copro-1000" not in harness.events
+    report = next(report for report in result.arms if report.arm_id == "copro")
+    assert report.selection.selected_run_id == "copro-1001"
+    assert {score.run_id for score in report.official_scores} == {"copro-1001"}
+    # The arm still gets its one held-out claim, on the run that produced a
+    # prompt -- degraded, not silenced.
+    assert report.held_out is not None
+    claims = read_study_manifest(study_dir).held_out_claims
+    assert not any(claim.candidate_name == "copro-1000" for claim in claims)
+
+
+def test_an_arm_whose_runs_all_failed_issues_no_claim(
+    tmp_path: Path,
+) -> None:
+    """No selectable run means no selection and no provider call.
+
+    An arg-max over nothing has no answer, and buying a held-out evaluation
+    for an arm with no candidate would be paying to measure a prompt that
+    does not exist. The arm is skipped and the rest of the stage runs.
+    """
+    study_dir = _calibrated_study(tmp_path)
+    harness = _Harness(
+        study_dir,
+        scores=_stage1_scores(study_dir),
+        fail_runs=frozenset({"copro-1000", "copro-1001"}),
+    )
+
+    result = run_arm_stage(
+        study_dir=study_dir,
+        stage=StageId.STAGE1,
+        environment=harness.environment(),
+    )
+
+    assert "official:copro-1000" not in harness.events
+    assert "held_out:copro" not in harness.events
+    assert not any(report.arm_id == "copro" for report in result.arms), (
+        "an arm with no selectable run reports no result"
+    )
+    # The other arm still reported, and both failed runs are on the
+    # manifest with their failures.
+    assert {report.arm_id for report in result.arms} == {"null-identity"}
+    manifest = read_study_manifest(study_dir)
+    arm = next(arm for arm in manifest.arms if arm.arm_id == "copro")
+    assert len(arm.runs) == 2
+    assert all(run.terminal_failure is not None for run in arm.runs)
+    assert not any(entry.arm_id == "copro" for entry in manifest.selection)
+
+
+def test_a_run_with_no_failure_and_no_template_still_aborts(
+    tmp_path: Path,
+) -> None:
+    """The genuinely-unexplained case remains an invariant violation.
+
+    Degrade-not-abort is scoped to runs that *declared* why they stopped.
+    A run claiming it completed while having accepted and retained nothing
+    is a defect in the optimizer or its artifacts, and recording it as a
+    tidy failure would convert a bug into a data point.
+    """
+    harness = _Harness(tmp_path, scores={})
+
+    with pytest.raises(
+        ValueError, match="terminal candidate or a recorded terminal failure"
+    ):
+        ArmRunResult(
+            candidate=None,
+            record=RunRecord(
+                run_id="mystery-1",
+                seed=1,
+                artifact_dir="/tmp/runs/mystery-1",  # noqa: S108
+                result_ref=_pointer("1"),
+                audit_ref=_pointer("2"),
+                cost_ref=_pointer("3"),
+                audit_passed=True,
+                transport=TransportName.FAKE.value,
+                spend=(),
+                terminal_failure=None,
+            ),
+            observed_task_calls=harness.task_calls,
+        )
 
 
 def test_the_selection_is_durable_before_the_held_out_call(

@@ -6,6 +6,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Codex arm now gets a wall budget big enough to spend its
+  pre-registered eval cap.** D2 admits the Codex agent 8 evaluate-calls, and
+  on the c19 design one such call scores 88 internal tasks at `K_REPEAT = 3`
+  and costs ~120 s measured -- so the cap needs ~960 s of evaluation before
+  the agent's own selection turns. The study forwarded the cap onto every
+  Codex `RunSpec` but never a wall, leaving `whetstone-ai`'s
+  `CODEX_DEFAULT_WALL_SECONDS` of **600 s** in force: `600 < 8 x 120` made
+  the pre-registered cap structurally impossible to spend. The Stage-1 Codex
+  arm's real agent session completed 6 of its 8 calls, was SIGKILLed at the
+  wall, and terminalized with `codex_wall_budget_exceeded`. A new pinned
+  `CODEX_WALL_SECONDS = 1500.0` -- the ~960 s floor plus headroom for
+  selection turns and slower-than-mean calls -- is forwarded beside
+  `CODEX_EVALUATE_CALL_CAP` from `bound_stage_environment`. Recorded rather
+  than hashed, unlike the cap: the wall changes how long the arm may take to
+  buy the same 8 calls, not what it buys.
+- **A run that terminalizes is now recorded as a failed run instead of
+  aborting its whole stage.** §3.9 pre-registers that a run exceeding its
+  wall or eval-budget cap "terminalizes with `terminal_failure` and is
+  recorded as a failed run, not retried silently", and the recording half was
+  never implemented: `ArmRunResult` and `RunRecord` made a failed run
+  unrepresentable, and `_result_from` reached for a terminal prompt
+  unconditionally, so the `StageError` it raised escaped the stage and
+  discarded every sibling run's and every later arm's already-paid evidence
+  -- which is what took the Stage-1 nulls down with the Codex arm above.
+  `RunRecord.terminal_failure` (schema **v14**) now records the run's own
+  failure code and message; such a run contributes no candidate, so selection
+  skips it, no held-out claim is issued for it, and its spend and artifacts
+  stay on the manifest. The arm degrades to `not validated` -- its arg-max ran
+  over fewer runs than the design pre-registered -- and the stage runs its
+  remaining seeds and arms. A run with **no** declared failure and no terminal
+  prompt still raises: that is an unexplained absence and a real invariant
+  violation, not an outcome to file away.
+
 ## [0.2.10] - 2026-08-25
 
 ### Fixed

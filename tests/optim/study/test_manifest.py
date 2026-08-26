@@ -393,8 +393,8 @@ def _full_manifest() -> StudyManifest:
 
 def test_persisted_schema_literals_are_pinned() -> None:
     assert STUDY_MANIFEST_SCHEMA_NAME == "whetstone_envs.step10_study"
-    assert STUDY_MANIFEST_SCHEMA_VERSION == 13
-    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v13"
+    assert STUDY_MANIFEST_SCHEMA_VERSION == 14
+    assert STUDY_MANIFEST_SCHEMA == "whetstone_envs.step10_study/v14"
     assert STUDY_MANIFEST_NAME == "study.json"
 
 
@@ -460,6 +460,33 @@ def test_serialized_document_keys_match_the_owned_wire_keys() -> None:
     payload = _full_manifest().model_dump(mode="json", by_alias=True)
     assert list(payload) == [member.value for member in ManifestKey]
     assert payload["schema"] == STUDY_MANIFEST_SCHEMA
+
+
+def test_a_recorded_run_failures_wire_keys_are_pinned() -> None:
+    """v14's failure record, pinned separately because it is optional.
+
+    ``_full_manifest`` carries no failed run -- a manifest whose runs all
+    completed is the ordinary case -- so this record's own keys would never
+    appear in the nested-key golden above. They are persisted identity all
+    the same: a reader groups a study's failures by ``code``, and renaming
+    either key silently orphans every failure already on disk.
+    """
+    from whetstone_envs.optim.study.manifest import RunFailureRecord
+
+    payload = RunFailureRecord(
+        code="codex_wall_budget_exceeded",
+        message="the run exceeded its wall budget",
+    ).model_dump(mode="json", by_alias=True)
+    assert list(payload) == ["code", "message"]
+    assert payload["code"] == "codex_wall_budget_exceeded"
+
+
+def test_a_recorded_run_failure_needs_a_code() -> None:
+    """A failure with no code explains nothing and is refused."""
+    from whetstone_envs.optim.study.manifest import RunFailureRecord
+
+    with pytest.raises(ValidationError, match="nonblank code"):
+        RunFailureRecord(code="  ", message="something went wrong")
 
 
 def test_nested_record_wire_keys_are_pinned() -> None:
@@ -591,6 +618,10 @@ def test_nested_record_wire_keys_are_pinned() -> None:
         "transport",
         "search_num_seeds",
         "provider_concurrency",
+        # v14. A run that terminalized has no candidate, and this is the
+        # whole of its explanation -- so the key is persisted identity, not
+        # a projection something else can reconstruct.
+        "terminal_failure",
     ]
     assert list(payload["arms"][0]["runs"][0]["spend"][0]) == [
         "role",

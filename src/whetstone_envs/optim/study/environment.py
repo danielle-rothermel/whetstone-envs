@@ -71,7 +71,10 @@ from whetstone_envs.optim.study.manifest import (
     read_study_manifest,
     write_study_manifest,
 )
-from whetstone_envs.optim.study.spec import CODEX_EVALUATE_CALL_CAP
+from whetstone_envs.optim.study.spec import (
+    CODEX_EVALUATE_CALL_CAP,
+    CODEX_WALL_SECONDS,
+)
 from whetstone_envs.optim.study.stages import StageEnvironment, StageError
 from whetstone_envs.reporting.schema import SPLIT_ROLE_BY_REPORT_ROLE
 
@@ -723,6 +726,14 @@ def bound_stage_environment(  # noqa: PLR0913
             # the design rather than be reconstructed by a default that
             # happens to match.
             codex_capacity=CODEX_EVALUATE_CALL_CAP,
+            # The wall the cap above needs to be reachable. Eight admitted
+            # calls at ~120 s each is ~960 s of evaluation, and the
+            # dependency's default wall is 600 s -- so leaving this to the
+            # default did not merely risk a tight fit, it made the
+            # pre-registered cap impossible to spend and terminalized the
+            # arm partway through. Forwarded from the design for exactly
+            # the reason the cap is.
+            codex_wall_seconds=CODEX_WALL_SECONDS,
             allow_real_codex=allow_real_codex,
             discard_stale_runs=discard_stale_runs,
             # The same width the engines above were bound with. The runner

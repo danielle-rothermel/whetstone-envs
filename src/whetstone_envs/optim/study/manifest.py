@@ -202,7 +202,25 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: design, not what the design pre-registered -- the same line
 #: ``mde_measured`` already sits on -- so two studies of one design that
 #: calibrate to different anchors still pre-register identically.
-STUDY_MANIFEST_SCHEMA_VERSION = 13
+#: v14 gives a terminally-failed run a representation, as
+#: ``RunRecord.terminal_failure``.
+#:
+#: §3.9 pre-registers that a run exceeding its wall or eval-budget cap "is
+#: recorded as a failed run", and v13 and earlier had nowhere to record one:
+#: every ``RunRecord`` implied a run with a terminal prompt, because the only
+#: way to build one was through a path that read that prompt off the run's
+#: artifacts first. A run that terminalized honestly therefore could not be
+#: filed at all -- the stage raised where it should have recorded, and one
+#: arm's budget failure discarded every sibling run's and every later arm's
+#: already-paid evidence. Recording the failure is what makes the
+#: pre-registered sentence true and what lets the arm degrade to
+#: ``VERDICT_NOT_VALIDATED`` while the stage finishes.
+#:
+#: Recorded rather than hashed, like the transport and the width: whether a
+#: run hit its wall is what that execution *did*, not what the design
+#: pre-registered, so a study whose runs all completed and one whose Codex
+#: arm failed still pre-register identically.
+STUDY_MANIFEST_SCHEMA_VERSION = 14
 STUDY_MANIFEST_SCHEMA = (
     f"{STUDY_MANIFEST_SCHEMA_NAME}/v{STUDY_MANIFEST_SCHEMA_VERSION}"
 )
@@ -1422,6 +1440,28 @@ class RunSpendRecord(_StrictModel):
         return self
 
 
+class RunFailureRecord(_StrictModel):
+    """Why a run ended with no candidate, in the run's own words.
+
+    Both fields are copied verbatim from the ``terminal_failure`` the run
+    wrote into its own ``result.json``. The code is what a reader groups
+    failures by -- ``codex_wall_budget_exceeded`` is a budget that did not
+    fit, not an algorithm defect -- and the message is what says which
+    budget and by how much. Neither is re-derived here: a stage that
+    paraphrased its runs' failures would be a second, disagreeing account
+    of an event only the run witnessed.
+    """
+
+    code: StrictStr
+    message: StrictStr
+
+    @model_validator(mode="after")
+    def _validate_failure(self) -> RunFailureRecord:
+        if not self.code.strip():
+            raise ValueError("a recorded failure names a nonblank code")
+        return self
+
+
 class RunRecord(_StrictModel):
     """One optimizer run: where it lives, what it cost, whether it is valid.
 
@@ -1502,6 +1542,29 @@ class RunRecord(_StrictModel):
     #: :data:`~whetstone_envs.optim.provider.DEFAULT_PROVIDER_CONCURRENCY`
     #: is pinned as a literal instead of tracking the dependency's.
     provider_concurrency: StrictInt = DEFAULT_PROVIDER_CONCURRENCY
+    #: Why this run ended without a scorable result, or ``None`` if it did
+    #: not (schema v14).
+    #:
+    #: **A failed run is a recorded run, not an absent one.** §3.9 of the
+    #: pre-registration says a run that exceeds its wall or eval-budget cap
+    #: "terminalizes with ``terminal_failure`` and is recorded as a failed
+    #: run, not retried silently" -- and recording it is what lets the stage
+    #: degrade instead of aborting. Without this field a terminally-failed
+    #: run had no representation at all: the stage reached for its terminal
+    #: prompt, found none, and raised, taking every sibling run and every
+    #: later arm's paid evidence down with it.
+    #:
+    #: A run carrying this contributes **no candidate**. It is not scored on
+    #: official, cannot be an arg-max representative, and is never issued a
+    #: held-out claim, because there is no terminal prompt to measure and a
+    #: measured number for one would be a fabrication. Its spend, its
+    #: artifacts, and its audit stay recorded: the study paid for what the
+    #: run did before it stopped, and §3.9 keeps that evidence.
+    #:
+    #: ``None`` on every run that produced a terminal candidate, which is
+    #: also what records written before schema v14 load as -- correctly, as
+    #: any such run reached selection and therefore had one.
+    terminal_failure: RunFailureRecord | None = None
 
     @model_validator(mode="after")
     def _validate_run(self) -> RunRecord:
@@ -3045,6 +3108,7 @@ __all__ = [
     "PreRegistrationViolationError",
     "ProviderCallRecord",
     "ReportSpendEntry",
+    "RunFailureRecord",
     "RunRecord",
     "RunSpendRecord",
     "SelectionRecord",

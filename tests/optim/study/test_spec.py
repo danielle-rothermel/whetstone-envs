@@ -146,6 +146,41 @@ def test_the_codex_cap_is_the_adopted_eight() -> None:
     assert CODEX_EVALUATE_CALL_CAP == 8
 
 
+def test_the_codex_wall_admits_the_whole_pre_registered_cap() -> None:
+    """The wall is design, and it must fit the cap it is paired with.
+
+    An admitted evaluate-call scores 88 internal tasks at ``K_REPEAT = 3``
+    and costs ~120s measured, so the pre-registered eight calls need ~960s
+    of evaluation before the agent's own selection turns. A wall below that
+    does not bound a runaway agent -- it silently redefines the arm's eval
+    budget to whatever fits, which is what D12's equalization exists to
+    prevent.
+
+    Fails-before: ``CODEX_WALL_SECONDS`` did not exist and nothing pinned a
+    wall, so the arm ran on whetstone-ai's 600s ``CODEX_DEFAULT_WALL_SECONDS``
+    -- and ``600 < 8 * 120`` made the pre-registered cap structurally
+    impossible to spend. The Stage-1 Codex arm was SIGKILLed after 6 of its
+    8 calls.
+    """
+    from whetstone.optim.codex.control import CODEX_DEFAULT_WALL_SECONDS
+
+    from whetstone_envs.optim.study.spec import CODEX_WALL_SECONDS
+
+    measured_seconds_per_call = 120.0
+    floor = CODEX_EVALUATE_CALL_CAP * measured_seconds_per_call
+
+    assert CODEX_WALL_SECONDS == 1500.0
+    assert floor < CODEX_WALL_SECONDS, (
+        f"a {CODEX_WALL_SECONDS}s wall cannot buy "
+        f"{CODEX_EVALUATE_CALL_CAP} calls at ~{measured_seconds_per_call}s"
+    )
+    # The dependency's default is what this replaces, and it is exactly the
+    # arithmetic that broke: pinned as a literal comparison so a change to
+    # either side is visible here rather than in a paid run.
+    assert CODEX_DEFAULT_WALL_SECONDS == 600.0
+    assert floor > CODEX_DEFAULT_WALL_SECONDS
+
+
 def test_the_protocol_split_sizes_are_pinned() -> None:
     """The study's three sizes, as literals.
 

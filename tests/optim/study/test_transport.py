@@ -1107,6 +1107,128 @@ def test_the_fold_sums_counters_and_withholds_an_unknown_total() -> None:
     assert mixed[0].usd is None
 
 
+def test_a_zero_call_role_does_not_withhold_a_priced_total() -> None:
+    """A role that reached no provider has no bill to be uncertain about.
+
+    An optimizer with no proposer -- codex, null-random -- used to report
+    an all-zero proposer row whose ``usd`` was absent because nothing was
+    priceable, not because something priceable went unpriced. Folding that
+    as "unknowable" nulled the role's whole total, and an arm stage that
+    really did buy every one of its proposer calls rendered as
+    ``unpriced (0/N calls)``.
+    """
+    empty = RunSpendRecord(
+        role="proposer",
+        calls=0,
+        cached_calls=0,
+        input_tokens=0,
+        output_tokens=0,
+        priced_calls=0,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=None,
+    )
+    paid = RunSpendRecord(
+        role="proposer",
+        calls=8,
+        cached_calls=0,
+        input_tokens=80,
+        output_tokens=16,
+        priced_calls=8,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+    folded = run_spend_records((empty, paid))
+    assert len(folded) == 1
+    assert folded[0].calls == 8
+    assert folded[0].unpriced_calls == 0
+    assert folded[0].usd == pytest.approx(0.5)
+
+    # Order does not matter: the guard is on the zero-call record, not on
+    # whichever record happened to be seen first.
+    assert run_spend_records((paid, empty))[0].usd == pytest.approx(0.5)
+
+
+def test_a_genuinely_unpriced_call_withholds_beside_a_zero_row() -> None:
+    """The guard is on ``calls``, never on an absent ``usd`` alone.
+
+    A zero-call record stops withholding; a record whose calls really went
+    unpriced must keep doing so, or the fix would trade a false "unpriced"
+    for a false total.
+    """
+    empty = RunSpendRecord(
+        role="proposer",
+        calls=0,
+        cached_calls=0,
+        input_tokens=0,
+        output_tokens=0,
+        priced_calls=0,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=None,
+    )
+    paid = RunSpendRecord(
+        role="proposer",
+        calls=8,
+        cached_calls=0,
+        input_tokens=80,
+        output_tokens=16,
+        priced_calls=8,
+        unpriced_calls=0,
+        rows_missing_token_breakdown=0,
+        usd=0.5,
+    )
+    truly_unpriced = RunSpendRecord(
+        role="proposer",
+        calls=1,
+        cached_calls=0,
+        input_tokens=10,
+        output_tokens=2,
+        priced_calls=0,
+        unpriced_calls=1,
+        rows_missing_token_breakdown=0,
+        usd=None,
+    )
+    folded = run_spend_records((empty, paid, truly_unpriced))
+    assert len(folded) == 1
+    assert folded[0].calls == 9
+    assert folded[0].unpriced_calls == 1
+    assert folded[0].usd is None
+
+
+def test_a_stage_with_a_zero_call_role_renders_a_dollar_figure() -> None:
+    """What the fold's semantics look like where an operator reads them.
+
+    The ledger column is the whole point of the fold: a stage whose runs
+    were fully priced must print what it cost, not the ``unpriced (0/N
+    calls)`` that a proposer-less optimizer's all-zero row produced.
+    """
+    record = StageRecord(
+        stage=StageId.STAGE1.value,
+        transport=OPENROUTER_TRANSPORT,
+        spend=run_spend_records(
+            (
+                _spend(calls=112, usd=0.001234),
+                RunSpendRecord(
+                    role="proposer",
+                    calls=0,
+                    cached_calls=0,
+                    input_tokens=0,
+                    output_tokens=0,
+                    priced_calls=0,
+                    unpriced_calls=0,
+                    rows_missing_token_breakdown=0,
+                    usd=None,
+                ),
+            )
+        ),
+    )
+    text = "\n".join(stage_spend_lines((record,)))
+    assert "$0.001234" in text
+    assert "unpriced" not in text
+
+
 def test_the_fold_keeps_roles_apart() -> None:
     """Two roles fold to two records, in first-seen order."""
     task = _spend(calls=10, usd=0.5)

@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-08-26
+
 ### Fixed
 
 - **A single unscoreable row no longer collapses an evaluation's whole

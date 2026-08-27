@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-08-27
+
 ### Changed
 
 - **The task model's reasoning effort is pinned per family: c18 drops to

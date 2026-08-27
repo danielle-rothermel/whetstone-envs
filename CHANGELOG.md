@@ -6,6 +6,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The task model's reasoning effort is pinned per family: c18 drops to
+  `minimal` while c19 keeps `low`.** c18's Stage-0 gate failed **by
+  saturation** at the shared `low`: the naive anchor scored **0.9375** and
+  the ceiling anchor scored **0.9375** on the same 48-task held-out split
+  (45/48 held by each), leaving measured headroom of **0.0000** against the
+  0.20 minimum. A naive prompt that already ties the ceiling bounds every
+  arm's improvement at zero before a candidate is written, so the design
+  cannot measure what it exists to measure — and escalating the effort is
+  monotonically the wrong direction, since c18 is easier for the task model
+  at a given rung than c19 is. The probe therefore goes down a rung.
+  `_step10` takes the effort as a builder parameter rather than reading
+  `TASK_REASONING_EFFORT` as a module constant: the c19 pair still passes
+  that constant and the c18 pair passes the new
+  `C18_TASK_REASONING_EFFORT`, so the divergence is visible at every
+  registration instead of hidden inside a shared value. Both toys inherit
+  their own family's effort, which stays out of `SIZED_FIELDS`.
+  Consequences, all golden-tested: **c19's design hash is unchanged**
+  (`0aaf21e9…`, and `0bac099c…` for its toy — pinned to the literals
+  `main` produced at 0.2.13), while **c18's moves**, so a c18 study
+  initialised at `low` cannot be continued and needs a fresh `study_id`.
+  The protocol document records this as revision item 23 with the gate's
+  numbers, amends §4.1, §5.4 and §5.5, and states the narrowing it forces
+  on C3:
+  the two families now measure the same machinery at different task-model
+  capability rungs, so C3 claims the machinery carries across toolchains
+  and **not** that one rung serves both populations. `PROTOCOL_DOC_SHA256`
+  is re-pinned to `2244ef18…`; `0c5c14b4…` is historical and is the
+  revision that was in force for the c18 attempt whose gate failed.
+
 ## [0.2.13] - 2026-08-26
 
 ### Added

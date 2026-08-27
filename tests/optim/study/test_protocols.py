@@ -20,6 +20,7 @@ from pathlib import Path
 from whetstone_envs.optim.c18_experiment import C18_PROTOCOL_SPLIT_SIZES
 from whetstone_envs.optim.study.manifest import CODEX_AGENT_OMITTED
 from whetstone_envs.optim.study.protocols import (
+    C18_TASK_REASONING_EFFORT,
     CODEX_AGENT_MODEL,
     GEPA_MAX_METRIC_CALLS,
     MIPROV2_MINIBATCH_SIZE,
@@ -145,14 +146,18 @@ def test_the_two_protocols_share_every_unpopulation_pin() -> None:
 
     Everything the generality claim says is *unchanged* between the two
     families is compared directly. A c18 study that ran a different task
-    model, a different reasoning effort, a different proposer, a different
-    Codex agent or cap, or different COPRO/GEPA/MIPROv2 control shapes
-    would not be evidence that the machinery carried -- it would be a
-    second study.
+    model, a different proposer, a different Codex agent or cap, or
+    different COPRO/GEPA/MIPROv2 control shapes would not be evidence that
+    the machinery carried -- it would be a second study.
+
+    ``task_reasoning_effort`` is deliberately **not** in this list, since
+    item 23. It is one of the two controls section 4.1 now pre-registers
+    differently for the second family, and
+    ``test_the_c18_protocol_pins_a_lower_reasoning_effort`` asserts the
+    divergence directly rather than leaving it to a hole here.
     """
     shared = (
         "task_model",
-        "task_reasoning_effort",
         "proposer_model",
         "codex_agent_model",
         "temperature",
@@ -205,25 +210,59 @@ def test_the_protocol_pins_the_task_models_reasoning_effort() -> None:
     drift silently -- ``low`` is what Danielle ratified, and a change to it
     is a change to the study.
 
-    ``minimal`` is historical (item 19). Its Stage-0 probe failed the gate
-    on capability rather than power -- ceiling 0.1977 against the 0.30
-    floor -- so item 21 re-pinned the effort to ``low``.
+    ``minimal`` is historical for c19 (item 19). Its Stage-0 probe failed
+    the gate on capability rather than power -- ceiling 0.1977 against the
+    0.30 floor -- so item 21 re-pinned the effort to ``low``.
+
+    Since item 23 this constant is c19's pin rather than the study-wide
+    one; c18 reads ``C18_TASK_REASONING_EFFORT``.
     """
     assert TASK_REASONING_EFFORT is ReasoningEffort.LOW
     assert TASK_REASONING_EFFORT.value == "low"
     assert STEP10_C19.task_reasoning_effort is TASK_REASONING_EFFORT
 
 
-def test_the_toy_runs_at_the_same_reasoning_effort_as_the_real_study() -> None:
-    """The effort is not a sized field, and the toy proves it.
+def test_the_c18_protocol_pins_a_lower_reasoning_effort() -> None:
+    """C18's pin, as a literal, and the divergence it encodes (item 23).
 
-    A toy that ran at a different effort would be exercising a different
-    task model than the study it stands in for -- which is precisely what
-    ``SIZED_FIELDS`` exists to bound.
+    ``minimal`` is what Danielle ratified for this family after its Stage-0
+    gate failed **by saturation** at c19's ``low``: the naive anchor scored
+    0.9375 and the ceiling anchor scored 0.9375 on the same 48-task
+    held-out split, leaving 0.0000 headroom against the 0.20 minimum. A
+    naive prompt that already ties the ceiling bounds every arm's
+    improvement at zero, so the design could not measure what it exists to
+    measure, and escalating effort only pushes the naive anchor further in.
+
+    Pinned as a literal here for the same reason c19's is: a change to it
+    is a change to the study. ``low`` is historical for c18 -- it names the
+    design attempt 1's gate refused.
+    """
+    assert C18_TASK_REASONING_EFFORT is ReasoningEffort.MINIMAL
+    assert C18_TASK_REASONING_EFFORT.value == "minimal"
+    assert STEP10_C18.task_reasoning_effort is C18_TASK_REASONING_EFFORT
+    # The divergence itself, asserted rather than merely implied: the two
+    # families measure the same machinery at different capability rungs.
+    assert STEP10_C18.task_reasoning_effort != STEP10_C19.task_reasoning_effort
+
+
+def test_each_toy_runs_at_its_own_familys_reasoning_effort() -> None:
+    """The effort is not a sized field, and both toys prove it.
+
+    A toy that ran at a different effort than the design it stands in for
+    would be exercising a different task model -- which is precisely what
+    ``SIZED_FIELDS`` exists to bound. The guard is *within* a pair: since
+    item 23 the two families differ here by design, so comparing across
+    them would assert the opposite of the pre-registration.
     """
     assert (
         STEP10_C19_TOY.task_reasoning_effort
         == STEP10_C19.task_reasoning_effort
+        == ReasoningEffort.LOW
+    )
+    assert (
+        STEP10_C18_TOY.task_reasoning_effort
+        == STEP10_C18.task_reasoning_effort
+        == ReasoningEffort.MINIMAL
     )
     assert "task_reasoning_effort" not in SIZED_FIELDS
 
@@ -469,6 +508,109 @@ def test_the_shipped_document_still_hashes_to_the_registered_digest() -> None:
     would pre-register nothing.
     """
     assert protocol_doc_sha256(Path(PROTOCOL_DOC_PATH)) == PROTOCOL_DOC_SHA256
+
+
+# --------------------------------------------------------------------------
+# The per-family effort pin moves exactly one design hash
+# --------------------------------------------------------------------------
+
+
+def _registered_design_hash(protocol: StudyProtocol) -> str:
+    """The pre-registration hash of ``protocol`` as registered.
+
+    Built through the same chain a real study takes -- protocol to
+    manifest to spec to hash -- rather than by re-listing the payload here,
+    so a change to how a study derives its pinning is caught by these
+    goldens instead of being reproduced by them. The three arguments the
+    hash takes that a protocol does not carry (the correction rule, its
+    family size, and the completeness backstop) are the same for every
+    registration and are passed as the study's pinned values.
+    """
+    from whetstone_envs.optim.study import stages
+    from whetstone_envs.optim.study.init import study_manifest_for
+    from whetstone_envs.optim.study.manifest import (
+        COMPLETENESS_BACKSTOP,
+        CORRECTION_FAMILY_SIZE,
+        CORRECTION_HOLM_BONFERRONI,
+        pre_registration_design_hash,
+    )
+    from whetstone_envs.optim.study.spec import spec_from_manifest
+
+    spec = spec_from_manifest(study_manifest_for(protocol))
+    return pre_registration_design_hash(
+        k_repeat=spec.k_repeat,
+        k_run_by_arm={arm.arm_id: arm.k_run for arm in spec.arms},
+        kind_by_arm={arm.arm_id: arm.kind.value for arm in spec.arms},
+        split_by_arm=stages._split_by_arm(spec),
+        minibatch_by_arm=stages._minibatch_by_arm(spec),
+        search_by_arm=stages._search_by_arm(spec),
+        task_reasoning_effort=spec.task_reasoning_effort,
+        ci_level=spec.ci_level,
+        resamples=spec.resamples,
+        bootstrap_seed=spec.bootstrap_seed,
+        correction=CORRECTION_HOLM_BONFERRONI,
+        m=CORRECTION_FAMILY_SIZE,
+        completeness_backstop=COMPLETENESS_BACKSTOP,
+    )
+
+
+def test_the_c19_design_hash_is_unchanged_by_the_c18_effort_pin() -> None:
+    """C19's pre-registration survives item 23 byte for byte.
+
+    Item 23 makes the task-route reasoning effort a per-family pin so c18
+    can drop to ``minimal``. The effort is hashed into the design, so the
+    change had one way to go wrong that no other test here would catch: if
+    the builder's new parameter reached c19's registrations with any value
+    other than ``TASK_REASONING_EFFORT`` -- or if making it a parameter
+    perturbed the payload -- c19's design hash would move, and the running
+    c19 study's manifest would no longer validate against the design it
+    pre-registered.
+
+    The literals are the hashes ``main`` produced at v0.2.13, before this
+    change. They are pinned rather than recomputed from both sides,
+    because a test that compared the code against itself would pass no
+    matter what the code did.
+    """
+    assert _registered_design_hash(STEP10_C19) == (
+        "0aaf21e9ef74ffe03ebe1e3131f7f5ae90752815c92cebb51e4bba7fcc31586e"
+    )
+    assert _registered_design_hash(STEP10_C19_TOY) == (
+        "0bac099ca90b29d2bf5ce7885d8a6a13cd46e272ff6a94fcdc2a04b754da5897"
+    )
+
+
+def test_the_c18_design_hash_moved_with_its_effort_pin() -> None:
+    """C18's pre-registration is a *new* design, and says so.
+
+    The other half of item 23: re-pinning the effort is a design change, so
+    c18's hash must not be what it was at ``low``. Both literals are
+    pinned -- the current one, and the superseded one it must not equal --
+    because "the hash changed" and "the hash changed to the intended value"
+    are different claims, and only the second one makes a c18 study
+    initialised under this code checkable against its manifest.
+
+    ``acc31b8f...`` and ``6f29ec90...`` are historical: they name the c18
+    designs run at ``low``, which attempt 1's Stage-0 gate refused by
+    saturation. No c18 result should be carried forward under them.
+    """
+    at_low_real = (
+        "acc31b8f234f6ca9dd5c8611b73630bdff6decb02ab3399fcd74ed21dccc8e9d"
+    )
+    at_low_toy = (
+        "6f29ec90a1e9371b2758f6cc44883441ad98fd468018358c46e204d818c4e465"
+    )
+    real = _registered_design_hash(STEP10_C18)
+    toy = _registered_design_hash(STEP10_C18_TOY)
+    assert real == (
+        "ba939591324c5644b97eebfdab14e3c22c5f9efb106ef1b774dfa150ffc6ccc3"
+    )
+    assert toy == (
+        "4d919b79a4eb1a51eef14b6accb89062e7e70e6939eaae3abbe18fc559b62a4c"
+    )
+    assert real != at_low_real
+    assert toy != at_low_toy
+    # And the two families still cannot be confused for one another.
+    assert real != _registered_design_hash(STEP10_C19)
 
 
 # --------------------------------------------------------------------------

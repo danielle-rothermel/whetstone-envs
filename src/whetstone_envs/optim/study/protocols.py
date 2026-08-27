@@ -15,15 +15,23 @@ one run per arm. Each has a sized-down toy -- :data:`STEP10_C19_TOY` and
 
 All four are built by :func:`_step10`, and that is load-bearing rather than
 tidy. Every value the generality claim says is *unchanged* between the two
-families -- the task model and its reasoning effort, the proposer, the
-Codex agent and its call cap, the COPRO, GEPA and MIPROv2 control shapes,
-the arm list, the correction rule, the protocol document and its digest --
-is a module constant read inside that builder rather than a parameter, so
-there is no argument by which a c18 study could disagree with the c19 study
-about them. What *is* parameterised is exactly what section 4.1 states
-differently: the population, the splits, the per-arm train/val partition,
-whether MIPROv2 minibatches, and the run count. A parameter added there is
-a claim that the two designs may legitimately differ on it.
+families -- the task model itself, the proposer, the Codex agent and its
+call cap, the COPRO, GEPA and MIPROv2 control shapes, the arm list, the
+correction rule, the protocol document and its digest -- is a module
+constant read inside that builder rather than a parameter, so there is no
+argument by which a c18 study could disagree with the c19 study about them.
+What *is* parameterised is exactly what section 4.1 states differently: the
+population, the splits, the per-arm train/val partition, whether MIPROv2
+minibatches, the task route's reasoning effort, and the run count. A
+parameter added there is a claim that the two designs may legitimately
+differ on it.
+
+The reasoning effort is the newest such parameter (item 23). c18's Stage-0
+gate failed by *saturation* at c19's ``low`` -- its naive anchor tied its
+ceiling at 0.9375, leaving no headroom for any optimizer to recover -- so
+c18 pins ``minimal`` while c19 keeps ``low``. The two families therefore
+measure the same machinery at different task-model capability rungs, which
+narrows C3 to a claim about the machinery rather than about one rung.
 
 Within a pair, only the sized fields may differ:
 :data:`SIZED_FIELDS` names them, and a golden test compares each protocol
@@ -83,6 +91,7 @@ __all__ = [
     "C18_N_PER_STRATUM",
     "C18_POOL_SEED_START",
     "C18_SPLIT_SIZES",
+    "C18_TASK_REASONING_EFFORT",
     "C18_TRAIN_SIZE",
     "C18_VAL_SIZE",
     "CODEX_AGENT_MODEL",
@@ -214,8 +223,18 @@ PROTOCOL_IDS: tuple[str, ...] = (
 #: ``diff_check`` rejecting a no-op mutation, which holds under every
 #: optimizer, not on COPRO's inability to retain. No pre-registered quantity
 #: moves.
+#: ``0c5c14b4...`` is historical in turn, and like ``ec650113...`` it was a
+#: digest a study actually ran against: it is the revision in force for
+#: attempt 1 of the c18 study's Stage 0, the gate that failed by saturation.
+#: Item 23 (2026-08-26) supersedes it by making the task-route reasoning
+#: effort a **per-family** pin -- c19 keeps ``low``, c18 drops to
+#: ``minimal`` -- on the evidence that attempt produced: naive 0.9375 tying
+#: ceiling 0.9375 on the 48-task held-out split, headroom 0.0000 against the
+#: 0.20 minimum. The revision records those numbers, amends §4.1 and §5.5,
+#: and states the narrowing the divergence forces on C3. It moves **c18's**
+#: design hash only; c19's is unchanged.
 PROTOCOL_DOC_SHA256 = (
-    "0c5c14b473f0fc230e0b35f7a2e7e94b210686da256a54a30c54698fd7cfb734"
+    "2244ef187199a6a2f931156fd760c7dbce03a5527623dc87833dec6f17791bcb"
 )
 
 
@@ -250,7 +269,8 @@ PROTOCOL_DOC_PATH = _protocol_doc_path()
 TASK_MODEL = "openai/gpt-5-nano"
 PROPOSER_MODEL = "openai/gpt-5.4-nano"
 
-#: The task model's pinned reasoning effort, pre-registered as design.
+#: The **c19** family's pinned task-route reasoning effort, pre-registered
+#: as design. See :data:`C18_TASK_REASONING_EFFORT` for c18's.
 #:
 #: Pinned rather than left at the route's default because it is not an
 #: invocation setting: ``gpt-5-nano`` bills reasoning tokens as the largest
@@ -268,7 +288,9 @@ PROPOSER_MODEL = "openai/gpt-5.4-nano"
 #: A design value, so it is hashed into
 #: :func:`~whetstone_envs.optim.study.manifest.pre_registration_design_hash`
 #: and it is **not** a sized field: the toy and the real study run the same
-#: effort or they are not the same protocol.
+#: effort or they are not the same protocol. It is, since item 23, a
+#: *per-family* pin rather than a study-wide one -- see
+#: :data:`C18_TASK_REASONING_EFFORT`. This constant is c19's value.
 #:
 #: ``minimal`` is historical (item 19, 2026-08-24). It was probed and its
 #: Stage-0 gate failed on task-model capability rather than on power: the
@@ -282,6 +304,47 @@ PROPOSER_MODEL = "openai/gpt-5.4-nano"
 #: change: it moves the pre-registration's design hash, so a study
 #: initialised under ``minimal`` cannot be continued under this value.
 TASK_REASONING_EFFORT = ReasoningEffort.LOW
+
+#: The **c18** family's pinned task-route reasoning effort (item 23,
+#: 2026-08-26).
+#:
+#: Everything :data:`TASK_REASONING_EFFORT` says about *why* the effort is
+#: design rather than an invocation setting holds here unchanged: it is
+#: pinned before Stage 0, hashed into the design, enforced at bind time,
+#: applied to the task route only, and not a sized field. Only the value
+#: differs, and only for this family.
+#:
+#: c18 diverges because its Stage-0 gate failed **by saturation** at
+#: ``low``, which is the opposite failure from the one item 21 diagnosed on
+#: c19. The naive anchor scored **0.9375** and the ceiling anchor scored
+#: **0.9375** on the same 48-task held-out split (45/48 held by both), so
+#: measured headroom was **0.0000** against the 0.20 minimum. A naive prompt
+#: that already ties the ceiling leaves an optimizer nothing to recover:
+#: every arm's improvement would be bounded by zero before any candidate was
+#: written, so the design could not measure what it exists to measure. The
+#: gate verdict is recorded in the archived attempt.
+#:
+#: Escalating effort is monotonically the wrong direction here -- c18 is
+#: *easier* for the task model at a given effort than c19 is, so more
+#: reasoning only pushes the naive anchor further into the ceiling. The
+#: probe therefore goes **down** to ``minimal``, seeking a capability rung at
+#: which the naive prompt still fails often enough to leave headroom.
+#:
+#: This makes the effort the **second** control section 4.1 pre-registers
+#: differently for the second family, alongside the MIPROv2 minibatch. That
+#: is a real narrowing of C3's generality claim and item 23 says so: the two
+#: families no longer measure the same task-model capability, so the claim
+#: they jointly support is that the *machinery* carries across toolchains,
+#: not that one capability rung serves both populations. Everything else the
+#: builder reads -- the models themselves, ``K_REPEAT``, the arm list, the
+#: correction rule, the COPRO/GEPA/MIPROv2 control shapes -- stays shared.
+#:
+#: ``low`` is historical for c18: it names the design attempt 1's gate
+#: refused, and no c18 study should be run against it. The re-pin moves
+#: c18's design hash, so a c18 study initialised under ``low`` cannot be
+#: continued under this value. c19's design hash is untouched, because c19
+#: still reads :data:`TASK_REASONING_EFFORT`.
+C18_TASK_REASONING_EFFORT = ReasoningEffort.MINIMAL
 
 #: What a projection with no Codex arm appends to the study id, so a
 #: rehearsal's artifacts can never be mistaken for the study's.
@@ -558,7 +621,9 @@ class StudyProtocol:
     task_model: str
     #: The task route's pinned reasoning effort -- see
     #: :data:`TASK_REASONING_EFFORT` for why it is design rather than an
-    #: invocation setting.
+    #: invocation setting, and :data:`C18_TASK_REASONING_EFFORT` for why the
+    #: pin is per-family. Not a sized field: a pair's toy runs its family's
+    #: real effort.
     task_reasoning_effort: ReasoningEffort
     proposer_model: str
     codex_agent_model: str
@@ -779,26 +844,39 @@ def _step10(  # noqa: PLR0913
     miprov2_minibatch_size: int,
     copro_breadth: int,
     copro_depth: int,
+    task_reasoning_effort: ReasoningEffort,
     design_k_run: int | None,
 ) -> StudyProtocol:
     """Build one size of one Step 10 design.
 
     **One builder, four registrations.** Every value that is *shared* --
-    the models, the reasoning effort, the arm list, the Codex pins, the
-    COPRO and GEPA and MIPROv2 control shapes, the protocol document and
-    its digest -- is a module constant read here rather than a parameter,
-    which is what makes the two families the same protocol run twice and
-    each toy the same design as the study it stands in for. There is no
-    argument by which a c18 study could disagree with the c19 study on the
-    task model, on ``K_REPEAT``, on the correction rule, or on what an arm
-    is.
+    the models themselves, the arm list, the Codex pins, the COPRO and
+    GEPA and MIPROv2 control shapes, the protocol document and its digest
+    -- is a module constant read here rather than a parameter, which is
+    what makes the two families the same protocol run twice and each toy
+    the same design as the study it stands in for. There is no argument by
+    which a c18 study could disagree with the c19 study on the task model,
+    on ``K_REPEAT``, on the correction rule, or on what an arm is.
 
     The parameters are exactly the values section 4.1 pre-registers
     *differently* for the second family -- its population, its splits, its
-    train/val partition, its minibatch setting, and its run count -- plus
-    the sized fields each toy shrinks. A parameter added here is a claim
-    that the two designs may legitimately differ on it, and shows up in
-    review as one.
+    train/val partition, its minibatch setting, its task-route reasoning
+    effort, and its run count -- plus the sized fields each toy shrinks. A
+    parameter added here is a claim that the two designs may legitimately
+    differ on it, and shows up in review as one.
+
+    ``task_reasoning_effort`` became such a parameter under item 23. It was
+    a module constant read here, deliberately, when the second family was
+    registered: the effort sets the task model's capability, and two
+    families measured at different capabilities do not jointly evidence one
+    generality claim about capability. c18's Stage-0 gate then failed **by
+    saturation** at c19's ``low`` -- naive 0.9375 tying ceiling 0.9375,
+    headroom 0.0000 -- which is a statement about c18's population at that
+    rung rather than about the machinery. Making it a parameter is
+    therefore the honest encoding: the divergence is visible at every
+    registration, both toys still inherit their family's real value (it
+    stays out of ``SIZED_FIELDS``), and the narrowing it implies for C3 is
+    recorded in the document rather than hidden inside a shared constant.
     """
     return StudyProtocol(
         protocol_id=protocol_id,
@@ -810,7 +888,7 @@ def _step10(  # noqa: PLR0913
         train_size=train_size,
         val_size=val_size,
         task_model=TASK_MODEL,
-        task_reasoning_effort=TASK_REASONING_EFFORT,
+        task_reasoning_effort=task_reasoning_effort,
         proposer_model=PROPOSER_MODEL,
         codex_agent_model=CODEX_AGENT_MODEL,
         temperature=TEMPERATURE_NOTE,
@@ -853,6 +931,7 @@ STEP10_C19 = _step10(
     miprov2_minibatch_size=MIPROV2_MINIBATCH_SIZE,
     copro_breadth=COPRO_BREADTH,
     copro_depth=COPRO_DEPTH,
+    task_reasoning_effort=TASK_REASONING_EFFORT,
     design_k_run=None,
 )
 
@@ -870,6 +949,7 @@ STEP10_C19_TOY = _step10(
     miprov2_minibatch_size=TOY_MIPROV2_MINIBATCH_SIZE,
     copro_breadth=TOY_COPRO_BREADTH,
     copro_depth=TOY_COPRO_DEPTH,
+    task_reasoning_effort=TASK_REASONING_EFFORT,
     design_k_run=None,
 )
 
@@ -895,6 +975,7 @@ STEP10_C18 = _step10(
     miprov2_minibatch_size=MIPROV2_MINIBATCH_SIZE,
     copro_breadth=COPRO_BREADTH,
     copro_depth=COPRO_DEPTH,
+    task_reasoning_effort=C18_TASK_REASONING_EFFORT,
     design_k_run=K_RUN_C18,
 )
 
@@ -912,6 +993,7 @@ STEP10_C18_TOY = _step10(
     miprov2_minibatch_size=TOY_MIPROV2_MINIBATCH_SIZE,
     copro_breadth=TOY_COPRO_BREADTH,
     copro_depth=TOY_COPRO_DEPTH,
+    task_reasoning_effort=C18_TASK_REASONING_EFFORT,
     design_k_run=K_RUN_C18,
 )
 

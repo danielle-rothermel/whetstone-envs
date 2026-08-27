@@ -62,6 +62,33 @@ revision 1 said something different.
 | 21 | Task-model reasoning effort (value) | **`minimal` → `low`** on the task route. `minimal`'s Stage 0 failed the §7 gate on the task model's *capability*, not on the design's power: ceiling anchor **0.1977** against the 0.30 floor, leaving **0.1897** headroom against the 0.20 minimum, while naive (**0.008**) and the measured MDE (**0.0446**) both passed. Attempt 2 of the same design at the route's default effort measured a ceiling of **0.8068**, which is what identifies the effort rather than the task as the cause. Everything item 19 established — the pin, its place in the design hash, and the pre-bind refusal — is unchanged; only the pinned value moves. The re-pin moves the design hash and so requires a fresh `study_id`. | Danielle, 2026-08-25 |
 
 | 22 | Null-B's justification (correction) | §3.8 and §5.4 justified null-B's shape partly by claiming COPRO *cannot* terminalize `seed_retained` — that `seed_retained` "exists only on contracts carrying `terminal_proposal_count` (GEPA/MIPROv2)", so a byte-identical proposal under COPRO fails as `copro_proposal_cardinality` and the control would be "indistinguishable from a defect". **whetstone-ai 0.1.16 makes that premise false**: COPRO now retains its seed at both terminal emission points when the seed ties or wins the ranking, so such a round is a clean completion. Both passages are restated truthfully. **Null-B's design is unchanged**, because it never depended on the failure: `diff_check` rejects a no-op mutation under *every* optimizer, so a byte-identical proposer is unreachable regardless, and null-B's question — what the report harness alone does to an unoptimized seed — is not a question about an optimizer's search. No pre-registered quantity moves. | correction, 2026-08-25 (whetstone-ai 0.1.16) |
+| 23 | Task-model reasoning effort (scope) | study-wide → **per family**: c19 keeps `low` (item 21), and **c18 pins `minimal`**. c18's Stage 0 failed the §7 gate at `low` **by saturation** — the opposite failure from item 21's. The naive anchor scored **0.9375** and the ceiling anchor scored **0.9375** on the same 48-task held-out split (45/48 held by each), leaving measured headroom of **0.0000** against the 0.20 minimum. A naive prompt that already ties the ceiling bounds every arm's improvement at zero before a candidate is written, so the design cannot measure what it exists to measure. Escalating effort is monotonically the wrong direction on this family — c18 is easier for the task model at a given rung than c19 is, so more reasoning pushes the naive anchor further into the ceiling — hence a **down**-probe to `minimal`, seeking a rung at which the naive prompt still fails often enough to leave headroom. Everything item 19 established is unchanged: the pin, its place in the design hash, and the pre-bind refusal. The effort becomes the second control §4.1 pre-registers differently for the second family, alongside the MIPROv2 minibatch; **§4.1 and §5.5 are amended accordingly**. The re-pin moves **c18's** design hash and requires a fresh c18 `study_id`; **c19's design hash is unchanged**, since c19 still reads the study-wide constant. | Danielle, 2026-08-26 |
+
+**On item 23.** Two things are worth stating plainly, because the item narrows
+a claim rather than only moving a number.
+
+*What the divergence costs C3.* The generality claim is that the *machinery*
+carries to a second toolchain — the same `run_optimizer` entry point, the same
+arms, the same audits, the same statistics. That claim is untouched: everything
+the two families share is still read from one constant inside one builder, and
+the adapter-swap assertion is unchanged. What the two families no longer share
+is the task model's **capability rung**. So C3 is now explicitly a claim about
+the machinery, not the additional claim that one rung serves both populations.
+A reader comparing c18's per-arm deltas against c19's is comparing runs at
+different task-model capabilities; each manifest records its own effort and
+hashes it into its own design, so the difference is checkable from either.
+
+*Why a down-probe rather than a re-populated c18.* The alternative was to leave
+the effort shared and change c18's population until the naive anchor stopped
+saturating. That is the larger design change: it moves the family the claim is
+about, and §4.1 pre-registers c18's population from its own `DEFAULT_CONFIG`
+precisely so the second family is not tuned into agreement. Moving the
+capability rung leaves the population pre-registered as written and is
+recorded here as the post-hoc adjustment it is, with the gate's numbers stated
+above and the verdict preserved in the archived attempt. The standing rule from
+§5.4 still holds and is what makes this a decision rather than an automatic
+step: a gate failure is a finding for humans, not an automatic escalation —
+in either direction.
 
 **On item 21.** The design's own rule is that an effort chosen after Stage 0
 saw the anchors is a post-hoc adjustment. This revision *is* such an
@@ -775,6 +802,25 @@ The claim is mechanical, so the evidence is mechanical.
    `(24, 48, 48)` from `DEFAULT_CONFIG` at `n_per_stratum=30`, `K_REPEAT = 3`,
    `K_RUN = 1`. Report each run's held-out accuracy vs naive and ceiling with a
    CI — descriptive, not a claim; T=48 has an MDE around 0.20.
+   **Task-model reasoning effort: `minimal`** for this family (item 23), against
+   c19's `low`. Attempt 1 ran c18 at `low` and its Stage-0 gate failed by
+   saturation — naive **0.9375** tying ceiling **0.9375**, headroom **0.0000**
+   against the 0.20 minimum — so the family is re-pinned one rung down. This is
+   the second control this section states differently from the c19 study; the
+   first is the minibatch setting in item (1a) below. Everything else — the task
+   model itself, the proposer, the Codex pins, `K_REPEAT`, the arm list, the
+   control shapes, the correction rule — is shared, which is the mechanical
+   content of the claim. Because the two families now measure at different
+   capability rungs, C3 is a claim about the *machinery* carrying across
+   toolchains and **not** a claim that one rung serves both populations. Each
+   study records its own effort in `models.task_reasoning_effort` and hashes it
+   into its own design, so the two are distinguishable from either manifest;
+   a reader comparing the families' per-arm deltas is comparing runs at
+   different task-model capabilities.
+1a. **MIPROv2 runs unbatched on c18.** The internal split is 24 and the pinned
+   minibatch is 35, so a batched c18 arm would draw more than it has. The
+   family is pre-registered unbatched rather than at a resized batch, which
+   would make the two families' MIPROv2 arms different searches.
 2. **The adapter-swap assertion.** A test asserts that the c18 path reaches the
    optimizer through the same `run_optimizer` entry point, differing only in the
    env-adapter module. Concretely: the c18 additions are
@@ -971,7 +1017,8 @@ is an order-of-magnitude figure measured at toy prompt sizes, not a quote. The
 consequence is registered rather than hidden: the study is a **$152–$176** run,
 not a small-tens-of-dollars one.
 
-**The task model's `reasoning.effort` is pinned to `low` (item 21).** A
+**The task model's `reasoning.effort` is pinned per family — `low` for c19
+(item 21), `minimal` for c18 (item 23, after its gate saturated at `low`).** A
 reasoning effort changes the task model's capability, so it changes the thing
 being measured — which is exactly why it is fixed **before** Stage 0 measures
 the anchors and hashed into the pre-registered design rather than chosen once
@@ -1064,13 +1111,16 @@ require a new decision mid-run.
   (`openrouter_seeded_call_config`). Note this changes from the 0.1.2 reruns'
   `openai/gpt-4.1-nano`, which scored 0.0 on both anchors at a 2-task split —
   Stage 0 exists to confirm gpt-5-nano is not also at the floor.
-- **Task-model reasoning effort:** **`low`, pinned** (item 21; `minimal` under
-  item 19 is historical, see §5.4). Carried as
-  `TASK_REASONING_EFFORT` in `protocols.py`, recorded as
-  `models.task_reasoning_effort` in the manifest, and hashed into
+- **Task-model reasoning effort:** pinned **per family** (item 23).
+  **c19: `low`** (item 21; `minimal` under item 19 is historical, see §5.4),
+  carried as `TASK_REASONING_EFFORT` in `protocols.py`.
+  **c18: `minimal`**, carried as `C18_TASK_REASONING_EFFORT`, after c18's
+  Stage-0 gate failed by saturation at `low` (naive 0.9375 = ceiling 0.9375,
+  headroom 0.0000); see §4.1 and item 23. Either way it is recorded as
+  `models.task_reasoning_effort` in the manifest and hashed into
   `pre_registration_design_hash` — a design that changed the effort could not
-  keep its design hash. It is **not** a sized field: the toy and the real study
-  run at the same effort or they are not the same protocol.
+  keep its design hash. It is **not** a sized field: within a family, the toy
+  and the real study run at the same effort or they are not the same protocol.
 - **Proposer / reflection model:** `openai/gpt-5.4-nano`, at the route's
   default reasoning effort. The task-model pin does not reach it.
 - **Temperature:** left unset. `CoproControl` refuses a proposer temperature

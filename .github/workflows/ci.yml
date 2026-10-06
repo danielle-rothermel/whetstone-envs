@@ -14,7 +14,7 @@ concurrency:
 jobs:
   ci:
     name: Python ${{ matrix.python-version }}
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
@@ -45,7 +45,7 @@ jobs:
 
   browser-report:
     name: HTML report · Chromium
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read

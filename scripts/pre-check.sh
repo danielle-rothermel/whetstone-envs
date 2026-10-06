@@ -13,8 +13,7 @@ fi
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check
-uv run actionlint -ignore 'label "depot-ubuntu-24.04" is unknown' \
-    .github/workflows/*.yml
+uv run actionlint .github/workflows/*.yml
 uvx tombi@1.2.5 lint --offline .defs/terms.toml .defs/contracts.toml
 pytest_args=(-q)
 if [[ "${CI:-}" == "true" ]]; then

@@ -317,16 +317,16 @@ wheels = [
 
 [[package]]
 name = "dr-providers"
-version = "0.3.2"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "dr-wire" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/54/1a/ab7f5ec6d14cdb87ec2833a3c2bf9b4f0b5265c2eb9b8946c5e1ed5cbb97/dr_providers-0.3.2.tar.gz", hash = "sha256:799ea4bf7d35b56b4ac22191e1a2d6894eee1f984696ea92fe0dcba857caf2fb", size = 43030, upload-time = "2026-08-21T04:45:38.465Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/75/91/e219fc0f7e7a825949ccbb74c4a41a7eb5472334e03bfcaa45edd37d080e/dr_providers-0.3.4.tar.gz", hash = "sha256:757817dbd68466d35b6dfc3d15d48334b23b5a011ffe7c2d0c3ac9afe5ce4c49", size = 72066, upload-time = "2026-10-08T19:02:58.579Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/dc/1955fbe4758a4e6222ceb3562be11d2c5453b5db5186e625af3f43caa8f0/dr_providers-0.3.2-py3-none-any.whl", hash = "sha256:e51209731314be148c0fc766f084b018ed8640ad7bca73e4e87da1a3e25b6e6b", size = 63428, upload-time = "2026-08-21T04:45:37.226Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/fa/e0bc08e07dbbe7ffd60dc04519879fad782846099139a797d1123fe89c73/dr_providers-0.3.4-py3-none-any.whl", hash = "sha256:24a380c2759535e107474196a02bd2aec2ac2e0720bf5615730bb9a8e689dce9", size = 87670, upload-time = "2026-10-08T19:02:57.376Z" },
 ]
 
 [[package]]
@@ -1771,7 +1771,7 @@ wheels = [
 
 [[package]]
 name = "whetstone-ai"
-version = "0.1.16"
+version = "0.1.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-exec" },
@@ -1787,14 +1787,14 @@ dependencies = [
     { name = "typer" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/25/97583caca5aa3364209a7b0862751061268ea769b01cb1e54464e4db2592/whetstone_ai-0.1.16.tar.gz", hash = "sha256:33d7a559cc4f60782b9b8e29e425f0b7e24a1a782d5d606fd501fdd17991aca4", size = 444516, upload-time = "2026-08-25T21:57:36.419Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/fd/354d42b3007593a6ff593a58dc5f02a67641ccb3793dfad3d2c512ffaa3b/whetstone_ai-0.1.17.tar.gz", hash = "sha256:27002a99c61f94f8847ad099490c94ee12903214d49f78e66f61654733010d56", size = 444966, upload-time = "2026-10-08T20:06:59.341Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/17/19a07761b8c54088665b5b6b66fd1b1d4e344b5cb82fb588929081105798/whetstone_ai-0.1.16-py3-none-any.whl", hash = "sha256:3114b7af604c2e5b68fdea9b7c45c135f5836570803f6da971a15234039ff438", size = 555070, upload-time = "2026-08-25T21:57:34.932Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/a9/a57521a4b40a6b15b73fc33f074b16726690dcec58f8817ba557b21bb464/whetstone_ai-0.1.17-py3-none-any.whl", hash = "sha256:cd2921b79323128d56d237e3ef48799426237e1269646b136ef835f85146e73e", size = 554915, upload-time = "2026-10-08T20:06:57.774Z" },
 ]
 
 [[package]]
 name = "whetstone-envs"
-version = "0.2.14"
+version = "0.2.15"
 source = { editable = "." }
 dependencies = [
     { name = "absl-py" },
@@ -1850,7 +1850,7 @@ requires-dist = [
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "rich", marker = "extra == 'optim'", specifier = "==15.0.0" },
     { name = "scipy", marker = "extra == 'c18'", specifier = "==1.18.0" },
-    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.16" },
+    { name = "whetstone-ai", marker = "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'optim'", specifier = "==0.1.17" },
 ]
 provides-extras = ["c18", "optim"]
 

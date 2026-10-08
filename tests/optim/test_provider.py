@@ -38,7 +38,7 @@ def test_a_pinned_effort_reaches_the_request_body() -> None:
     this pins: the exact wire shape the OpenRouter chat preset's
     ``REASONING_OBJECT`` translation emits.
     """
-    from dr_providers import ProviderCallRequest, ReasoningEffort
+    from dr_providers import ProviderGenerateRequest, ReasoningEffort
     from dr_providers.modeling.transcript import (
         MessageRole,
         PromptMessage,
@@ -50,7 +50,7 @@ def test_a_pinned_effort_reaches_the_request_body() -> None:
         messages=(PromptMessage(role=MessageRole.USER, content="hi"),)
     )
     payload = build_payload(
-        ProviderCallRequest(
+        ProviderGenerateRequest(
             config=openrouter_seeded_call_config(
                 model="openai/gpt-5-nano",
                 reasoning_effort=ReasoningEffort.MINIMAL,
@@ -68,7 +68,7 @@ def test_an_unpinned_route_sends_no_reasoning_key_at_all() -> None:
     to the ones sent before this control existed; a payload carrying
     ``reasoning: null`` would be a different request.
     """
-    from dr_providers import ProviderCallRequest
+    from dr_providers import ProviderGenerateRequest
     from dr_providers.modeling.transcript import (
         MessageRole,
         PromptMessage,
@@ -77,7 +77,7 @@ def test_an_unpinned_route_sends_no_reasoning_key_at_all() -> None:
     from dr_providers.translation.request import build_payload
 
     payload = build_payload(
-        ProviderCallRequest(
+        ProviderGenerateRequest(
             config=openrouter_seeded_call_config(model="openai/gpt-5-nano"),
             transcript=Transcript(
                 messages=(PromptMessage(role=MessageRole.USER, content="hi"),)
@@ -432,7 +432,7 @@ def test_the_bound_openrouter_transport_retries() -> None:
 
 
 def _live_request():
-    """One real ``ProviderCallRequest`` the driver will accept.
+    """One real ``ProviderGenerateRequest`` the driver will accept.
 
     Built rather than stubbed because the driver checks the evidence's
     request identity and policy identity against the request it invoked,
@@ -440,14 +440,14 @@ def _live_request():
     that faked them could not tell a real double-invocation from a
     bookkeeping error.
     """
-    from dr_providers import ProviderCallRequest
+    from dr_providers import ProviderGenerateRequest
     from dr_providers.modeling.transcript import (
         MessageRole,
         PromptMessage,
         Transcript,
     )
 
-    return ProviderCallRequest(
+    return ProviderGenerateRequest(
         config=openrouter_seeded_call_config(model="openai/gpt-4.1-nano"),
         transcript=Transcript(
             messages=(PromptMessage(role=MessageRole.USER, content="hi"),)

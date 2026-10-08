@@ -6,6 +6,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-10-08
+
+### Changed
+
+- **Pinned `whetstone-ai` to 0.1.17** (from 0.1.16) in the `optim` extra,
+  which brings `dr-providers` 0.3.4 (from 0.3.2). `dr-graph`,
+  `dr-serialize`, and `dr-store` are unchanged; `dr-store` stays at 0.2.6
+  because `dr-exec` 0.1.14, which whetstone-ai pins, requires
+  `dr-store==0.2.6` exactly.
+- **Generation requests are `ProviderGenerateRequest`.** dr-providers 0.3.4
+  turns `ProviderCallRequest` into a generate/score union, so the fake task
+  transport in `whetstone_envs.optim.provider` and the provider tests name
+  `ProviderGenerateRequest` instead. The seeded fake-model
+  `ProviderCallDefinition` built by `prepare_experiment` declares
+  `supported_kinds={ProviderCallKind.GENERATE}`, which 0.3.4 requires.
+- **Recorded provider identity hashes change.** dr-providers 0.3.4 renames
+  its identity-reference fields and payload keys (`request_identity_hash` to
+  `request_hash`, `retry_policy_identity_hash` to `retry_policy_hash`,
+  `call_identity_hash` to `call_hash`, `evidence_identity_hash` to
+  `evidence_hash`, the config payload's `definition_identity_hash` to
+  `definition_hash`, the request payload's `config_identity_hash` to
+  `config_hash`, and `provider_call_identity_hash()` to
+  `provider_call_hash()`), replaces `PROVIDER_CALL_REQUEST_SCHEMA` with
+  kind-specific request schemas, and advances the definition schema to 7.
+  Every provider-call definition, config, request, call, evidence, and
+  result hash changes, and with them every hash derived from them: the
+  rollout graph's provider-call config reference, the task-model identity
+  carried by optimizer controls, and therefore the control identities.
+  Runs, controls, and caches recorded under 0.2.14 do not match runs
+  configured under 0.2.15. No whetstone-envs code named the renamed
+  symbols, and no golden pinned here derives from a dr-providers object, so
+  study design hashes, eval-config hashes, and manifests are unchanged.
+
 ## [0.2.14] - 2026-08-27
 
 ### Changed

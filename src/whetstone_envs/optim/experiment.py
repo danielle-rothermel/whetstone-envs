@@ -18,6 +18,7 @@ from dr_providers import (
     ControlConstraints,
     ProviderCallConfig,
     ProviderCallDefinition,
+    ProviderCallKind,
     ProviderKind,
     RequestControl,
     TokenLimitParameter,
@@ -260,6 +261,7 @@ def _seeded_provider_call_config(
             "protocol": WireProtocol.CHAT_COMPLETIONS,
             "model": "fake-model",
         },
+        supported_kinds=frozenset({ProviderCallKind.GENERATE}),
         constraints=ControlConstraints(
             supported_controls=frozenset(
                 {

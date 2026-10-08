@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from dr_providers import (
     GenerationControls,
     HttpProvider,
-    ProviderCallRequest,
+    ProviderGenerateRequest,
     ProviderInvocationEvidence,
     ReasoningEffort,
     RecoverabilityClass,
@@ -492,7 +492,7 @@ class FakeTaskTransport:
         self._gold_by_prompt = dict(gold_by_prompt)
 
     def __call__(
-        self, request: ProviderCallRequest
+        self, request: ProviderGenerateRequest
     ) -> ProviderInvocationEvidence:
         messages = getattr(
             getattr(request, "transcript", None), "messages", ()

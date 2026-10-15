@@ -13,12 +13,6 @@ from pydantic import (
 
 
 class Instance(BaseModel):
-    """A strictly validated, immutable task instance.
-
-    ``strata`` is deduplicated in first-seen order. ``prompt_inputs`` is
-    detached from caller-owned mappings and exposed read-only.
-    """
-
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -65,7 +59,6 @@ class Instance(BaseModel):
 
     @property
     def public_prompt_identity(self) -> tuple[tuple[str, str], ...]:
-        """Identify public inputs, independently of rendered text."""
         return tuple(sorted(self.prompt_inputs.items()))
 
     def __hash__(self) -> int:

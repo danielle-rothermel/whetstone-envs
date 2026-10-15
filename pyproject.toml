@@ -14,7 +14,7 @@ license-files = [
     "src/whetstone_envs/c23/attribution/PROVENANCE.md",
 ]
 authors = [
-    { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
+    { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" },
 ]
 requires-python = ">=3.12"
 classifiers = [
@@ -46,10 +46,7 @@ whetstone-eval = "whetstone_envs.reporting.cli:main"
 whetstone-study = "whetstone_envs.optim.study.cli:main"
 
 [project.optional-dependencies]
-c18 = [
-    "numpy==2.5.1",
-    "scipy==1.18.0",
-]
+c18 = ["numpy==2.5.1", "scipy==1.18.0"]
 optim = [
     "rich==15.0.0",
     "whetstone-ai==0.1.17; python_version >= '3.13' and python_version < '3.15'",
@@ -73,12 +70,10 @@ dev = [
     "ruff>=0.15.18",
     "ty>=0.0.51",
 ]
-browser-test = [
-    "playwright==1.58.0",
-]
+browser-test = ["playwright==1.58.0"]
 
 [tool.uv]
-required-version = "==0.11.25"
+required-version = "==0.12.3"
 
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]

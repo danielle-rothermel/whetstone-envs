@@ -25,7 +25,7 @@ The canonical identity of the information exposed by the default prompt \
 boundary: the sorted key-value pairs in a task instance's prompt inputs. It \
 excludes identifier, seed, task strata, and gold, and it is not rendered-prompt \
 identity."""
-exported_symbols = ["whetstone_envs.instances.public_prompt_identity"]
+exported_symbols = ["whetstone_envs.instances.Instance.public_prompt_identity"]
 
 [[terms]]
 name = "task pool"

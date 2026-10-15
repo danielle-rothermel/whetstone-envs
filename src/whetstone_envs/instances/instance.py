@@ -63,14 +63,19 @@ class Instance(BaseModel):
     ) -> dict[str, str]:
         return dict(value)
 
+    @property
+    def public_prompt_identity(self) -> tuple[tuple[str, str], ...]:
+        """Identify public inputs, independently of rendered text."""
+        return tuple(sorted(self.prompt_inputs.items()))
+
     def __hash__(self) -> int:
-        # MappingProxyType is unhashable, so hash a sorted item tuple instead.
+        # MappingProxyType is unhashable, so hash its public identity instead.
         return hash(
             (
                 self.id,
                 self.seed,
                 self.strata,
-                tuple(sorted(self.prompt_inputs.items())),
+                self.public_prompt_identity,
                 self.gold,
             ),
         )

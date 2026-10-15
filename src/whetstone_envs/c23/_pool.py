@@ -19,7 +19,7 @@ from whetstone_envs.c23._inductionbench import (
 from whetstone_envs.c23._prompts import render_demonstrations
 from whetstone_envs.c23._selection import select_task
 from whetstone_envs.c23._transducers import apply_reference
-from whetstone_envs.instances import Instance, public_prompt_identity
+from whetstone_envs.instances import Instance
 from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:
@@ -109,7 +109,7 @@ def _generate_pool(
                 stratum=stratum,
                 retained_index=len(retained),
             )
-            identity = public_prompt_identity(instance)
+            identity = instance.public_prompt_identity
             if identity in seen_identities:
                 continue
             seen_identities.add(identity)

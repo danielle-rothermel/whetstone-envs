@@ -650,6 +650,9 @@ class Instance(BaseModel):
     strata: tuple[str, ...] = Field(min_length=1)
     prompt_inputs: Mapping[str, str] = Field(default_factory=dict)
     gold: str = ""
+
+    @property
+    def public_prompt_identity(self) -> tuple[tuple[str, str], ...]: ...
 ```
 
 Construct instances directly with keyword arguments and a tuple of strata,
@@ -662,11 +665,9 @@ Invalid fields and frozen attribute assignments raise Pydantic
 `ValidationError`. Hashing uses all five fields and ignores prompt-input
 insertion order.
 
-```python
-def public_prompt_identity(
-    instance: Instance,
-) -> tuple[tuple[str, str], ...]: ...
-```
+`instance.public_prompt_identity` is the sorted tuple of public prompt-input
+items. It excludes identifier, seed, strata, and private gold, does not
+necessarily identify rendered text, and is not included in model serialization.
 
 ## Pools and splits
 

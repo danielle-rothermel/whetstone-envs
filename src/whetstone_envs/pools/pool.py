@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from whetstone_envs.instances import Instance, public_prompt_identity
+from whetstone_envs.instances import Instance
 from whetstone_envs.pools.splitting import PoolSplit, split_pool
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ class TaskPool:
                 raise ValueError(msg)
             seen_ids.add(inst.id)
 
-            public_identity = public_prompt_identity(inst)
+            public_identity = inst.public_prompt_identity
             if public_identity in seen_public_identities:
                 first_id = seen_public_identities[public_identity]
                 msg = (

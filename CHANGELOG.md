@@ -12,11 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   detached read-only prompt inputs, model serialization, and content-based
   hashing. Invalid fields and frozen assignments raise `ValidationError`;
   direct construction requires keyword arguments.
+- Public prompt identity is the read-only `Instance.public_prompt_identity`
+  property, shared by hashing, generation, and pool deduplication.
 
 ### Removed
 
 - The `make_instance` convenience constructor. Task families construct
   `Instance` directly with explicit stratum tuples.
+- The standalone `public_prompt_identity` helper and its `identity.py` module.
 
 ## [0.2.15] - 2026-10-08
 

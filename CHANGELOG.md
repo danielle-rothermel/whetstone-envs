@@ -6,8 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `InstanceGroup` in `models/instance_group.py`: a strict, frozen model with
+  a nonblank name and ordered instances with unique identifiers.
+
 ### Changed
 
+- `TaskPool` is a strict, frozen model in `models/task_pool.py`, imported from
+  `whetstone_envs.models` and constructed with one `instance_group` field.
+  Callers access members through `pool.instance_group.instances`. Public
+  prompt uniqueness, stratum indexing, three-way splitting, and persisted
+  pool identities are preserved; group names do not enter the content hash.
 - `Instance` is imported from `whetstone_envs.models` and defined in
   `models/instance.py`.
 - `Instance` is a strict, frozen Pydantic model with validated construction,
@@ -19,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- The `whetstone_envs.pools.TaskPool` export and `pools/pool.py` implementation.
 - The `whetstone_envs.instances` package.
 - The `make_instance` convenience constructor. Task families construct
   `Instance` directly with explicit stratum tuples.

@@ -15,6 +15,19 @@ date = "2026-08-06"
 check = "uv run pytest -q tests/instances"
 
 [[contracts]]
+title = "Instance groups own ordered membership"
+statement = """
+An instance group has a nonblank string name and an immutable ordered tuple \
+of validated task instances with unique identifiers. Empty groups are valid. \
+A task pool contains one instance group and additionally rejects duplicate \
+public prompt identities; its stratum index is derived from that group's \
+ordered instances."""
+rationale = """
+Named membership and identifier uniqueness have one owner, while the task \
+pool retains the stronger public-task uniqueness required for evaluation."""
+date = "2026-10-15"
+
+[[contracts]]
 title = "Public prompt identity excludes private data"
 statement = """
 Public prompt identity is the sorted tuple of a task instance's prompt-input \

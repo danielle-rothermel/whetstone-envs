@@ -19,8 +19,7 @@ from whetstone_envs.c19.scenarios import (
     build_scenario,
 )
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance
-from whetstone_envs.pools import TaskPool
+from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 if TYPE_CHECKING:
     from whetstone_envs.c19._minigrid import MiniGridState
@@ -243,7 +242,9 @@ def generate_pool(
                 )
                 for fact in _facts(scenario)
             )
-    return TaskPool(instances)
+    return TaskPool(
+        instance_group=InstanceGroup(name="c19", instances=tuple(instances)),
+    )
 
 
 def build_manifest(
@@ -256,7 +257,7 @@ def build_manifest(
         n_per_stratum=n_per_stratum,
         seed_start=seed_start,
     )
-    seeds = tuple(instance.seed for instance in pool.instances)
+    seeds = tuple(instance.seed for instance in pool.instance_group.instances)
     return Manifest.from_pool(
         pool,
         generator_version=GENERATOR_VERSION,

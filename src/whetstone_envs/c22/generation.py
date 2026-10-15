@@ -23,8 +23,7 @@ from whetstone_envs.c22.constraints import (
     Title,
 )
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance
-from whetstone_envs.pools import TaskPool
+from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 GENERATOR_VERSION = "c22-1"
 PUBLISHED_KEY_MAX = 3757
@@ -275,7 +274,9 @@ def _generate_pool(
                     )
                 )
                 seed += 1
-    return TaskPool(instances)
+    return TaskPool(
+        instance_group=InstanceGroup(name="c22", instances=tuple(instances)),
+    )
 
 
 def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool:

@@ -10,8 +10,7 @@ from types import MappingProxyType
 
 from whetstone_envs.c11.oracle import canonicalize
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance
-from whetstone_envs.pools import TaskPool
+from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 GENERATOR_VERSION = "c11-generation-2"
 INPUT_JSON_FIELD = "input_json"
@@ -265,15 +264,17 @@ def generate_pool(
     ordered = (
         block[index] for index in range(n_per_stratum) for block in by_stratum
     )
-    return TaskPool(ordered)
+    return TaskPool(
+        instance_group=InstanceGroup(name="c11", instances=tuple(ordered)),
+    )
 
 
 def build_manifest(pool: TaskPool) -> Manifest:
     """Describe the retained C11 pool with the shared manifest contract."""
-    if not pool.instances:
+    if not pool.instance_group.instances:
         msg = "C11 manifests require a nonempty pool"
         raise ValueError(msg)
-    seeds = tuple(instance.seed for instance in pool.instances)
+    seeds = tuple(instance.seed for instance in pool.instance_group.instances)
     return Manifest.from_pool(
         pool,
         generator_version=GENERATOR_VERSION,

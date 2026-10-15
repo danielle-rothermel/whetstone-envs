@@ -55,8 +55,8 @@ if TYPE_CHECKING:
     )
 
     from whetstone_envs.manifests import Manifest
+    from whetstone_envs.models import TaskPool
     from whetstone_envs.optim.experiment import PreparedExperiment
-    from whetstone_envs.pools import TaskPool
 
 __all__ = [
     "KNOWN_FAMILY_IDS",

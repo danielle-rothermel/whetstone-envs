@@ -19,8 +19,7 @@ from whetstone_envs.c23._inductionbench import (
 from whetstone_envs.c23._prompts import render_demonstrations
 from whetstone_envs.c23._selection import select_task
 from whetstone_envs.c23._transducers import apply_reference
-from whetstone_envs.models import Instance
-from whetstone_envs.pools import TaskPool
+from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -125,7 +124,9 @@ def _generate_pool(
         for row in range(n_per_stratum)
         for stratum_index in range(len(per_stratum))
     )
-    return TaskPool(instances)
+    return TaskPool(
+        instance_group=InstanceGroup(name="c23", instances=tuple(instances)),
+    )
 
 
 def _make_task(
@@ -165,7 +166,9 @@ def default_split_sizes(pool: TaskPool) -> tuple[int, int, int]:
             "C23 pool strata must be "
             f"{expected_labels!r}, got {pool.strata!r}",
         )
-    if any(len(instance.strata) != 1 for instance in pool.instances):
+    if any(
+        len(instance.strata) != 1 for instance in pool.instance_group.instances
+    ):
         raise ValueError("C23 instances must belong to exactly one stratum")
     counts = pool.stratum_counts()
     if len(set(counts.values())) != 1:

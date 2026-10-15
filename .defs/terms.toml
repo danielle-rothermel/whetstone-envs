@@ -13,6 +13,13 @@ exported_symbols = [
 ]
 
 [[terms]]
+name = "instance group"
+definition = """
+A named, ordered, immutable collection of task instances with unique \
+identifiers. An instance group may be empty."""
+exported_symbols = ["whetstone_envs.models.InstanceGroup"]
+
+[[terms]]
 name = "task stratum"
 definition = """
 A nonblank label grouping task instances for split allocation and score \
@@ -30,9 +37,9 @@ exported_symbols = ["whetstone_envs.models.Instance.public_prompt_identity"]
 [[terms]]
 name = "task pool"
 definition = """
-An ordered collection of task instances with unique identifiers and unique \
-public prompt identities, used as the source for evaluation splits."""
-exported_symbols = ["whetstone_envs.pools.TaskPool"]
+A source for evaluation splits containing one named instance group with \
+unique public prompt identities."""
+exported_symbols = ["whetstone_envs.models.TaskPool"]
 
 [[terms]]
 name = "pool split"

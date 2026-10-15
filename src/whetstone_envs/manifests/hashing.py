@@ -5,8 +5,7 @@ from dr_serialize import (
     identity_document_hash,
 )
 
-from whetstone_envs.models import Instance
-from whetstone_envs.pools import TaskPool
+from whetstone_envs.models import Instance, TaskPool
 
 _POOL_IDENTITY_SCHEMA = "whetstone_envs.task_pool"
 _POOL_IDENTITY_SCHEMA_VERSION = 1
@@ -26,14 +25,16 @@ def content_hash(pool: TaskPool) -> Sha256Digest:
     """Return the versioned identity hash for the pool's ordered content.
 
     The identity schema freezes which task-instance facts participate. Pool
-    order remains significant; prompt-input mapping order does not.
+    order remains significant; prompt-input mapping order and group names do
+    not participate.
     """
     document = build_identity_document(
         schema=_POOL_IDENTITY_SCHEMA,
         schema_version=_POOL_IDENTITY_SCHEMA_VERSION,
         payload={
             "instances": [
-                _identity_instance(instance) for instance in pool.instances
+                _identity_instance(instance)
+                for instance in pool.instance_group.instances
             ],
         },
     )

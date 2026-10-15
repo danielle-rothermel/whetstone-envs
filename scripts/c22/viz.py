@@ -12,7 +12,7 @@ from whetstone_envs.c22 import PROBES, generate_pool
 
 def main(console: Console, num_examples: int):
     console.print(Text("C22 | IFEval Variant", style="bold"))
-    instances = generate_pool().instances
+    instances = generate_pool().instance_group.instances
     for i, instance in enumerate(instances[:num_examples]):
         console.print(
             Panel(

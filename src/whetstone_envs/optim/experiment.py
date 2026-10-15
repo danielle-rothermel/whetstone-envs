@@ -64,7 +64,7 @@ from whetstone_envs.optim.rows import TaskRow, task_rows_from_instances
 from whetstone_envs.pools import PoolSplit
 
 if TYPE_CHECKING:
-    from whetstone_envs.pools import TaskPool
+    from whetstone_envs.models import TaskPool
 
 C19_NAMESPACE = "whetstone_envs.c19"
 C19_DATASET_REVISION = "c19/v1"

@@ -13,7 +13,7 @@ from dr_graph.flow.transport import (
 from whetstone_envs.models import Instance
 
 if TYPE_CHECKING:
-    from whetstone_envs.pools.pool import TaskPool
+    from whetstone_envs.models import TaskPool
 
 
 def _destination_cell_marginal_costs(
@@ -139,11 +139,11 @@ def split_pool(
     )
     total = _validate_split_sizes(
         destination_sizes,
-        pool_size=len(pool.instances),
+        pool_size=len(pool.instance_group.instances),
     )
 
     by_combination: dict[tuple[str, ...], deque[Instance]] = {}
-    for inst in pool.instances:
+    for inst in pool.instance_group.instances:
         by_combination.setdefault(inst.strata, deque()).append(inst)
 
     selected_by_combination = dict.fromkeys(by_combination, 0)
@@ -185,7 +185,7 @@ def split_pool(
     destination_instances = tuple(
         tuple(
             instance
-            for instance in pool.instances
+            for instance in pool.instance_group.instances
             if assignment_by_id.get(instance.id) == destination
         )
         for destination in range(len(destination_sizes))

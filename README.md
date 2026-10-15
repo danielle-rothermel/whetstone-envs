@@ -10,11 +10,12 @@ This repo owns the environment data and evaluation rules shared by Whetstone's
 quick-test task families. Core packages have no dependency on optimizer or
 execution-contract code:
 
-- [**Instances**][models-source] define immutable task inputs,
-  private gold data, generation seeds, task strata, and public prompt identity.
-- [**Pools and splits**][pools-source] validate ordered instance
-  collections and allocate deterministic internal, official, and held-out
-  cohorts.
+- [**Instances and groups**][models-source] define immutable task inputs,
+  private gold data, generation seeds, task strata, public prompt identity,
+  and named ordered instance collections.
+- [**Pools**][models-source] validate ordered instance collections, and
+  [**splits**][pools-source] allocate deterministic internal, official, and
+  held-out cohorts.
 - [**Probes**][probes-source] pair naive and ceiling templates,
   render public prompt inputs, and normalize predictions for evaluation.
 - [**Scoring**][scoring-source] represents scored, failed, and
@@ -633,7 +634,7 @@ classification and typed transport status metadata; raw provider messages,
 response bodies, headers, and metadata are excluded. Keep reports outside
 every Git repository and do not publish them casually.
 
-## Instances
+## Instances and groups
 
 [`whetstone_envs.models`][models-source] owns the immutable
 unit passed through generation, prompting, scoring, splitting, and persistence.
@@ -669,12 +670,26 @@ insertion order.
 items. It excludes identifier, seed, strata, and private gold, does not
 necessarily identify rendered text, and is not included in model serialization.
 
+```python
+class InstanceGroup(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    name: str
+    instances: tuple[Instance, ...]
+```
+
+An instance group requires a nonblank name and unique instance identifiers.
+Its ordered membership is immutable, and an empty tuple is valid. Groups may
+contain repeated public prompt identities; task pools apply that stronger
+uniqueness rule. Both models are imported from `whetstone_envs.models`.
+
 ## Pools and splits
 
-[`whetstone_envs.pools`][pools-source] owns validated ordered pools
-and the deterministic policy for selecting three disjoint evaluation cohorts.
-Split optimization is delegated to `dr-graph`; returned instances preserve pool
-order.
+[`whetstone_envs.models`][models-source] owns `TaskPool`, which contains one
+`InstanceGroup` and rejects duplicate public prompt identities.
+[`whetstone_envs.pools`][pools-source] owns the three-way `PoolSplit` and
+deterministic allocation policy. Split optimization is delegated to `dr-graph`;
+returned instances preserve pool order.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -685,9 +700,10 @@ class PoolSplit:
 ```
 
 ```python
-@dataclass(frozen=True, slots=True)
-class TaskPool:
-    instances: tuple[Instance, ...]
+class TaskPool(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    instance_group: InstanceGroup
 
     @property
     def strata(self) -> tuple[str, ...]: ...
@@ -701,6 +717,12 @@ class TaskPool:
         held_out_n: int,
     ) -> PoolSplit: ...
 ```
+
+Construct a pool with
+`TaskPool(instance_group=InstanceGroup(name="example", instances=(instance,)))`.
+Access its ordered members through `pool.instance_group.instances`. Group names
+do not participate in the versioned pool content hash. Generated groups use
+their task-family identifier as the name.
 
 ## Probes
 

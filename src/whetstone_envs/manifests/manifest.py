@@ -31,7 +31,7 @@ from whetstone_envs.manifests.validation import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from whetstone_envs.pools import TaskPool
+    from whetstone_envs.models import TaskPool
 
 _MANIFEST_MAX_BYTES = 1 << 20
 _PERSISTED_FIELDS = frozenset(
@@ -50,7 +50,10 @@ def _retained_seeds_within_range(
     seed_range: tuple[int, int],
 ) -> bool:
     start, end = seed_range
-    return all(start <= instance.seed < end for instance in pool.instances)
+    return all(
+        start <= instance.seed < end
+        for instance in pool.instance_group.instances
+    )
 
 
 def _manifest_document(path: Path) -> CanonicalJsonFile:

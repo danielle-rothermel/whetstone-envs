@@ -7,8 +7,7 @@ from whetstone_envs.c18.config import (
     GenerationConfig,
 )
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance
-from whetstone_envs.pools import TaskPool
+from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 
 def _validated_count(
@@ -91,7 +90,14 @@ def generate_pool(
         )
         for index, stratum in enumerate(config.strata)
     )
-    return TaskPool(block[row] for row in range(count) for block in blocks)
+    return TaskPool(
+        instance_group=InstanceGroup(
+            name="c18",
+            instances=tuple(
+                block[row] for row in range(count) for block in blocks
+            ),
+        ),
+    )
 
 
 def build_manifest(

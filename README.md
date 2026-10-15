@@ -209,15 +209,7 @@ deselected unless `WHETSTONE_ENVS_REAL_TRANSPORT=1` is set. Opting in
 without `OPENROUTER_API_KEY` fails loudly rather than skipping — a silent
 skip would let a run that called nothing report success.
 
-```bash
-mise exec -- bash scripts/check-real-transport.sh
-mise exec -- bash scripts/check-real-transport.sh -k rung1
-```
-
-The script writes a transcript and a rung table with per-rung ledgered cost
-under `~/drotherm/data/whetstone-envs/real-transport/<timestamp>/`. It
-spends real money, so it is never part of `pre-check.sh` or the default CI
-run; the `Real transport smoke` workflow is `workflow_dispatch`-only.
+The `Real transport smoke` workflow is `workflow_dispatch`-only.
 
 ### Real Codex runs
 
@@ -575,11 +567,7 @@ deselected by default through `addopts`, and every rung is skipped unless
 `WHETSTONE_ENVS_REAL_CODEX=1`. Once opted in, an unmet precondition —
 non-macOS host, missing `sandbox-exec`, missing binary, no session, or a
 missing spend opt-in — is a loud failure rather than a skip, because pytest
-exits 0 on a fully skipped session. The runner script does not trust that
-exit status either: it reports `all rungs passed` only when every rung
-reached the table with a PASSED verdict and the table holds as many rungs as
-the ladder collects, and otherwise reports `ladder not fully observed` and
-exits 1.
+exits 0 on a fully skipped session.
 
 No rung live-skips. An agent that decides the seed template is best may say
 so either by returning no selection or by *selecting* a call whose template
@@ -591,16 +579,6 @@ so a failure names its cause rather than the first symptom.
 
 [#138]: https://github.com/danielle-rothermel/whetstone-ai/pull/138
 [#140]: https://github.com/danielle-rothermel/whetstone-ai/pull/140
-
-```bash
-scripts/check-real-codex.sh              # whole ladder, stop at first break
-scripts/check-real-codex.sh -k rung3     # one rung
-```
-
-The script writes its transcript and a rung table to
-`~/drotherm/data/whetstone-envs/real-codex/<timestamp>/`.
-`.github/workflows/real-codex.yml` runs the same script on a self-hosted
-macOS runner, `workflow_dispatch`-only.
 
 The Codex *agent's* model is not the run's task model: the task model is an
 OpenRouter route the Codex CLI cannot run at all, and a subscription
@@ -910,7 +888,7 @@ validated configurations produce explicit, unpinned cohorts. Regeneration is a
 repository operation:
 
 ```bash
-uv run python scripts/regenerate-c18.py \
+uv run python scripts/task-setup/regenerate-c18.py \
   --config default \
   --output src/whetstone_envs/c18/resources/default.manifest.json
 ```
@@ -1063,14 +1041,14 @@ The hook runs formatting, lint, type, definitions, the fast test suite, and
 package validation. Run it directly at any time:
 
 ```bash
-scripts/pre-check.sh
+scripts/dev/pre-check.sh
 ```
 
 CI also runs the full-cohort integration checks. Run that exact gate locally
 before release:
 
 ```bash
-CI=true scripts/pre-check.sh
+CI=true scripts/dev/pre-check.sh
 ```
 
 Regenerate the canonical C11 manifest after an intentional generator change:

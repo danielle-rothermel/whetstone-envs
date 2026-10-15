@@ -401,7 +401,7 @@ uv run ty check
 uv run pytest -q
 uv lock --check
 uv build --clear --no-sources
-uv run python scripts/check_distributions.py
+uv run python scripts/task-setup/check_distributions.py
 git diff --check
 ```
 

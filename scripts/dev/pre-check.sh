@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd -- "${repo_root}"
 
 if uv run --no-project python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)'; then
@@ -21,4 +21,4 @@ uvx tombi@1.2.5 lint --offline .defs/terms.toml .defs/contracts.toml
 #fi
 #uv run pytest "${pytest_args[@]}"
 uv build --clear --no-sources
-#uv run python scripts/check_distributions.py
+#uv run python scripts/task-setup/check_distributions.py

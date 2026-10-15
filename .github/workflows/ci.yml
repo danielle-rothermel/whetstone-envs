@@ -37,7 +37,7 @@ jobs:
             pyproject.toml
             uv.lock
       - name: Run the repository checks
-        run: scripts/pre-check.sh
+        run: scripts/dev/pre-check.sh
       - name: Run repository safety hooks
         env:
           SKIP: pre-check

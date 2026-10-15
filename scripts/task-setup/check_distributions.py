@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, NoReturn
 if TYPE_CHECKING:
     from email.message import Message
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = PROJECT_ROOT / "dist"
 PACKAGE_DIR = PROJECT_ROOT / "src" / "whetstone_envs"
 DISTRIBUTION_NAME = "whetstone-envs"

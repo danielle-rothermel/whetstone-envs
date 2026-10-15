@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from dr_graph.flow.transport import (
@@ -10,10 +10,10 @@ from dr_graph.flow.transport import (
     solve_separable_transport,
 )
 
-from whetstone_envs.models import Instance
+from whetstone_envs.models import InstanceGroup, PoolSplit
 
 if TYPE_CHECKING:
-    from whetstone_envs.models import TaskPool
+    from whetstone_envs.models import Instance, TaskPool
 
 
 def _destination_cell_marginal_costs(
@@ -22,7 +22,7 @@ def _destination_cell_marginal_costs(
     destination_demand: int,
     total_flow: int,
 ) -> tuple[int, ...]:
-    """Return Whetstone's coverage-first, squared-spread cell costs."""
+    # One extra coverage miss must cost more than all squared-spread costs.
     coverage_penalty = total_flow * total_flow + 1
     return tuple(
         2 * unit - 1 + (coverage_penalty if unit > 1 else 0)
@@ -35,9 +35,8 @@ def _destination_cell_marginal_costs(
 
 def _allocate_destination_quotas(
     selected_by_combination: dict[tuple[str, ...], int],
-    destination_sizes: tuple[int, int, int],
+    destination_sizes: tuple[int, ...],
 ) -> list[dict[tuple[str, ...], int]]:
-    """Set global quotas maximizing coverage before squared-count balance."""
     combinations = tuple(selected_by_combination)
     supplies = tuple(selected_by_combination.values())
     total = sum(destination_sizes)
@@ -74,73 +73,42 @@ def _allocate_destination_quotas(
 
 
 def _validate_split_sizes(
-    destination_sizes: tuple[int, int, int],
+    sizes: Mapping[str, int],
     *,
     pool_size: int,
-) -> int:
-    for name, size in zip(
-        ("internal_eval_n", "official_n", "held_out_n"),
-        destination_sizes,
-        strict=True,
-    ):
+) -> dict[str, int]:
+    if not isinstance(sizes, Mapping):
+        raise TypeError("split sizes must be a mapping of names to integers")
+    requested_sizes = dict(sizes)
+    for name, size in requested_sizes.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("split group names must be nonblank strings")
         if type(size) is not int:
             msg = f"{name} must be an int, got {type(size).__name__}"
             raise TypeError(msg)
         if size < 0:
             msg = f"{name} must be non-negative, got {size}"
             raise ValueError(msg)
-    total = sum(destination_sizes)
+    total = sum(requested_sizes.values())
     if total > pool_size:
         msg = (
             f"split sizes sum to {total} but pool has only "
             f"{pool_size} instances"
         )
         raise ValueError(msg)
-    return total
-
-
-@dataclass(frozen=True, slots=True)
-class PoolSplit:
-    """Three subsets whose instance IDs must be pairwise disjoint."""
-
-    internal_eval: tuple[Instance, ...]
-    official: tuple[Instance, ...]
-    held_out: tuple[Instance, ...]
-
-    def __post_init__(self) -> None:
-        groups = {
-            "internal_eval": self.internal_eval,
-            "official": self.official,
-            "held_out": self.held_out,
-        }
-        seen: dict[str, str] = {}
-        for name, subset in groups.items():
-            for inst in subset:
-                if inst.id in seen:
-                    msg = (
-                        f"split is not disjoint: instance {inst.id!r} "
-                        f"appears in both {seen[inst.id]!r} and "
-                        f"{name!r}"
-                    )
-                    raise AssertionError(msg)
-                seen[inst.id] = name
+    return requested_sizes
 
 
 def split_pool(
     pool: TaskPool,
-    internal_eval_n: int,
-    official_n: int,
-    held_out_n: int,
+    sizes: Mapping[str, int],
 ) -> PoolSplit:
-    destination_sizes = (
-        internal_eval_n,
-        official_n,
-        held_out_n,
-    )
-    total = _validate_split_sizes(
-        destination_sizes,
+    requested_sizes = _validate_split_sizes(
+        sizes,
         pool_size=len(pool.instance_group.instances),
     )
+    destination_sizes = tuple(requested_sizes.values())
+    total = sum(destination_sizes)
 
     by_combination: dict[tuple[str, ...], deque[Instance]] = {}
     for inst in pool.instance_group.instances:
@@ -191,7 +159,12 @@ def split_pool(
         for destination in range(len(destination_sizes))
     )
     return PoolSplit(
-        internal_eval=destination_instances[0],
-        official=destination_instances[1],
-        held_out=destination_instances[2],
+        instance_groups=tuple(
+            InstanceGroup(name=name, instances=instances)
+            for name, instances in zip(
+                requested_sizes,
+                destination_instances,
+                strict=True,
+            )
+        ),
     )

@@ -39,6 +39,7 @@ from whetstone_envs.probes import normalize
 from whetstone_envs.reporting.schema import (
     EVAL_REPORT_SCHEMA,
     SPEND_SCHEMA_VERSION,
+    SPLIT_ROLE_BY_REPORT_ROLE,
     TRAJECTORY_REPORT_SCHEMA,
     CandidateRecord,
     CandidateSource,
@@ -117,26 +118,9 @@ def _family_name(prepared: PreparedExperiment) -> FamilyName:
     return cast("FamilyName", family)
 
 
-def _instances_for_role(
-    prepared: PreparedExperiment, role: EvalRoleName
-) -> tuple[Instance, ...]:
-    if role == "internal":
-        return prepared.split.internal_eval
-    if role == "official":
-        return prepared.split.official
-    if role == "held_out":
-        return prepared.split.held_out
-    raise ValueError(f"unsupported evaluation role {role!r}")
-
-
 def _eval_split_for_role(
     prepared: PreparedExperiment, role: EvalRoleName
 ) -> EvalSplit:
-    """Resolve the prepared eval split for one reporting role.
-
-    Held-out is optional upstream, so an absent held-out split is refused by
-    name rather than silently reported against another role's tasks.
-    """
     configs = prepared.experiment.eval_configs
     if role == "internal":
         return configs.internal
@@ -426,7 +410,8 @@ def project_eval_report(  # noqa: PLR0913
 ) -> EvalReport:
     if len(candidates) != len(results):
         raise ValueError("candidate/result counts disagree")
-    all_instances = _instances_for_role(prepared, role)
+    eval_split = _eval_split_for_role(prepared, role)
+    all_instances = prepared.split[SPLIT_ROLE_BY_REPORT_ROLE[role]].instances
     candidate_records = tuple(
         _candidate_record(name=name, source=source, candidate=candidate)
         for name, source, candidate in candidates
@@ -434,7 +419,6 @@ def project_eval_report(  # noqa: PLR0913
     projected_results: list[EvaluationResult] = []
     report_observations: list[Observation] = []
     graph_hash = prepared.experiment.rollout_graph.graph_hash
-    eval_split = _eval_split_for_role(prepared, role)
     all_tasks = tuple(
         zip(
             all_instances,

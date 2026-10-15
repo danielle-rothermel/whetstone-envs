@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `PoolSplit` is a strict, frozen model in `models/pool_split.py` containing
+  ordered named `InstanceGroup` objects. Group names must be unique and
+  instance IDs must be disjoint across groups; `split[name]` retrieves a group.
+- `TaskPool.split` accepts a name-to-size mapping with any number of
+  destinations. Request order controls group order and allocation ties.
+  Evaluation consumers retain their three named roles, existing cohorts,
+  and persisted evaluation identities. Protocol implementation references
+  are updated and the packaged document digest is re-pinned.
 - `TaskPool` is a strict, frozen model in `models/task_pool.py`, imported from
   `whetstone_envs.models` and constructed with one `instance_group` field.
   Callers access members through `pool.instance_group.instances`. Public
@@ -29,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- The `whetstone_envs.pools.PoolSplit` export, its three fixed cohort fields,
+  and the three positional size arguments to `TaskPool.split`.
 - The `whetstone_envs.pools.TaskPool` export and `pools/pool.py` implementation.
 - The `whetstone_envs.instances` package.
 - The `make_instance` convenience constructor. Task families construct

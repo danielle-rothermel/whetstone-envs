@@ -160,104 +160,18 @@ PROTOCOL_IDS: tuple[str, ...] = (
     STEP10_C18_TOY_ID,
 )
 
-#: The digest of the registered pre-registration text, pinned as a golden.
-#:
-#: ``init`` computes the digest from the file it actually reads, so this is
-#: not what a manifest records -- it is what a test asserts the shipped
-#: document still hashes to. A pre-registration whose text could change
-#: without anything failing would pre-register nothing.
-#: Revision 2 (2026-08-23). Revision 1 hashed to ``a311de47...``; that value
-#: is historical -- it is what a manifest initialised before the 2026-08-23
-#: decisions recorded, and the text it names states a design this code does
-#: not run. The revision block at the head of the document lists every
-#: change and the plan note that decided it. Revision 2 was amended the same
-#: day by item 17 -- L1 restated as task-set containment -- so its earlier
-#: digest ``1fa2102b...`` is historical for the same reason, as is
-#: ``2e98198b...``, which item 18 superseded later the same day when §3.9
-#: gained the row-level retry and missing-row rules. ``086dc1ba...`` is
-#: historical in turn: item 18 was amended once more on 2026-08-23 to give
-#: the retry budget a single owner (5 attempts total per logical call, spent
-#: in the transport wrapper, with whetstone's driver pinned to one attempt so
-#: the two loops cannot multiply) and to add §3.9's per-task completeness
-#: floor, which refuses an evaluation that lost every repeat of any task.
-#: 06e51d15... is historical in turn: the floor's wording was made
-#: explicit about reading presence from the reported per-task vectors.
-#: ``31425667...`` is historical in turn: §3.9 now names which evaluations
-#: the floor applies to -- the two reported scores and the standalone
-#: ``whetstone-eval`` report, with in-search evaluations exempt to the
-#: optimizer's reward policy -- and states that "measured" means measured to
-#: a full ``K_REPEAT``, without which the 90% bound could never bind.
-#: ``df0e9d4c...`` is historical in turn: item 19 (2026-08-24) pins the task
-#: model's reasoning effort to ``minimal``, which the text had previously
-#: declined to pin. That revision also states how the pin is verified --
-#: request correctness, read off the manifest's recorded provider call
-#: config and enforced as a refusal before a paid bind is written, rather
-#: than billed reasoning tokens, which no provider guarantees.
-#: ``0dfd0c47...`` is historical in turn: item 20 (2026-08-25) states the
-#: study's tolerance for stochastic and infrastructure outcomes, under
-#: Danielle's ruling that the protocol cannot require perfection from its
-#: infra. §3.9 now says a fully-lost task degrades the claim to
-#: ``incomplete (not claimed)`` rather than aborting its stage, that blank
-#: generations are scored failing samples rather than missing rows, and
-#: that anchor calibration floors at 90% presence and balance-subsets the
-#: two anchors to equal per-task depth; the COPRO breadth invariant now
-#: reads 1..``breadth`` with the shortfall recorded. The pre-registered
-#: quantities are unchanged -- breadth 6, depth 3, the K values, and the
-#: 90% floor are still what the design *requests*, and realized counts are
-#: measurement.
-#: ``ec650113...`` is historical in turn, and unlike the digests above it
-#: was a digest a study actually ran against: it is the revision in force
-#: for attempt 3 of Stage 0, the ``minimal`` probe. Item 21 (2026-08-25)
-#: supersedes it by re-pinning the task model's reasoning effort from
-#: ``minimal`` to ``low`` on the evidence that probe produced -- a gate
-#: failure on ceiling capability rather than on power -- and by recording
-#: that probe's numbers in the document as the provenance for the change.
-#: ``17ad9c01...`` is historical in turn, and like ``ec650113...`` it was a
-#: digest a study ran against. Item 22 (2026-08-25) supersedes it on a
-#: correction rather than a design change: §3.8 and §5.4 justified null-B's
-#: shape partly by claiming COPRO cannot terminalize ``seed_retained``,
-#: because only GEPA and MIPROv2 carried ``terminal_proposal_count``.
-#: whetstone-ai 0.1.16 makes COPRO retain its seed at both terminal emission
-#: points, so that premise is false. The revision states the mechanism
-#: truthfully and records that null-B's conclusion is unchanged: it rests on
-#: ``diff_check`` rejecting a no-op mutation, which holds under every
-#: optimizer, not on COPRO's inability to retain. No pre-registered quantity
-#: moves.
-#: ``0c5c14b4...`` is historical in turn, and like ``ec650113...`` it was a
-#: digest a study actually ran against: it is the revision in force for
-#: attempt 1 of the c18 study's Stage 0, the gate that failed by saturation.
-#: Item 23 (2026-08-26) supersedes it by making the task-route reasoning
-#: effort a **per-family** pin -- c19 keeps ``low``, c18 drops to
-#: ``minimal`` -- on the evidence that attempt produced: naive 0.9375 tying
-#: ceiling 0.9375 on the 48-task held-out split, headroom 0.0000 against the
-#: 0.20 minimum. The revision records those numbers, amends §4.1 and §5.5,
-#: and states the narrowing the divergence forces on C3. It moves **c18's**
-#: design hash only; c19's is unchanged.
+# Init records the digest of the file it reads; this pin identifies the
+# packaged revision for verification.
 PROTOCOL_DOC_SHA256 = (
-    "2244ef187199a6a2f931156fd760c7dbce03a5527623dc87833dec6f17791bcb"
+    "5c80955a1497824563b2a4b9555ac636a605b81904f70ddaeeb6cbaef9f7608c"
 )
 
 
-def _protocol_doc_path() -> str:
-    """The registered pre-registration document, inside this package.
-
-    Resolved from the package rather than from a home directory. ``init``
-    hashes this file and refuses to author a study without it, so a default
-    pointing into one machine's durable notes made every other checkout --
-    and every installed copy of this package -- unable to initialise a
-    study at all. The document ships in the wheel, which is what makes the
-    digest a manifest records checkable by whoever reads the manifest.
-
-    ``--protocol-doc`` still overrides it, and the digest always comes from
-    whichever file is actually read.
-    """
+def _packaged_protocol_doc_path() -> str:
     return str(files(_PROTOCOL_DOC_PACKAGE).joinpath(STEP10_C19_PROTOCOL_DOC))
 
 
-#: The pre-registration document itself. ``init`` hashes the file at this
-#: path and records the digest, so a manifest names a *specific* revision of
-#: the protocol rather than a filename that could be rewritten afterwards.
-PROTOCOL_DOC_PATH = _protocol_doc_path()
+PROTOCOL_DOC_PATH = _packaged_protocol_doc_path()
 
 # --------------------------------------------------------------------------
 # Models (D14, and note 26 for the agent)

@@ -12,15 +12,10 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from whetstone_envs.models.instance import Instance
-    from whetstone_envs.pools.splitting import PoolSplit
+    from whetstone_envs.models.pool_split import PoolSplit
 
 
 class TaskPool(BaseModel):
-    """An ordered pool with unique instance IDs and prompt-input identities.
-
-    Rendered-prompt uniqueness depends on each renderer and template.
-    """
-
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     instance_group: InstanceGroup
@@ -69,26 +64,12 @@ class TaskPool(BaseModel):
 
     def split(
         self,
-        internal_eval_n: int,
-        official_n: int,
-        held_out_n: int,
+        sizes: Mapping[str, int],
     ) -> PoolSplit:
-        """Split by complete strata tuples without oversubscription.
-
-        First-seen combinations are selected round-robin in pool order. Global
-        destination allocation maximizes combination coverage, then minimizes
-        squared counts. Selected instances retain pool order, and an unused
-        pool tail may remain unassigned.
-        """
         # Keep the allocation solver outside the models import path.
         from whetstone_envs.pools.splitting import split_pool  # noqa: PLC0415
 
-        return split_pool(
-            self,
-            internal_eval_n,
-            official_n,
-            held_out_n,
-        )
+        return split_pool(self, sizes)
 
     def as_sequence(self) -> Sequence[Instance]:
         return self.instance_group.instances

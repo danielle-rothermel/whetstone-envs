@@ -1,12 +1,3 @@
-"""The prepared-experiment shape every task family hands the runner.
-
-One family-generic builder, :func:`prepare_experiment`, turns a pool and a
-:class:`ExperimentContract` into the ``Experiment`` the optimizers drive.
-``prepare_c19_experiment`` is that builder bound to C19's contract, and a
-second family binds its own; nothing here is C19-shaped except the
-``C19_*`` constants and the binding at the bottom of this module.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -60,8 +51,8 @@ from whetstone.experiment.sampling import (
 )
 
 from whetstone_envs.c19 import PROBES
+from whetstone_envs.models import PoolSplit
 from whetstone_envs.optim.rows import TaskRow, task_rows_from_instances
-from whetstone_envs.pools import PoolSplit
 
 if TYPE_CHECKING:
     from whetstone_envs.models import TaskPool
@@ -95,13 +86,6 @@ class _RolloutGraph:
 
 
 class PreparedExperiment(Protocol):
-    """What a family's experiment builder hands the runner and the report.
-
-    ``run_optimizer`` and ``project_trajectory_report`` read exactly these
-    two attributes, so a second family satisfies the contract by returning
-    its own prepared pair rather than by subclassing anything.
-    """
-
     @property
     def experiment(self) -> Experiment: ...
 
@@ -111,12 +95,7 @@ class PreparedExperiment(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PreparedSplitExperiment:
-    """One family's Experiment beside the pool split that authored it.
-
-    The split is retained because the eval configs carry task hashes, not
-    the source instances, and the report projects per-stratum results from
-    the instances.
-    """
+    """Retain source cohorts because eval configs contain only task hashes."""
 
     experiment: Experiment
     split: PoolSplit
@@ -370,13 +349,13 @@ def c19_candidate(*, candidate_id: str, template: str) -> Candidate:
     return C19_CONTRACT.candidate(candidate_id=candidate_id, template=template)
 
 
-def _rows_from_split(
+def _required_evaluation_rows(
     split: PoolSplit,
     *,
     namespace: str,
 ) -> tuple[tuple[TaskRow, ...], tuple[TaskRow, ...]]:
-    internal = task_rows_from_instances(split.internal_eval)
-    official = task_rows_from_instances(split.official)
+    internal = task_rows_from_instances(split[INTERNAL_EVAL].instances)
+    official = task_rows_from_instances(split[OFFICIAL].instances)
     if not internal or not official:
         msg = (
             f"{namespace} experiment requires non-empty internal and "
@@ -394,17 +373,14 @@ def prepare_experiment(
     num_seeds: int = 1,
     provider_call_config: ProviderCallConfig | None = None,
 ) -> PreparedSplitExperiment:
-    """Prepare one family's Experiment and retain its source split.
-
-    Every family reaches the optimizers through this one builder; the only
-    thing that varies between two families is the ``contract`` handed in.
-    Held-out is derived under its own role when the split requests one, and
-    omitted otherwise, because upstream treats it as optional.
-    """
     if num_seeds < 1:
         raise ValueError("num_seeds must be at least 1")
-    split = pool.split(*split_sizes)
-    internal_rows, official_rows = _rows_from_split(
+    split = pool.split(
+        dict(
+            zip((INTERNAL_EVAL, OFFICIAL, HELD_OUT), split_sizes, strict=True)
+        ),
+    )
+    internal_rows, official_rows = _required_evaluation_rows(
         split, namespace=contract.namespace
     )
     procedure, procedure_hash = _reference_procedure(contract.namespace)
@@ -426,7 +402,7 @@ def prepare_experiment(
             num_seeds=num_seeds,
         )
 
-    held_out_rows = task_rows_from_instances(split.held_out)
+    held_out_rows = task_rows_from_instances(split[HELD_OUT].instances)
     eval_configs = EvalConfigs(
         env_name=contract.namespace,
         procedure_config_hash=procedure_hash,

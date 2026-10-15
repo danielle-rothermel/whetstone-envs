@@ -14,8 +14,7 @@ execution-contract code:
   private gold data, generation seeds, task strata, public prompt identity,
   and named ordered instance collections.
 - [**Pools**][models-source] validate ordered instance collections, and
-  [**splits**][pools-source] allocate deterministic internal, official, and
-  held-out cohorts.
+  [**splitting**][pools-source] allocates deterministic named cohorts.
 - [**Probes**][probes-source] pair naive and ceiling templates,
   render public prompt inputs, and normalize predictions for evaluation.
 - [**Scoring**][scoring-source] represents scored, failed, and
@@ -686,17 +685,17 @@ uniqueness rule. Both models are imported from `whetstone_envs.models`.
 ## Pools and splits
 
 [`whetstone_envs.models`][models-source] owns `TaskPool`, which contains one
-`InstanceGroup` and rejects duplicate public prompt identities.
-[`whetstone_envs.pools`][pools-source] owns the three-way `PoolSplit` and
-deterministic allocation policy. Split optimization is delegated to `dr-graph`;
-returned instances preserve pool order.
+`InstanceGroup` and rejects duplicate public prompt identities, and `PoolSplit`,
+which contains named disjoint groups. The allocation algorithm lives in
+[`whetstone_envs.pools`][pools-source] and delegates optimization to `dr-graph`.
 
 ```python
-@dataclass(frozen=True, slots=True)
-class PoolSplit:
-    internal_eval: tuple[Instance, ...]
-    official: tuple[Instance, ...]
-    held_out: tuple[Instance, ...]
+class PoolSplit(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    instance_groups: tuple[InstanceGroup, ...]
+
+    def __getitem__(self, name: str) -> InstanceGroup: ...
 ```
 
 ```python
@@ -712,9 +711,7 @@ class TaskPool(BaseModel):
     def in_stratum(self, label: str) -> tuple[Instance, ...]: ...
     def split(
         self,
-        internal_eval_n: int,
-        official_n: int,
-        held_out_n: int,
+        sizes: Mapping[str, int],
     ) -> PoolSplit: ...
 ```
 
@@ -723,6 +720,23 @@ Construct a pool with
 Access its ordered members through `pool.instance_group.instances`. Group names
 do not participate in the versioned pool content hash. Generated groups use
 their task-family identifier as the name.
+
+```python
+split = pool.split(sizes={"train": 8, "validation": 2})
+training_instances = split["train"].instances
+```
+
+Group names must be nonblank and sizes must be exact nonnegative integers.
+Request insertion order determines group order and allocation tie-breaking.
+The allocator selects by complete ordered strata tuples, maximizes combination
+coverage before balancing counts, and preserves source-pool order within each
+group. Unselected instances remain outside the split. Empty groups are valid;
+an empty request produces an empty split. Missing group lookup raises
+`KeyError`. Group names and instance IDs across groups must be unique.
+
+Experiment preparation requests `internal_eval`, `official`, and `held_out`
+in that order. The optimizer CLI and persisted evaluation/study schemas retain
+those three evaluation roles and their existing size conventions.
 
 ## Probes
 

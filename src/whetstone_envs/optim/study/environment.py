@@ -1,28 +1,4 @@
-"""Bind a study directory to a running population, engine, and store.
-
-The stage harness takes every provider-touching collaborator as a callable
-so it can be exercised without one. This module is where those callables
-actually come from: it reads the manifest's ``population`` and ``models``
-blocks, regenerates the pool the study pre-registered, and hands back a
-:class:`~whetstone_envs.optim.study.stages.StageEnvironment` bound to a
-per-role evaluation engine over one open store.
-
-**The population is regenerated, never re-chosen, and the result is
-checked.** Pool generation is deterministic in
-``(n_per_stratum, pool_seed_start)`` and both are recorded in the manifest,
-so binding an environment reproduces the exact tasks the study
-pre-registered rather than drawing a fresh sample of the same size. Binding
-then verifies that: the regenerated splits' content-addressed task hashes
-must equal the ones the manifest recorded, and a mismatch refuses the bind
-rather than proceeding to evaluate a different population under the study's
-name. That check is cheap and it is the only thing standing between a
-changed generator and a study whose Stage-2 numbers describe different
-tasks than its Stage-0 anchors did.
-
-The environment is a context manager because the store and every engine it
-opens are resources: leaving the block closes them on every exit path,
-including the failures a stage re-raises.
-"""
+"""Verify regenerated task hashes before binding study evaluation resources."""
 
 from __future__ import annotations
 
@@ -40,6 +16,7 @@ from whetstone.eval.runtime_engine import (
     DEFAULT_CONCURRENCY as WHETSTONE_DEFAULT_CONCURRENCY,
 )
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
+from whetstone.experiment.sampling import HELD_OUT, INTERNAL_EVAL, OFFICIAL
 
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.provider import (
@@ -88,7 +65,7 @@ if TYPE_CHECKING:
     from whetstone.experiment.candidate import Candidate
     from whetstone.provider.policy import ProviderExecutionPolicy
 
-    from whetstone_envs.pools import PoolSplit
+    from whetstone_envs.models import PoolSplit
 
 __all__ = [
     "FAKE_TRANSPORT",
@@ -180,16 +157,11 @@ def anchor_candidates(family_id: str) -> tuple[Candidate, Candidate]:
 def _require_recorded_population(
     split: PoolSplit, recorded: SplitsRecord
 ) -> None:
-    """Refuse a bind whose regenerated tasks are not the recorded ones.
-
-    Compared by content-addressed task hash, not by size or id: the hash is
-    over ``{task_id, prompt_inputs, gold}``, so it is the only comparison
-    that catches a generator whose output changed while its shape did not.
-    """
+    """Compare recorded task hashes, rather than just IDs or counts."""
     for role, instances, record in (
-        ("internal", split.internal_eval, recorded.internal),
-        ("official", split.official, recorded.official),
-        ("held_out", split.held_out, recorded.held_out),
+        ("internal", split[INTERNAL_EVAL].instances, recorded.internal),
+        ("official", split[OFFICIAL].instances, recorded.official),
+        ("held_out", split[HELD_OUT].instances, recorded.held_out),
     ):
         if not record.task_hashes:
             # A manifest written before its splits were measured records
@@ -659,13 +631,13 @@ def bound_stage_environment(  # noqa: PLR0913
 
         task_ids_by_role = {
             EvalRole.INTERNAL: tuple(
-                instance.id for instance in split.internal_eval
+                instance.id for instance in split[INTERNAL_EVAL].instances
             ),
             EvalRole.OFFICIAL: tuple(
-                instance.id for instance in split.official
+                instance.id for instance in split[OFFICIAL].instances
             ),
             EvalRole.HELD_OUT: tuple(
-                instance.id for instance in split.held_out
+                instance.id for instance in split[HELD_OUT].instances
             ),
         }
         # The design's repeat count, not the calibration's: an arm stage

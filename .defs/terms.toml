@@ -44,9 +44,10 @@ exported_symbols = ["whetstone_envs.models.TaskPool"]
 [[terms]]
 name = "pool split"
 definition = """
-The internal-evaluation, official, and held-out subsets selected from a task \
-pool. Task-instance identifiers are disjoint across the three destinations."""
-exported_symbols = ["whetstone_envs.pools.PoolSplit"]
+An ordered collection of named instance groups selected from a task pool. \
+Group names are unique and task-instance identifiers are disjoint across \
+groups; the selected groups need not exhaust the source pool."""
+exported_symbols = ["whetstone_envs.models.PoolSplit"]
 
 [[terms]]
 name = "probe pair"

@@ -67,10 +67,24 @@ date = "2026-08-06"
 check = "uv run pytest -q tests/scoring/test_aggregation.py"
 
 [[contracts]]
+title = "Pool splits own named disjoint groups"
+statement = """
+A pool split contains an immutable ordered tuple of validated instance groups \
+with unique names and no task-instance identifier shared across groups. Named \
+lookup returns the corresponding group and raises KeyError for an absent \
+name. Empty groups and an empty collection of groups are valid."""
+rationale = """
+Group membership has one owner, while the split enforces the cross-group \
+invariants independently of any evaluation protocol or allocation algorithm."""
+date = "2026-10-15"
+
+[[contracts]]
 title = "Pool splitting preserves deterministic cohorts"
 statement = """
-Task-pool splitting selects without replacement by each task instance's \
-complete ordered task-strata tuple, fills exactly the requested nonnegative \
+Task-pool splitting accepts a mapping of nonblank group names to exact \
+nonnegative integer sizes and uses its insertion order as destination order, \
+including for allocation ties. It selects without replacement by each task \
+instance's complete ordered task-strata tuple, fills exactly the requested nonnegative \
 destination sizes without oversubscription, maximizes combination coverage \
 before balancing combination counts, preserves source-pool order in every \
 destination, and leaves unselected task instances unassigned. Exact separable \
@@ -146,7 +160,7 @@ check = "uv run pytest -q tests/manifests"
 title = "Owning subpackages define the public API"
 statement = """
 Consumers import public contracts from whetstone_envs.models, \
-whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
+whetstone_envs.manifests, whetstone_envs.probes, and \
 whetstone_envs.scoring. Strict report models are imported from \
 whetstone_envs.reporting. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \

@@ -39,6 +39,7 @@ dependencies = [
     "numpy==2.5.1",
     "pydantic==2.13.4",
     "rfc8785==0.1.4",
+    "rich>=15.0.0",
 ]
 
 [project.scripts]

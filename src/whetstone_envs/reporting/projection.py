@@ -75,7 +75,7 @@ if TYPE_CHECKING:
     from whetstone.experiment.sampling import EvalSplit
     from whetstone.optim.contracts import OptimStepResult
 
-    from whetstone_envs.instances import Instance
+    from whetstone_envs.models import Instance
     from whetstone_envs.optim.experiment import PreparedExperiment
 
 

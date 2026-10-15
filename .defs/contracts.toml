@@ -132,7 +132,7 @@ check = "uv run pytest -q tests/manifests"
 [[contracts]]
 title = "Owning subpackages define the public API"
 statement = """
-Consumers import public contracts from whetstone_envs.instances, \
+Consumers import public contracts from whetstone_envs.models, \
 whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
 whetstone_envs.scoring. Strict report models are imported from \
 whetstone_envs.reporting. Task-family contracts are imported from their owning \

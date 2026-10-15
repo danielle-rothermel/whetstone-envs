@@ -19,7 +19,7 @@ from whetstone_envs.c23._inductionbench import (
 from whetstone_envs.c23._prompts import render_demonstrations
 from whetstone_envs.c23._selection import select_task
 from whetstone_envs.c23._transducers import apply_reference
-from whetstone_envs.instances import Instance
+from whetstone_envs.models import Instance
 from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:

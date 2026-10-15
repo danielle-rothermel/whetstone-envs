@@ -10,7 +10,7 @@ from dr_graph.flow.transport import (
     solve_separable_transport,
 )
 
-from whetstone_envs.instances import Instance
+from whetstone_envs.models import Instance
 
 if TYPE_CHECKING:
     from whetstone_envs.pools.pool import TaskPool

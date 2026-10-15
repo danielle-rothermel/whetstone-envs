@@ -10,7 +10,7 @@ This repo owns the environment data and evaluation rules shared by Whetstone's
 quick-test task families. Core packages have no dependency on optimizer or
 execution-contract code:
 
-- [**Instances**][instances-source] define immutable task inputs,
+- [**Instances**][models-source] define immutable task inputs,
   private gold data, generation seeds, task strata, and public prompt identity.
 - [**Pools and splits**][pools-source] validate ordered instance
   collections and allocate deterministic internal, official, and held-out
@@ -635,7 +635,7 @@ every Git repository and do not publish them casually.
 
 ## Instances
 
-[`whetstone_envs.instances`][instances-source] owns the immutable
+[`whetstone_envs.models`][models-source] owns the immutable
 unit passed through generation, prompting, scoring, splitting, and persistence.
 Prompt inputs are public; `gold` remains private evaluation data.
 
@@ -1071,7 +1071,7 @@ uv run python -m whetstone_envs.c19.regenerate
 [c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
 [c18-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c18
 [c19-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c19
-[instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
+[models-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/models
 [c22-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c22
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests
 [pools-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/pools

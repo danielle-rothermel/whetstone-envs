@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `Instance` is imported from `whetstone_envs.models` and defined in
+  `models/instance.py`.
 - `Instance` is a strict, frozen Pydantic model with validated construction,
   detached read-only prompt inputs, model serialization, and content-based
   hashing. Invalid fields and frozen assignments raise `ValidationError`;
@@ -17,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- The `whetstone_envs.instances` package.
 - The `make_instance` convenience constructor. Task families construct
   `Instance` directly with explicit stratum tuples.
 - The standalone `public_prompt_identity` helper and its `identity.py` module.

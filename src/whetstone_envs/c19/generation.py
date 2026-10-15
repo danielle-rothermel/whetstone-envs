@@ -18,8 +18,8 @@ from whetstone_envs.c19.scenarios import (
     C19Size,
     build_scenario,
 )
-from whetstone_envs.instances import Instance
 from whetstone_envs.manifests import Manifest
+from whetstone_envs.models import Instance
 from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:

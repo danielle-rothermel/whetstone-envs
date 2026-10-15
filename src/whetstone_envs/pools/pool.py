@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from whetstone_envs.instances import Instance
+from whetstone_envs.models import Instance
 from whetstone_envs.pools.splitting import PoolSplit, split_pool
 
 if TYPE_CHECKING:

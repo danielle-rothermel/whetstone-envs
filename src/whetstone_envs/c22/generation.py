@@ -22,8 +22,8 @@ from whetstone_envs.c22.constraints import (
     RequiredKeyword,
     Title,
 )
-from whetstone_envs.instances import Instance
 from whetstone_envs.manifests import Manifest
+from whetstone_envs.models import Instance
 from whetstone_envs.pools import TaskPool
 
 GENERATOR_VERSION = "c22-1"

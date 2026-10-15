@@ -5,7 +5,7 @@ from dr_serialize import (
     identity_document_hash,
 )
 
-from whetstone_envs.instances import Instance
+from whetstone_envs.models import Instance
 from whetstone_envs.pools import TaskPool
 
 _POOL_IDENTITY_SCHEMA = "whetstone_envs.task_pool"

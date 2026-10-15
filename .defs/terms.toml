@@ -10,7 +10,6 @@ A single generated evaluation task carrying a stable identifier, generation \
 seed, one or more task strata, public prompt inputs, and private gold data."""
 exported_symbols = [
     "whetstone_envs.instances.Instance",
-    "whetstone_envs.instances.make_instance",
 ]
 
 [[terms]]

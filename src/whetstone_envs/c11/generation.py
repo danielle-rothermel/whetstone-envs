@@ -9,11 +9,7 @@ from enum import UNIQUE, StrEnum, verify
 from types import MappingProxyType
 
 from whetstone_envs.c11.oracle import canonicalize
-from whetstone_envs.instances import (
-    Instance,
-    make_instance,
-    public_prompt_identity,
-)
+from whetstone_envs.instances import Instance, public_prompt_identity
 from whetstone_envs.manifests import Manifest
 from whetstone_envs.pools import TaskPool
 
@@ -207,10 +203,10 @@ def _build_instance(stratum: C11Stratum, seed: int) -> Instance:
     if input_json == gold:
         msg = f"{stratum.value} builder produced a canonical input"
         raise RuntimeError(msg)
-    return make_instance(
+    return Instance(
         id=f"c11-{stratum.name.lower()}-{seed}",
         seed=seed,
-        strata=stratum.value,
+        strata=(stratum.value,),
         prompt_inputs={INPUT_JSON_FIELD: input_json},
         gold=gold,
     )

@@ -640,25 +640,29 @@ unit passed through generation, prompting, scoring, splitting, and persistence.
 Prompt inputs are public; `gold` remains private evaluation data.
 
 ```python
-@dataclass(frozen=True, slots=True)
-class Instance:
-    id: str
+class Instance(BaseModel):
+    model_config = ConfigDict(
+        strict=True, frozen=True, extra="forbid", validate_default=True,
+    )
+
+    id: str = Field(min_length=1)
     seed: int
-    strata: tuple[str, ...]
-    prompt_inputs: Mapping[str, str] = field(default_factory=lambda: ...)
+    strata: tuple[str, ...] = Field(min_length=1)
+    prompt_inputs: Mapping[str, str] = Field(default_factory=dict)
     gold: str = ""
 ```
 
-```python
-def make_instance(
-    *,
-    id: str,
-    seed: int,
-    strata: tuple[str, ...] | str,
-    prompt_inputs: Mapping[str, str] | None = None,
-    gold: str = "",
-) -> Instance: ...
+Construct instances directly with keyword arguments and a tuple of strata,
+such as `Instance(id="task-1", seed=1, strata=("example",))`. Construction
+strictly validates field types, requires an exact Python integer seed, and
+rejects unknown fields. Strata must be nonblank and are deduplicated in
+first-seen order. Prompt inputs are copied and exposed as a read-only mapping,
+including when omitted; model serialization emits a plain dictionary.
+Invalid fields and frozen attribute assignments raise Pydantic
+`ValidationError`. Hashing uses all five fields and ignores prompt-input
+insertion order.
 
+```python
 def public_prompt_identity(
     instance: Instance,
 ) -> tuple[tuple[str, str], ...]: ...

@@ -6,7 +6,7 @@ from whetstone_envs.c18.config import (
     DistractorMode,
     GenerationConfig,
 )
-from whetstone_envs.instances import Instance, make_instance
+from whetstone_envs.instances import Instance
 from whetstone_envs.manifests import Manifest
 from whetstone_envs.pools import TaskPool
 
@@ -56,10 +56,10 @@ def _build_stratum(
             )
             raise AssertionError(msg)
         instances.append(
-            make_instance(
+            Instance(
                 id=f"c18-D{hops}-{seed}-{index:04d}",
                 seed=seed,
-                strata=f"D{hops}",
+                strata=(f"D{hops}",),
                 prompt_inputs={
                     "question": raw.question,
                     "query": raw.query,

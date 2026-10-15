@@ -19,11 +19,7 @@ from whetstone_envs.c23._inductionbench import (
 from whetstone_envs.c23._prompts import render_demonstrations
 from whetstone_envs.c23._selection import select_task
 from whetstone_envs.c23._transducers import apply_reference
-from whetstone_envs.instances import (
-    Instance,
-    make_instance,
-    public_prompt_identity,
-)
+from whetstone_envs.instances import Instance, public_prompt_identity
 from whetstone_envs.pools import TaskPool
 
 if TYPE_CHECKING:
@@ -149,10 +145,10 @@ def _make_instance(
     stratum: StratumConfiguration,
     retained_index: int,
 ) -> Instance:
-    return make_instance(
+    return Instance(
         id=f"c23-{stratum.label}-{stratum.seed}-{retained_index:04d}",
         seed=stratum.seed,
-        strata=stratum.label,
+        strata=(stratum.label,),
         prompt_inputs={
             "demos_block": render_demonstrations(task.demonstrations),
             "query": task.query,

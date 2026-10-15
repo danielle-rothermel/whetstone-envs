@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `Instance` is a strict, frozen Pydantic model with validated construction,
+  detached read-only prompt inputs, model serialization, and content-based
+  hashing. Invalid fields and frozen assignments raise `ValidationError`;
+  direct construction requires keyword arguments.
+
+### Removed
+
+- The `make_instance` convenience constructor. Task families construct
+  `Instance` directly with explicit stratum tuples.
+
 ## [0.2.15] - 2026-10-08
 
 ### Changed

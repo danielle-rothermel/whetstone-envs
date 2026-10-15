@@ -18,7 +18,7 @@ from whetstone_envs.c19.scenarios import (
     C19Size,
     build_scenario,
 )
-from whetstone_envs.instances import Instance, make_instance
+from whetstone_envs.instances import Instance
 from whetstone_envs.manifests import Manifest
 from whetstone_envs.pools import TaskPool
 
@@ -158,13 +158,13 @@ def _instance(
     grid_text: str,
     command: str,
 ) -> Instance:
-    return make_instance(
+    return Instance(
         id=(
             f"c19-{context.scenario.value}-"
             f"{context.size.name.lower()}-{fact.value}-{context.seed}"
         ),
         seed=context.seed,
-        strata=stratum_label(context.scenario, context.size, fact),
+        strata=(stratum_label(context.scenario, context.size, fact),),
         prompt_inputs={
             "grid": grid_text,
             "command": command,

@@ -171,8 +171,8 @@ uv run whetstone-eval trajectory RUN_DIR --show-candidates
 uv run whetstone-eval trajectory-html RUN_DIR
 ```
 
-Reports are bounded to 128 MiB and use `whetstone_envs.eval_report/v4`
-and `whetstone_envs.trajectory_report/v3`.
+Reports are bounded to 128 MiB and use `whetstone_envs.eval_report/v5`
+and `whetstone_envs.trajectory_report/v4`.
 
 Both HTML commands validate the strict JSON report and atomically replace a
 deterministic `eval-report.html` or `trajectory-report.html`. Each output is a

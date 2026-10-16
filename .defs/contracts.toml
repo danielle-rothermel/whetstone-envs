@@ -182,13 +182,13 @@ date = "2026-08-21"
 title = "Evaluation reports are strict bounded local evidence"
 statement = """
 Evaluation and optimization inspection reads only strict canonical JSON using \
-the exact persisted literals `whetstone_envs.eval_report/v4` and \
-`whetstone_envs.trajectory_report/v3`. Reports contain no spend projection. \
+the exact persisted literals `whetstone_envs.eval_report/v5` and \
+`whetstone_envs.trajectory_report/v4`. Reports contain no spend projection. \
 Publication validates a complete \
 candidate, task, observation, step, resolution, reference, ordering, matrix, \
 and finite-number contract under an explicit 128 MiB limit before bounded \
 same-directory atomic replacement. \
-Standalone observation order is candidate-major then exact task and seed \
+Evaluation observation order is candidate-major then exact task and seed \
 order; trajectory order is exact step and resolution order, including repeated \
 evaluations. COPRO projections follow intent resolutions; GEPA projections \
 follow unique evaluate effects in persisted transcript order without \
@@ -197,8 +197,9 @@ prompts, outputs, traces, full \
 candidate payloads, exact mutation text, safe typed provider failure metadata, \
 and both per-step and cumulative budgets. Raw provider messages, bodies, and \
 metadata, credentials, headers, environment values, and SQLite bytes never \
-enter reports. C19 scored observations are exact binary normalized matches to \
-their report task gold, and every hydrated trajectory evaluation binds its \
+enter reports. Scored observations carry binary scores supplied by the runtime \
+scorer; report validation checks structural consistency and accounting rather \
+than regrading recorded outputs. Every hydrated trajectory evaluation binds its \
 exact candidate, evaluation result, and reward references."""
 rationale = """
 Offline debugging must remain reproducible and complete without reopening \

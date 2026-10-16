@@ -170,6 +170,7 @@ def _hydrate_evaluation_report(  # noqa: PLR0913
     model: str,
     split_sizes: tuple[int, int, int],
     resolution: _TrajectoryResolutionSource,
+    mutation_field: str,
 ) -> EvalReport | None:
     ref = resolution.eval_result_ref
     if ref is None:
@@ -191,6 +192,7 @@ def _hydrate_evaluation_report(  # noqa: PLR0913
         model=model,
         role="internal",
         split_sizes=split_sizes,
+        mutation_field=mutation_field,
         candidates=(
             EvaluationCandidate(
                 name=candidate.record.candidate_id,
@@ -362,6 +364,7 @@ def project_trajectory_report(  # noqa: PLR0913
                 model=model,
                 split_sizes=split_sizes,
                 resolution=resolution,
+                mutation_field=result.run.record.mutation_field,
             )
             trajectory_resolutions.append(
                 _project_resolution(

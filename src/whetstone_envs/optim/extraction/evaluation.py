@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from importlib.metadata import version
-from typing import TYPE_CHECKING, cast, get_args
+from typing import TYPE_CHECKING
 
 from whetstone.eval import (
     EvalEvidence,
@@ -32,7 +32,6 @@ from whetstone_envs.evidence import (
     EvalRun,
     EvalSuccess,
     EvaluationResult,
-    FamilyName,
     Observation,
     ObservationState,
     ProviderErrorProjection,
@@ -55,25 +54,11 @@ if TYPE_CHECKING:
     from whetstone_envs.optim.experiment import PreparedExperiment
 
 
-_FAMILY_NAMESPACE_PREFIX = "whetstone_envs."
-
-
 @dataclass(frozen=True, slots=True)
 class EvaluationCandidate:
     name: str
     source: CandidateSource
     candidate: CandidateRef
-
-
-def _family_name(prepared: PreparedExperiment) -> FamilyName:
-
-    env_name = prepared.experiment.env_name
-    family = env_name.removeprefix(_FAMILY_NAMESPACE_PREFIX)
-    if family not in get_args(FamilyName):
-        raise ValueError(
-            f"experiment namespace {env_name!r} names no reportable family"
-        )
-    return cast("FamilyName", family)
 
 
 def _eval_split_for_role(
@@ -95,14 +80,18 @@ def _eval_split_for_role(
 
 
 def _candidate_record(
-    *, name: str, source: CandidateSource, candidate: CandidateRef
+    *,
+    name: str,
+    source: CandidateSource,
+    candidate: CandidateRef,
+    mutation_field: str,
 ) -> CandidateRecord:
-    template = candidate.record.payload.get("prompt_template")
+    template = candidate.record.payload.get(mutation_field)
     if type(template) is not str:
         raise ValueError(
             f"candidate {candidate.record.candidate_id!r} at "
             f"{candidate.record_ref.content_hash} has no strict string "
-            "prompt_template"
+            f"payload field {mutation_field!r}"
         )
     return CandidateRecord(
         name=name,
@@ -111,6 +100,7 @@ def _candidate_record(
         record_ref=_required_ref(candidate.record_ref),
         identity_hash=str(candidate.identity_hash),
         payload=candidate.record.payload.to_json(),
+        mutation_field=mutation_field,
         prompt_template=template,
     )
 
@@ -397,6 +387,7 @@ def project_eval_report(  # noqa: PLR0913
     model: str,
     role: EvalRoleName,
     split_sizes: tuple[int, int, int],
+    mutation_field: str,
     candidates: tuple[EvaluationCandidate, ...],
     results: tuple[EvalResult, ...],
     task_hashes: tuple[str, ...] | None = None,
@@ -407,7 +398,10 @@ def project_eval_report(  # noqa: PLR0913
     plan = _select_task_plan(prepared, role, task_hashes)
     candidate_records = tuple(
         _candidate_record(
-            name=item.name, source=item.source, candidate=item.candidate
+            name=item.name,
+            source=item.source,
+            candidate=item.candidate,
+            mutation_field=mutation_field,
         )
         for item in candidates
     )
@@ -453,7 +447,7 @@ def project_eval_report(  # noqa: PLR0913
         schema_version=EVAL_REPORT_SCHEMA,
         run=EvalRun(
             run_id=run_id,
-            family=_family_name(prepared),
+            family=prepared.experiment.env_name,
             transport=transport,
             model=model,
             role=role,

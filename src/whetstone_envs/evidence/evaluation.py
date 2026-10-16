@@ -16,12 +16,10 @@ from pydantic import (
 
 from whetstone_envs.evidence._models import ReportRef, _StrictModel
 from whetstone_envs.probes import normalize
-from whetstone_envs.scoring.families import family_score
 
-EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v4"
+EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v5"
 CandidateSource = Literal["naive", "ceiling", "custom", "optimized"]
 EvalRoleName = Literal["internal", "official", "held_out"]
-FamilyName = Literal["c19", "c18"]
 
 SPLIT_ROLE_BY_REPORT_ROLE: dict[EvalRoleName, str] = {
     "internal": "internal_eval",
@@ -32,7 +30,7 @@ SPLIT_ROLE_BY_REPORT_ROLE: dict[EvalRoleName, str] = {
 
 class EvalRun(_StrictModel):
     run_id: StrictStr
-    family: FamilyName
+    family: StrictStr
     transport: StrictStr
     model: StrictStr
     role: EvalRoleName
@@ -47,6 +45,7 @@ class EvalRun(_StrictModel):
     def _validate_run(self) -> EvalRun:
         values = (
             self.run_id,
+            self.family,
             self.transport,
             self.model,
             self.dataset_revision,
@@ -70,6 +69,7 @@ class CandidateRecord(_StrictModel):
     record_ref: ReportRef
     identity_hash: StrictStr
     payload: dict[StrictStr, JsonValue]
+    mutation_field: StrictStr
     prompt_template: StrictStr
 
     @model_validator(mode="after")
@@ -78,7 +78,9 @@ class CandidateRecord(_StrictModel):
             raise ValueError("candidate name and ID must be nonblank")
         if not self.prompt_template:
             raise ValueError("candidate prompt template must be nonempty")
-        if self.payload.get("prompt_template") != self.prompt_template:
+        if not self.mutation_field.strip():
+            raise ValueError("candidate mutation field must be nonblank")
+        if self.payload.get(self.mutation_field) != self.prompt_template:
             raise ValueError(
                 "candidate payload must contain the exact template"
             )
@@ -388,7 +390,7 @@ def _validate_result_accounting(
 
 
 class EvalReport(_StrictModel):
-    schema_version: Literal["whetstone_envs.eval_report/v4"]
+    schema_version: Literal["whetstone_envs.eval_report/v5"]
     run: EvalRun
     candidates: tuple[CandidateRecord, ...]
     tasks: tuple[TaskRecord, ...]
@@ -400,7 +402,7 @@ class EvalReport(_StrictModel):
         self._validate_candidate_and_task_identities()
         self._validate_result_order()
         self._validate_observation_matrix()
-        self._validate_observation_scores()
+        self._validate_observation_tasks()
         self._validate_result_summaries()
         return self
 
@@ -445,7 +447,7 @@ class EvalReport(_StrictModel):
                 "observations must cover exact candidate-major matrix order"
             )
 
-    def _validate_observation_scores(self) -> None:
+    def _validate_observation_tasks(self) -> None:
         task_by_id = {task.task_id: task for task in self.tasks}
         for row in self.observations:
             task = task_by_id.get(row.task_id)
@@ -453,19 +455,11 @@ class EvalReport(_StrictModel):
                 raise ValueError(
                     "observation references an unknown exact task"
                 )
-            if row.state is ObservationState.SCORED:
-                if row.output_text is None:
-                    raise ValueError("scored observations require output text")
-                expected_score = family_score(
-                    family=self.run.family,
-                    output_text=row.output_text,
-                    gold=task.gold,
-                )
-                if row.score != expected_score:
-                    raise ValueError(
-                        "observation score disagrees with the "
-                        f"{self.run.family} scorer"
-                    )
+            if (
+                row.state is ObservationState.SCORED
+                and row.output_text is None
+            ):
+                raise ValueError("scored observations require output text")
 
     def _validate_result_summaries(self) -> None:
         for result in self.results:

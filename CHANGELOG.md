@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Evaluation evidence v5 and trajectory evidence v4 accept nonblank task-family
+  identifiers and record the candidate mutation field explicitly. Evidence
+  validates binary scores and accounting without importing task graders.
+
 - Provider transports use concrete generation requests, invocation evidence,
   call configs, and Whetstone's transport signature. Fake tasks use the owned
   task-row type; retry policy, attempt limits, delay bounds, and jitter remain

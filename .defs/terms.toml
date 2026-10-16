@@ -248,7 +248,7 @@ exported_symbols = [
 name = "evaluation report"
 definition = """
 A bounded, atomically published, versioned canonical JSON debugging artifact \
-that retains normalized candidates and tasks plus candidate-major C19 \
+that retains normalized candidates and tasks plus candidate-major \
 observations, exact accounting, aggregate evidence, prompts, outputs, private \
 gold, safe typed provider-failure metadata, and component traces without raw \
 provider messages, credentials, or SQLite content."""

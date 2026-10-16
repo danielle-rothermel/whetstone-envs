@@ -18,7 +18,7 @@ from whetstone_envs.evidence.evaluation import (
     EvalSuccess,
 )
 
-TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v3"
+TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v4"
 
 
 class TrajectoryCandidate(_StrictModel):
@@ -117,7 +117,7 @@ class TrajectoryStep(_StrictModel):
 
 
 class TrajectoryReport(_StrictModel):
-    schema_version: Literal["whetstone_envs.trajectory_report/v3"]
+    schema_version: Literal["whetstone_envs.trajectory_report/v4"]
     result_ref: ReportRef
     run_id: StrictStr
     mutation_field: StrictStr

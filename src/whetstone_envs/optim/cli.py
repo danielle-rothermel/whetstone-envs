@@ -100,7 +100,7 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run COPRO, GEPA, or MIPROv2 on a named whetstone-envs family."
+            "Run Codex, COPRO, GEPA, or MIPROv2 on a named task family."
         ),
     )
     parser.add_argument(
@@ -112,13 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--optimizer",
         choices=OPTIMIZERS,
         required=True,
-        help=(
-            "The arm to run. 'null-random' is null-A, the "
-            "selection-on-noise control: it drives COPRO's search shape "
-            "with an uninformative proposer, so it honours "
-            "--copro-breadth and --copro-depth and produces the same "
-            "evidence a COPRO run does."
-        ),
+        help="Optimizer to run.",
     )
     parser.add_argument(
         "--demo-mode",
@@ -271,19 +265,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--miprov2-num-trials",
         type=_positive_int,
         default=DEFAULT_MIPROV2_NUM_TRIALS,
-        help=(
-            "MIPROv2 optimization trials. The default is this runner's own "
-            "shape; the protocol's auto-light configuration assumes 10."
-        ),
+        help="MIPROv2 optimization trials.",
     )
     parser.add_argument(
         "--miprov2-num-candidates",
         type=_positive_int,
         default=DEFAULT_MIPROV2_NUM_CANDIDATES,
-        help=(
-            "MIPROv2 candidates per component. The default is this "
-            "runner's own shape; the protocol's auto-light assumes 6."
-        ),
+        help="MIPROv2 candidates per component.",
     )
     parser.add_argument(
         "--train-size",
@@ -327,9 +315,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--codex-model",
         default=None,
         help=(
-            "The Codex agent's own model. Defaults to --model, the task "
-            "model. The agent's own spend is not on the study's key and "
-            "is not priced in the run's cost report."
+            "The Codex agent's own model. Omit to use the adapter's "
+            "default agent model."
         ),
     )
     parser.add_argument(

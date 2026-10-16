@@ -1,45 +1,3 @@
-"""The eval runtime config the out-of-process Codex MCP server rebuilds.
-
-Codex evaluates through an MCP server whetstone starts in a *separate
-process*, and that process rebuilds its evaluation engine from one
-serialized config and nothing else
-(``whetstone.optim.codex.mcp_server.build_server_from_env``). whetstone-ai
-ships :class:`~whetstone.eval.reference_runtime.ReferenceEvalRuntimeConfig`
-for this, but its experiment is always the in-memory *toy* experiment --
-it can carry a launch's ``mutation_field`` and ``render_contract``, but it
-has no way to carry the launch's ``Experiment``. whetstone-ai names that
-limitation itself, in ``platform/cli.py``'s ``ToyExperimentOnlyError``: a
-launch's persisted record cannot supply an experiment, because an
-``Experiment`` owns a live ``rollout_graph`` and the launch persists only
-identity hashes over the eval config.
-
-The consequence for a study run is not a crash: the server comes up
-happily on the toy experiment, its Eval Config hash does not match the
-run's Tool Config, and **every** tool call is refused as
-``tool config is not bound to the engine's exact Eval Config``. The agent
-then has nothing to select and the Step terminalizes. That is what this
-module exists to prevent.
-
-**Why an envs-owned config is the right shape.** ``EvalRuntimeConfig`` is
-an open ``typing.Protocol``, and the server loads whichever class the
-runner names by ``module:Class`` path, so supplying one is the extension
-point whetstone-ai already provides rather than a workaround. And envs
-*can* do what a persisted launch cannot: a family's experiment is a pure
-function of its generation parameters, so this config carries those
-parameters -- the family id, the split sizes, the pool shape, the repeat
-count, and the task route -- and rebuilds the identical experiment on the
-other side.
-
-**Determinism is the whole contract.** The rebuilt engine must produce
-the same ``eval_config_ref`` as the harness's, or every call is refused
-exactly as above. That holds because ``FamilySpec.generate_pool`` is
-seeded and ``build_experiment`` is a pure function of the pool and the
-split sizes. :func:`build_codex_runtime_config` derives every field from
-the same :class:`~whetstone_envs.optim.run.RunSpec` the in-process engine
-was built from, so the two cannot drift apart silently; the run asserts
-the two hashes agree before it spawns anything.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
@@ -163,16 +121,6 @@ class EnvsCodexRuntimeConfig(BaseModel):
 
     @property
     def execution_policy(self) -> ProviderExecutionPolicy:
-        """The reference policy, widened and -- when paid -- hardened.
-
-        The same two transforms the study path applies, in the same
-        order, because this process evaluates the same tasks against the
-        same provider. Without them the hosted-MCP evaluator ran at
-        whetstone's 30 s chat-completion timeout with no waiting retry,
-        which is precisely the pair of defects that aborted the live
-        Stage 0 -- and it ran that way *in another process*, where the
-        study's own hardening could not reach it.
-        """
         policy = widened_execution_policy(
             self._reference.execution_policy,
             concurrency=self.provider_concurrency,
@@ -219,10 +167,6 @@ class EnvsCodexRuntimeConfig(BaseModel):
         experiment = prepared.experiment
         execution_policy = self.execution_policy
         if self.transport == "openrouter":
-            # The retrying wrapper, not the bare client: a 429 in this
-            # process is the same 429, and the study's own wrapper is on
-            # the other side of a process boundary. Bound once here so
-            # every tool call the agent makes shares one connection pool.
             _, transport_factory = bind_openrouter_transport(execution_policy)
         else:
             transport_factory = fake_transport_factory(

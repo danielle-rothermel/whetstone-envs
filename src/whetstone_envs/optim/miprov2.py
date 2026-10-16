@@ -1,41 +1,3 @@
-"""MIPROv2 wiring on whetstone-ai's public MIPROv2 surface.
-
-MIPROv2 differs from COPRO and GEPA in that its control alone cannot start a
-run: the search reads a labeled trainset, rendered proposal examples, and a
-durable RNG checkpoint, all of which belong to the opening state. This module
-resolves the control, builds the adapter, and derives that opening state from
-the same prepared experiment the other optimizers use, for whichever family
-the run names.
-
-Demonstrations reach the candidate through MIPROv2's own composed template
-(``### Demonstrations``), not through a placeholder in the family's render
-contract: the composer emits the section itself and escapes its JSON so the
-composed template still satisfies the family's placeholder requirement.
-``fewshot`` searches over demo sets and renders the selected set into that
-section; ``zeroshot`` and ``ground_only`` keep the section empty while still
-bootstrapping demos to ground instruction proposals.
-
-Minibatching is off by default. The trainset and valset are supplied by
-the caller as two explicit, disjoint task-hash tuples drawn from the
-internal split, and ``configure_miprov2`` refuses a ``minibatch_size``
-exceeding the valset. C18's internal split of 24 is below MIPROv2's
-default 35, so a study that turns minibatching on must size it against the
-run's own valset.
-
-The split is a required input rather than a setting with a default: an
-in-search improvement measured on tasks the bootstrap already saw cannot
-be distinguished from demonstration memorization, so while the setup is
-being debugged every MIPROv2 run must state a disjoint train/val
-partition. :func:`~whetstone_envs.optim.run.partition_internal_split`
-derives the two tuples deterministically from the spec's sizes.
-
-The search shape (``num_trials``, ``num_candidates``) is parameters rather
-than literals, so a study arm can request the protocol's auto-light
-configuration without editing this module. The defaults are this runner's
-own, smaller shape, which is what keeps the fake-transport end-to-end runs
-fast.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
@@ -116,14 +78,6 @@ DEFAULT_MIPROV2_MINIBATCH = False
 #: observable once ``minibatch`` is on.
 DEFAULT_MIPROV2_FULL_EVAL_STEPS = 1
 
-#: The search shape this runner has always produced. Both are **below** the
-#: protocol's auto-light configuration, which assumes ``num_trials=10`` and
-#: ``num_candidates=6``; Wave 3's measured 245 task calls are therefore the
-#: cost of *this* shape, not of the protocol's.
-#:
-#: They stay the defaults so the fake-transport end-to-end tests remain
-#: fast, and are exposed as settings so a study arm can request the
-#: protocol's shape without editing this module.
 DEFAULT_MIPROV2_NUM_TRIALS = 2
 #: Seeds -3/-2 are RESET/LABELS_ONLY; 3 admits seed -1, the first
 #: bootstrap candidate.
@@ -170,32 +124,6 @@ def build_miprov2_control(  # noqa: PLR0913
     trainset_task_hashes: tuple[str, ...],
     valset_task_hashes: tuple[str, ...],
 ) -> Miprov2Control:
-    """Resolve one family's MIPROv2 control against the engine.
-
-    ``minibatch_size`` defaults to the whole validation split, which is what
-    a non-minibatched run evaluates on every trial. The protocol's
-    auto-light configuration turns ``minibatch`` on and sizes the batch
-    below that, so the periodic full evaluation becomes observable.
-
-    ``num_trials`` and ``num_candidates`` default to this runner's own
-    shape, which is smaller than the protocol's auto-light 10 and 6. They
-    are parameters rather than literals so a study arm can request the
-    protocol's shape; raising them raises the run's call count, which is
-    why the Stage-1 estimate is a loose upper bound.
-
-    ``proposer_config_ref`` names the instruction-proposal route. The
-    proposer transport resolves this reference and asserts the resolved
-    record matches it, so a run whose proposer differs from its task model
-    must pass the reference minted from the *proposer's* config; ``None``
-    keeps the experiment's own route, for a run that never named a proposer.
-
-    ``trainset_task_hashes`` and ``valset_task_hashes`` are required and
-    must be disjoint subsets of the engine's internal split: bootstrapping
-    draws demonstrations from the trainset and the search scores every
-    trial on the valset, so overlapping them would let demonstration
-    memorization read as an in-search improvement. The caller derives them
-    from the run spec, which is what makes the partition reproducible.
-    """
     prompt_adapter = PlainPromptAdapter()
     task_hashes = tuple(engine.sampling.task_hashes)
     if len(task_hashes) < MIN_MIPROV2_TASKS:
@@ -364,27 +292,6 @@ class Miprov2SearchShape(Protocol):
 def miprov2_budget(
     control: Miprov2SearchShape | None = None,
 ) -> Miprov2EffectBudget:
-    """A ceiling generous enough that a run ends on its schedule.
-
-    These are budgets, not expectations: a run should terminate because its
-    trial schedule is exhausted, so budget exhaustion is a real signal --
-    which only holds while the ceiling is above what the schedule costs.
-
-    Without a ``control`` these are the small-run ceilings this module has
-    always used. They are far below the Step 10 design: at 10 trials on a
-    minibatch of 35 at ``K_REPEAT = 3`` the trial schedule alone plans
-    1,050 rows against a 256-row ceiling, and a bootstrap walk over a
-    44-task trainset makes up to 132 attempts against a 32-attempt
-    ceiling, so both are exhausted long before the schedule is.
-    That is what a fixed ceiling costs once the search shape is a design
-    parameter rather than this module's own default.
-
-    Given a ``control`` the ceiling is derived from the shape that control
-    actually pins, with generous headroom. It stays an upper bound and is
-    deliberately loose: a tight ceiling tuned to one measurement would
-    convert an ordinary run into a spurious mid-run failure, and this
-    guard exists to catch runaway fan-out rather than to price a run.
-    """
     if control is None:
         return Miprov2EffectBudget(
             bootstrap_generations=32,
@@ -397,16 +304,7 @@ def miprov2_budget(
     batch = (
         min(control.minibatch_size, valset) if control.minibatch else valset
     )
-    # A bootstrap attempt debits ``bootstrap_generations`` by one and
-    # ``task_rows`` by the repeat count, so the two ceilings are in
-    # different units and only one of them scales with ``num_seeds``.
-    # ``bootstrap_generations`` counts effects -- upstream's
-    # ``effect_counts`` sums ``effect.kind == kind``, and the audit's
-    # bootstrap-through-engine invariant is a bijection between billed
-    # effects and engine intents -- so its ceiling is in attempts, and a
-    # plan walks at most the whole trainset: the walk is bounded by
-    # trainset x plans regardless of how many repeats each attempt pays
-    # for. The repeat count enters through ``rows`` below instead.
+    # Bootstrap effects count attempts; task rows also scale with repeats.
     # ``num_candidates`` bounds the plan count without restating upstream's
     # ``range(-3, num_candidates - 3)`` arithmetic here.
     # ``num_candidates`` is optional upstream: ``auto`` mode resolves it

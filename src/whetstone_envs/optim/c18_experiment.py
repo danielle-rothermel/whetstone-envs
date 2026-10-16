@@ -1,29 +1,3 @@
-"""C18 PrOntoQA as the study's second optimizer family.
-
-C18 exists here to prove C3 (generality): the same ``run_optimizer`` drives
-it with nothing swapped but the family adapter. Everything below is the
-adapter -- a contract naming C18's persisted identity and placeholders, a
-pool generator matching the registry's calling convention, an experiment
-builder that is :func:`whetstone_envs.optim.experiment.prepare_experiment`
-under that contract, and a verdict-aware eval-node runner.
-
-Two facts about C18 differ from C19 and are recorded here rather than
-special-cased in the runner:
-
-* **Scoring.** A C18 generation is a True/False verdict, and the ceiling
-  probe asks for step-by-step reasoning ending in that verdict on its own
-  final line. Scoring the whole reply by exact match would score every
-  reasoned answer zero, so C18's eval runner extracts the terminal verdict
-  first, exactly as :func:`whetstone_envs.c18.score_gold` does.
-* **Split sizes.** ``default_split_sizes`` at C18's own
-  ``n_per_category=30`` yields ``(24, 48, 48)`` across four depth categories --
-  :data:`C18_PROTOCOL_SPLIT_SIZES`. The internal split of 24 is smaller
-  than MIPROv2's default ``minibatch_size`` of 35, so a C18 MIPROv2 run
-  must keep ``minibatch=False``; the runner's control builder already does,
-  and a study that turns minibatching on must size it against the internal
-  split rather than against C19's.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -31,10 +5,6 @@ from typing import TYPE_CHECKING
 from whetstone_envs.c18 import DEFAULT_CONFIG, PROBES
 from whetstone_envs.c18 import generate_pool as _c18_generate_pool
 from whetstone_envs.c18.config import GenerationConfig
-from whetstone_envs.c18.generation import (
-    build_manifest as _c18_build_manifest,
-)
-from whetstone_envs.c18.generation import default_split_sizes
 from whetstone_envs.optim.experiment import (
     ExperimentContract,
     prepare_experiment,
@@ -47,7 +17,6 @@ if TYPE_CHECKING:
     from dr_providers import ProviderCallConfig
 
     from whetstone_envs.instances import InstancePool
-    from whetstone_envs.manifests import Manifest
     from whetstone_envs.optim.experiment import PreparedSplitExperiment
 
 __all__ = [
@@ -58,13 +27,11 @@ __all__ = [
     "C18_MUTATION_FIELD",
     "C18_NAMESPACE",
     "C18_PROMPT_FIELDS",
-    "C18_PROTOCOL_SPLIT_SIZES",
     "C18_RESPONSE_FIELD",
     "C18_TASK_CONTEXT",
     "C18VerdictEvalProcedureRunner",
     "c18_candidate",
     "c18_generate_pool",
-    "c18_protocol_split_sizes",
     "c18_render_contract",
     "prepare_c18_experiment",
 ]
@@ -90,13 +57,6 @@ C18_TASK_CONTEXT = (
 #: the pool the family's ``DEFAULT_CONFIG`` describes.
 C18_DEFAULT_N_PER_CATEGORY = DEFAULT_CONFIG.n_per_category
 C18_DEFAULT_POOL_SEED_START = DEFAULT_CONFIG.seed_start
-
-#: The study protocol's C18 split: ``DEFAULT_CONFIG``'s ``SplitPlan(6, 12,
-#: 12)`` scaled to ``n_per_category=30`` across four depth categories. Pinned
-#: as a literal and checked against :func:`default_split_sizes` by test, so a
-#: generator change that moves the split fails loudly instead of silently
-#: resizing the study's second family.
-C18_PROTOCOL_SPLIT_SIZES = (24, 48, 48)
 
 
 C18_CONTRACT = ExperimentContract(
@@ -144,35 +104,6 @@ def c18_generate_pool(*, n_per_category: int, seed_start: int) -> InstancePool:
         )
     )
     return _c18_generate_pool(config, n_per_category=n_per_category)
-
-
-def c18_pool_manifest(*, n_per_category: int, seed_start: int) -> Manifest:
-    """This family's manifest for the pool at these generation settings.
-
-    Adapts PrOntoQA's own ``build_manifest``, which takes a pool and a
-    config, to the registry's uniform keyword shape. The pool is generated
-    here rather than accepted as an argument so the manifest cannot
-    describe a pool other than the one those settings produce.
-    """
-    return _c18_build_manifest(
-        c18_generate_pool(
-            n_per_category=n_per_category, seed_start=seed_start
-        ),
-        DEFAULT_CONFIG
-        if seed_start == C18_DEFAULT_POOL_SEED_START
-        else GenerationConfig(
-            generator_version=DEFAULT_CONFIG.generator_version,
-            seed_start=seed_start,
-            n_per_category=DEFAULT_CONFIG.n_per_category,
-            categories=DEFAULT_CONFIG.categories,
-            split=DEFAULT_CONFIG.split,
-        ),
-    )
-
-
-def c18_protocol_split_sizes(pool: InstancePool) -> tuple[int, int, int]:
-    """The split sizes C18's own configuration derives for ``pool``."""
-    return default_split_sizes(pool, DEFAULT_CONFIG)
 
 
 def prepare_c18_experiment(

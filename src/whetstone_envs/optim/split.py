@@ -1,39 +1,3 @@
-"""The train/val partition every optimizer with that concept must state.
-
-MIPROv2 bootstraps demonstrations from a trainset and scores each search
-trial on a valset; GEPA reflects over a trainset and selects its Pareto
-frontier on a valset. In both cases an improvement measured on tasks the
-optimizer already trained on cannot be distinguished from demonstration or
-instruction memorization -- so while the setup is being debugged, both
-optimizers take an explicit, disjoint partition of the internal split
-rather than defaulting to one.
-
-The two optimizers do not take the same partition, and the difference is
-not cosmetic. **MIPROv2** needs only a disjoint pair inside the internal
-split, so a partition that leaves tasks unused is legal. **GEPA** builds
-its data registry from the whole internal split and then requires the
-trainset and valset to cover it exactly, so a GEPA partition must sum to
-the internal size; :func:`whetstone_envs.optim.run.run_optimizer` refuses a
-partial GEPA partition at spec validation rather than letting whetstone
-reject it after the run directory exists.
-
-The partition is derived from two integers so it is reproducible from the
-run spec alone: :func:`partition_internal_split` takes the first
-``train_size`` task hashes as the trainset and the next ``val_size`` as the
-valset. The internal split's task-hash tuple is already deterministic, so
-the same spec always names the same two sets, and the run's durable record
-carries both tuples for the audits to read.
-
-COPRO, the null arms, and Codex-direct have no train/val concept and are
-deliberately not routed through here.
-
-This module also owns :data:`COPRO_SHAPED_OPTIMIZERS`, the other piece of
-per-optimizer shape membership that both the runner and the study spec have
-to agree on. It lives beside the train/val tuple because it answers the same
-kind of question -- which optimizers a given control field applies to -- and
-because both callers must reach it without importing whetstone.
-"""
-
 from __future__ import annotations
 
 #: The two optimizers with a train/val concept, named individually because
@@ -49,15 +13,7 @@ MIPROV2_OPTIMIZER = "miprov2"
 TRAIN_VAL_OPTIMIZERS = (GEPA_OPTIMIZER, MIPROV2_OPTIMIZER)
 
 #: COPRO itself, and the control whose search *is* COPRO's.
-COPRO_OPTIMIZER = "copro"
-NULL_RANDOM_OPTIMIZER_NAME = "null-random"
 
-#: The optimizers configured by ``breadth`` and ``depth``. ``null-random``
-#: is COPRO's search with an uninformative proposer, so it takes COPRO's
-#: shape: a control that searched a different shape would control for a
-#: search the study never ran. Named once, here, so the runner and the
-#: study spec cannot drift apart on which arms the shape applies to.
-COPRO_SHAPED_OPTIMIZERS = (COPRO_OPTIMIZER, NULL_RANDOM_OPTIMIZER_NAME)
 
 #: The smallest breadth upstream ``CoproControl`` accepts. A single draft
 #: per step leaves nothing to select between, so upstream refuses it.
@@ -99,15 +55,6 @@ def require_disjoint_split(
     task_hashes: tuple[str, ...],
     optimizer: str,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Refuse a partition the run could not honestly report on.
-
-    Checked against the engine's own task hashes rather than trusted from
-    the caller: the control builders are reached by the CLI, a study arm,
-    and tests alike, so this is the one place that proves the sets the
-    optimizer will actually train and score on are disjoint and inside the
-    internal split. Refusing here keeps the failure outside the durable run
-    boundary, so an unrunnable partition leaves no run directory behind.
-    """
     if not trainset_task_hashes:
         raise ValueError(f"{optimizer} trainset must be non-empty")
     if not valset_task_hashes:
@@ -133,13 +80,10 @@ def require_disjoint_split(
 
 
 __all__ = [
-    "COPRO_OPTIMIZER",
-    "COPRO_SHAPED_OPTIMIZERS",
     "GEPA_OPTIMIZER",
     "MIN_COPRO_BREADTH",
     "MIN_COPRO_DEPTH",
     "MIPROV2_OPTIMIZER",
-    "NULL_RANDOM_OPTIMIZER_NAME",
     "TRAIN_VAL_OPTIMIZERS",
     "partition_internal_split",
     "require_disjoint_split",

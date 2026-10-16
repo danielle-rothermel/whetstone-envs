@@ -41,13 +41,6 @@ from whetstone_envs.evidence.files import (
     publish_eval_report,
     publish_trajectory_report,
 )
-from whetstone_envs.evidence.spend import (
-    SPEND_SCHEMA_VERSION,
-    EvalSpend,
-    RoleSpend,
-    RoleSpendName,
-    RunSpend,
-)
 from whetstone_envs.evidence.trajectory import (
     TRAJECTORY_REPORT_SCHEMA,
     TrajectoryCandidate,
@@ -60,7 +53,6 @@ __all__ = [
     "EVAL_REPORT_NAME",
     "EVAL_REPORT_SCHEMA",
     "MAX_REPORT_BYTES",
-    "SPEND_SCHEMA_VERSION",
     "SPLIT_ROLE_BY_REPORT_ROLE",
     "TRAJECTORY_REPORT_NAME",
     "TRAJECTORY_REPORT_SCHEMA",
@@ -74,7 +66,6 @@ __all__ = [
     "EvalReport",
     "EvalRoleName",
     "EvalRun",
-    "EvalSpend",
     "EvalSuccess",
     "EvaluationResult",
     "FamilyName",
@@ -86,10 +77,7 @@ __all__ = [
     "ProviderRecoverability",
     "ReportRef",
     "ReportedEvidence",
-    "RoleSpend",
-    "RoleSpendName",
     "RowAccounting",
-    "RunSpend",
     "TaskRecord",
     "TrajectoryCandidate",
     "TrajectoryReport",

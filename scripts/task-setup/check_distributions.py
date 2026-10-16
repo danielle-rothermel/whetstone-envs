@@ -27,7 +27,6 @@ PACKAGE_DIR = PROJECT_ROOT / "src" / "whetstone_envs"
 DISTRIBUTION_NAME = "whetstone-envs"
 CONSOLE_SCRIPTS = {
     "whetstone-eval": "whetstone_envs.reporting.cli:main",
-    "whetstone-study": "whetstone_envs.optim.study.cli:main",
 }
 CHANGELOG = PROJECT_ROOT / "CHANGELOG.md"
 LICENSE_EXPRESSION = "MIT AND Apache-2.0"
@@ -281,7 +280,6 @@ scripts = {
 }
 expected_scripts = {
     "whetstone-eval": "whetstone_envs.reporting.cli:main",
-    "whetstone-study": "whetstone_envs.optim.study.cli:main",
 }
 if {name: entry.value for name, entry in scripts.items()} != expected_scripts:
     raise SystemExit(f"installed console scripts disagree: {scripts!r}")

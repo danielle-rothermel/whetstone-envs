@@ -1,21 +1,3 @@
-"""The task-family registry the shared optimizer runner reads.
-
-``run_optimizer`` drives whichever family a run names, so every piece of
-family-specific knowledge it needs -- how to generate the pool, how to
-prepare the experiment, which probe pair anchors it, which candidate field
-optimizers mutate, which placeholders a proposed template must keep, and how
-a generation is scored -- lives behind one ``FamilySpec`` rather than inline
-in the runner.
-
-This is the C3 generality boundary. A second family is admitted by
-registering a ``FamilySpec``; if adding one required a change anywhere else
-under ``whetstone_envs/optim/``, that is the domain leak the study is looking
-for, not a change to absorb quietly.
-
-Both ``c19`` and ``c18`` are registered here, and their registrations are the
-only place either family's name appears in the runner's path.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -25,9 +7,6 @@ from typing import TYPE_CHECKING, Protocol
 from whetstone_envs.c18 import PROBES as C18_PROBES
 from whetstone_envs.c19 import PROBES as C19_PROBES
 from whetstone_envs.c19 import generate_pool as c19_generate_pool
-from whetstone_envs.c19.generation import (
-    build_manifest as c19_build_manifest,
-)
 from whetstone_envs.optim.c18_experiment import (
     C18_CONTRACT,
     C18_DEFAULT_N_PER_CATEGORY,
@@ -35,7 +14,6 @@ from whetstone_envs.optim.c18_experiment import (
     C18_TASK_CONTEXT,
     C18VerdictEvalProcedureRunner,
     c18_generate_pool,
-    c18_pool_manifest,
     prepare_c18_experiment,
 )
 from whetstone_envs.optim.experiment import (
@@ -55,7 +33,6 @@ if TYPE_CHECKING:
     )
 
     from whetstone_envs.instances import InstancePool
-    from whetstone_envs.manifests import Manifest
     from whetstone_envs.optim.experiment import PreparedExperiment
 
 __all__ = [
@@ -65,7 +42,6 @@ __all__ = [
     "FamilyId",
     "FamilySpec",
     "PoolGenerator",
-    "PoolManifestBuilder",
     "family_spec",
     "register_family",
     "registered_family_ids",
@@ -110,37 +86,10 @@ class ExperimentBuilder(Protocol):
     ) -> PreparedExperiment: ...
 
 
-class PoolManifestBuilder(Protocol):
-    """Build the canonical manifest of one of this family's pools.
-
-    A study records its population by the manifest's content hash and its
-    generator version, so the family that knows how to generate the pool is
-    also the one that knows how to describe it. Keeping this behind the
-    registration is what stops a study author from importing a family's
-    generation module directly -- the domain leak C3 exists to catch.
-    """
-
-    def __call__(
-        self, *, n_per_category: int, seed_start: int
-    ) -> Manifest: ...
-
-
 class EvalRunnerFactory(Protocol):
     """Build the eval-node runner that scores this family's generations."""
 
     def __call__(self) -> EvalProcedureRunner: ...
-
-
-class CandidateBuilder(Protocol):
-    """Build one validated candidate from a template.
-
-    The study's anchors and every scored representative candidate reach the
-    engine through this, so a family that mints candidates differently --
-    a different root base schema, a different payload field -- is a
-    registration rather than a change to whatever builds them.
-    """
-
-    def __call__(self, *, candidate_id: str, template: str) -> Candidate: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,10 +118,6 @@ class FamilySpec:
     #: Naive and ceiling anchors, and the scripted fake-transport bodies.
     probes: ProbePair
     generate_pool: PoolGenerator
-    #: How this family describes a generated pool: the manifest whose
-    #: content hash and generator version a study records as its
-    #: population.
-    pool_manifest: PoolManifestBuilder
     build_experiment: ExperimentBuilder
     #: Scores one generation against a task's frozen gold.
     eval_runner: EvalRunnerFactory
@@ -224,13 +169,6 @@ class FamilySpec:
     def build_candidate(
         self, *, candidate_id: str, template: str
     ) -> Candidate:
-        """Mint one validated candidate from a template.
-
-        The study's anchors and every scored representative candidate reach
-        the engine through this. A family that mints candidates differently
-        -- a different root base schema, a different payload field -- says
-        so in its ``contract``, so this stays one path rather than a branch.
-        """
         return self.contract.candidate(
             candidate_id=candidate_id, template=template
         )
@@ -258,41 +196,6 @@ class FamilySpec:
             self.probes.naive_template,
         )
 
-    def rehearsal_proposal_bodies(self, breadth: int) -> tuple[str, ...]:
-        """Enough distinct drafts to fill a fake round of ``breadth``.
-
-        A family scripts exactly two bodies -- the ceiling draft and the
-        naive seed -- so a fake COPRO round wider than that cannot be
-        filled: the proposer runs out of distinct drafts and the run dies
-        inside the durable boundary with ``copro_proposal_cardinality``.
-        The real transport has no such limit, because a proposer writes its
-        own bodies, so this exists only to let a fake-transport *rehearsal*
-        run the pinned search shape.
-
-        The drafts are the family's own ceiling template with a numbered
-        marker prepended, which keeps two properties that matter. Each
-        still satisfies the render contract -- it carries every placeholder
-        untouched -- so the proposal path admits it rather than rejecting a
-        malformed draft. And each is textually distinct, so COPRO sees a
-        genuinely multi-draft round rather than re-offering one body under
-        different slots.
-
-        These are rehearsal scaffolding and score identically to the
-        ceiling probe, which is the correct behaviour on a transport that
-        answers from the experiment's own gold: a fake rehearsal is
-        evidence about plumbing, never about search efficacy.
-        """
-        if breadth < 1:
-            raise ValueError("breadth must be at least 1")
-        # ``proposal_bodies`` already contributes the ceiling draft, and
-        # the naive seed occupies a slot the optimizer never requests, so
-        # a round of ``breadth`` needs ``breadth - 1`` further drafts.
-        return tuple(
-            f"Variant {index}: apply the procedure below exactly.\n\n"
-            f"{self.probes.ceiling_template}"
-            for index in range(1, breadth)
-        )
-
 
 _C19_SPEC = FamilySpec(
     family_id=FamilyId.C19.value,
@@ -308,7 +211,6 @@ _C19_SPEC = FamilySpec(
     ),
     probes=C19_PROBES,
     generate_pool=c19_generate_pool,
-    pool_manifest=c19_build_manifest,
     build_experiment=prepare_c19_experiment,
     eval_runner=ExactMatchEvalProcedureRunner,
     # The historical runner default, retained so an unparameterised run
@@ -333,7 +235,6 @@ _C18_SPEC = FamilySpec(
     ),
     probes=C18_PROBES,
     generate_pool=c18_generate_pool,
-    pool_manifest=c18_pool_manifest,
     build_experiment=prepare_c18_experiment,
     eval_runner=C18VerdictEvalProcedureRunner,
     default_n_per_category=C18_DEFAULT_N_PER_CATEGORY,

@@ -130,7 +130,6 @@ Compact cards show:
 - tasks and repeats;
 - provider-error count;
 - deadline/guard-timeout status; and
-- cost/token facts when the producer recorded them.
 
 Incomplete evidence uses a visibly different status from a numeric zero. A
 missing aggregate never renders as `0%`.

@@ -15,11 +15,10 @@ from pydantic import (
 )
 
 from whetstone_envs.evidence._models import ReportRef, _StrictModel
-from whetstone_envs.evidence.spend import EvalSpend
 from whetstone_envs.probes import normalize
 from whetstone_envs.scoring.families import family_score
 
-EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v3"
+EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v4"
 CandidateSource = Literal["naive", "ceiling", "custom", "optimized"]
 EvalRoleName = Literal["internal", "official", "held_out"]
 FamilyName = Literal["c19", "c18"]
@@ -389,14 +388,12 @@ def _validate_result_accounting(
 
 
 class EvalReport(_StrictModel):
-    schema_version: Literal["whetstone_envs.eval_report/v3"]
+    schema_version: Literal["whetstone_envs.eval_report/v4"]
     run: EvalRun
     candidates: tuple[CandidateRecord, ...]
     tasks: tuple[TaskRecord, ...]
     observations: tuple[Observation, ...]
     results: tuple[EvaluationResult, ...]
-    # None means no provider spend was evidenced.
-    spend: EvalSpend | None = None
 
     @model_validator(mode="after")
     def _validate_collections(self) -> EvalReport:

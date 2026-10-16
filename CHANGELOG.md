@@ -18,8 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Reporting and optimizer callers use that package directly; the reporting
   schema, derivations, and model exports are removed. Validators use focused
   checks and shared summary calculations. Comparisons return typed outcomes
-  with presentation labels supplied by reporting. Persisted formats and CLI
-  behavior are unchanged.
+  with presentation labels supplied by reporting.
 - `InstancePoolSplit` lives with `InstancePool` in `instances/instance_pool.py`.
   It retains its source `pool`, stores ordered `split_groups`, and exposes
   a cached read-only `splits` mapping. Selected instances must match the source
@@ -32,11 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   selection, coverage-first allocation, instance assignment, and named group
   construction. Selected cohorts, tie order, and source ordering are preserved.
 - Pool manifests and pool identity payloads use schema version 2. Evaluation
-  reports use `whetstone_envs.eval_report/v3`, trajectory reports use
-  `whetstone_envs.trajectory_report/v2`, and study manifests use
-  `whetstone_envs.step10_study/v16`. Category field names replace strata names
-  in the persisted formats; packaged pool manifests and protocol digest are
-  regenerated. Pool content hashes change with the versioned identity payload.
+  reports use `whetstone_envs.eval_report/v4` and trajectory reports use
+  `whetstone_envs.trajectory_report/v3`. Category field names replace strata names
+  in the persisted formats; packaged pool manifests are regenerated.
+  Pool content hashes change with the versioned identity payload.
   Older persisted schemas are rejected; recorded run files are left untouched.
 - Instance representations, validation, and allocation share one capability
   package, `whetstone_envs.instances`. `InstancePool.split` owns allocation
@@ -56,11 +54,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `InstancePool.split` accepts a name-to-size mapping with any number of
   destinations. Request order controls group order and allocation ties.
   Evaluation consumers retain their three named roles, existing cohorts,
-  and persisted evaluation identities. Protocol implementation references
-  are updated and the packaged document digest is re-pinned.
+  and persisted evaluation identities.
 
 ### Removed
 
+- The exploration-specific `optim.study` package, registered protocols,
+  study CLI, optimizer fidelity audits, and null-control optimizers. Remove
+  study-only family manifest/rehearsal hooks, retry telemetry counters, and
+  the study completeness gate applied to standalone evaluations.
+- Spend models, billing projections, `cost.json` publication, and spend
+  displays. Evaluation and trajectory formats omit spend fields under new
+  schema versions; older report schemas are rejected. Existing recorded
+  run artifacts are untouched. Whetstone runtime records retain the
+  telemetry required by their upstream schema.
 - Automatic study report generation, its Markdown/HTML renderers and
   presentation assets, and the `whetstone-study report` command. Study
   results remain in `study.json` and its referenced evidence; the CLI

@@ -17,9 +17,8 @@ from whetstone_envs.evidence.evaluation import (
     EvalReport,
     EvalSuccess,
 )
-from whetstone_envs.evidence.spend import RunSpend
 
-TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v2"
+TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v3"
 
 
 class TrajectoryCandidate(_StrictModel):
@@ -118,7 +117,7 @@ class TrajectoryStep(_StrictModel):
 
 
 class TrajectoryReport(_StrictModel):
-    schema_version: Literal["whetstone_envs.trajectory_report/v2"]
+    schema_version: Literal["whetstone_envs.trajectory_report/v3"]
     result_ref: ReportRef
     run_id: StrictStr
     mutation_field: StrictStr
@@ -127,7 +126,6 @@ class TrajectoryReport(_StrictModel):
     steps: tuple[TrajectoryStep, ...]
     resolutions: tuple[TrajectoryResolution, ...]
     terminal_candidate_refs: tuple[ReportRef, ...]
-    spend: RunSpend | None = None
 
     @model_validator(mode="after")
     def _validate_order(self) -> TrajectoryReport:

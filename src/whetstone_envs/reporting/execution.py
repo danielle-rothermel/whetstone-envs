@@ -11,7 +11,6 @@ from whetstone.eval import EvalRequest
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
-from whetstone.eval.schema import EvalEvidence
 from whetstone.experiment.candidate import CandidateRef, candidate_reference
 
 from whetstone_envs.c19 import PROBES, generate_pool
@@ -22,7 +21,6 @@ from whetstone_envs.evidence import (
     EvalRoleName,
     publish_eval_report,
 )
-from whetstone_envs.optim.completeness import require_task_completeness
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
     c19_candidate,
@@ -39,9 +37,7 @@ from whetstone_envs.optim.provider import (
     widened_execution_policy,
 )
 from whetstone_envs.optim.run import DEFAULT_OUTPUT_ROOT
-from whetstone_envs.optim.run_cost import RunCostDocument, write_run_cost
 from whetstone_envs.optim.scoring_runner import ExactMatchEvalProcedureRunner
-from whetstone_envs.optim.study.manifest import RunSpendRecord
 from whetstone_envs.reporting.projection import project_eval_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
@@ -50,7 +46,6 @@ from whetstone_envs.reporting.publication import (
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
-    from dr_store.sync import BlockingObjectStore
 
     from whetstone_envs.optim.experiment import (
         PreparedSplitExperiment,
@@ -76,19 +71,7 @@ class C19EvalSpec:
     output_dir: Path | None = None
     run_id: str | None = None
     model: str = "openai/gpt-4.1-nano"
-    #: The task route's reasoning effort. ``None`` sends no reasoning key,
-    #: which is what this CLI did before the field existed.
-    #:
-    #: Threaded so a standalone report can reproduce a study arm's route
-    #: exactly: an evaluation of the study's own candidates at a different
-    #: effort is an evaluation of a different task model.
     task_reasoning_effort: ReasoningEffort | None = None
-    #: How many task evaluations run against the provider at once.
-    #:
-    #: The same operator setting the study path takes, for the same
-    #: reason: this CLI reaches the same provider with the same
-    #: reasoning-model latency, and a standalone evaluation of a few
-    #: hundred rows is exactly as bound by width as a stage is.
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
 
 
@@ -192,13 +175,6 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                 else ProviderKind.OPENAI
             ),
         )
-        # The same two transforms, in the same order, the study path
-        # applies -- widen the connection pool to the requested width,
-        # then harden the paid route's timeout and retry ownership. This
-        # CLI talks to the same provider at the same token sizes, so a
-        # policy that differed here would mean the standalone tool ran at
-        # whetstone's 30 s chat-completion bound with retries that never
-        # waited, which is the failure that aborted the live Stage 0.
         execution_policy = widened_execution_policy(
             runtime_config.execution_policy,
             concurrency=spec.provider_concurrency,
@@ -249,7 +225,6 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                     candidate_refs
                 )
             )
-            _require_reported_completeness(results, candidate_refs)
             report = project_eval_report(
                 store=cast("ObjectStore", store),
                 prepared=prepared,
@@ -262,91 +237,7 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
                 results=results,
             )
             publish_eval_report(output, report)
-            _publish_eval_cost(output, report, store=store)
     return EvalRunOutput(directory=output, report=report)
-
-
-def _require_reported_completeness(
-    results: tuple[object, ...],
-    candidate_refs: tuple[tuple[str, object, object], ...],
-) -> None:
-    """Apply the study's per-task floor to the standalone report too.
-
-    ``whetstone-eval`` publishes a held-out number that a claim is made
-    from, exactly as a study stage does, and it is subject to exactly the
-    same loss: a task whose every repeat was dropped leaves the task
-    mean averaging over a smaller population than it reports, biased
-    upward by the slow tasks whose absence caused it. The floor lived
-    only in :class:`~whetstone_envs.optim.study.arms.RoleScorer`, so this
-    path published the very number the floor exists to refuse.
-
-    Checked after the evaluations rather than during, so the report path
-    matches the stage's "priced first, then judged" ordering: the calls
-    were billed whether or not the evidence is fit to report, and the
-    cost artifact is not written for a run that refuses -- but the rows
-    persist, so a refused run's spend is still recoverable from the
-    store.
-
-    An evaluation that produced no evidence at all is left alone here;
-    the projection already refuses a result without evidence, and
-    reporting a completeness failure for it would name the wrong cause.
-    """
-    for (name, _source, _candidate), result in zip(
-        candidate_refs, results, strict=True
-    ):
-        evidence = getattr(result, "evidence", None)
-        if not isinstance(evidence, EvalEvidence):
-            continue
-        require_task_completeness(evidence, purpose=f"eval:{name}")
-
-
-def _publish_eval_cost(
-    output: Path,
-    report: EvalReport,
-    *,
-    store: BlockingObjectStore,
-) -> None:
-    """Write ``cost.json`` beside the report, when there was a bill.
-
-    Optimizer runs publish one of these and the standalone eval path did
-    not, so held-out evaluation -- the role every efficacy claim is finally
-    made against -- spent real money that no artifact recorded. A study's
-    reported cost understated its true spend by the whole reporting pass.
-
-    Projected from the report rather than re-read from the rows: the report
-    already re-derived the bill from the persisted evidence, and a second
-    reading could disagree with the number the report publishes.
-
-    A run that evidenced no provider call writes nothing. An all-zero
-    document would claim the evaluation was measured and found free, which
-    is the same untrue claim ``project_run_cost`` declines to make.
-    """
-    if report.spend is None:
-        return
-    task_model = report.spend.task_model
-    write_run_cost(
-        output,
-        RunCostDocument(
-            run_id=report.run.run_id,
-            cost_report_schema_version=report.spend.schema_version,
-            spend=(
-                RunSpendRecord(
-                    role=task_model.role,
-                    calls=task_model.calls,
-                    cached_calls=task_model.cached_calls,
-                    input_tokens=task_model.input_tokens,
-                    output_tokens=task_model.output_tokens,
-                    priced_calls=task_model.priced_calls,
-                    unpriced_calls=task_model.unpriced_calls,
-                    rows_missing_token_breakdown=(
-                        task_model.rows_missing_token_breakdown
-                    ),
-                    usd=task_model.usd,
-                ),
-            ),
-        ),
-        store=store,
-    )
 
 
 __all__ = [

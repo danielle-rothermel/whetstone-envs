@@ -1,46 +1,3 @@
-"""The Codex-direct arm's control and adapter, built per family.
-
-Codex is the study's foreign-agent arm: whetstone runs no search of its
-own. The Codex CLI runs out of process under dr-exec containment, reaches
-one MCP tool that evaluates a candidate on the internal split, and returns
-the ``call_id`` of the call whose candidate it selected. So this module is
-much smaller than :mod:`whetstone_envs.optim.gepa` -- there is no
-proposer, no transport, and no prompt-services descriptor, because the
-agent proposes for itself.
-
-What it does own is the same family-driven binding every other builder
-here owns: the render contract and mutation field come from the family's
-:class:`~whetstone_envs.optim.families.FamilySpec`, the reward policy and
-internal split come from the run's engine, and the arm's capacity cap
-becomes the control's ``max_tool_calls``.
-
-**Capacity is the eval budget.** ``max_tool_calls`` is simultaneously the
-Step's ``tool_calls`` budget label and the per-run
-``ToolCapacity.max_accepted_calls`` the evaluation server admits against.
-The study's cap is :data:`CODEX_EVALUATE_CALL_CAP` (D2, 8 admitted
-evaluate-calls per run), and it is the default here: whetstone-ai holds no
-policy on how large an eval budget a caller should buy, so the number is
-the study's to name.
-
-**Preflight is mandatory and unforgeable.** ``prepare_codex_run`` requires
-proof of a usable Codex session before it commits capacity, and it has no
-default. :func:`build_codex_adapter` runs the real ``codex_auth_preflight``
-against this run's executor and process environment before it returns an
-adapter at all. The scripted stand-in lives in ``whetstone.testing`` and is
-reachable only through :class:`CodexTestSeam`, which no production path
-constructs.
-
-**A real Codex session costs money, so it is opt-in.** The preflight
-proves a session by *spawning the CLI*, which on an authenticated machine
-is itself a billed call -- so "no seam" is not the same as "no spend".
-:func:`refuse_unauthorized_real_codex` is the gate every Codex run passes
-through before any preflight, adapter, admission, or subprocess exists: a
-run either supplies a :class:`CodexTestSeam` or names the two-part opt-in
-(:data:`ALLOW_REAL_CODEX_ENV` set to :data:`ALLOW_REAL_CODEX_ENV_VALUE` in
-the process environment *and* ``RunSpec.allow_real_codex``), and anything
-else raises :class:`RealCodexRefusedError`.
-"""
-
 from __future__ import annotations
 
 import os
@@ -76,58 +33,12 @@ if TYPE_CHECKING:
 
     from whetstone_envs.optim.families import FamilySpec
 
-#: The Codex arm's admitted evaluate-call cap (D2). It is the per-run
-#: ``ToolCapacity.max_accepted_calls`` and the Step's ``tool_calls``
-#: budget at once, so one number bounds both what the agent may buy and
-#: what the Step may debit.
-#:
-#: This is the same constant the study's spec module names; it is
-#: re-exported here rather than imported, because ``optim.codex`` is
-#: below ``optim.study`` in the dependency direction and the runner must
-#: not import the study to run one arm.
 CODEX_EVALUATE_CALL_CAP = 8
 
-#: The Codex *agent's* own model. It is deliberately not the run's task
-#: model: the two are different products on different routes, and the
-#: task model this study evaluates (``openai/gpt-4.1-nano``, an
-#: OpenRouter route) is not a model the Codex CLI can run at all -- a
-#: ChatGPT subscription refuses it outright with
-#: ``"The 'openai/gpt-4.1-nano' model is not supported when using Codex
-#: with a ChatGPT account"``, before the agent produces a single token.
-#:
-#: Naming the CLI's own current default keeps a default run working while
-#: staying explicit: ``CodexControl.model`` is identity-bearing and
-#: refuses an empty string, so the arm cannot express "whatever the CLI
-#: picks" by omission -- it has to say which model it measured. The §6
-#: run pins its own through ``--codex-model``.
-#:
-#: This is the **runner's** default: the right answer for a single run
-#: nobody pre-registered. A study never takes it by default -- it names
-#: its agent in ``manifest.models.codex_agent_model`` and
-#: :func:`~whetstone_envs.optim.study.spec.require_pinned_codex_agent_model`
-#: refuses a stage whose resolved control disagrees.
 CODEX_DEFAULT_AGENT_MODEL = "gpt-5.6-sol"
 
 
 def resolve_codex_agent_model(codex_model: str | None) -> str:
-    """The model a Codex *agent* session runs, given an arm's override.
-
-    The one owner of "which model does the Codex route use". Every caller
-    that names a Codex session -- the runner that builds the control, and
-    the study stage that preflights the arm before buying the arms ahead
-    of it -- resolves it here, so a preflight cannot probe a different
-    route than the run it is clearing.
-
-    That drift is not hypothetical: the study preflight passed the run's
-    ``task_model``, which is an OpenRouter route the Codex CLI cannot run
-    at all. The probe therefore tested a route no arm would use, and a
-    real study would clear preflight and then fail on the Codex arm's
-    turn -- exactly the late failure the preflight exists to prevent.
-
-    ``None`` means the arm did not override the agent model and takes
-    :data:`CODEX_DEFAULT_AGENT_MODEL`. It never means the run's task
-    model: the two are different products on different routes.
-    """
     return codex_model or CODEX_DEFAULT_AGENT_MODEL
 
 
@@ -174,11 +85,6 @@ class CodexTestSeam:
     extra_environment_keys: frozenset[str] = frozenset()
 
 
-#: The process-environment half of the real-Codex opt-in. It is an
-#: environment variable rather than a flag alone because the flag lives in
-#: a serializable spec: a study manifest, a saved arm, or a copied command
-#: line can carry ``allow_real_codex=True`` into a machine that never
-#: intended to spend, and an environment variable does not travel with it.
 ALLOW_REAL_CODEX_ENV = "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
 
 #: The one value that opts in. Anything else -- unset, empty, ``"0"``,
@@ -186,21 +92,6 @@ ALLOW_REAL_CODEX_ENV = "WHETSTONE_ENVS_ALLOW_REAL_CODEX"
 #: rather than spends.
 ALLOW_REAL_CODEX_ENV_VALUE = "1"
 
-#: The test-process tripwire: while this names any non-empty value, no
-#: opt-in of any kind reaches a real Codex session.
-#:
-#: The opt-in above is *process* state, and a test can set process state.
-#: ``monkeypatch.setenv`` is the ordinary way to prove a gate lifts, and a
-#: test that lifts the authorization half in order to check the next
-#: decision would -- without this -- also lift the last thing standing
-#: between the suite and a billed session. That is not hypothetical: the
-#: study harness's early guard runs a session probe once the opt-in is
-#: satisfied, so an authorization test that supplied no seam spawned the
-#: real CLI.
-#:
-#: So the suite sets this for the whole session and the gate honours it
-#: above every other input. A test may monkeypatch the allow variable; it
-#: cannot reach a real session while this one is present.
 FORBID_REAL_CODEX_ENV = "WHETSTONE_ENVS_FORBID_REAL_CODEX"
 
 
@@ -216,44 +107,6 @@ class RealCodexRefusedError(RuntimeError):
 def refuse_unauthorized_real_codex(
     *, test_seam: CodexTestSeam | None, allow_real_codex: bool
 ) -> None:
-    """Refuse a Codex run that is neither scripted nor deliberately paid.
-
-    The preflight is not a spend guard. It proves a session by *spawning
-    the Codex CLI*, and on a machine with ``~/.codex/auth.json`` that
-    spawn succeeds -- and is billed. So "the caller passed no seam" used
-    to mean "the run reaches the real CLI", which is exactly the accident
-    this refuses: a suite, a study arm, or a parametrization that named
-    the Codex optimizer without meaning to buy a session.
-
-    A run is admitted on one of two grounds, and nothing else:
-
-    * a :class:`CodexTestSeam`, which points the run at the scripted fake
-      CLI and cannot be built from a spec or a flag; or
-    * the deliberate opt-in, which is *both*
-      :data:`ALLOW_REAL_CODEX_ENV` set to
-      :data:`ALLOW_REAL_CODEX_ENV_VALUE` in this process's environment and
-      ``allow_real_codex`` on the run's spec. Requiring both means neither
-      a serialized spec nor an exported variable can authorize a paid run
-      on its own.
-
-    The two grounds are mutually exclusive in practice but not checked as
-    such: a seam already means no real CLI is reachable, so an opt-in
-    alongside one buys nothing.
-
-    **The test-process tripwire outranks both.** When
-    :data:`FORBID_REAL_CODEX_ENV` names any non-empty value, this refuses
-    regardless of the opt-in halves and regardless of any ``monkeypatch``
-    that set them: the suite sets it once per session, so a test may lift
-    the authorization half to prove a gate lifts and still cannot reach a
-    real session. A seam is unaffected, because a seamed run reaches no
-    real CLI to forbid -- which is what keeps the scripted path, and the
-    tests that drive it, fully exercisable under the tripwire.
-
-    This is the single gate every production path to the real preflight or
-    adapter passes through, including the study harness's early stage
-    guard, so the tripwire cannot be routed around by reaching the
-    preflight another way.
-    """
     if test_seam is not None:
         return
     forbidden = os.environ.get(FORBID_REAL_CODEX_ENV)
@@ -394,14 +247,6 @@ def build_codex_adapter(  # noqa: PLR0913
             "Config than the run's engine, so every tool call it admits "
             "would be refused"
         )
-    # The Eval Config alone does not pin the model route. On the
-    # openrouter transport the task model is carried by the provider call
-    # config, so a runtime config naming a different model can rebuild to
-    # the *same* ``eval_config_ref`` and still evaluate on another route --
-    # the run would complete, report a coherent trajectory, and have
-    # measured a model the study never asked for. Checking the task-model
-    # identity closes that; checking the task hashes states the split
-    # agreement here rather than leaving it to the control builder alone.
     if rebuilt.task_model_identity_hash() != engine.task_model_identity_hash():
         raise ValueError(
             "the Codex MCP runtime config rebuilds a different task model "
@@ -460,30 +305,6 @@ def preflight_codex_session(
     allow_real_codex: bool = False,
     test_seam: CodexTestSeam | None = None,
 ) -> None:
-    """Prove a usable Codex session ahead of a stage that will need one.
-
-    This is :func:`build_codex_adapter`'s own preflight, reachable without
-    an engine, a store, or a control. A study stage whose design names the
-    Codex arm needs the answer *before* it starts paying for the arms
-    ordered ahead of it: an unsupported platform, a missing binary, or an
-    expired session is otherwise discovered on the Codex arm's turn, after
-    COPRO, MIPROv2, and GEPA have already been bought.
-
-    It runs the same ``codex_auth_preflight`` through the same executor and
-    the same containment path a real run would, so a session it admits is
-    one the run can use, and ``test_seam`` substitutes it exactly as it
-    does for the adapter -- no production caller can construct one.
-
-    The probe is itself a billed session probe, so this routes through
-    :func:`refuse_unauthorized_real_codex` before building anything --
-    that gate is where the two-part opt-in and the test-process tripwire
-    live, and reaching a real probe around it would be exactly the
-    bypass the tripwire exists to prevent. ``allow_real_codex`` is the
-    caller's authorization; an unauthorized or forbidden call raises
-    :class:`RealCodexRefusedError` here, and an authorized one raises
-    whatever the preflight raises, which for the real one is
-    ``CodexPreflightError``.
-    """
     refuse_unauthorized_real_codex(
         test_seam=test_seam, allow_real_codex=allow_real_codex
     )

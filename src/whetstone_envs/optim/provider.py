@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import random
 import time
-from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from dr_providers import (
@@ -35,16 +34,6 @@ if TYPE_CHECKING:
     from whetstone.provider.policy import ProviderExecutionPolicy
 
 
-#: How long a task call may take, in seconds.
-#:
-#: whetstone's ``default_transport_policy`` allows 30 s, which is a fine
-#: bound for a chat completion and far too short for a reasoning model.
-#: The live Stage 0 measured a median of 4,466 completion tokens and a
-#: maximum of 12,335 on ``gpt-5-nano``; at that size a call routinely runs
-#: past 30 s, and a timeout is charged for the tokens already generated
-#: before it is retried. This bound is set from that measurement with room
-#: above the observed maximum, so the timeout catches a genuinely stuck
-#: call rather than a merely slow one.
 TASK_CALL_TIMEOUT_SECONDS = 300.0
 
 #: How many times one provider call may be attempted.
@@ -61,32 +50,7 @@ TASK_CALL_TIMEOUT_SECONDS = 300.0
 #: attempt.
 TASK_CALL_MAX_ATTEMPTS = 5
 
-#: How many times whetstone's driver may attempt one call: exactly once.
-#:
-#: **Retries have exactly one owner.** ``whetstone.provider.driver`` loops
-#: over ``policy.max_attempts`` and re-invokes the transport on a
-#: retryable failure; :class:`RetryingTransport` *also* loops. Left at
-#: five apiece the two compose multiplicatively rather than additively: a
-#: row against a rate limit that never clears makes 5x5 = 25 billed
-#: invocations, sleeping the wrapper's full schedule five times over
-#: (~4 minutes of backoff per driver attempt, and up to ~40 minutes of
-#: wall clock for a single row once the provider's own ``Retry-After``
-#: hints are honoured).
-#:
-#: It also corrupts the record. The driver appends one
-#: ``ProviderCallAttempt`` per *driver* iteration, so a row that really
-#: cost 25 invocations persists five attempts: the ledger under-counts
-#: billed calls by exactly the wrapper's factor, which is the number an
-#: operator would use to reconcile spend.
-#:
-#: The wrapper keeps the budget rather than the driver because the
-#: wrapper is the layer that actually waits. The driver's own backoff is
-#: applied through an injected ``sleep`` that the eval path never
-#: supplies (``GraphRolloutEvalDriver`` builds its ``LlmCallContext``
-#: without one), so driver-owned retries fire within microseconds and are
-#: no retry at all against a live rate limit. Setting this to one makes
-#: the driver a pass-through and leaves the single waiting loop in
-#: charge.
+# The transport owns retry delays; disable the driver's second retry loop.
 DRIVER_MAX_ATTEMPTS = 1
 
 #: The backoff schedule between attempts: 2 s, 4 s, 8 s, 16 s, capped.
@@ -169,36 +133,6 @@ class OpenRouterTransport:
 
 
 class RetryingTransport:
-    """Wait between attempts, which whetstone's own retry loop does not.
-
-    **This is why one 429 aborted a paid Stage 0.**
-    ``ProviderExecutionPolicy`` already classifies a rate limit as
-    retryable and already computes a backoff delay, and
-    ``whetstone.provider.driver`` already loops over ``max_attempts``. But
-    the delay is applied through an injected ``sleep``, and the eval path
-    never injects one: ``GraphRolloutEvalDriver`` builds its
-    ``LlmCallContext`` without a ``sleep``, so ``run_provider_call`` falls
-    back to ``_no_sleep`` and all three attempts are made within
-    microseconds of each other. Against a rate limit that is still
-    firing, three instant retries are one retry.
-
-    Waiting here rather than there is deliberate. The sleep seam exists
-    upstream but is not reachable from anything this package binds -- the
-    driver takes no ``sleep`` argument to forward -- so the wait is
-    applied at the transport, which is the seam this package *does* own.
-
-    **This wrapper is therefore the sole owner of the retry budget.**
-    Because it owns the waiting it must also own the counting: two
-    loops over the same failure multiply rather than compose, since this
-    wrapper exhausts its attempts and then *returns* the transient
-    failure, which the driver reads as one failed attempt and retries in
-    full. The policy the driver runs under is pinned to
-    :data:`DRIVER_MAX_ATTEMPTS` (one) by
-    :func:`hardened_execution_policy` so that outer loop never turns over
-    -- see that constant for what the multiplication costs in spend, wall
-    clock, and ledger accuracy.
-    """
-
     def __init__(
         self,
         inner: Callable[[Any], Any],
@@ -215,42 +149,6 @@ class RetryingTransport:
         # Jitter spreads retries apart so concurrent workers do not
         # retry in lockstep; it is not a security primitive.
         self._rng = rng if rng is not None else random.Random()  # noqa: S311
-        self._attempts = 0
-        self._transient_outcomes: list[str] = []
-        self._lock = Lock()
-
-    @property
-    def attempts(self) -> int:
-        """Provider invocations this wrapper has made, across all calls.
-
-        **Not the same number as ``calls``, and deliberately so.** ``calls``
-        counts persisted output rows -- one per logical call, which is what
-        the study is billed a completion for and what every cost projection
-        re-derives from the store. A retried call still persists one row,
-        so a report that showed only ``calls`` said nothing about the 429s
-        it survived: the wrapper's retries were invisible in the record
-        even though each one was a real request to the provider.
-
-        This is a live counter rather than a projected number because it
-        is the one quantity that *cannot* be read back: a transient
-        attempt leaves no row to re-derive it from. It is therefore
-        reported beside ``calls`` rather than folded into it, and nothing
-        here changes what ``calls`` means.
-        """
-        with self._lock:
-            return self._attempts
-
-    @property
-    def transient_outcomes(self) -> tuple[str, ...]:
-        """Each transient failure this wrapper retried past, in order.
-
-        The recoverability class rather than a status code, because that
-        is what the retry decision was actually made on -- see
-        :func:`_is_transient` -- so a stage report explains its own
-        attempt count in the same terms the wrapper used to produce it.
-        """
-        with self._lock:
-            return tuple(self._transient_outcomes)
 
     def delay_for(self, attempt_number: int) -> float:
         """The jittered wait before ``attempt_number``'s retry."""
@@ -261,31 +159,12 @@ class RetryingTransport:
         low = capped * (1.0 - RETRY_JITTER_FRACTION)
         return self._rng.uniform(low, capped)
 
-    def _count(self, evidence: object, *, transient: bool) -> None:
-        """Record one provider invocation, and why it was retried.
-
-        Under a lock because one wrapper is shared by every worker in the
-        stage -- ``bind_openrouter_transport`` returns a single instance so
-        the pool is shared -- and a counter incremented from N concurrent
-        evaluations would otherwise lose increments to the read-modify-write
-        race, under-reporting exactly the attempt storm it exists to show.
-        """
-        with self._lock:
-            self._attempts += 1
-            if transient:
-                failure = getattr(evidence, "failure", None)
-                recoverability = getattr(failure, "recoverability", None)
-                self._transient_outcomes.append(
-                    getattr(recoverability, "value", str(recoverability))
-                )
-
     def __call__(self, request: object):
         evidence = self._inner(request)
         for attempt_number in range(1, self._max_attempts):
             if not _is_transient(evidence):
-                self._count(evidence, transient=False)
                 return evidence
-            self._count(evidence, transient=True)
+
             # The provider's own instruction wins over the schedule when
             # it gave one, because it knows when it will accept traffic.
             requested = _retry_after_seconds(evidence)
@@ -296,38 +175,12 @@ class RetryingTransport:
             )
             self._sleep(delay)
             evidence = self._inner(request)
-        # The budget is spent. This last outcome is returned whatever it
-        # is, so it is counted here rather than in the loop -- which would
-        # have counted it only on the paths that retried past it.
-        self._count(evidence, transient=False)
         return evidence
 
 
 def widened_execution_policy(
     policy: ProviderExecutionPolicy, *, concurrency: int
 ) -> ProviderExecutionPolicy:
-    """Return ``policy`` with a connection pool that can hold ``concurrency``.
-
-    The engine's worker pool and the HTTP client's connection pool are two
-    separate bounds, and the smaller one wins. whetstone's
-    ``default_transport_policy`` fixes the client at ten connections, so
-    raising the worker count alone would leave workers queued on sockets
-    rather than talking to the provider -- the requested width would be
-    recorded and not run.
-
-    Keepalive is raised with the ceiling rather than left at its default:
-    these are many short requests to one host, so a connection returned to
-    the pool and immediately discarded would pay a fresh TLS handshake per
-    call, which is the cost the pool exists to avoid.
-
-    This changes the policy's ``identity_hash``, which is correct and
-    harmless: that hash identifies the transport configuration a call was
-    made under, and this *is* a different transport configuration. It is
-    not an input to the pre-registration design hash, which covers the
-    design fields alone -- see
-    :func:`~whetstone_envs.optim.study.manifest.
-    pre_registration_design_hash`.
-    """
     validate_provider_concurrency(concurrency)
     transport_policy = policy.transport_policy
     if transport_policy.max_connections >= concurrency:
@@ -347,20 +200,6 @@ def widened_execution_policy(
 def openrouter_seeded_call_config(
     *, model: str, reasoning_effort: ReasoningEffort | None = None
 ):
-    """Return the OpenRouter chat preset, which advertises SEED.
-
-    ``reasoning_effort`` pins the route's reasoning budget. The OpenRouter
-    chat preset declares ``ReasoningRequestShape.REASONING_OBJECT``, so a
-    pinned effort reaches the wire as ``{"reasoning": {"effort": ...}}`` in
-    the request body; ``None`` sends no reasoning key at all and leaves the
-    route on the provider's default, which is what every call made before
-    the pin existed did.
-
-    The effort is a *design* value, not an invocation setting: it changes
-    the task model's capability and therefore the thing a study measures.
-    It is passed in rather than defaulted here so the one caller that must
-    not receive it -- the proposer route -- cannot acquire it by accident.
-    """
     controls = (
         None
         if reasoning_effort is None
@@ -383,37 +222,6 @@ def openrouter_transport_factory(policy: ProviderExecutionPolicy):
 def hardened_execution_policy(
     policy: ProviderExecutionPolicy,
 ) -> ProviderExecutionPolicy:
-    """Give ``policy`` a reasoning-sized timeout and enough attempts.
-
-    Two changes, both measured against the live Stage 0 rather than
-    guessed:
-
-    * ``timeout_seconds`` rises from whetstone's 30 s to
-      :data:`TASK_CALL_TIMEOUT_SECONDS`, because ``gpt-5-nano`` spends
-      thousands of reasoning tokens per call and a 30 s bound turns an
-      ordinary slow call into a timeout that is billed and then retried.
-    * ``max_attempts`` *falls* to :data:`DRIVER_MAX_ATTEMPTS` -- one --
-      because the retry budget belongs to :class:`RetryingTransport`,
-      which is the layer that actually waits between attempts. The five
-      attempts a rate limit needs to clear are spent there, once, rather
-      than five times over by an outer loop that would multiply both the
-      spend and the wall clock while recording neither. See
-      :data:`DRIVER_MAX_ATTEMPTS`.
-
-    The retry *eligibility* is left exactly as whetstone sets it: rate
-    limits, transport errors, and timeouts are already retryable, and
-    provider rejections and malformed responses already are not, which is
-    the right split -- re-sending a refused request buys the same refusal.
-    It still matters with a single driver attempt, because the wrapper
-    reads the same classification off the transport's own
-    ``RecoverabilityClass`` and the two must agree about what is worth
-    re-sending.
-
-    Like :func:`widened_execution_policy` this changes the policy's
-    ``identity_hash`` and not the pre-registration design hash. Both are
-    invocation properties: they change how a call is made, never what is
-    being measured.
-    """
     return policy.model_copy(
         update={
             "max_attempts": DRIVER_MAX_ATTEMPTS,
@@ -428,14 +236,6 @@ def hardened_execution_policy(
 
 
 def bind_openrouter_transport(policy: ProviderExecutionPolicy):
-    """Return one retrying transport and a factory that always yields it.
-
-    The transport is wrapped in :class:`RetryingTransport` here, at the
-    one place a live provider client is constructed, so no caller can
-    bind a paid route that retries a 429 without waiting. The wrapper is
-    what the whole study talks through: eval and proposal share it, which
-    is also what keeps one connection pool rather than one per binding.
-    """
     transport = RetryingTransport(OpenRouterTransport(policy))
 
     def factory(_policy: ProviderExecutionPolicy) -> RetryingTransport:

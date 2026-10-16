@@ -44,7 +44,6 @@ dependencies = [
 
 [project.scripts]
 whetstone-eval = "whetstone_envs.reporting.cli:main"
-whetstone-study = "whetstone_envs.optim.study.cli:main"
 
 [project.optional-dependencies]
 c18 = ["numpy==2.5.1", "scipy==1.18.0"]
@@ -85,7 +84,6 @@ artifacts = [
     "src/whetstone_envs/c23/attribution/LICENSE",
     "src/whetstone_envs/c23/attribution/PROVENANCE.md",
     "src/whetstone_envs/c23/manifest.json",
-    "src/whetstone_envs/optim/study/protocol_docs/*.md",
 ]
 
 [tool.pytest.ini_options]
@@ -109,10 +107,6 @@ include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
 extend-exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
-    # A standalone script run against a *different* whetstone-ai
-    # checkout than the one installed here, so its imports cannot
-    # resolve against this environment by construction.
-    "tests/optim/audit/fixtures/generate.py",
 ]
 line-length = 79
 
@@ -165,11 +159,6 @@ ignore = ["PLR1711", "S101", "TRY003"]
 "src/whetstone_envs/reporting/cli.py" = ["PLC0415"]
 "src/whetstone_envs/reporting/html.py" = ["PLC0415"]
 "tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
-# A standalone fixture generator, run by hand against a whetstone-ai
-# checkout rather than imported: it must set sys.path before importing
-# whetstone at all, and it mirrors a CodexRunner signature it does not
-# use every argument of.
-"tests/optim/audit/fixtures/generate.py" = ["ARG002", "E402", "PLR0913"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
 
 [tool.ruff.lint.flake8-type-checking]
@@ -181,14 +170,10 @@ include = ["scripts", "src", "tests"]
 exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
-    # A standalone script run against a *different* whetstone-ai
-    # checkout than the one installed here, so its imports cannot
-    # resolve against this environment by construction.
-    "tests/optim/audit/fixtures/generate.py",
 ]
 
 [[tool.ty.overrides]]
-# The optimizer, audit, study, and reporting packages import whetstone-ai,
+# The optimizer and reporting packages import whetstone-ai,
 # which the `optim` extra installs only on Python 3.13+. The 3.12 check
 # therefore type-checks these files against no whetstone at all, so the
 # imports are unresolvable there by construction and nowhere else.

@@ -43,16 +43,6 @@ PROVIDER_CONCURRENCY_FORCE_FLAG = "--force-provider-concurrency"
 #: together so the drift is caught rather than inferred.
 DEFAULT_PROVIDER_CONCURRENCY = 5
 
-#: The largest concurrency reachable without an explicit override.
-#:
-#: OpenRouter documents no per-account concurrency ceiling for paid models
-#: -- only free-tier request-per-minute limits and Cloudflare's protection
-#: against traffic that "dramatically exceeds reasonable usage" -- so
-#: there is no provider-published number to encode here. This cap is
-#: therefore this study's own prudence rather than a quoted limit: it is
-#: high enough that a real stage is bounded by the provider's latency
-#: rather than by this package, and low enough that a typo cannot open
-#: hundreds of billed connections at once.
 MAX_UNFORCED_PROVIDER_CONCURRENCY = 64
 
 
@@ -86,7 +76,7 @@ def resolve_provider_concurrency(value: int, *, force: bool) -> int:
             f"provider concurrency {value} exceeds the sanity cap of "
             f"{MAX_UNFORCED_PROVIDER_CONCURRENCY}. OpenRouter publishes "
             "no per-account concurrency limit for paid models, so this "
-            "cap is this study's own prudence rather than a provider "
+            "cap is this runner's own prudence rather than a provider "
             "limit -- but a width this large opens that many billed "
             "connections at once, and an extra digit is far likelier "
             f"than a deliberate choice. Pass "

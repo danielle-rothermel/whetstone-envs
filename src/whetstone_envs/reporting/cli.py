@@ -166,8 +166,6 @@ def build_parser() -> argparse.ArgumentParser:
         default="internal",
     )
     run.add_argument("--repeats", type=int, default=1)
-    # Declared through the same constants the study CLI uses, so the two
-    # surfaces cannot drift on the flag's spelling or its bounds.
     run.add_argument(
         PROVIDER_CONCURRENCY_FLAG,
         type=int,

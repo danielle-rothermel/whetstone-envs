@@ -230,8 +230,8 @@ future raw-record command may expose other payload fields.
 Persisted-format names and schema versions are explicit constants with golden
 tests:
 
-- `whetstone_envs.eval_report/v3`
-- `whetstone_envs.trajectory_report/v2`
+- `whetstone_envs.eval_report/v4`
+- `whetstone_envs.trajectory_report/v3`
 
 Strict frozen Pydantic models reject unknown fields, scalar coercion,
 non-finite numbers, duplicate coordinates, and inconsistent references.

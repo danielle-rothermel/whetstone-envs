@@ -106,10 +106,6 @@ from whetstone_envs.optim.miprov2 import (
     build_miprov2_state,
     miprov2_run_ref,
 )
-from whetstone_envs.optim.nulls import (
-    NULL_RANDOM_OPTIMIZER,
-    NullRandomTransport,
-)
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
     bind_openrouter_transport,
@@ -119,9 +115,7 @@ from whetstone_envs.optim.provider import (
     openrouter_seeded_call_config,
     widened_execution_policy,
 )
-from whetstone_envs.optim.run_cost import project_run_cost, write_run_cost
 from whetstone_envs.optim.split import (
-    COPRO_SHAPED_OPTIMIZERS,
     GEPA_OPTIMIZER,
     MIN_COPRO_BREADTH,
     TRAIN_VAL_OPTIMIZERS,
@@ -151,23 +145,7 @@ DEFAULT_OUTPUT_ROOT = (
     Path.home() / "drotherm" / "data" / "runs" / ("whetstone-envs")
 )
 
-#: Every optimizer the shared runner can drive today.
-#:
-#: ``null-random`` (null-A) is here because it is a *control for selection*:
-#: it must spend the same proposal budget and fill the same slots as the
-#: optimizer it stands in for, and it must produce the same evidence -- a
-#: result, a store, an audit, priced cost rows -- or it cannot be compared
-#: against the arms it controls. It is COPRO's own search shape with
-#: :class:`~whetstone_envs.optim.nulls.NullRandomTransport` substituted for
-#: the proposer, so it reaches that evidence through this runner rather than
-#: through a parallel path of its own.
-#:
-#: ``null-identity`` (null-B) is absent: it proposes nothing, so it has no
-#: search to drive and no optimizer-fidelity invariant to audit. The study
-#: harness synthesizes its record directly. Admitting a name the runner
-#: cannot drive would fail late, inside a durable run boundary, instead of
-#: at spec validation.
-OPTIMIZERS = ("codex", "copro", "gepa", "miprov2", NULL_RANDOM_OPTIMIZER)
+OPTIMIZERS = ("codex", "copro", "gepa", "miprov2")
 
 TRANSPORTS = ("fake", "openrouter")
 
@@ -179,10 +157,6 @@ DEFAULT_COPRO_DEPTH = 1
 #: default to, so an unseeded run keeps the control identity it always had.
 GEPA_DEFAULT_SEED = 0
 MIPROV2_DEFAULT_SEED = 9
-#: null-A's own seed default. It matches the study spec's ``null-random``
-#: arm seed, so a single run reproduces the control the study would have
-#: drawn at that arm's first seed.
-NULL_RANDOM_DEFAULT_SEED = 5000
 
 #: The MIPROv2 candidate count below which minibatching exhausted the
 #: search space and raised inside the durable run boundary (D3's defect
@@ -192,10 +166,6 @@ NULL_RANDOM_DEFAULT_SEED = 5000
 #: ``ValueError: No valid program found in param_score_dict``.
 MIPROV2_MINIBATCH_MIN_CANDIDATES = 3
 
-#: The first whetstone-ai release whose ``select_promotion`` degrades to
-#: DSPy's own behaviour rather than raising. At or above it the shape is
-#: runnable and the refusal below lifts; below it the refusal is the only
-#: thing standing between a study arm and a run that dies mid-flight.
 MIPROV2_SPENT_COMBINATION_FIX_VERSION = (0, 1, 9)
 
 #: Where the refusal points a reader who wants the upstream story.
@@ -209,12 +179,6 @@ DEFAULT_SPLIT_SIZES = (2, 2, 0)
 
 @dataclass(frozen=True, slots=True)
 class RunSpec:
-    """One optimizer run over one task family.
-
-    Every field the study varies is explicit here, so a run is fully
-    described by its spec and nothing is read from module state.
-    """
-
     optimizer: str
     transport: str
     #: The registered task family this run drives.
@@ -223,14 +187,6 @@ class RunSpec:
     output_dir: Path | None = None
     run_id: str | None = None
     model: str = "openai/gpt-4.1-nano"
-    #: The task route's reasoning effort. ``None`` sends no reasoning key
-    #: and leaves the route on the provider's default, which is what every
-    #: run made before this field existed did.
-    #:
-    #: Applies to the **task** route only; the proposer route never takes
-    #: it. A study pins this in its manifest and the study path reads it
-    #: from there -- this field is the standalone runner's way to say the
-    #: same thing.
     task_reasoning_effort: ReasoningEffort | None = None
     #: The proposer's model. ``None`` reuses ``model`` for both roles.
     proposer_model: str | None = None
@@ -242,17 +198,6 @@ class RunSpec:
     n_per_category: int | None = None
     #: First generator seed for the pool. ``None`` takes the family default.
     pool_seed_start: int | None = None
-    #: This run's algorithmic seed. ``None`` keeps each optimizer's own
-    #: default, which is what an unparameterised smoke run wants.
-    #:
-    #: GEPA and MIPROv2 carry it into their controls as an explicit field.
-    #: ``CoproControl`` has no seed: COPRO's stochasticity is the proposer
-    #: LM, so its effective seed is the provider ``SEED`` control plus
-    #: proposal ordering. The field is still recorded for a COPRO run so the
-    #: study manifest can state what was requested and how it was honoured;
-    #: :func:`seed_disposition` names that difference. The study assigns
-    #: disjoint per-optimizer ranges; choosing them is the study's concern,
-    #: not the runner's, so the runner accepts any integer.
     seed: int | None = None
     #: COPRO candidates proposed per step.
     copro_breadth: int = DEFAULT_COPRO_BREADTH
@@ -261,10 +206,6 @@ class RunSpec:
     #: GEPA's paid metric-call ceiling. ``None`` keeps the family default of
     #: one full pass over the trainset plus one reflection minibatch.
     gepa_max_metric_calls: int | None = None
-    #: Traces GEPA's reflection proposer consumes per reflection round.
-    #: ``None`` keeps the family's own single-trace default. A study pins
-    #: this, because how many traces the reflection step sees is part of
-    #: the proposer's input rather than a runtime detail.
     gepa_reflection_minibatch_size: int | None = None
     #: Whether MIPROv2 evaluates each trial on a sampled minibatch rather
     #: than the whole validation split. Off by default, which is the
@@ -343,14 +284,6 @@ class RunSpec:
     allow_real_codex: bool = False
 
 
-#: How a run's ``seed`` reaches the optimizer, recorded per optimizer.
-#:
-#: These are manifest values, not free-form prose: the study records which
-#: arm carried an explicit control seed and which did not.
-SEED_DISPOSITION_CONTROL_FIELD = "control-seed-field"
-SEED_DISPOSITION_PROVIDER_ONLY = "provider-seed-control-only"
-
-
 def installed_whetstone_ai_version() -> str | None:
     """The installed whetstone-ai version string, or ``None`` if absent.
 
@@ -393,12 +326,6 @@ def _release_tuple(text: str) -> tuple[int, ...]:
 
 
 def _miprov2_spent_combination_fixed() -> bool:
-    """Whether the installed whetstone-ai carries the #137 fallback.
-
-    An unreadable or absent version reads as *not fixed*: the refusal is
-    what stops a study arm from dying inside a durable run boundary, so
-    the uncertain case keeps it rather than lifting it on a guess.
-    """
     installed = installed_whetstone_ai_version()
     if installed is None:
         return False
@@ -409,13 +336,6 @@ def _miprov2_spent_combination_fixed() -> bool:
 
 
 def _validate_miprov2_settings(spec: RunSpec) -> None:
-    """Refuse MIPROv2 minibatch settings the run cannot honour.
-
-    Like the other optimizer-scoped settings, these are refused at spec
-    validation rather than inside the durable run boundary, and refused on
-    another optimizer rather than silently ignored -- a setting that looks
-    honoured but is not is how a study comes to misdescribe its own arm.
-    """
     non_default = (
         spec.miprov2_minibatch != DEFAULT_MIPROV2_MINIBATCH
         or spec.miprov2_minibatch_size is not None
@@ -432,16 +352,9 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
     ):
         raise ValueError("miprov2_minibatch_size must be at least 1")
     if spec.miprov2_minibatch and spec.miprov2_minibatch_size is None:
-        # D3's defect (e). Left unset, ``configure_miprov2`` resolves the
-        # batch to the whole valset, so "minibatch on" silently means "no
-        # minibatch" -- and the F16 fan-out invariant then correctly FAILs
-        # the audit of a run that already spent. Refusing the combination
-        # here turns a paid audit failure into a free validation error.
         raise ValueError(
             "--miprov2-minibatch requires --miprov2-minibatch-size: left "
-            "unset the batch is the whole validation split, so "
-            "minibatching is on in name only and the run's "
-            "mipro_minibatch_sizing invariant fails after it has spent"
+            "unset the batch is the whole validation split"
         )
     if (
         spec.miprov2_minibatch
@@ -472,18 +385,6 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
 
 
 def _validate_train_val_split(spec: RunSpec) -> None:
-    """Refuse a train/val split the run cannot honestly claim.
-
-    Required for every optimizer in :data:`TRAIN_VAL_OPTIMIZERS` and
-    refused on the others, for the same reason the other optimizer-scoped
-    settings are: a size that looks honoured but is not is how a study
-    comes to misdescribe its own arm.
-
-    Both sizes are checked against the *internal* split, which is the only
-    split these optimizers may see -- the official and held-out splits are
-    not theirs to train on. Refused here, at pure spec validation, so an
-    unrunnable partition never reaches the durable run boundary.
-    """
     supplied = spec.train_size is not None or spec.val_size is not None
     if spec.optimizer not in TRAIN_VAL_OPTIMIZERS:
         if supplied:
@@ -529,12 +430,6 @@ def _validate_train_val_split(spec: RunSpec) -> None:
 
 
 def _validate_codex_settings(spec: RunSpec) -> None:
-    """Refuse Codex settings the run cannot honour.
-
-    Refused on another optimizer rather than silently ignored, like every
-    other optimizer-scoped setting: a setting that looks honoured but is
-    not is how a study comes to misdescribe its own arm.
-    """
     non_default = (
         spec.codex_capacity is not None
         or spec.codex_binary != CODEX_DEFAULT_BINARY
@@ -554,19 +449,6 @@ def _validate_codex_settings(spec: RunSpec) -> None:
             "codex_reasoning_effort must be one of "
             f"{list(CODEX_REASONING_EFFORTS)}"
         )
-
-
-def seed_disposition(optimizer: str) -> str:
-    """Name how ``optimizer`` honours a run's requested seed.
-
-    COPRO is the honest exception: ``CoproControl`` carries no seed field,
-    so a COPRO run's reproducibility rests on the provider ``SEED`` control
-    and proposal ordering rather than on an algorithmic seed. Recording that
-    beats faking a seed the control never reads.
-    """
-    if optimizer == "copro":
-        return SEED_DISPOSITION_PROVIDER_ONLY
-    return SEED_DISPOSITION_CONTROL_FIELD
 
 
 def default_output_dir(run_id: str) -> Path:
@@ -808,35 +690,14 @@ def _bind_optimizer(  # noqa: PLR0913
             ),
             codex_control=codex_control,
         )
-    if spec.optimizer in COPRO_SHAPED_OPTIMIZERS:
-        # null-A is COPRO's search shape with an uninformative proposer.
-        # Substituting only the transport is what makes it a control for
-        # *selection*: the budget, the slots, the selection rule, and the
-        # recorded evidence are COPRO's own, and the single thing that
-        # differs is that the drafts carry no information.
-        bound_transport = proposer_transport
-        if spec.optimizer == NULL_RANDOM_OPTIMIZER:
-            bound_transport = NullRandomTransport(
-                seed=(
-                    NULL_RANDOM_DEFAULT_SEED
-                    if spec.seed is None
-                    else spec.seed
-                ),
-                render_contract=validated.family.render_contract(),
-                execution_policy_hash=(
-                    engine.execution_policy_identity_hash()
-                ),
-                prompt_adapter_identity_hash=prompt_adapter_identity_hash(
-                    prompt_adapter
-                ),
-            )
+    if spec.optimizer == "copro":
         return _BoundOptimizer(
             adapter_key=COPRO_ADAPTER_KEY,
             adapter=_copro_adapter(
                 engine=engine,
                 control=copro_control,
                 prompt_adapter=prompt_adapter,
-                proposer_transport=bound_transport,
+                proposer_transport=proposer_transport,
                 family=validated.family,
                 extra_proposal_bodies=spec.extra_proposal_bodies,
             ),
@@ -1083,42 +944,6 @@ def run_optimizer(  # noqa: PLR0915
     codex_test_seam: CodexTestSeam | None = None,
     codex_prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> Path:
-    """Run one optimizer over one family's split, writing artifacts off-repo.
-
-    Every optimizer reaches the same runtime entry point. MIPROv2
-    additionally binds an opening durable state, and its ``demo_mode``
-    selects the demonstration regime; Codex is the one ``TOOL_USING`` run,
-    so it alone gets a durable admission authority and a tool executor.
-    Every family-specific decision is read from the family registry, so
-    this function names no family.
-
-    ``codex_test_seam`` exists only so a test can drive the scripted fake
-    Codex CLI. It is keyword-only, absent from :class:`RunSpec`, and has
-    no CLI flag, so no production path or serialized spec can select one --
-    see :class:`~whetstone_envs.optim.codex.CodexTestSeam`.
-
-    ``codex_prompt_builder`` is the same shape of seam for the agent's
-    instruction, and exists for the real-CLI ladder: its capacity and
-    no-tool-call rungs cannot observe what they assert under the truthful
-    production prompt, because an agent correctly told its real allowance
-    obeys it and the durable refusal path is never reached. Like the
-    seam it is keyword-only, absent from :class:`RunSpec`, and has no CLI
-    flag, so a study arm or a serialized spec cannot change what the
-    agent is told.
-
-    A Codex run that supplies neither a seam nor the deliberate real-Codex
-    opt-in is refused before any effect happens: the preflight spawns the
-    billed CLI to prove a session, so it cannot be the thing that stops an
-    accidental paid run. Every caller -- the CLI, a study arm, a
-    parametrized test -- reaches Codex through this function, so one gate
-    covers all of them.
-
-    The spend guard runs *after* spec validation and before anything else.
-    Both are pure and neither spends, so the order is only about which
-    message a caller gets: an unrunnable spec should be told what is wrong
-    with it rather than that it could not afford to run, and a spec that
-    is merely unaffordable has nothing else to report.
-    """
     if codex_test_seam is not None and spec.optimizer != "codex":
         raise ValueError("codex_test_seam applies only to --optimizer codex")
     if codex_prompt_builder is not None and spec.optimizer != "codex":
@@ -1304,13 +1129,6 @@ def run_optimizer(  # noqa: PLR0915
                 result.model_dump_json(indent=2),
                 encoding="utf-8",
             )
-            # ``cost.json`` beside ``result.json``, so a reader can price a
-            # run without parsing a whole optimization result. It is written
-            # only when the result carries a cost report: an all-zero
-            # document would claim the run was free rather than unmeasured.
-            cost = project_run_cost(result, run_id=resolved_run_id)
-            if cost is not None:
-                write_run_cost(resolved_output, cost, store=store)
             trajectory = project_trajectory_report(
                 store=cast("ObjectStore", store),
                 prepared=prepared,
@@ -1355,17 +1173,6 @@ def _proposer_route(
     experiment: Experiment,
     proposer_model: str | None,
 ) -> _ProposerRoute:
-    """Bind the proposal route, which may differ from the task route.
-
-    A study runs a cheap task model against a stronger proposer, so the two
-    routes are separable. ``None`` reuses the experiment's own route, which
-    keeps a single-model run byte-identical to one that never named a
-    proposer -- including its recorded reference hash.
-
-    A named proposer stays deliberately *unpinned*: the route carries no
-    reasoning controls, because the effort a study pins is a property of the
-    task model it measures, not of the proposer that writes prompts.
-    """
     if proposer_model is None:
         config = experiment.rollout_graph.provider_call_config
         return _ProposerRoute(
@@ -1398,8 +1205,6 @@ __all__ = [
     "MIPROV2_SPENT_COMBINATION_FIX_VERSION",
     "MIPROV2_SPENT_COMBINATION_ISSUE",
     "OPTIMIZERS",
-    "SEED_DISPOSITION_CONTROL_FIELD",
-    "SEED_DISPOSITION_PROVIDER_ONLY",
     "TRAIN_VAL_OPTIMIZERS",
     "TRANSPORTS",
     "CodexReasoningEffort",
@@ -1410,5 +1215,4 @@ __all__ = [
     "installed_whetstone_ai_version",
     "registered_family_ids",
     "run_optimizer",
-    "seed_disposition",
 ]

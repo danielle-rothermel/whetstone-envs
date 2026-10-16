@@ -184,8 +184,9 @@ date = "2026-08-21"
 title = "Evaluation reports are strict bounded local evidence"
 statement = """
 Evaluation and optimization inspection reads only strict canonical JSON using \
-the exact persisted literals `whetstone_envs.eval_report/v3` and \
-`whetstone_envs.trajectory_report/v2`. Publication validates a complete \
+the exact persisted literals `whetstone_envs.eval_report/v4` and \
+`whetstone_envs.trajectory_report/v3`. Reports contain no spend projection. \
+Publication validates a complete \
 candidate, task, observation, step, resolution, reference, ordering, matrix, \
 and finite-number contract under an explicit 128 MiB limit before bounded \
 same-directory atomic replacement. \

@@ -39,10 +39,6 @@ GEPA_COMPONENT_NAME = "generate"
 INLINE_EXECUTOR_SCHEMA_SUFFIX = "inline_proposal_executor"
 COMPONENT_SCHEMA_SUFFIX = "gepa_component"
 
-#: Traces the reflection proposer consumes per round when a caller pins
-#: none. One is the smoke-run shape: enough to exercise the reflection
-#: path, small enough to keep an unparameterised run cheap. The study pins
-#: its own through ``RunSpec.gepa_reflection_minibatch_size``.
 DEFAULT_REFLECTION_MINIBATCH_SIZE = 1
 
 
@@ -109,33 +105,6 @@ def build_gepa_control(  # noqa: PLR0913
     trainset_task_hashes: tuple[str, ...],
     valset_task_hashes: tuple[str, ...],
 ):
-    """Resolve one family's GEPA control over the engine's internal split.
-
-    ``seed`` is GEPA's explicit algorithmic seed, carried straight onto the
-    control. ``max_metric_calls`` pins the paid metric-call ceiling; ``None``
-    keeps the default of one full pass over the trainset plus one reflection
-    minibatch, which is what a smoke run needs.
-
-    ``proposer_config_ref`` names the reflection route. The proposer
-    transport resolves this reference and asserts the resolved record
-    matches it, so a run whose proposer differs from its task model must
-    pass the reference minted from the *proposer's* config; ``None`` keeps
-    the experiment's own route, for a run that never named a proposer.
-
-    ``reflection_minibatch_size`` is how many traces the reflection
-    proposer consumes per round. ``None`` keeps the single-trace default a
-    smoke run wants; a study pins it, because the number of traces the
-    reflection step sees is part of the proposer's input rather than a
-    runtime detail, and a hardcoded value cannot be audited against a
-    design.
-
-    ``trainset_task_hashes`` and ``valset_task_hashes`` are required and
-    must be disjoint subsets of the internal split. GEPA reflects over the
-    trainset and selects its Pareto frontier on the valset, so a valset
-    that repeated the trainset would score candidates on the very tasks
-    their reflection was written from -- the selection would then reward
-    memorization rather than generalization.
-    """
     prompt_adapter = PlainPromptAdapter()
     internal_task_hashes = (
         experiment.eval_configs.internal.task_set.task_hashes

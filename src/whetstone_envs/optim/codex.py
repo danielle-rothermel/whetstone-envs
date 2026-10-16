@@ -40,10 +40,6 @@ CODEX_EVALUATE_CALL_CAP = 8
 CODEX_DEFAULT_AGENT_MODEL = "gpt-5.6-sol"
 
 
-def resolve_codex_agent_model(codex_model: str | None) -> str:
-    return codex_model or CODEX_DEFAULT_AGENT_MODEL
-
-
 #: Where a Codex run's dr-exec job records live, beneath the run's own
 #: output directory. One directory per run, so a completed run's spawn
 #: evidence stays beside the artifacts it produced.
@@ -58,28 +54,9 @@ CODEX_REASONING_EFFORTS: tuple[str, ...] = tuple(
 
 @dataclass(frozen=True, slots=True)
 class CodexTestSeam:
-    """The only way to run the Codex arm without a real Codex session.
+    """Test-only preflight and environment for a scripted Codex CLI.
 
-    A test drives the scripted fake CLI, which has no session to prove and
-    no spend to protect, so it must be able to replace the preflight. But
-    a replaceable preflight that any caller could pass is not a preflight:
-    the whole point is that no budgeted run starts without a proven
-    session.
-
-    So the substitution is a named seam rather than an optional argument.
-    :class:`~whetstone_envs.optim.run.RunSpec` has no field that carries
-    one, the CLI has no flag that builds one, and
-    :func:`build_codex_adapter` defaults it to ``None`` -- meaning a
-    production path reaches the real ``codex_auth_preflight`` and cannot
-    select anything else. Only a test that constructs this record by name
-    gets the stand-in.
-
-    ``preflight`` takes the same keyword arguments as
-    ``codex_auth_preflight`` and is expected to ignore them.
-    ``environment`` is merged into the run's process environment, which is
-    how the fake CLI receives its transcript, and
-    ``extra_environment_keys`` widens the runner's allowlist by exactly
-    those keys and nothing more.
+    Neither RunSpec nor the CLI can select this seam.
     """
 
     preflight: Callable[..., None]
@@ -126,7 +103,7 @@ def refuse_unauthorized_real_codex(
         "it is not a spend guard. Drive the scripted fake CLI through a "
         "CodexTestSeam, or opt in deliberately with both "
         f"{ALLOW_REAL_CODEX_ENV}={ALLOW_REAL_CODEX_ENV_VALUE} in the "
-        "environment and --allow-real-codex (RunSpec.allow_real_codex)."
+        "environment and --allow-real-codex (CodexSettings.allow_real_codex)."
     )
 
 
@@ -181,12 +158,7 @@ def build_codex_adapter(  # noqa: PLR0913
     test_seam: CodexTestSeam | None = None,
     prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> CodexAdapter:
-    # The MCP evaluation server rebuilds its engine from this config
-    # alone, in another process. Proving here that the rebuild lands on
-    # the same Eval Config is what keeps a mismatch from becoming a run
-    # in which every single tool call is refused and the agent has
-    # nothing to select -- the failure mode is silent on the server side,
-    # so it is caught on this side before anything is spawned.
+    # Reject a mismatched subprocess runtime before spawning the CLI.
     rebuilt = runtime_config.build_engine(store)
     if rebuilt.eval_config_ref != engine.eval_config_ref:
         raise ValueError(
@@ -217,7 +189,7 @@ def build_codex_adapter(  # noqa: PLR0913
         # structurally: pydantic spells ``model_validate_json``'s
         # parameter ``json_data`` while the protocol spells it ``data``,
         # so no pydantic model can satisfy the protocol by name. The
-        # cast records that, and the e2e proves the behavior.
+        # cast records that protocol signature mismatch.
         runtime_config=cast("EvalRuntimeConfig", runtime_config),
         runtime_config_class=ENVS_CODEX_RUNTIME_CONFIG_CLASS,
         reward_policy=reward_policy,
@@ -244,40 +216,6 @@ def build_codex_adapter(  # noqa: PLR0913
     return CodexAdapter(runner, store=store)
 
 
-def preflight_codex_session(
-    *,
-    scratch_root: Path,
-    codex_binary: str = CODEX_DEFAULT_BINARY,
-    model: str = "",
-    allow_real_codex: bool = False,
-    test_seam: CodexTestSeam | None = None,
-) -> None:
-    refuse_unauthorized_real_codex(
-        test_seam=test_seam, allow_real_codex=allow_real_codex
-    )
-    executor = build_codex_executor(run_root=scratch_root)
-    runner = SubprocessCodexRunner(
-        executor=executor,
-        codex_binary=codex_binary,
-        model=model,
-        environment=dict(test_seam.environment) if test_seam else None,
-        extra_environment_keys=(
-            test_seam.extra_environment_keys if test_seam else frozenset()
-        ),
-    )
-    preflight = test_seam.preflight if test_seam else codex_auth_preflight
-    preflight(
-        executor=executor,
-        codex_binary=codex_binary,
-        environment=runner.codex_process_environment(),
-        model=model,
-    )
-
-
-def codex_run_root(output_dir: Path) -> Path:
-    return output_dir / CODEX_RUN_ROOT_NAME
-
-
 __all__ = [
     "ALLOW_REAL_CODEX_ENV",
     "ALLOW_REAL_CODEX_ENV_VALUE",
@@ -293,10 +231,7 @@ __all__ = [
     "RealCodexRefusedError",
     "build_codex_adapter",
     "build_codex_control",
-    "codex_run_root",
-    "preflight_codex_session",
     "refuse_unauthorized_real_codex",
-    "resolve_codex_agent_model",
 ]
 
 
@@ -317,7 +252,7 @@ def bind_codex(  # noqa: PLR0913
         engine=engine,
         experiment=experiment,
         problem=problem,
-        model=resolve_codex_agent_model(settings.model),
+        model=settings.model or CODEX_DEFAULT_AGENT_MODEL,
         max_tool_calls=settings.capacity,
         codex_binary=settings.binary,
         reasoning_effort=settings.reasoning_effort,
@@ -330,7 +265,7 @@ def bind_codex(  # noqa: PLR0913
         runtime_config=runtime_config,
         reward_policy=experiment.reward_policy,
         store_path=sqlite_path,
-        run_root=codex_run_root(output_dir),
+        run_root=output_dir / CODEX_RUN_ROOT_NAME,
         test_seam=test_seam,
         prompt_builder=prompt_builder,
     )

@@ -304,7 +304,7 @@ exported_symbols = [
 [[terms]]
 name = "optimizer run input"
 definition = """
-Validated execution and task-generation parameters with exactly one \
+Validated execution parameters with exactly one \
 optimizer-specific settings variant and an explicit transport."""
 exported_symbols = [
     "whetstone_envs.optim.spec.RunSpec",

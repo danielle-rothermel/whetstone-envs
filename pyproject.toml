@@ -89,7 +89,7 @@ venvPath = "."
 venv = ".venv"
 
 [tool.ruff]
-include = ["examples/**/*.py", "scripts/**/*.py", "src/**/*.py"]
+include = ["examples/**/*.py", "scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
 extend-exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
@@ -141,9 +141,8 @@ select = [
 ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PT009", "PT027", "S603"]
 "src/whetstone_envs/c18/probes.py" = ["E501"]
-"src/whetstone_envs/reporting/cli.py" = ["PLC0415"]
-"src/whetstone_envs/reporting/html.py" = ["PLC0415"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
 
 [tool.ruff.lint.flake8-type-checking]
@@ -154,7 +153,7 @@ runtime-evaluated-base-classes = [
 ]
 
 [tool.ty.src]
-include = ["scripts", "src"]
+include = ["examples", "scripts", "src", "tests"]
 exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
@@ -168,7 +167,8 @@ exclude = [
 include = [
     "src/whetstone_envs/optim/**",
     "src/whetstone_envs/evaluation/**",
-    "src/whetstone_envs/reporting/**",
+    "tests/optim/**",
+    "examples/**",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

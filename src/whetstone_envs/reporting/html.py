@@ -22,7 +22,8 @@ from whetstone_envs.reporting._comparison import comparison_label
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from typing import JsonValue
+
+    from pydantic import JsonValue
 
 EVAL_HTML_NAME = "eval-report.html"
 TRAJECTORY_HTML_NAME = "trajectory-report.html"

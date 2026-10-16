@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Focused standard-library tests for shared instance, split, manifest, evidence,
+  report-rendering, and optimizer contracts. Repository checks run core tests
+  on all supported Python versions and optimizer checks on Python 3.13+.
+
 - `InstanceGroup` in `instances/instance_group.py`: a strict, frozen model with
   a nonblank name and ordered instances with unique identifiers.
 
@@ -104,7 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Unused scoring observations and aggregation hierarchy, the retired C19 report
   guide data, the pool sequence wrapper, and unused optimizer-name constants.
-  Manifest-only validation now lives with `Manifest`.
+  Manifest-only validation now lives with `Manifest`. Remove the unused
+  standalone Codex preflight and one-operation model/path wrappers.
 
 - Standalone C19 evaluation, its launcher and CLI commands, and C19-specific
   report guides, matrices, filters, and layouts. Evidence inspection displays

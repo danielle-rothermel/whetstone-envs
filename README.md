@@ -629,18 +629,13 @@ uv sync --locked --extra c18
 uv run pre-commit install
 ```
 
-The hook runs formatting, lint, type, definitions, the fast test suite, and
-package validation. Run it directly at any time:
+The hook runs formatting, lint, type, definitions, focused shared-contract
+tests, and package validation. Core tests run on every supported Python
+version; optimizer execution and Codex reconstruction checks run on Python
+3.13 and 3.14 with the optional dependencies. Run it directly at any time:
 
 ```bash
 scripts/dev/pre-check.sh
-```
-
-CI also runs the full-cohort integration checks. Run that exact gate locally
-before release:
-
-```bash
-CI=true scripts/dev/pre-check.sh
 ```
 
 Regenerate the canonical C11 manifest after an intentional generator change:

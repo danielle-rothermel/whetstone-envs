@@ -195,12 +195,21 @@ directory. CLI flags are translated into these models. Shared experiment
 preparation, task rows, exact-match runner, provider transport, and concurrency
 policy live in `whetstone_envs.evaluation`.
 
+From the repository root, with the `optim` extra installed:
+
 ```python
+from pathlib import Path
+
+from whetstone_envs.evaluation.runtime import TransportKind
+from whetstone_envs.optim.problem import load_problem
 from whetstone_envs.optim.run import run_optimizer
 from whetstone_envs.optim.spec import CoproSettings, RunSpec
-from whetstone_envs.evaluation.runtime import TransportKind
 
-run_optimizer(RunSpec(optimizer=CoproSettings(), transport=TransportKind.FAKE))
+problem = load_problem(Path("examples/optimization_problem.py"))
+run_optimizer(
+    RunSpec(optimizer=CoproSettings(), transport=TransportKind.FAKE),
+    problem=problem,
+)
 ```
 
 ## Evaluation and trajectory reports

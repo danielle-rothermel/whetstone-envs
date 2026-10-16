@@ -16,8 +16,6 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from whetstone_envs.instances.instance_group import InstanceGroup
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from whetstone_envs.instances.instance import Instance
 
 
@@ -98,9 +96,6 @@ class InstancePool(BaseModel):
                 assignment_by_id=assignment_by_id,
             ),
         )
-
-    def as_sequence(self) -> Sequence[Instance]:
-        return self.instance_group.instances
 
 
 class InstancePoolSplit(BaseModel):

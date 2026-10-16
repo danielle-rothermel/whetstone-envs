@@ -191,6 +191,19 @@ function outcomeCards(evalReport, view, name) {
   }
   section.append(cards); return section;
 }
+function categoryTable(evalReport, name) {
+  const section = panel(`Categories · ${name}`); const result = resultFor(evalReport, name);
+  if (!result || result.kind !== 'success') { section.append(node('p', { text: 'No category scores recorded.' })); return section; }
+  const table = node('table'); const head = node('thead'); const labels = node('tr');
+  for (const label of ['Category', 'Score', 'Passed / planned', 'Failed', 'Missing', 'Invalid']) labels.append(node('th', { text: label }));
+  head.append(labels); const body = node('tbody');
+  for (const category of result.categories) {
+    const row = node('tr');
+    for (const value of [category.category, scoreText(category.score), `${category.numerator} / ${category.denominator}`, category.accounting.failed, category.accounting.missing, category.accounting.invalid]) row.append(node('td', { text: String(value) }));
+    body.append(row);
+  }
+  table.append(head, body); section.append(table); return section;
+}
 function pairData(view) {
   if (state.selected.length !== 2) return null;
   return Object.values(view.pairs).find((item) => item.left === state.selected[0] && item.right === state.selected[1])
@@ -263,7 +276,7 @@ function evalSurface(evalReport, view, candidateOverride = null) {
   const selectedIndex = names.indexOf(state.selected[0]); const compareName = state.selected.find((name) => name !== state.selected[0]); const compareIndex = compareName === undefined ? null : names.indexOf(compareName);
   const layout = node('div', { className: 'layout' }); const side = node('aside'); const content = node('div');
   side.append(candidateRail(candidates), candidateInspector(candidates, selectedIndex, 'prompt_template', compareIndex));
-  content.append(outcomeCards(evalReport, view, state.selected[0]), pairedBuckets(view), taskTable(evalReport, view)); layout.append(side, content); return layout;
+  content.append(outcomeCards(evalReport, view, state.selected[0]), categoryTable(evalReport, state.selected[0]), pairedBuckets(view), taskTable(evalReport, view)); layout.append(side, content); return layout;
 }
 function renderEval() {
   byId('report').append(evalSurface(report, payload.view)); const rawTask = fragment().get('task');
@@ -341,7 +354,7 @@ function renderTrajectory() {
   const layout = node('div', { className: 'layout' }); const side = node('aside'); const content = node('div'); side.append(trajectoryCandidateRail(), candidateInspector(report.candidates, report.candidates.indexOf(candidate), 'mutation_text'));
   if (resolution) {
     const resolutionCandidate = candidateForRef(resolution.candidate_ref.content_hash); content.append(trajectoryDiagnosis(resolution, resolutionCandidate));
-    if (resolution.eval_report) { const key = resolutionKey(resolution); const view = payload.view.eval_views[key]; state.selected = [resolution.eval_report.candidates[0].name]; content.append(node('h2', { text: `Hydrated evaluation · step ${resolution.step_index}, resolution ${resolution.resolution_index}` }), outcomeCards(resolution.eval_report, view, state.selected[0]), taskTable(resolution.eval_report, view)); }
+    if (resolution.eval_report) { const key = resolutionKey(resolution); const view = payload.view.eval_views[key]; state.selected = [resolution.eval_report.candidates[0].name]; content.append(node('h2', { text: `Hydrated evaluation · step ${resolution.step_index}, resolution ${resolution.resolution_index}` }), outcomeCards(resolution.eval_report, view, state.selected[0]), categoryTable(resolution.eval_report, state.selected[0]), taskTable(resolution.eval_report, view)); }
     else content.append(node('p', { className: 'panel', text: 'No hydrated evaluation is recorded for this exact resolution.' }));
   } else content.append(node('p', { className: 'panel', text: 'No evaluation resolutions are recorded.' }));
   layout.append(side, content); root.append(layout);

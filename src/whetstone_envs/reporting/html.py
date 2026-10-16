@@ -59,26 +59,6 @@ def _strict_embedded_json(value: Mapping[str, JsonValue]) -> str:
 
 
 def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
-    summaries: dict[str, JsonValue] = {}
-    matrices: dict[str, JsonValue] = {}
-    for result in report.results:
-        if isinstance(result, EvalSuccess):
-            summaries[result.candidate_name] = {
-                "kind": result.kind,
-                "numerator": result.numerator,
-                "denominator": result.denominator,
-                "score": result.score,
-                "accounting": result.accounting.model_dump(mode="json"),
-                "classification": result.classification,
-                "message": result.message,
-            }
-            matrices[result.candidate_name] = {
-                item.category: item.model_dump(mode="json")
-                for item in result.categories
-            }
-        else:
-            summaries[result.candidate_name] = result.model_dump(mode="json")
-
     pairs: dict[str, JsonValue] = {}
     names = [candidate.name for candidate in report.candidates]
     for left_index, left in enumerate(names):
@@ -105,8 +85,6 @@ def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
         for name in names
     }
     return {
-        "summaries": summaries,
-        "matrices": matrices,
         "pairs": pairs,
         "provider_errors": provider_errors,
     }

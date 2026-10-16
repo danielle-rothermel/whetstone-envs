@@ -72,28 +72,24 @@ exported_symbols = ["whetstone_envs.probes.normalize"]
 [[terms]]
 name = "evaluation observation"
 definition = """
-One task-repeat result classified as scored, failed, or missing. A scored \
-observation carries a binary score; failed and missing observations carry no \
-score."""
+One task-repeat result classified as scored, failed, missing, or invalid. \
+A scored observation carries a binary score; other states carry no score."""
 exported_symbols = [
-    "whetstone_envs.scoring.Observation",
-    "whetstone_envs.scoring.Outcome",
-    "whetstone_envs.scoring.scored",
-    "whetstone_envs.scoring.failed",
-    "whetstone_envs.scoring.missing",
+    "whetstone_envs.evidence.Observation",
+    "whetstone_envs.evidence.ObservationState",
 ]
 
 [[terms]]
-name = "score aggregate"
+name = "evaluation accounting"
 definition = """
-A task, category, or overall result containing an equal-weighted mean when \
-complete, contribution counts, and any child aggregates."""
+Counts of planned, scored, failed, missing, and invalid observations, with \
+scores formed by averaging scored repeats within each task and then averaging \
+tasks that have a score. Missing values remain distinct from numeric zero."""
 exported_symbols = [
-    "whetstone_envs.scoring.Aggregate",
-    "whetstone_envs.scoring.aggregate",
-    "whetstone_envs.scoring.aggregate_task",
-    "whetstone_envs.scoring.aggregate_category",
-    "whetstone_envs.scoring.aggregate_overall",
+    "whetstone_envs.evidence.RowAccounting",
+    "whetstone_envs.evidence.account_observations",
+    "whetstone_envs.evidence.two_stage_task_mean",
+    "whetstone_envs.evidence.summarize_categories",
 ]
 
 [[terms]]

@@ -159,7 +159,6 @@ button.selected {
 
 .cards,
 .buckets,
-.matrix,
 .timeline,
 .lineage {
   display: grid;
@@ -169,7 +168,6 @@ button.selected {
 
 .card,
 .bucket,
-.cell,
 .timeline button,
 .lineage button {
   padding: 0.55rem;
@@ -324,9 +322,7 @@ dialog::backdrop {
     display: flex;
   }
 
-  .matrix {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {

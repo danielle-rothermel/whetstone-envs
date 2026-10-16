@@ -17,9 +17,7 @@ execution-contract code:
   [**splitting**][instances-source] allocates deterministic named cohorts.
 - [**Probes**][probes-source] pair naive and ceiling templates,
   render public prompt inputs, and normalize predictions for evaluation.
-- [**Scoring**][scoring-source] represents scored, failed, and
-  missing observations and aggregates complete repeat matrices through task,
-  category, and overall levels.
+- [**Scoring**][scoring-source] provides normalized binary exact match.
 - [**Manifests**][manifests-source] pin generated pools with
   versioned identities and bounded canonical persistence.
 - [**C11 JSON canonicalization**][c11-source] provides deterministic RFC 8785
@@ -350,46 +348,11 @@ class ProbePair:
 
 ## Scoring
 
-[`whetstone_envs.scoring`][scoring-source] keeps failures and absent
-results distinct from binary scores. Aggregation exposes a mean only when the
-complete planned task/repeat matrix is present and scored.
-
-```python
-@verify(UNIQUE)
-class Outcome(StrEnum):
-    SCORED = "scored"
-    FAILED = "failed"
-    MISSING = "missing"
-
-@dataclass(frozen=True, slots=True)
-class Observation:
-    task_id: str
-    repeat_id: int
-    outcome: Outcome = Outcome.SCORED
-    score: int | None = None
-```
-
-```python
-@dataclass(frozen=True, slots=True)
-class Aggregate:
-    mean: float | None
-    usable: int
-    failed_count: int
-    missing_count: int
-    label: str | None = None
-    children: tuple["Aggregate", ...] = field(default_factory=tuple)
-
-def aggregate(
-    observations: Iterable[Observation],
-    task_categories: Mapping[str, tuple[str, ...]],
-    *,
-    expected_repeat_ids: Iterable[int],
-) -> Aggregate: ...
-```
-
-`exact_match`, `scored`, `failed`, and `missing` provide the primary leaf-level
-constructors. `aggregate_task`, `aggregate_category`, and `aggregate_overall`
-expose the individual aggregation steps when callers already own the hierarchy.
+[`whetstone_envs.scoring`][scoring-source] provides normalized binary
+`exact_match(prediction, gold)`. Task-specific graders belong to their task
+packages. Runtime scoring is supplied explicitly with the optimization problem.
+Saved evidence owns observation states, row accounting, and task/category
+summaries; reports validate the recorded binary scores without regrading them.
 
 ## Manifests
 

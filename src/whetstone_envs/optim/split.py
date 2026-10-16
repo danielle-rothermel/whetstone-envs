@@ -1,25 +1,7 @@
 from __future__ import annotations
 
-#: The two optimizers with a train/val concept, named individually because
-#: they do not share a rule: GEPA must partition the internal split
-#: exactly, MIPROv2 need only fit inside it.
-GEPA_OPTIMIZER = "gepa"
-MIPROV2_OPTIMIZER = "miprov2"
-
-#: The optimizers that bootstrap or reflect on one set of tasks and score
-#: on another, and so must state an explicit train/val partition. COPRO,
-#: the nulls, and Codex-direct have no such concept, so supplying a split
-#: for them is refused rather than ignored.
-TRAIN_VAL_OPTIMIZERS = (GEPA_OPTIMIZER, MIPROV2_OPTIMIZER)
-
-#: COPRO itself, and the control whose search *is* COPRO's.
-
-
-#: The smallest breadth upstream ``CoproControl`` accepts. A single draft
-#: per step leaves nothing to select between, so upstream refuses it.
 MIN_COPRO_BREADTH = 2
 
-#: The smallest depth a search can have: one round of proposals.
 MIN_COPRO_DEPTH = 1
 
 
@@ -72,11 +54,8 @@ def require_disjoint_split(
 
 
 __all__ = [
-    "GEPA_OPTIMIZER",
     "MIN_COPRO_BREADTH",
     "MIN_COPRO_DEPTH",
-    "MIPROV2_OPTIMIZER",
-    "TRAIN_VAL_OPTIMIZERS",
     "partition_internal_split",
     "require_disjoint_split",
 ]

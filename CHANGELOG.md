@@ -102,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- Unused scoring observations and aggregation hierarchy, the retired C19 report
+  guide data, the pool sequence wrapper, and unused optimizer-name constants.
+  Manifest-only validation now lives with `Manifest`.
+
 - Standalone C19 evaluation, its launcher and CLI commands, and C19-specific
   report guides, matrices, filters, and layouts. Evidence inspection displays
   recorded category labels and prompt inputs without task-specific parsing.

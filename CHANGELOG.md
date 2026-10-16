@@ -92,6 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- Standalone C19 evaluation, its launcher and CLI commands, and C19-specific
+  report guides, matrices, filters, and layouts. Evidence inspection displays
+  recorded category labels and prompt inputs without task-specific parsing.
 - The exploration-specific `optim.study` package, registered protocols,
   study CLI, optimizer fidelity audits, and null-control optimizers. Remove
   study-only family manifest/rehearsal hooks, retry telemetry counters, and

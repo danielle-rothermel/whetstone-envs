@@ -96,36 +96,15 @@ function invalidFragment(message) {
   notice.textContent = `Fragment notice: ${message}. No nearby item was selected.`;
 }
 
-function infoRows(title, rows) {
-  const section = node('section');
-  section.append(node('h3', { text: title }));
-  const list = node('dl');
-  for (const item of rows) list.append(node('dt', { text: item.name }), node('dd', { text: item.description }));
-  section.append(list);
-  return section;
-}
-function renderAbout() {
-  const dialog = byId('about-dialog'); clear(dialog);
-  dialog.append(
-    node('h2', { id: 'about-title', text: 'About C19' }), node('p', { text: payload.info.objective }),
-    infoRows('Public inputs and private gold', payload.info.public_inputs), infoRows('Grid sizes', payload.info.sizes),
-    infoRows('Scenarios', payload.info.scenarios), infoRows('LRFPDT actions and no-op rules', payload.info.actions),
-    infoRows('Grid tokens and coordinates', payload.info.tokens), infoRows('Facts and exact answer forms', payload.info.facts),
-    node('h3', { text: 'Normalization and scoring' }), node('p', { text: payload.info.scoring }),
-    node('h3', { text: 'Default pool and split roles' }), node('p', { text: payload.info.pool }),
-    infoRows('Candidate terminology', payload.info.terminology), textBlock('Naive template', payload.info.naive_template),
-    textBlock('Ceiling template', payload.info.ceiling_template), button('Close', () => dialog.close()),
-  );
-}
 function renderHeader() {
   const header = byId('run-header'); clear(header);
   const run = payload.kind === 'eval' ? report.run : null;
   header.append(
-    node('h1', { text: `C19 · ${payload.kind === 'eval' ? run.run_id : report.run_id}` }),
+    node('h1', { text: `${payload.kind === 'eval' ? run.run_id : report.run_id}` }),
     node('span', { className: 'status', text: `Status: ${payload.kind === 'eval' ? report.results.map((item) => item.kind).join(', ') : report.terminal_status}` }),
     node('span', { text: payload.kind === 'eval' ? `${run.role} · ${report.tasks.length} tasks × ${run.repeats} repeats` : `${report.steps.length} steps · ${report.resolutions.length} resolutions` }),
     node('strong', { className: 'notice', text: 'PRIVATE ARTIFACT — contains gold, full outputs, prompts, and candidate text' }),
-    button('About C19', () => byId('about-dialog').showModal()), button('Provenance', showProvenance),
+    button('Provenance', showProvenance),
   );
 }
 function showProvenance() {
@@ -212,19 +191,6 @@ function outcomeCards(evalReport, view, name) {
   }
   section.append(cards); return section;
 }
-function matrix(evalReport, view) {
-  const section = panel('C19 scenario × size × fact matrix'); const grid = node('div', { className: 'matrix' });
-  for (const size of ['small', 'medium']) for (const scenario of ['navigation', 'manipulation', 'door']) for (const fact of ['coordinate', 'heading', 'front', 'carrying']) {
-    const label = `${scenario}|${size}|${fact}`; const summaries = state.selected.map((name) => view.matrices[name] && view.matrices[name][label]); const applicable = summaries.some(Boolean);
-    const cell = button(`${size} · ${scenario} · ${fact}`, () => { if (applicable) { state.filters = { ...state.filters, scenario, size, fact }; saveFragment(); render(); } }, 'cell');
-    if (!applicable) cell.append(node('div', { text: 'N/A', className: 'subtle' }));
-    else for (let index = 0; index < summaries.length; index += 1) {
-      const item = summaries[index]; cell.append(node('div', { text: item ? `${state.selected[index]}: ${item.numerator}/${item.denominator} · ${scoreText(item.score)} · F${item.accounting.failed} M${item.accounting.missing}` : `${state.selected[index]}: N/A` }));
-    }
-    grid.append(cell);
-  }
-  section.append(grid); return section;
-}
 function pairData(view) {
   if (state.selected.length !== 2) return null;
   return Object.values(view.pairs).find((item) => item.left === state.selected[0] && item.right === state.selected[1])
@@ -241,7 +207,7 @@ function pairedBuckets(view) {
 }
 function filterControls() {
   const bar = node('div', { className: 'toolbar' });
-  const definitions = [['scenario', ['', 'navigation', 'manipulation', 'door']], ['size', ['', 'small', 'medium']], ['fact', ['', 'coordinate', 'heading', 'front', 'carrying']], ['row_state', ['', 'scored', 'failed', 'missing', 'invalid']], ['score', ['', 'pass', 'wrong']], ['provider', ['', 'provider-error', 'no-provider-error']]];
+  const definitions = [['row_state', ['', 'scored', 'failed', 'missing', 'invalid']], ['score', ['', 'pass', 'wrong']], ['provider', ['', 'provider-error', 'no-provider-error']]];
   for (const [key, values] of definitions) {
     const select = node('select', { 'aria-label': key }); for (const value of values) select.append(node('option', { value, text: value || `all ${key.replace('_', ' ')}` }));
     select.value = state.filters[key] || ''; select.addEventListener('change', () => { state.filters[key] = select.value; saveFragment(); render(); }); bar.append(select);
@@ -256,10 +222,8 @@ function taskRows(evalReport, view) {
   if (pair) { order[`${pair.left} only`] = state.selected[0] === pair.left ? 2 : 1; order[`${pair.right} only`] = state.selected[0] === pair.right ? 2 : 1; }
   order['both wrong'] = 3; order['both correct'] = 4;
   return evalReport.observations.filter((row) => selected.has(row.candidate_name)).filter((row) => {
-    const facet = view.task_facets[row.task_id]; const bucket = buckets.get(`${row.task_id}:${row.seed_index}`);
-    return (!state.bucket || bucket === state.bucket) && (!state.filters.scenario || facet.scenario === state.filters.scenario)
-      && (!state.filters.size || facet.size === state.filters.size) && (!state.filters.fact || facet.fact === state.filters.fact)
-      && (!state.filters.row_state || row.state === state.filters.row_state) && (!state.filters.score || (state.filters.score === 'pass' ? row.score === 1 : row.score === 0))
+    const bucket = buckets.get(`${row.task_id}:${row.seed_index}`);
+    return (!state.bucket || bucket === state.bucket) && (!state.filters.row_state || row.state === state.filters.row_state) && (!state.filters.score || (state.filters.score === 'pass' ? row.score === 1 : row.score === 0))
       && (!state.filters.provider || (state.filters.provider === 'provider-error' ? row.provider_error !== null : row.provider_error === null))
       && (!state.filters.task_id || row.task_id.includes(state.filters.task_id));
   }).sort((a, b) => (order[buckets.get(`${a.task_id}:${a.seed_index}`)] ?? 5) - (order[buckets.get(`${b.task_id}:${b.seed_index}`)] ?? 5)
@@ -281,7 +245,8 @@ function taskTable(evalReport, view) {
 function rowState(row) { return row.state !== 'scored' ? `${row.state} · ${row.failure_code || 'no code'}` : (row.score === 1 ? '✓ correct' : '✕ wrong'); }
 function openTask(evalReport, task, seedIndex) {
   state.task = `${task.task_id}:${seedIndex}`; saveFragment(); const dialog = byId('task-dialog'); clear(dialog);
-  dialog.append(node('h2', { id: 'task-title', text: `${task.task_id} · repeat ${seedIndex}` }), node('p', { text: `hash ${task.task_hash} · seed ${task.seed} · categories ${task.categories.join(', ')}` }), textBlock('ASCII grid', task.prompt_inputs.grid), textBlock('Action script', task.prompt_inputs.command), textBlock('Question', task.prompt_inputs.question), textBlock('Private gold', task.gold));
+  dialog.append(node('h2', { id: 'task-title', text: `${task.task_id} · repeat ${seedIndex}` }), node('p', { text: `hash ${task.task_hash} · seed ${task.seed} · categories ${task.categories.join(', ')}` }), textBlock('Private gold', task.gold));
+  for (const [name, value] of Object.entries(task.prompt_inputs)) dialog.append(textBlock(name, value));
   const rows = evalReport.observations.filter((item) => item.task_id === task.task_id && item.seed_index === seedIndex && state.selected.includes(item.candidate_name));
   const tabs = node('div', { className: 'tabs' }); const details = node('div', { className: 'detail-grid' });
   rows.forEach((item, index) => {
@@ -298,7 +263,7 @@ function evalSurface(evalReport, view, candidateOverride = null) {
   const selectedIndex = names.indexOf(state.selected[0]); const compareName = state.selected.find((name) => name !== state.selected[0]); const compareIndex = compareName === undefined ? null : names.indexOf(compareName);
   const layout = node('div', { className: 'layout' }); const side = node('aside'); const content = node('div');
   side.append(candidateRail(candidates), candidateInspector(candidates, selectedIndex, 'prompt_template', compareIndex));
-  content.append(outcomeCards(evalReport, view, state.selected[0]), matrix(evalReport, view), pairedBuckets(view), taskTable(evalReport, view)); layout.append(side, content); return layout;
+  content.append(outcomeCards(evalReport, view, state.selected[0]), pairedBuckets(view), taskTable(evalReport, view)); layout.append(side, content); return layout;
 }
 function renderEval() {
   byId('report').append(evalSurface(report, payload.view)); const rawTask = fragment().get('task');
@@ -376,14 +341,14 @@ function renderTrajectory() {
   const layout = node('div', { className: 'layout' }); const side = node('aside'); const content = node('div'); side.append(trajectoryCandidateRail(), candidateInspector(report.candidates, report.candidates.indexOf(candidate), 'mutation_text'));
   if (resolution) {
     const resolutionCandidate = candidateForRef(resolution.candidate_ref.content_hash); content.append(trajectoryDiagnosis(resolution, resolutionCandidate));
-    if (resolution.eval_report) { const key = resolutionKey(resolution); const view = payload.view.eval_views[key]; state.selected = [resolution.eval_report.candidates[0].name]; content.append(node('h2', { text: `Hydrated evaluation · step ${resolution.step_index}, resolution ${resolution.resolution_index}` }), outcomeCards(resolution.eval_report, view, state.selected[0]), matrix(resolution.eval_report, view), taskTable(resolution.eval_report, view)); }
+    if (resolution.eval_report) { const key = resolutionKey(resolution); const view = payload.view.eval_views[key]; state.selected = [resolution.eval_report.candidates[0].name]; content.append(node('h2', { text: `Hydrated evaluation · step ${resolution.step_index}, resolution ${resolution.resolution_index}` }), outcomeCards(resolution.eval_report, view, state.selected[0]), taskTable(resolution.eval_report, view)); }
     else content.append(node('p', { className: 'panel', text: 'No hydrated evaluation is recorded for this exact resolution.' }));
   } else content.append(node('p', { className: 'panel', text: 'No evaluation resolutions are recorded.' }));
   layout.append(side, content); root.append(layout);
 }
 function restoreFilters() {
-  const params = fragment(); for (const key of ['scenario', 'size', 'fact', 'row_state', 'score', 'provider', 'task_id']) if (params.has(key)) state.filters[key] = params.get(key); state.bucket = params.get('bucket');
+  const params = fragment(); for (const key of ['row_state', 'score', 'provider', 'task_id']) if (params.has(key)) state.filters[key] = params.get(key); state.bucket = params.get('bucket');
 }
 function render() { clear(byId('report')); if (payload.kind === 'eval') renderEval(); else renderTrajectory(); }
 
-renderAbout(); renderHeader(); restoreFilters(); render();
+renderHeader(); restoreFilters(); render();

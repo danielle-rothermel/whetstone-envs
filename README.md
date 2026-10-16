@@ -40,21 +40,17 @@ execution-contract code:
 - **Artifacts** owns run directories, the shared default output path, and
   errors carrying the directory of a failed run.
 - [**Reporting**][reporting-source] provides terminal and self-contained HTML
-  inspection plus CLI dispatch to standalone evaluation.
+  inspection of saved evidence.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
 3.13 or 3.14 and pins published `whetstone-ai==0.1.17`.
 
-Standalone C19 execution lives in `whetstone_envs.evaluation` and requires the
-same `optim` extra. `evaluation.spec` validates candidate inputs and run
-settings; `evaluation.run` prepares tasks, configures providers, executes
-candidates, and publishes reports. `optim.extraction` reads Whetstone runtime
-evidence into portable reports for evaluation and optimizer execution.
-Reporting reads those portable reports without importing the runtime stack.
-`evaluation.runtime` owns shared provider policy, transport binding, and engine
-assembly for standalone evaluation, optimizer execution, and Codex rebuilding.
+`optim.extraction` reads Whetstone runtime evidence into portable reports.
+Reporting reads those reports without importing the runtime stack.
+`evaluation.runtime` owns shared engine assembly for optimizer execution
+and Codex rebuilding.
 
 ## Installation
 
@@ -162,41 +158,26 @@ run_optimizer(RunSpec(optimizer=CoproSettings(), transport=TransportKind.FAKE))
 
 ## Evaluation and trajectory reports
 
-Explain C19, run a standalone fake evaluation, and inspect the saved report:
+Inspect saved evaluation and optimizer reports without executing tasks:
 
 ```bash
-uv run --extra optim whetstone-eval info c19 --show-templates
-uv run --extra optim whetstone-eval run \
-  --family c19 --candidate naive --candidate ceiling \
-  --transport fake --role internal --split-sizes 20,20,0 --repeats 1
-uv run --extra optim whetstone-eval summary RUN_DIR
-uv run --extra optim whetstone-eval failures RUN_DIR
-uv run --extra optim whetstone-eval task RUN_DIR TASK_ID
-uv run --extra optim whetstone-eval compare RUN_DIR naive ceiling
-uv run --extra optim whetstone-eval html RUN_DIR
+uv run whetstone-eval summary RUN_DIR
+uv run whetstone-eval failures RUN_DIR
+uv run whetstone-eval task RUN_DIR TASK_ID
+uv run whetstone-eval compare RUN_DIR CANDIDATE_A CANDIDATE_B
+uv run whetstone-eval html RUN_DIR
+uv run whetstone-eval trajectory RUN_DIR
+uv run whetstone-eval trajectory RUN_DIR --show-candidates
+uv run whetstone-eval trajectory-html RUN_DIR
 ```
 
-`--candidate-file NAME=PATH` adds a validated UTF-8 prompt template.
-`--role` selects the split to evaluate: `internal`, `official`, or
-`held_out`. Official and held-out evidence intentionally carries no reward,
-and each role reports against its own tasks and eval config hash. The
-held-out split is optional, so `--role held_out` requires a positive
-third `--split-sizes` entry and is refused by name otherwise. Standalone runs publish `runtime.sqlite` and a bounded 128 MiB
-canonical `eval-report.json`. Optimizer runs additionally publish
-`trajectory-report.json` under the same bound. Reports use
-`whetstone_envs.eval_report/v4` and `whetstone_envs.trajectory_report/v3`,
-with no spend fields. Inspect trajectories with:
-
-```bash
-uv run --extra optim whetstone-eval trajectory RUN_DIR
-uv run --extra optim whetstone-eval trajectory RUN_DIR --show-candidates
-uv run --extra optim whetstone-eval trajectory-html RUN_DIR
-```
+Reports are bounded to 128 MiB and use `whetstone_envs.eval_report/v4`
+and `whetstone_envs.trajectory_report/v3`.
 
 Both HTML commands validate the strict JSON report and atomically replace a
 deterministic `eval-report.html` or `trajectory-report.html`. Each output is a
 portable single file that opens directly through `file://`; it embeds its CSS,
-classic JavaScript, C19 guide, and report data and performs no network access.
+classic JavaScript and report data and performs no network access.
 Regenerate it at any time from the authoritative JSON.
 
 Inspection reads report JSON only and never opens SQLite. JSON and HTML reports

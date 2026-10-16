@@ -9,7 +9,6 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from whetstone_envs.c19._info import C19_INFO, NamedDescription
 from whetstone_envs.evidence import (
     EvalReport,
     EvalSuccess,
@@ -21,37 +20,7 @@ from whetstone_envs.evidence import (
 from whetstone_envs.reporting._comparison import comparison_label
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
-
-
-def _description_table(title: str, rows: Iterable[NamedDescription]) -> Table:
-    table = Table(title=title, box=None, show_header=False)
-    table.add_column(style="bold")
-    table.add_column()
-    for row in rows:
-        table.add_row(row.name, row.description)
-    return table
-
-
-def render_c19_info(console: Console, *, show_templates: bool) -> None:
-    console.print(Panel(C19_INFO.objective, title="C19"))
-    for title, rows in (
-        ("Public inputs and private gold", C19_INFO.public_inputs),
-        ("Grid sizes", C19_INFO.sizes),
-        ("Scenario families", C19_INFO.scenarios),
-        ("Actions and no-op rules", C19_INFO.actions),
-        ("Grid tokens and coordinates", C19_INFO.tokens),
-        ("Facts and exact answer forms", C19_INFO.facts),
-    ):
-        console.print(_description_table(title, rows))
-    console.print(Panel(C19_INFO.scoring, title="Normalization and scoring"))
-    console.print(Panel(C19_INFO.pool, title="Default pool and split roles"))
-    console.print(
-        _description_table("Candidate terminology", C19_INFO.terminology)
-    )
-    if show_templates:
-        console.print(Panel(Text(C19_INFO.naive_template), title="naive"))
-        console.print(Panel(Text(C19_INFO.ceiling_template), title="ceiling"))
+    from collections.abc import Mapping
 
 
 def _accounting_text(result: EvalSuccess) -> str:
@@ -94,7 +63,7 @@ def render_summary(console: Console, report: EvalReport) -> None:
                 Text(result.message),
             )
     console.print(table)
-    categories = Table(title="C19 categories")
+    categories = Table(title="Categories")
     categories.add_column("candidate")
     categories.add_column("category")
     categories.add_column("score")
@@ -115,33 +84,11 @@ def render_summary(console: Console, report: EvalReport) -> None:
     console.print(categories)
 
 
-def _matches(  # noqa: PLR0913
-    row: Observation,
-    report: EvalReport,
-    *,
-    candidate: str | None,
-    scenario: str | None,
-    size: str | None,
-    fact: str | None,
-) -> bool:
-    if candidate is not None and row.candidate_name != candidate:
-        return False
-    task = report.tasks[row.task_index]
-    parts = task.categories[0].split("|")
-    return all(
-        expected is None or actual == expected
-        for actual, expected in zip(parts, (scenario, size, fact), strict=True)
-    )
-
-
-def render_failures(  # noqa: PLR0913
+def render_failures(
     console: Console,
     report: EvalReport,
     *,
     candidate: str | None = None,
-    scenario: str | None = None,
-    size: str | None = None,
-    fact: str | None = None,
 ) -> None:
     if candidate is not None and candidate not in {
         item.name for item in report.candidates
@@ -152,14 +99,9 @@ def render_failures(  # noqa: PLR0913
         table.add_column(column)
     selected: list[tuple[int, str, Observation]] = []
     for ordinal, row in enumerate(report.observations):
-        if not _matches(
-            row,
-            report,
-            candidate=candidate,
-            scenario=scenario,
-            size=size,
-            fact=fact,
-        ) or (row.state is ObservationState.SCORED and row.score == 1.0):
+        if (candidate is not None and row.candidate_name != candidate) or (
+            row.state is ObservationState.SCORED and row.score == 1.0
+        ):
             continue
         outcome = (
             "incorrect"
@@ -446,7 +388,6 @@ def _format_budget(
 
 
 __all__ = [
-    "render_c19_info",
     "render_compare",
     "render_failures",
     "render_summary",

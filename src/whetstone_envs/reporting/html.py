@@ -5,13 +5,11 @@ import hashlib
 import json
 import os
 import tempfile
-from dataclasses import asdict
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from whetstone_envs.artifacts import validate_output_root
-from whetstone_envs.c19._info import C19_INFO
 from whetstone_envs.evidence import (
     EvalReport,
     EvalSuccess,
@@ -29,7 +27,6 @@ if TYPE_CHECKING:
 EVAL_HTML_NAME = "eval-report.html"
 TRAJECTORY_HTML_NAME = "trajectory-report.html"
 _ASSET_PACKAGE = "whetstone_envs.reporting.assets"
-_FACET_COUNT = 3
 
 
 def _asset(name: str) -> str:
@@ -61,19 +58,7 @@ def _strict_embedded_json(value: Mapping[str, JsonValue]) -> str:
     return escaped
 
 
-def _task_facets(categories: tuple[str, ...]) -> dict[str, str]:
-    parts = categories[0].split("|")
-    if len(parts) != _FACET_COUNT:
-        raise ValueError(
-            "C19 report task requires scenario|size|fact category"
-        )
-    return dict(zip(("scenario", "size", "fact"), parts, strict=True))
-
-
 def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
-    task_facets = {
-        task.task_id: _task_facets(task.categories) for task in report.tasks
-    }
     summaries: dict[str, JsonValue] = {}
     matrices: dict[str, JsonValue] = {}
     for result in report.results:
@@ -120,7 +105,6 @@ def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
         for name in names
     }
     return {
-        "task_facets": task_facets,
         "summaries": summaries,
         "matrices": matrices,
         "pairs": pairs,
@@ -288,7 +272,6 @@ def _payload(
     return {
         "kind": kind,
         "report": report.model_dump(mode="json"),
-        "info": asdict(C19_INFO),
         "view": (
             _eval_view(report)
             if isinstance(report, EvalReport)

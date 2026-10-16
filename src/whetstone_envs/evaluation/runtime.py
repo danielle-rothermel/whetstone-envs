@@ -7,24 +7,26 @@ from typing import TYPE_CHECKING
 
 from dr_providers import ProviderKind
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
+from whetstone.eval.eval_procedure import EvalProcedureRunner
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
+from whetstone.experiment.candidate import TemplateRenderContract
 from whetstone.experiment.env import Experiment
 from whetstone.experiment.sampling import INTERNAL_EVAL
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
-from whetstone_envs.optim.families import FamilySpec
-from whetstone_envs.optim.provider import (
+from whetstone_envs.evaluation.provider import (
     RetryingTransport,
     bind_openrouter_transport,
-    fake_gold_by_prompt,
     fake_transport_factory,
     hardened_execution_policy,
     widened_execution_policy,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from dr_store import ObjectStore
 
 
@@ -73,7 +75,9 @@ def evaluation_execution_policy(
 @dataclass(frozen=True, slots=True)
 class PreparedEvaluationRuntime:
     experiment: Experiment
-    family: FamilySpec
+    eval_runner: EvalProcedureRunner
+    mutation_field: str
+    render_contract: TemplateRenderContract
     reference: ReferenceEvalRuntimeConfig
     execution_policy: ProviderExecutionPolicy
     concurrency: int
@@ -83,9 +87,9 @@ class PreparedEvaluationRuntime:
     def build_engine(self, store: ObjectStore) -> RuntimeEvalEngine:
         # Whetstone's reference builder cannot apply our policy or concurrency.
         driver = GraphRolloutEvalDriver(
-            eval_runner=self.family.eval_runner(),
-            mutation_field=self.family.mutation_field,
-            render_contract=self.family.render_contract(),
+            eval_runner=self.eval_runner,
+            mutation_field=self.mutation_field,
+            render_contract=self.render_contract,
             transport_factory=self.transport_factory,
         )
         return RuntimeEvalEngine(
@@ -100,10 +104,13 @@ class PreparedEvaluationRuntime:
         )
 
 
-def prepare_evaluation_runtime(
+def prepare_evaluation_runtime(  # noqa: PLR0913
     *,
     experiment: Experiment,
-    family: FamilySpec,
+    eval_runner: EvalProcedureRunner,
+    mutation_field: str,
+    render_contract: TemplateRenderContract,
+    fake_replies: Mapping[str, str],
     reference: ReferenceEvalRuntimeConfig,
     transport: TransportKind,
     concurrency: int,
@@ -115,16 +122,12 @@ def prepare_evaluation_runtime(
     if transport is TransportKind.OPENROUTER:
         live_transport, transport_factory = bind_openrouter_transport(policy)
     else:
-        transport_factory = fake_transport_factory(
-            gold_by_prompt=fake_gold_by_prompt(
-                experiment,
-                render_contract=family.render_contract(),
-                ceiling_template=family.probes.ceiling_template,
-            )
-        )
+        transport_factory = fake_transport_factory(replies=fake_replies)
     return PreparedEvaluationRuntime(
         experiment=experiment,
-        family=family,
+        eval_runner=eval_runner,
+        mutation_field=mutation_field,
+        render_contract=render_contract,
         reference=reference,
         execution_policy=policy,
         concurrency=concurrency,

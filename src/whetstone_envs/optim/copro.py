@@ -26,8 +26,8 @@ if TYPE_CHECKING:
     from whetstone.optim.proposal.proposer import ProposerTransport
     from whetstone.provider.language_model import PlainPromptAdapter
 
-    from whetstone_envs.optim.families import (
-        FamilySpec,
+    from whetstone_envs.optim.problem import (
+        OptimizationProblem,
     )
     from whetstone_envs.optim.proposals import ProposalRuntime
     from whetstone_envs.optim.spec import (
@@ -40,29 +40,32 @@ from whetstone_envs.optim._bindings import CoproBinding
 COPRO_EXECUTOR_SCHEMA_SUFFIX = "copro_proposal_executor"
 
 
-def _proposal_contract(family: FamilySpec) -> CoproProposalContractRecord:
-    placeholders = ", ".join(f"{{{field}}}" for field in family.prompt_fields)
+def _proposal_contract(
+    problem: OptimizationProblem,
+) -> CoproProposalContractRecord:
+    placeholders = ", ".join(
+        f"{{{field}}}" for field in problem.contract.prompt_fields
+    )
     return CoproProposalContractRecord(
-        target_name=f"{family.family_id}_prompt_template",
-        task_context=family.task_context,
+        target_name=f"{problem.contract.namespace}_prompt_template",
+        task_context=problem.task_context,
         output_rule=(
             f"Return one non-empty prompt template that uses {placeholders}."
         ),
     )
 
 
-def _copro_adapter(  # noqa: PLR0913
+def _copro_adapter(
     *,
     engine: EvalEngine,
     control: CoproControl,
     prompt_adapter: PlainPromptAdapter,
     proposer_transport: ProposerTransport | None,
-    family: FamilySpec,
-    extra_proposal_bodies: tuple[str, ...] = (),
+    problem: OptimizationProblem,
 ) -> CoproAdapter:
     transport = proposer_transport or FakeProposerTransport(
         {},
-        default=family.proposal_bodies(extra_proposal_bodies),
+        default=problem.proposal_bodies,
         execution_policy_hash=engine.execution_policy_identity_hash(),
         prompt_adapter_identity_hash=prompt_adapter_identity_hash(
             prompt_adapter
@@ -73,7 +76,9 @@ def _copro_adapter(  # noqa: PLR0913
         transport=transport,
         proposal_executor=build_inline_proposal_executor(
             policy_identity_hash=compute_identity_hash(
-                schema=(f"{family.namespace}.{COPRO_EXECUTOR_SCHEMA_SUFFIX}"),
+                schema=(
+                    f"{problem.contract.namespace}.{COPRO_EXECUTOR_SCHEMA_SUFFIX}"
+                ),
                 schema_version=1,
                 payload={"mode": "inline"},
             ),
@@ -86,14 +91,14 @@ def bind_copro(
     settings: CoproSettings,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     proposer: ProposalRuntime,
 ) -> CoproBinding:
     defaults = CoproInjectedDefaults(
         prompt_model=ProposerConfig(
             provider_call_config=proposer.route.ref, temperature=None
         ),
-        proposal_contract=_proposal_contract(family),
+        proposal_contract=_proposal_contract(problem),
         eval_config_ref=engine.eval_config_ref,
         eval_role=EvalRole.INTERNAL,
         provider_execution_policy_ref=engine.provider_execution_policy_ref,
@@ -114,7 +119,6 @@ def bind_copro(
             control=control,
             prompt_adapter=proposer.prompt_adapter,
             proposer_transport=proposer.transport,
-            family=family,
-            extra_proposal_bodies=settings.extra_proposal_bodies,
+            problem=problem,
         ),
     )

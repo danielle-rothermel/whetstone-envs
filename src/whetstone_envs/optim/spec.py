@@ -4,16 +4,14 @@ from enum import UNIQUE, StrEnum, auto, verify
 from pathlib import Path
 from typing import Annotated, Literal
 
-from dr_providers import ReasoningEffort
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from whetstone_envs.evaluation.concurrency import DEFAULT_PROVIDER_CONCURRENCY
 from whetstone_envs.evaluation.runtime import TransportKind
 from whetstone_envs.optim.codex import (
     CODEX_DEFAULT_BINARY,
     CodexReasoningEffort,
 )
-from whetstone_envs.optim.concurrency import DEFAULT_PROVIDER_CONCURRENCY
-from whetstone_envs.optim.families import FamilyId
 from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_FULL_EVAL_STEPS,
     DEFAULT_MIPROV2_MINIBATCH,
@@ -25,7 +23,6 @@ from whetstone_envs.optim.split import MIN_COPRO_BREADTH, MIN_COPRO_DEPTH
 
 DEFAULT_COPRO_BREADTH = 2
 DEFAULT_COPRO_DEPTH = 1
-DEFAULT_SPLIT_SIZES = (2, 2, 0)
 GEPA_DEFAULT_SEED = 0
 MIPROV2_DEFAULT_SEED = 9
 
@@ -53,7 +50,6 @@ class CoproSettings(_RunInput):
     kind: Literal[OptimizerKind.COPRO] = OptimizerKind.COPRO
     breadth: int = Field(default=DEFAULT_COPRO_BREADTH, ge=MIN_COPRO_BREADTH)
     depth: int = Field(default=DEFAULT_COPRO_DEPTH, ge=MIN_COPRO_DEPTH)
-    extra_proposal_bodies: tuple[str, ...] = ()
 
 
 class GepaSettings(_RunInput):
@@ -105,56 +101,17 @@ OptimizerSettings = Annotated[
 class RunSpec(_RunInput):
     optimizer: OptimizerSettings
     transport: TransportKind
-    family: FamilyId = FamilyId.C19
-    split_sizes: tuple[
-        Annotated[int, Field(ge=1)],
-        Annotated[int, Field(ge=1)],
-        Annotated[int, Field(ge=0)],
-    ] = DEFAULT_SPLIT_SIZES
     output_dir: Path | None = None
     run_id: str | None = None
-    model: str = "openai/gpt-4.1-nano"
-    task_reasoning_effort: ReasoningEffort | None = None
     proposer_model: str | None = None
-    num_seeds: int = Field(default=1, ge=1)
-    n_per_category: int | None = Field(default=None, ge=1)
-    pool_seed_start: int | None = None
     provider_concurrency: int = Field(
         default=DEFAULT_PROVIDER_CONCURRENCY, ge=1
     )
-
-    @model_validator(mode="after")
-    def _validate_optimizer(self) -> RunSpec:
-        settings = self.optimizer
-        if isinstance(settings, (GepaSettings, Miprov2Settings)):
-            size = settings.partition.train_size + settings.partition.val_size
-            if size > self.split_sizes[0]:
-                raise ValueError(
-                    "train_size + val_size exceeds the internal split"
-                )
-            if (
-                isinstance(settings, GepaSettings)
-                and size != self.split_sizes[0]
-            ):
-                raise ValueError(
-                    "GEPA train_size + val_size must cover "
-                    "the internal split exactly"
-                )
-        if (
-            isinstance(settings, CoproSettings)
-            and settings.extra_proposal_bodies
-            and self.transport is not TransportKind.FAKE
-        ):
-            raise ValueError(
-                "extra_proposal_bodies applies only to --transport fake"
-            )
-        return self
 
 
 __all__ = [
     "DEFAULT_COPRO_BREADTH",
     "DEFAULT_COPRO_DEPTH",
-    "DEFAULT_SPLIT_SIZES",
     "GEPA_DEFAULT_SEED",
     "MIPROV2_DEFAULT_SEED",
     "CodexSettings",

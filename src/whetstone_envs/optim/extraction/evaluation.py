@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from whetstone.eval import EvalResult
     from whetstone.experiment.sampling import EvalSplit
 
-    from whetstone_envs.optim.experiment import PreparedExperiment
+    from whetstone_envs.evaluation.experiment import PreparedSplitExperiment
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +62,7 @@ class EvaluationCandidate:
 
 
 def _eval_split_for_role(
-    prepared: PreparedExperiment, role: EvalRoleName
+    prepared: PreparedSplitExperiment, role: EvalRoleName
 ) -> EvalSplit:
     configs = prepared.experiment.eval_configs
     if role == "internal":
@@ -325,7 +325,7 @@ class _TaskPlan:
 
 
 def _select_task_plan(
-    prepared: PreparedExperiment,
+    prepared: PreparedSplitExperiment,
     role: EvalRoleName,
     task_hashes: tuple[str, ...] | None,
 ) -> _TaskPlan:
@@ -381,12 +381,10 @@ def _select_task_plan(
 def project_eval_report(  # noqa: PLR0913
     *,
     store: ObjectStore,
-    prepared: PreparedExperiment,
+    prepared: PreparedSplitExperiment,
     run_id: str,
     transport: str,
-    model: str,
     role: EvalRoleName,
-    split_sizes: tuple[int, int, int],
     mutation_field: str,
     candidates: tuple[EvaluationCandidate, ...],
     results: tuple[EvalResult, ...],
@@ -449,9 +447,15 @@ def project_eval_report(  # noqa: PLR0913
             run_id=run_id,
             family=prepared.experiment.env_name,
             transport=transport,
-            model=model,
+            model=str(
+                prepared.experiment.rollout_graph.provider_call_config.definition.route.model
+            ),
             role=role,
-            split_sizes=split_sizes,
+            split_sizes=(
+                len(prepared.split.splits["internal_eval"].instances),
+                len(prepared.split.splits["official"].instances),
+                len(prepared.split.splits["held_out"].instances),
+            ),
             repeats=eval_split.seed_plan.num_seeds,
             dataset_revision=eval_split.task_set.dataset_revision,
             graph_hash=prepared.experiment.rollout_graph.graph_hash,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from dr_graph import GraphConfig, graph_hash
 from dr_providers import (
@@ -50,23 +50,11 @@ from whetstone.experiment.sampling import (
     derive_eval_split,
 )
 
-from whetstone_envs.c19 import PROBES
+from whetstone_envs.evaluation.rows import TaskRow, task_rows_from_instances
 from whetstone_envs.instances import InstancePoolSplit
-from whetstone_envs.optim.rows import TaskRow, task_rows_from_instances
 
 if TYPE_CHECKING:
     from whetstone_envs.instances import InstancePool
-
-C19_NAMESPACE = "whetstone_envs.c19"
-C19_DATASET_REVISION = "c19/v1"
-C19_MUTATION_FIELD = "prompt_template"
-C19_ROOT_BASE_SCHEMA = "whetstone_envs.c19.root_candidate"
-C19_PROMPT_FIELDS = ("grid", "command", "question")
-#: The C19 family names its single generated component output "response";
-#: demonstrations and traces carry the task gold under this exact key. It
-#: reaches the optimizers through ``C19_CONTRACT.response_field``, never as
-#: a literal in the runner.
-C19_RESPONSE_FIELD = "response"
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,41 +73,18 @@ class _RolloutGraph:
         return self.procedure_hash
 
 
-class PreparedExperiment(Protocol):
-    @property
-    def experiment(self) -> Experiment: ...
-
-    @property
-    def split(self) -> InstancePoolSplit: ...
-
-
 @dataclass(frozen=True, slots=True)
 class PreparedSplitExperiment:
-    """Retain source cohorts because eval configs contain only task hashes."""
-
     experiment: Experiment
     split: InstancePoolSplit
 
 
 @dataclass(frozen=True, slots=True)
 class ExperimentContract:
-    """Everything :func:`prepare_experiment` needs that is family-specific.
-
-    A family names its persisted identity (``namespace`` and
-    ``dataset_revision``, which reach the derived eval splits), the payload
-    field its optimizers mutate, the placeholders its templates must keep,
-    the key its generated component answers under, and the two probe
-    templates that anchor its initial and ceiling candidates. Nothing else
-    about the family reaches the builder.
-    """
-
     namespace: str
     dataset_revision: str
     mutation_field: str
     prompt_fields: tuple[str, ...]
-    #: The key a generated component writes its answer under. A labeled
-    #: demonstration files the task's gold here, so a family that names its
-    #: output differently says so once, in its contract.
     response_field: str
     root_base_schema: str
     reward_policy_name: str
@@ -128,7 +93,6 @@ class ExperimentContract:
     ceiling_template: str
 
     def render_contract(self) -> TemplateRenderContract:
-        """The contract every template for this family must satisfy."""
         return TemplateRenderContract(
             kind=TemplateRenderKind.PYTHON_FORMAT_V1,
             available_fields=self.prompt_fields,
@@ -136,7 +100,6 @@ class ExperimentContract:
         )
 
     def candidate(self, *, candidate_id: str, template: str) -> Candidate:
-        """Build one validated prompt candidate for this family."""
         self.render_contract().validate_template(template)
         root_ref = typed_ref_for_record(
             self.root_base_schema, {"kind": "root"}
@@ -154,24 +117,6 @@ class ExperimentContract:
             terms=(RewardTerm(name="score", weight=1.0),),
             missing_data=MissingDataPolicy.SKIP,
         )
-
-
-C19_CONTRACT = ExperimentContract(
-    namespace=C19_NAMESPACE,
-    dataset_revision=C19_DATASET_REVISION,
-    mutation_field=C19_MUTATION_FIELD,
-    prompt_fields=C19_PROMPT_FIELDS,
-    response_field=C19_RESPONSE_FIELD,
-    root_base_schema=C19_ROOT_BASE_SCHEMA,
-    reward_policy_name="c19-exact-match",
-    candidate_id_prefix="c19",
-    naive_template=PROBES.naive_template,
-    ceiling_template=PROBES.ceiling_template,
-)
-
-
-def c19_render_contract() -> TemplateRenderContract:
-    return C19_CONTRACT.render_contract()
 
 
 def _task_hash(task: object) -> str:
@@ -273,11 +218,6 @@ def _reference_aggregation(namespace: str):
     )
 
 
-def c19_candidate(*, candidate_id: str, template: str) -> Candidate:
-    """Build one validated C19 prompt candidate."""
-    return C19_CONTRACT.candidate(candidate_id=candidate_id, template=template)
-
-
 def _required_evaluation_rows(
     split: InstancePoolSplit,
     *,
@@ -357,33 +297,7 @@ def prepare_experiment(
     return PreparedSplitExperiment(experiment=experiment, split=split)
 
 
-def prepare_c19_experiment(
-    pool: InstancePool,
-    *,
-    split_sizes: tuple[int, int, int],
-    num_seeds: int = 1,
-    provider_call_config: ProviderCallConfig | None = None,
-) -> PreparedSplitExperiment:
-    """Prepare the C19 Experiment: :func:`prepare_experiment` under C19."""
-    return prepare_experiment(
-        pool,
-        contract=C19_CONTRACT,
-        split_sizes=split_sizes,
-        num_seeds=num_seeds,
-        provider_call_config=provider_call_config,
-    )
-
-
 def provider_config_ref(config: ProviderCallConfig) -> IdentityRef:
-    """The typed reference naming exactly ``config``.
-
-    A proposer transport resolves its route reference and then asserts the
-    resolved record matches the reference it was handed, so a reference and
-    the record a resolver returns must be derived from the *same* config. A
-    caller that mints this from one config and resolves to another fails
-    that assertion at draft time; deriving both from one config is what
-    makes a proposer route that differs from the task route representable.
-    """
     payload = config.model_dump(mode="json")
     record_ref = typed_ref_for_record(PROVIDER_CALL_CONFIG_SCHEMA, payload)
     return IdentityRef(
@@ -393,27 +307,10 @@ def provider_config_ref(config: ProviderCallConfig) -> IdentityRef:
 
 
 def provider_call_config_ref(experiment: Experiment) -> IdentityRef:
-    """The typed reference to this experiment's provider call config.
-
-    Optimizer proposer transports resolve the prompt model through this
-    reference, so it must carry the ``PROVIDER_CALL_CONFIG_SCHEMA`` identity
-    of the experiment's rollout config -- not an execution-policy reference.
-
-    Every family's prepared experiment carries one rollout provider call
-    config, so this reads the experiment alone: COPRO, GEPA, and MIPROv2
-    bind one derivation rather than three copies.
-    """
     return provider_config_ref(experiment.rollout_graph.provider_call_config)
 
 
 def gold_by_task_hash(experiment: Experiment) -> dict[str, str]:
-    """Map every prepared task hash to its exact oracle gold.
-
-    The eval engine deliberately withholds gold from its sampling view, so
-    labeled demonstrations read it from the family's own experiment splits.
-    Every family's task rows carry a strict ``gold``, so this names no
-    family.
-    """
     gold_by_hash: dict[str, str] = {}
     for split in (
         experiment.eval_configs.internal,
@@ -430,42 +327,11 @@ def gold_by_task_hash(experiment: Experiment) -> dict[str, str]:
     return gold_by_hash
 
 
-def probe_candidates_from_templates(
-    *,
-    naive_template: str,
-    ceiling_template: str,
-) -> tuple[Candidate, Candidate]:
-    """Map a C19 probe pair's templates onto initial and ceiling candidates."""
-    return (
-        C19_CONTRACT.candidate(
-            candidate_id="c19-initial", template=naive_template
-        ),
-        C19_CONTRACT.candidate(
-            candidate_id="c19-ceiling", template=ceiling_template
-        ),
-    )
-
-
-def reward_policy_for_exact_match() -> RewardPolicy:
-    return C19_CONTRACT.reward_policy()
-
-
 __all__ = [
-    "C19_CONTRACT",
-    "C19_MUTATION_FIELD",
-    "C19_NAMESPACE",
-    "C19_PROMPT_FIELDS",
-    "C19_RESPONSE_FIELD",
     "ExperimentContract",
-    "PreparedExperiment",
     "PreparedSplitExperiment",
-    "c19_candidate",
-    "c19_render_contract",
     "gold_by_task_hash",
-    "prepare_c19_experiment",
     "prepare_experiment",
-    "probe_candidates_from_templates",
     "provider_call_config_ref",
     "provider_config_ref",
-    "reward_policy_for_exact_match",
 ]

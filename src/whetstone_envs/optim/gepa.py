@@ -20,8 +20,8 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
+from whetstone_envs.evaluation.experiment import provider_call_config_ref
 from whetstone_envs.optim._bindings import GepaBinding
-from whetstone_envs.optim.experiment import provider_call_config_ref
 from whetstone_envs.optim.split import (
     partition_internal_split,
     require_disjoint_split,
@@ -34,41 +34,34 @@ if TYPE_CHECKING:
     from whetstone.optim.gepa.harness_adapter import GepaHarnessAdapter
     from whetstone.optim.proposal.proposer import ProposerTransport
 
-    from whetstone_envs.optim.families import FamilySpec
+    from whetstone_envs.optim.problem import OptimizationProblem
     from whetstone_envs.optim.proposals import ProposalRuntime
     from whetstone_envs.optim.spec import GepaSettings
 
 GEPA_COMPONENT_NAME = "generate"
-#: Per-family schema names for the two identities GEPA mints. Both are
-#: persisted-format strings, so each family's own namespace owns its
-#: value rather than one family's name standing in for every family's.
+#: Per-problem schema names for the two identities GEPA mints. Both are
+#: persisted-format strings, so each problem's own namespace owns its
+#: value rather than one problem's name standing in for every problem's.
 INLINE_EXECUTOR_SCHEMA_SUFFIX = "inline_proposal_executor"
 COMPONENT_SCHEMA_SUFFIX = "gepa_component"
 
 DEFAULT_REFLECTION_MINIBATCH_SIZE = 1
 
 
-def gepa_prompt_services(family: FamilySpec) -> GepaPromptServices:
-    """Reflection prompt services bound to one family's placeholders.
-
-    The shared ``default_gepa_prompt_services`` binds a single ``{prompt}``
-    placeholder; a family's templates carry its own set, so the component
-    format is declared from the family's contract rather than taken from
-    the default.
-    """
+def gepa_prompt_services(problem: OptimizationProblem) -> GepaPromptServices:
     component_schema_hash = compute_identity_hash(
-        schema=f"{family.namespace}.{COMPONENT_SCHEMA_SUFFIX}",
+        schema=f"{problem.contract.namespace}.{COMPONENT_SCHEMA_SUFFIX}",
         schema_version=1,
-        payload={"field": family.mutation_field},
+        payload={"field": problem.contract.mutation_field},
     )
     descriptor = GepaPromptFormatDescriptor(
-        format_name=f"{family.family_id}_prompt_template",
+        format_name=f"{problem.contract.namespace}_prompt_template",
         components=(
             GepaComponentFormat(
                 component_name=GEPA_COMPONENT_NAME,
                 component_schema_identity_hash=component_schema_hash,
-                allowed_placeholders=family.prompt_fields,
-                required_placeholders=family.prompt_fields,
+                allowed_placeholders=problem.contract.prompt_fields,
+                required_placeholders=problem.contract.prompt_fields,
             ),
         ),
     )
@@ -101,7 +94,7 @@ def build_gepa_control(  # noqa: PLR0913
     *,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     prompt_services: GepaPromptServices,
     policy_identity_hash: str,
     proposer_config_ref: IdentityRef | None = None,
@@ -162,13 +155,12 @@ def build_gepa_control(  # noqa: PLR0913
             else reflection_minibatch_size
         ),
         seed=seed,
-    ).model_copy(update={"mutation_field": family.mutation_field})
+    ).model_copy(update={"mutation_field": problem.contract.mutation_field})
 
 
-def gepa_policy_identity_hash(family: FamilySpec) -> str:
-    """The identity of one family's inline GEPA proposal executor policy."""
+def gepa_policy_identity_hash(problem: OptimizationProblem) -> str:
     return compute_identity_hash(
-        schema=f"{family.namespace}.{INLINE_EXECUTOR_SCHEMA_SUFFIX}",
+        schema=f"{problem.contract.namespace}.{INLINE_EXECUTOR_SCHEMA_SUFFIX}",
         schema_version=1,
         payload={"mode": "inline"},
     )
@@ -179,7 +171,7 @@ def build_gepa_adapter(  # noqa: PLR0913
     store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     run_id: str,
     proposer_transport: ProposerTransport | None,
     proposer_config_ref: IdentityRef | None = None,
@@ -189,14 +181,13 @@ def build_gepa_adapter(  # noqa: PLR0913
     trainset_task_hashes: tuple[str, ...],
     valset_task_hashes: tuple[str, ...],
 ) -> GepaHarnessAdapter:
-    """Assemble one family's GEPA adapter on the public factory surface."""
     prompt_adapter = PlainPromptAdapter()
-    prompt_services = gepa_prompt_services(family)
-    policy_identity_hash = gepa_policy_identity_hash(family)
+    prompt_services = gepa_prompt_services(problem)
+    policy_identity_hash = gepa_policy_identity_hash(problem)
     control = build_gepa_control(
         engine=engine,
         experiment=experiment,
-        family=family,
+        problem=problem,
         prompt_services=prompt_services,
         policy_identity_hash=policy_identity_hash,
         proposer_config_ref=proposer_config_ref,
@@ -212,12 +203,12 @@ def build_gepa_adapter(  # noqa: PLR0913
         control=control,
         run_id=run_id,
         initial_candidate=experiment.initial_candidate,
-        mutation_field=family.mutation_field,
+        mutation_field=problem.contract.mutation_field,
         prompt_services=prompt_services,
         transport=_gepa_transport(
             engine=engine,
             prompt_adapter=prompt_adapter,
-            proposal_bodies=family.proposal_bodies(),
+            proposal_bodies=problem.proposal_bodies,
             proposer_transport=proposer_transport,
         ),
         proposal_executor=build_inline_proposal_executor(
@@ -244,7 +235,7 @@ def bind_gepa(  # noqa: PLR0913
     store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     run_id: str,
     proposer: ProposalRuntime,
 ) -> GepaBinding:
@@ -257,7 +248,7 @@ def bind_gepa(  # noqa: PLR0913
         store=store,
         engine=engine,
         experiment=experiment,
-        family=family,
+        problem=problem,
         run_id=run_id,
         proposer_transport=proposer.transport,
         proposer_config_ref=proposer.route.ref,

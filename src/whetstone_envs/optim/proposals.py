@@ -13,11 +13,11 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
-from whetstone_envs.optim.experiment import (
+from whetstone_envs.evaluation.experiment import (
     provider_call_config_ref,
     provider_config_ref,
 )
-from whetstone_envs.optim.provider import (
+from whetstone_envs.evaluation.provider import (
     openrouter_seeded_call_config,
 )
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from whetstone.experiment.env import Experiment
     from whetstone.provider.policy import ProviderExecutionPolicy
 
-    from whetstone_envs.optim.provider import RetryingTransport
+    from whetstone_envs.evaluation.provider import RetryingTransport
 
 
 @dataclass(frozen=True, slots=True)

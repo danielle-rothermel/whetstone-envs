@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from whetstone.core.identity import TypedRef
     from whetstone.optim.contracts import OptimStepResult
 
-    from whetstone_envs.optim.experiment import PreparedExperiment
+    from whetstone_envs.evaluation.experiment import PreparedSplitExperiment
 
 
 def _dispositions_append(
@@ -164,11 +164,9 @@ class _TrajectoryCandidates:
 def _hydrate_evaluation_report(  # noqa: PLR0913
     *,
     store: ObjectStore,
-    prepared: PreparedExperiment,
+    prepared: PreparedSplitExperiment,
     run_id: str,
     transport: str,
-    model: str,
-    split_sizes: tuple[int, int, int],
     resolution: _TrajectoryResolutionSource,
     mutation_field: str,
 ) -> EvalReport | None:
@@ -189,9 +187,7 @@ def _hydrate_evaluation_report(  # noqa: PLR0913
         prepared=prepared,
         run_id=run_id,
         transport=transport,
-        model=model,
         role="internal",
-        split_sizes=split_sizes,
         mutation_field=mutation_field,
         candidates=(
             EvaluationCandidate(
@@ -303,15 +299,13 @@ def _project_step(
     )
 
 
-def project_trajectory_report(  # noqa: PLR0913
+def project_trajectory_report(
     *,
     store: ObjectStore,
-    prepared: PreparedExperiment,
+    prepared: PreparedSplitExperiment,
     result_ref: TypedRef,
     result: OptimResult,
     transport: str,
-    model: str,
-    split_sizes: tuple[int, int, int],
 ) -> TrajectoryReport:
     if optimization_result_reference(result) != result_ref:
         raise ValueError(
@@ -361,8 +355,6 @@ def project_trajectory_report(  # noqa: PLR0913
                 prepared=prepared,
                 run_id=f"{result.run_id}:{step.step_index}:{resolution_index}",
                 transport=transport,
-                model=model,
-                split_sizes=split_sizes,
                 resolution=resolution,
                 mutation_field=result.run.record.mutation_field,
             )

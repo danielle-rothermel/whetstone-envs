@@ -65,16 +65,23 @@ uv add 'whetstone-envs[c18]'
 ```
 
 Install the optimizer adapter extra when running COPRO, GEPA, MIPROv2, or
-Codex against a task family:
+Codex against an explicitly prepared problem:
 
 ```bash
 uv add 'whetstone-envs[optim]'
 ```
 
 The extra requires Python 3.13 or 3.14 and pins `whetstone-ai==0.1.17`.
-The shared runner supports C19 MiniGrid state prediction and C18 PrOntoQA
-entailment. Family adapters own generation, experiment preparation, prompt
-contracts, probe templates, and scoring.
+The shared runner accepts an `OptimizationProblem` from a Python input file.
+The file defines `problem` with a prepared experiment and its source split,
+prompt contract, evaluation runner, proposer context, and explicit fake replies
+and proposal bodies when using fake transport. It owns dataset generation,
+splitting, repeats, probe templates, and the task provider configuration.
+Shared code contains no built-in task registrations. Evaluation runners follow
+Whetstone's `EvalProcedureRunner` contract; isolated workers require an
+importable runner class with a zero-argument constructor.
+
+The generic [echo example](examples/optimization_problem.py) is executable:
 
 | Optimizer | Behavior | Configuration |
 | --- | --- | --- |
@@ -87,7 +94,7 @@ Run a small fake optimization:
 
 ```bash
 uv run --extra optim python -m whetstone_envs.optim.cli \
-  --family c19 --optimizer copro --transport fake --split-sizes 2,2,0
+  --problem examples/optimization_problem.py --optimizer copro --transport fake
 ```
 
 For GEPA and MIPROv2, `--train-size` and `--val-size` are required. The
@@ -98,21 +105,17 @@ Codex reject train/val settings.
 
 ```bash
 uv run --extra optim python -m whetstone_envs.optim.cli \
-  --family c19 --optimizer gepa --transport fake --split-sizes 4,2,0 \
+  --problem examples/optimization_problem.py --optimizer gepa --transport fake \
   --train-size 2 --val-size 2
 ```
 
-`--split-sizes` names the internal, official, and held-out sizes in that
-order. `--num-seeds` sets repeats per task; `--seed` sets the algorithmic
-seed for GEPA and MIPROv2. COPRO has no algorithmic seed field.
-`--n-per-category` and `--pool-seed-start` override family generation
-defaults. C18 and C19 keep their own scoring rules: C19 uses normalized exact
-match; C18 extracts and scores the terminal True/False verdict.
-
-`--model` selects the task model and `--proposer-model` optionally selects a
-separate proposer. `--task-reasoning-effort` controls only the task route.
-`--transport openrouter` requires `OPENROUTER_API_KEY`. Provider concurrency
-defaults to 5; values above 64 require `--force-provider-concurrency`.
+`--seed` sets the algorithmic seed for GEPA and MIPROv2. COPRO has no
+algorithmic seed field. `--proposer-model` optionally selects a separate
+proposer model; otherwise it uses the prepared experiment's provider config.
+For live runs, the problem file supplies the task route, for example using
+`evaluation.provider.openrouter_seeded_call_config`. `--transport openrouter`
+requires `OPENROUTER_API_KEY`. Provider concurrency defaults to 5; values
+above 64 require `--force-provider-concurrency`.
 
 Run artifacts are written outside Git repositories. `--run-id` names a run;
 `--output` chooses its directory. Optimizer runs publish `runtime.sqlite`,
@@ -131,7 +134,8 @@ the CLI, including its authentication preflight.
 ```bash
 WHETSTONE_ENVS_ALLOW_REAL_CODEX=1 \
   uv run --extra optim python -m whetstone_envs.optim.cli \
-  --family c19 --optimizer codex --transport openrouter --allow-real-codex
+  --problem /path/to/live_problem.py --optimizer codex \
+  --transport openrouter --allow-real-codex
 ```
 
 `--codex-model` selects the agent model independently of the task model;
@@ -143,10 +147,18 @@ selected tool-call candidate is recorded in the terminal optimization result.
 Optimizer Python inputs are imported from `whetstone_envs.optim.spec`.
 `RunSpec` contains one `CoproSettings`, `GepaSettings`, `Miprov2Settings`, or
 `CodexSettings` object. GEPA and MIPROv2 compose `TrainValSizes` as `partition`.
+`run_optimizer(spec, problem=problem)` accepts that object directly. Codex also
+requires `problem_file=Path(...)`, because its evaluation subprocess reloads
+the input file. Input files must construct the same experiment and scorer on
+every load; Codex checks the rebuilt evaluation, model, and task identities
+before launch. Treat these files as executable local code.
+
 Optimizer modules own adapter/control construction; `optim.run` coordinates
-preparation, runtime execution, and publication. Inputs validate at
-construction; unknown fields and invalid combinations fail
-before creating a run directory. CLI flags are translated into these models.
+runtime execution and publication. Settings validate at construction;
+partitions are checked against the prepared split before creating a run
+directory. CLI flags are translated into these models. Shared experiment
+preparation, task rows, exact-match runner, provider transport, and concurrency
+policy live in `whetstone_envs.evaluation`.
 
 ```python
 from whetstone_envs.optim.run import run_optimizer

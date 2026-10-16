@@ -13,8 +13,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class TaskRow:
-    """One optimizer task row derived from a task instance."""
-
     task_id: str
     prompt_inputs: dict[str, str]
     gold: str
@@ -31,7 +29,6 @@ class TaskRow:
 
 
 def task_row_from_instance(instance: Instance) -> TaskRow:
-    """Map a task instance onto the row shape evaluation drivers require."""
     return TaskRow(
         task_id=instance.id,
         prompt_inputs=dict(instance.prompt_inputs),

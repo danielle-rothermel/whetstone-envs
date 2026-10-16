@@ -18,7 +18,7 @@ from dr_providers import (
 from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
 from dr_providers.outcomes.models import ProviderTransportResponse
 
-from whetstone_envs.optim.concurrency import (
+from whetstone_envs.evaluation.concurrency import (
     DEFAULT_PROVIDER_CONCURRENCY,
     MAX_UNFORCED_PROVIDER_CONCURRENCY,
     PROVIDER_CONCURRENCY_FLAG,
@@ -26,13 +26,10 @@ from whetstone_envs.optim.concurrency import (
     resolve_provider_concurrency,
     validate_provider_concurrency,
 )
-from whetstone_envs.optim.rows import TaskRow
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from whetstone.experiment.candidate import TemplateRenderContract
-    from whetstone.experiment.env import Experiment
     from whetstone.provider.driver import TransportCall
     from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -208,55 +205,25 @@ def bind_openrouter_transport(
     return transport, factory
 
 
-def fake_task_reply(prompt: str, gold_by_prompt: Mapping[str, str]) -> str:
-    return gold_by_prompt.get(prompt, f"generated: {prompt}")
-
-
-def fake_gold_by_prompt(
-    experiment: Experiment,
-    *,
-    render_contract: TemplateRenderContract,
-    ceiling_template: str,
-) -> dict[str, str]:
-    gold_by_prompt: dict[str, str] = {}
-    for split in (
-        experiment.eval_configs.internal,
-        experiment.eval_configs.official,
-    ):
-        for task in split.tasks:
-            if not isinstance(task, TaskRow):
-                raise TypeError(
-                    "an eval task must expose strict prompt_inputs and gold"
-                )
-            gold = task.gold
-            inputs = task.prompt_inputs
-            if not isinstance(gold, str) or not isinstance(inputs, dict):
-                raise TypeError(
-                    "an eval task must expose strict prompt_inputs and gold"
-                )
-            prompt = render_contract.render(ceiling_template, inputs)
-            existing = gold_by_prompt.get(prompt)
-            if existing is not None and existing != gold:
-                raise ValueError("one ceiling prompt maps to multiple golds")
-            gold_by_prompt[prompt] = gold
-    return gold_by_prompt
+def fake_task_reply(prompt: str, replies: Mapping[str, str]) -> str:
+    return replies.get(prompt, f"generated: {prompt}")
 
 
 class FakeTaskTransport:
     def __init__(
         self,
         policy: ProviderExecutionPolicy,
-        gold_by_prompt: Mapping[str, str],
+        replies: Mapping[str, str],
     ) -> None:
         self._policy = policy
-        self._gold_by_prompt = dict(gold_by_prompt)
+        self._replies = dict(replies)
 
     def __call__(
         self, request: ProviderGenerateRequest
     ) -> ProviderInvocationEvidence:
         messages = request.transcript.messages
         prompt = messages[-1].content if messages else ""
-        text = fake_task_reply(prompt, self._gold_by_prompt)
+        text = fake_task_reply(prompt, self._replies)
         response = ProviderTransportResponse(text=text, stop_reason="stop")
         return ProviderInvocationEvidence.build(
             request=request,
@@ -274,9 +241,9 @@ class FakeTaskTransport:
 
 def fake_transport_factory(
     *,
-    gold_by_prompt: Mapping[str, str],
+    replies: Mapping[str, str],
 ) -> Callable[[ProviderExecutionPolicy], FakeTaskTransport]:
-    replies = dict(gold_by_prompt)
+    replies = dict(replies)
 
     def factory(policy: ProviderExecutionPolicy) -> FakeTaskTransport:
         return FakeTaskTransport(policy, replies)
@@ -301,7 +268,6 @@ __all__ = [
     "OpenRouterTransport",
     "RetryingTransport",
     "bind_openrouter_transport",
-    "fake_gold_by_prompt",
     "fake_task_reply",
     "fake_transport_factory",
     "hardened_execution_policy",

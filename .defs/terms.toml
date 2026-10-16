@@ -105,20 +105,6 @@ both, and zero otherwise."""
 exported_symbols = ["whetstone_envs.scoring.exact_match"]
 
 [[terms]]
-name = "family scorer registry"
-definition = """
-The single owner of how one task family's generation becomes a score, keyed by \
-the family name a persisted report carries, holding only the pure scoring rule \
-so that both an evaluation run and a report consumer apply the identical rule \
-without either needing the optimizer stack."""
-exported_symbols = [
-    "whetstone_envs.scoring.FAMILY_SCORERS",
-    "whetstone_envs.scoring.FamilyScorer",
-    "whetstone_envs.scoring.family_score",
-    "whetstone_envs.scoring.scorable_family_ids",
-]
-
-[[terms]]
 name = "pool manifest"
 definition = """
 A persisted description of a generated instance pool recording its generator \
@@ -232,16 +218,30 @@ exported_symbols = [
 ]
 
 [[terms]]
-name = "optimizer adapter extra"
+name = "prepared optimization problem"
 definition = """
-An optional whetstone_envs.optim surface that maps task-family pools, probe \
-pairs, and exact-match scoring onto whetstone-ai experiment rows without \
-importing whetstone-ai from core environment packages."""
+An explicit combination of a prepared experiment and source instance split, \
+prompt contract, evaluation runner, proposer context, and scripted fake inputs \
+consumed by shared optimizer execution. Task setup is supplied by local Python \
+code rather than selected from a built-in registry."""
 exported_symbols = [
-    "whetstone_envs.optim.ExactMatchEvalProcedureRunner",
-    "whetstone_envs.optim.TaskRow",
-    "whetstone_envs.optim.task_row_from_instance",
-    "whetstone_envs.optim.task_rows_from_instances",
+    "whetstone_envs.optim.problem.OptimizationProblem",
+    "whetstone_envs.optim.problem.load_problem",
+]
+
+[[terms]]
+name = "experiment preparation"
+definition = """
+Optional evaluation support that maps an instance pool and an explicit prompt \
+contract onto a whetstone-ai experiment while retaining the source split."""
+exported_symbols = [
+    "whetstone_envs.evaluation.ExperimentContract",
+    "whetstone_envs.evaluation.PreparedSplitExperiment",
+    "whetstone_envs.evaluation.prepare_experiment",
+    "whetstone_envs.evaluation.ExactMatchEvalProcedureRunner",
+    "whetstone_envs.evaluation.TaskRow",
+    "whetstone_envs.evaluation.task_row_from_instance",
+    "whetstone_envs.evaluation.task_rows_from_instances",
 ]
 
 [[terms]]

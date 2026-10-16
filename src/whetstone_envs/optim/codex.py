@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from whetstone.experiment.reward import RewardPolicy
     from whetstone.optim.codex.runner import CodexPromptContext
 
-    from whetstone_envs.optim.families import FamilySpec
+    from whetstone_envs.optim.problem import OptimizationProblem
     from whetstone_envs.optim.spec import CodexSettings
 
 CODEX_EVALUATE_CALL_CAP = 8
@@ -98,12 +98,7 @@ FORBID_REAL_CODEX_ENV = "WHETSTONE_ENVS_FORBID_REAL_CODEX"
 
 
 class RealCodexRefusedError(RuntimeError):
-    """A Codex run would have spawned the real, billed CLI.
-
-    Raised before any preflight, adapter, admission authority, or
-    subprocess exists, so a refused run has spent nothing and left no
-    durable artifact behind.
-    """
+    pass
 
 
 def refuse_unauthorized_real_codex(
@@ -139,24 +134,13 @@ def build_codex_control(  # noqa: PLR0913
     *,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     model: str,
     max_tool_calls: int | None = None,
     codex_binary: str = CODEX_DEFAULT_BINARY,
     reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM,
     wall_seconds: float | None = None,
 ) -> CodexControl:
-    """Resolve one family's Codex control over the engine's internal split.
-
-    ``max_tool_calls`` defaults to :data:`CODEX_EVALUATE_CALL_CAP`, the
-    arm's capacity cap. Every other binding is attested rather than
-    assumed: the control pins the eval config, reward policy, execution
-    policy, task model, and internal split it will be measured against,
-    and ``prepare_codex_run`` re-checks each against the live engine, so a
-    control that disagreed with the runtime is refused before any capacity
-    is committed. Checking the split here as well keeps the failure at
-    build time, where the message can say which side is wrong.
-    """
     task_hashes = experiment.eval_configs.internal.task_set.task_hashes
     if engine.sampling.task_hashes != task_hashes:
         raise ValueError("Codex evaluation must be the internal eval split")
@@ -176,7 +160,7 @@ def build_codex_control(  # noqa: PLR0913
         internal_task_hashes=task_hashes,
         reasoning_effort=reasoning_effort,
         codex_binary=codex_binary,
-        mutation_field=family.mutation_field,
+        mutation_field=problem.contract.mutation_field,
         wall_seconds=(
             CODEX_DEFAULT_WALL_SECONDS
             if wall_seconds is None
@@ -197,38 +181,6 @@ def build_codex_adapter(  # noqa: PLR0913
     test_seam: CodexTestSeam | None = None,
     prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> CodexAdapter:
-    """Assemble one family's Codex adapter, session proven first.
-
-    The adapter is not returned until the preflight has proven the binary,
-    an auth source, and one cheap structured probe. ``test_seam`` is the
-    only way to substitute that check, and no production caller
-    constructs one -- see :class:`CodexTestSeam`.
-
-    The returned adapter still awaits its Tool Call Store: bind the
-    runtime's exact store with ``bind_tool_store`` once ``build_runtime``
-    has produced it, because the adapter reads durable ledger entries from
-    the store the harness admits through.
-
-    ``store_path`` must be the run's own sqlite, because the MCP
-    evaluation server runs in another process and persists its Tool
-    Results there, and ``reward_policy`` is the policy that server scores
-    with -- the same one the control pins by hash.
-
-    ``prompt_builder`` is a diagnostic seam outside the input model and CLI.
-    ``CodexPromptContext`` supplies the resolved route and base reference.
-
-    ``runtime_config`` is what that out-of-process server rebuilds its
-    engine from, and ``engine`` is the in-process engine it must agree
-    with -- see :mod:`whetstone_envs.optim.codex_runtime` for why envs
-    ships its own rather than using whetstone-ai's toy-experiment one.
-    Three things are asserted equal across the two engines before
-    anything is spawned, and each is a distinct failure the run would
-    otherwise absorb silently: ``eval_config_ref`` (a mismatch refuses
-    every tool call), ``task_model_identity_hash()`` (a mismatch measures
-    another model route, which the Eval Config does not pin on the
-    openrouter transport), and ``sampling.task_hashes`` (a mismatch
-    measures another task set).
-    """
     # The MCP evaluation server rebuilds its engine from this config
     # alone, in another process. Proving here that the rebuild lands on
     # the same Eval Config is what keeps a mismatch from becoming a run
@@ -323,7 +275,6 @@ def preflight_codex_session(
 
 
 def codex_run_root(output_dir: Path) -> Path:
-    """Where one Codex run's dr-exec job records live."""
     return output_dir / CODEX_RUN_ROOT_NAME
 
 
@@ -355,7 +306,7 @@ def bind_codex(  # noqa: PLR0913
     store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     runtime_config: EnvsCodexRuntimeConfig,
     output_dir: Path,
     sqlite_path: Path,
@@ -365,7 +316,7 @@ def bind_codex(  # noqa: PLR0913
     control = build_codex_control(
         engine=engine,
         experiment=experiment,
-        family=family,
+        problem=problem,
         model=resolve_codex_agent_model(settings.model),
         max_tool_calls=settings.capacity,
         codex_binary=settings.binary,

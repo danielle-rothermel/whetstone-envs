@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Optimizer execution accepts an explicit `OptimizationProblem` from Python
+  code or `--problem` input files. Shared evaluation owns experiment preparation,
+  task rows, provider transport, and concurrency. Remove built-in C18/C19
+  registrations, adapters, task generation flags, and prompt-specific defaults.
+  Codex rebuilds the supplied input file and checks its runtime identities.
+
 - Evaluation evidence v5 and trajectory evidence v4 accept nonblank task-family
   identifiers and record the candidate mutation field explicitly. Evidence
   validates binary scores and accounting without importing task graders.

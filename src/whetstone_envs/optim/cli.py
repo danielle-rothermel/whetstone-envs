@@ -5,9 +5,14 @@ import sys
 import traceback
 from pathlib import Path
 
-from dr_providers import ReasoningEffort
-
 from whetstone_envs.artifacts import DurableRunError, default_output_dir
+from whetstone_envs.evaluation.provider import (
+    DEFAULT_PROVIDER_CONCURRENCY,
+    MAX_UNFORCED_PROVIDER_CONCURRENCY,
+    PROVIDER_CONCURRENCY_FLAG,
+    PROVIDER_CONCURRENCY_FORCE_FLAG,
+    resolve_provider_concurrency,
+)
 from whetstone_envs.evaluation.runtime import TransportKind
 from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
@@ -17,7 +22,6 @@ from whetstone_envs.optim.codex import (
     CODEX_REASONING_EFFORTS,
     CodexReasoningEffort,
 )
-from whetstone_envs.optim.families import FamilyId, registered_family_ids
 from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_FULL_EVAL_STEPS,
     DEFAULT_MIPROV2_MINIBATCH,
@@ -26,18 +30,11 @@ from whetstone_envs.optim.miprov2 import (
     DEMO_MODES,
     Miprov2DemoMode,
 )
-from whetstone_envs.optim.provider import (
-    DEFAULT_PROVIDER_CONCURRENCY,
-    MAX_UNFORCED_PROVIDER_CONCURRENCY,
-    PROVIDER_CONCURRENCY_FLAG,
-    PROVIDER_CONCURRENCY_FORCE_FLAG,
-    resolve_provider_concurrency,
-)
+from whetstone_envs.optim.problem import load_problem
 from whetstone_envs.optim.run import run_optimizer
 from whetstone_envs.optim.spec import (
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
-    DEFAULT_SPLIT_SIZES,
     GEPA_DEFAULT_SEED,
     MIPROV2_DEFAULT_SEED,
     CodexSettings,
@@ -50,16 +47,6 @@ from whetstone_envs.optim.spec import (
     TrainValSizes,
 )
 from whetstone_envs.optim.split import MIN_COPRO_BREADTH
-
-
-def _split_sizes(value: str) -> tuple[int, int, int]:
-    try:
-        internal, official, held_out = (int(part) for part in value.split(","))
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            "split sizes must be three comma-separated integers"
-        ) from error
-    return (internal, official, held_out)
 
 
 def _int_at_least(value: str, *, minimum: int) -> int:
@@ -112,13 +99,14 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run Codex, COPRO, GEPA, or MIPROv2 on a named task family."
+            "Run Codex, COPRO, GEPA, or MIPROv2 on a prepared problem."
         ),
     )
     parser.add_argument(
-        "--family",
-        choices=registered_family_ids(),
-        default="c19",
+        "--problem",
+        type=Path,
+        required=True,
+        help="Python file defining an OptimizationProblem named problem.",
     )
     parser.add_argument(
         "--optimizer",
@@ -159,39 +147,14 @@ def build_parser() -> argparse.ArgumentParser:
             f"{MAX_UNFORCED_PROVIDER_CONCURRENCY}."
         ),
     )
-    parser.add_argument(
-        "--split-sizes",
-        type=_split_sizes,
-        default=DEFAULT_SPLIT_SIZES,
-    )
     parser.add_argument("--run-id")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--model", default="openai/gpt-4.1-nano")
-    parser.add_argument(
-        "--task-reasoning-effort",
-        type=ReasoningEffort,
-        default=None,
-        choices=list(ReasoningEffort),
-        help=(
-            "Reasoning effort for the task route. Omitted sends no "
-            "reasoning key and leaves the route on the provider's "
-            "default. The proposer route never takes it."
-        ),
-    )
     parser.add_argument(
         "--proposer-model",
         default=None,
         help=(
-            "Model for the proposer role. Defaults to --model, which keeps "
-            "a single-model run identical to one that never named a "
-            "proposer."
+            "Proposer model. Defaults to the prepared experiment task route."
         ),
-    )
-    parser.add_argument(
-        "--num-seeds",
-        type=_positive_int,
-        default=1,
-        help="Repeats per task (K_REPEAT).",
     )
     parser.add_argument(
         "--seed",
@@ -202,24 +165,6 @@ def build_parser() -> argparse.ArgumentParser:
             "their controls; COPRO has no control seed, so its runs are "
             "seeded only by the provider SEED control. Omit to keep each "
             "optimizer's own default."
-        ),
-    )
-    parser.add_argument(
-        "--n-per-category",
-        type=_positive_int,
-        default=None,
-        help=(
-            "Instances generated per category. Defaults to the family's own "
-            "pool size."
-        ),
-    )
-    parser.add_argument(
-        "--pool-seed-start",
-        type=int,
-        default=None,
-        help=(
-            "First generator seed for the instance pool. Defaults to the "
-            "family's own start."
         ),
     )
     parser.add_argument(
@@ -465,19 +410,14 @@ def main(argv: list[str] | None = None) -> int:
                     arguments.provider_concurrency,
                     force=arguments.force_provider_concurrency,
                 ),
-                family=FamilyId(arguments.family),
-                split_sizes=arguments.split_sizes,
                 output_dir=output,
                 run_id=run_id,
-                model=arguments.model,
-                task_reasoning_effort=arguments.task_reasoning_effort,
                 proposer_model=arguments.proposer_model,
-                num_seeds=arguments.num_seeds,
-                n_per_category=arguments.n_per_category,
-                pool_seed_start=arguments.pool_seed_start,
-            )
+            ),
+            problem=load_problem(arguments.problem),
+            problem_file=arguments.problem.resolve(),
         )
-    except ValueError as error:
+    except (ValueError, TypeError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2
     except DurableRunError as error:

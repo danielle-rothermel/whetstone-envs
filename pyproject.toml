@@ -89,7 +89,7 @@ venvPath = "."
 venv = ".venv"
 
 [tool.ruff]
-include = ["scripts/**/*.py", "src/**/*.py"]
+include = ["examples/**/*.py", "scripts/**/*.py", "src/**/*.py"]
 extend-exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",

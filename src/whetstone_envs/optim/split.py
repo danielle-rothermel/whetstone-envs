@@ -26,14 +26,6 @@ MIN_COPRO_DEPTH = 1
 def partition_internal_split(
     task_hashes: tuple[str, ...], *, train_size: int, val_size: int
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The ``(trainset, valset)`` this spec names over ``task_hashes``.
-
-    A deterministic prefix/suffix cut: the trainset is the first
-    ``train_size`` hashes and the valset the next ``val_size``. Taking
-    adjacent slices of an already-deterministic tuple is what makes the
-    partition reproducible from the two integers, with no seed or shuffle
-    of its own to record.
-    """
     if train_size < 1:
         raise ValueError("train_size must be at least 1")
     if val_size < 1:

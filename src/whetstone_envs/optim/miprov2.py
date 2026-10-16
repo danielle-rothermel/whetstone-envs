@@ -47,11 +47,11 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
-from whetstone_envs.optim._bindings import Miprov2Binding
-from whetstone_envs.optim.experiment import (
+from whetstone_envs.evaluation.experiment import (
     gold_by_task_hash,
     provider_call_config_ref,
 )
+from whetstone_envs.optim._bindings import Miprov2Binding
 from whetstone_envs.optim.split import (
     partition_internal_split,
     require_disjoint_split,
@@ -64,17 +64,17 @@ if TYPE_CHECKING:
     from whetstone.optim.contracts import OptimRunRef
     from whetstone.optim.proposal.proposer import ProposerTransport
 
-    from whetstone_envs.optim.families import FamilySpec
+    from whetstone_envs.optim.problem import OptimizationProblem
     from whetstone_envs.optim.proposals import ProposalRuntime
     from whetstone_envs.optim.spec import Miprov2Settings
 
-#: The single optimizable component: every family's rollout graph exposes
+#: The single optimizable component: every problem's rollout graph exposes
 #: exactly one provider trace, so MIPROv2 optimizes one prompt component.
 MIPROV2_COMPONENT_ID = "generate"
 #: MIPROv2 partitions the engine's tasks into a trainset and a valset, so a
 #: run needs at least one task for each.
 MIN_MIPROV2_TASKS = 2
-#: The family-namespaced schema name for MIPROv2's inline executor policy.
+#: The problem-namespaced schema name for MIPROv2's inline executor policy.
 INLINE_EXECUTOR_SCHEMA_SUFFIX = "miprov2_proposal_executor"
 #: Minibatching is off by default: every trial then evaluates the whole
 #: validation split, which is the schedule this runner has always produced.
@@ -91,10 +91,9 @@ DEFAULT_MIPROV2_NUM_CANDIDATES = 3
 DEMO_MODES = tuple(mode.value for mode in Miprov2DemoMode)
 
 
-def miprov2_policy_identity_hash(family: FamilySpec) -> str:
-    """One family's inline MIPROv2 proposal executor policy identity."""
+def miprov2_policy_identity_hash(problem: OptimizationProblem) -> str:
     return compute_identity_hash(
-        schema=f"{family.namespace}.{INLINE_EXECUTOR_SCHEMA_SUFFIX}",
+        schema=f"{problem.contract.namespace}.{INLINE_EXECUTOR_SCHEMA_SUFFIX}",
         schema_version=1,
         payload={"mode": "inline"},
     )
@@ -103,11 +102,6 @@ def miprov2_policy_identity_hash(family: FamilySpec) -> str:
 def _demo_maxima(
     demo_mode: Miprov2DemoMode,
 ) -> tuple[int, int]:
-    """The demo maxima each mode's control must carry.
-
-    A zero-shot control must carry zero maxima; the bootstrapping modes need
-    at least one demo to bootstrap.
-    """
     if demo_mode is Miprov2DemoMode.ZEROSHOT:
         return 0, 0
     return 1, 1
@@ -117,7 +111,7 @@ def build_miprov2_control(  # noqa: PLR0913
     *,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     proposer_config_ref: IdentityRef | None = None,
     demo_mode: Miprov2DemoMode = Miprov2DemoMode.FEWSHOT,
     num_trials: int = DEFAULT_MIPROV2_NUM_TRIALS,
@@ -179,13 +173,13 @@ def build_miprov2_control(  # noqa: PLR0913
         ),
         task_model_identity_hash=engine.task_model_identity_hash(),
         prompt_adapter=prompt_adapter,
-        template_render_contract=family.render_contract(),
-        mutation_field=family.mutation_field,
+        template_render_contract=problem.contract.render_contract(),
+        mutation_field=problem.contract.mutation_field,
         max_errors=4,
         validation_eval_source_is_metric_authority=True,
     )
     layout = Miprov2ProgramLayout(
-        layout_id=f"{family.namespace}.miprov2",
+        layout_id=f"{problem.contract.namespace}.miprov2",
         component_specs=(
             Miprov2ComponentSpec(
                 component_id=MIPROV2_COMPONENT_ID,
@@ -228,17 +222,11 @@ def build_miprov2_adapter(
     store: ObjectStore,
     engine: EvalEngine,
     control: Miprov2Control,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     proposer_transport: ProposerTransport | None = None,
 ) -> Miprov2Adapter:
-    """Assemble one family's MIPROv2 adapter on the public adapter surface.
-
-    MIPROv2 rejects an instruction that drops a placeholder the base
-    template requires, so the scripted bodies are the family's own probe
-    templates, which satisfy its render contract by construction.
-    """
     prompt_adapter = PlainPromptAdapter()
-    bodies = family.proposal_bodies()
+    bodies = problem.proposal_bodies
     transport = proposer_transport or FakeProposerTransport(
         {},
         default=bodies,
@@ -253,7 +241,7 @@ def build_miprov2_adapter(
         transport=transport,
         eval_config_resolver=EngineEvalBindingResolver(engine=engine),
         proposal_executor=build_inline_proposal_executor(
-            policy_identity_hash=miprov2_policy_identity_hash(family),
+            policy_identity_hash=miprov2_policy_identity_hash(problem),
         ),
     )
 
@@ -270,14 +258,6 @@ _BUDGET_HEADROOM = 4
 
 
 class Miprov2SearchShape(Protocol):
-    """The control fields a derived MIPROv2 ceiling reads.
-
-    Stated structurally because the ceiling depends on the search *shape*,
-    not on a control's identity: a caller sizing a budget supplies these
-    seven values, and a stand-in in a test states exactly what the ceiling
-    is a function of. ``Miprov2Control`` satisfies it.
-    """
-
     @property
     def trainset_task_hashes(self) -> tuple[str, ...]: ...
     @property
@@ -339,7 +319,6 @@ def miprov2_run(
     control: Miprov2Control,
     experiment: Experiment,
 ) -> OptimRun:
-    """The exact OptimRun the opening MIPROv2 state must bind."""
     return OptimRun(
         run_id=run_id,
         optimizer_config=control.reference(),
@@ -360,10 +339,9 @@ def build_miprov2_state(  # noqa: PLR0913
     engine: EvalEngine,
     experiment: Experiment,
     adapter: Miprov2Adapter,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     budget: Miprov2EffectBudget | None = None,
 ) -> Miprov2State:
-    """Derive the opening MIPROv2 state for one run of one family."""
     bindings = Miprov2DurableBindings(
         control_identity_hash=control.identity_hash(),
         prompt_route_identity_hash=control.prompt_model.identity_hash(),
@@ -389,7 +367,7 @@ def build_miprov2_state(  # noqa: PLR0913
         for task in engine.sampling.tasks
     }
     # The engine's sampling view withholds gold, so a labeled demonstration
-    # reads its output from the family's own experiment splits. A demo with
+    # reads its output from the problem's own experiment splits. A demo with
     # an empty output would teach the model to answer with nothing.
     gold_by_hash = gold_by_task_hash(experiment)
     missing = set(control.trainset_task_hashes) - set(gold_by_hash)
@@ -407,7 +385,9 @@ def build_miprov2_state(  # noqa: PLR0913
             outputs_by_component=ImmutableJsonObject(
                 {
                     component_id: {
-                        family.response_field: gold_by_hash[task_hash]
+                        problem.contract.response_field: gold_by_hash[
+                            task_hash
+                        ]
                     }
                 }
             ),
@@ -420,8 +400,8 @@ def build_miprov2_state(  # noqa: PLR0913
             component_id=component_id,
             template=str(template),
             template_render_contract=control.template_render_contract,
-            rendering_rules=family.rendering_rules,
-            example_execution=family.example_execution,
+            rendering_rules=problem.rendering_rules,
+            example_execution=problem.example_execution,
         ),
     )
     proposal_trainset = tuple(
@@ -443,7 +423,7 @@ def build_miprov2_state(  # noqa: PLR0913
         proposal_trainset=proposal_trainset,
         # MIPROv2 records a component's input field order canonically.
         component_field_order={
-            component_id: tuple(sorted(family.prompt_fields))
+            component_id: tuple(sorted(problem.contract.prompt_fields))
         },
         budget=budget or miprov2_budget(control),
     )
@@ -487,7 +467,7 @@ def bind_miprov2(  # noqa: PLR0913
     store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
-    family: FamilySpec,
+    problem: OptimizationProblem,
     proposer: ProposalRuntime,
 ) -> Miprov2Binding:
     trainset, valset = partition_internal_split(
@@ -498,7 +478,7 @@ def bind_miprov2(  # noqa: PLR0913
     control = build_miprov2_control(
         engine=engine,
         experiment=experiment,
-        family=family,
+        problem=problem,
         proposer_config_ref=proposer.route.ref,
         demo_mode=settings.demo_mode,
         seed=settings.seed,
@@ -514,7 +494,7 @@ def bind_miprov2(  # noqa: PLR0913
         store=store,
         engine=engine,
         control=control,
-        family=family,
+        problem=problem,
         proposer_transport=proposer.transport,
     )
     return Miprov2Binding(adapter=adapter, control=control)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
@@ -39,27 +40,21 @@ from whetstone_envs.optim.codex import (
 from whetstone_envs.optim.extraction.trajectory import (
     project_trajectory_report,
 )
-from whetstone_envs.optim.families import (
-    FamilySpec,
-    family_spec,
-)
 from whetstone_envs.optim.miprov2 import (
     build_miprov2_state,
     miprov2_run_ref,
 )
-from whetstone_envs.optim.provider import (
-    openrouter_seeded_call_config,
-)
+from whetstone_envs.optim.problem import OptimizationProblem
 from whetstone_envs.optim.spec import (
     CodexSettings,
     CoproSettings,
     GepaSettings,
+    Miprov2Settings,
     RunSpec,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from dr_store import ObjectStore
     from dr_store.sync import BlockingObjectStore
@@ -79,7 +74,6 @@ from whetstone_envs.optim._bindings import (
 from whetstone_envs.optim.codex import bind_codex
 from whetstone_envs.optim.codex_runtime import runtime_config_for_run
 from whetstone_envs.optim.copro import bind_copro
-from whetstone_envs.optim.experiment import PreparedExperiment
 from whetstone_envs.optim.gepa import bind_gepa
 from whetstone_envs.optim.miprov2 import bind_miprov2
 from whetstone_envs.optim.proposals import ProposalRuntime, prepare_proposer
@@ -88,10 +82,8 @@ from whetstone_envs.optim.proposals import ProposalRuntime, prepare_proposer
 @dataclass(frozen=True, slots=True)
 class _PreparedRun:
     spec: RunSpec
-    family: FamilySpec
-    prepared: PreparedExperiment
-    n_per_category: int
-    pool_seed_start: int
+    problem: OptimizationProblem
+    problem_file: Path | None
     run_id: str
 
 
@@ -101,53 +93,58 @@ class _RunEvaluation:
     proposer: ProposalRuntime
 
 
-def _prepare_run(spec: RunSpec) -> _PreparedRun:
-    family = family_spec(spec.family)
-    n_per_category = (
-        family.default_n_per_category
-        if spec.n_per_category is None
-        else spec.n_per_category
+def _prepare_run(
+    spec: RunSpec, problem: OptimizationProblem, problem_file: Path | None
+) -> _PreparedRun:
+    settings = spec.optimizer
+    internal_size = len(
+        problem.prepared.experiment.eval_configs.internal.tasks
     )
-    pool_seed_start = (
-        family.default_pool_seed_start
-        if spec.pool_seed_start is None
-        else spec.pool_seed_start
-    )
-    resolved_run_id = spec.run_id or (
-        f"{family.run_id_prefix}-{spec.optimizer.kind}-{uuid4().hex[:8]}"
-    )
-    provider = None
-    if spec.transport == "openrouter":
-        provider = openrouter_seeded_call_config(
-            model=spec.model, reasoning_effort=spec.task_reasoning_effort
+    if isinstance(settings, (GepaSettings, Miprov2Settings)):
+        size = settings.partition.train_size + settings.partition.val_size
+        if size > internal_size:
+            raise ValueError(
+                "train_size + val_size exceeds the internal split"
+            )
+        if isinstance(settings, GepaSettings) and size != internal_size:
+            raise ValueError(
+                "GEPA train_size + val_size must cover "
+                "the internal split exactly"
+            )
+    if isinstance(settings, CodexSettings) and problem_file is None:
+        raise ValueError(
+            "Codex requires a problem_file to reconstruct "
+            "its evaluation runtime"
         )
-    pool = family.generate_pool(
-        n_per_category=n_per_category,
-        seed_start=pool_seed_start,
-    )
-    prepared = family.build_experiment(
-        pool,
-        split_sizes=spec.split_sizes,
-        num_seeds=spec.num_seeds,
-        provider_call_config=provider,
-    )
+    if spec.transport.value == "fake" and not isinstance(
+        settings, CodexSettings
+    ):
+        if not problem.proposal_bodies:
+            raise ValueError(
+                "fake optimization requires explicit proposal_bodies"
+            )
+        for body in problem.proposal_bodies:
+            problem.contract.render_contract().validate_template(body)
     return _PreparedRun(
         spec=spec,
-        family=family,
-        prepared=prepared,
-        n_per_category=n_per_category,
-        pool_seed_start=pool_seed_start,
-        run_id=resolved_run_id,
+        problem=problem,
+        problem_file=problem_file.resolve()
+        if problem_file is not None
+        else None,
+        run_id=spec.run_id or f"{spec.optimizer.kind}-{uuid4().hex[:8]}",
     )
 
 
 def _build_evaluation(run: _PreparedRun, store: ObjectStore) -> _RunEvaluation:
     spec = run.spec
-    family = run.family
-    experiment = run.prepared.experiment
+    problem = run.problem
+    experiment = run.problem.prepared.experiment
     runtime = prepare_evaluation_runtime(
         experiment=experiment,
-        family=family,
+        eval_runner=problem.eval_runner,
+        mutation_field=problem.contract.mutation_field,
+        render_contract=problem.contract.render_contract(),
+        fake_replies=problem.fake_replies,
         reference=evaluation_reference_config(spec.transport),
         transport=spec.transport,
         concurrency=spec.provider_concurrency,
@@ -174,19 +171,18 @@ def _bind_optimizer(  # noqa: PLR0913
 ) -> OptimizerBinding:
     settings = run.spec.optimizer
     engine = evaluation.engine
-    experiment = run.prepared.experiment
-    family = run.family
+    experiment = run.problem.prepared.experiment
+    problem = run.problem
     if isinstance(settings, CodexSettings):
         return bind_codex(
             settings=settings,
             store=store,
             engine=engine,
             experiment=experiment,
-            family=family,
+            problem=problem,
             runtime_config=runtime_config_for_run(
                 spec=run.spec,
-                n_per_category=run.n_per_category,
-                pool_seed_start=run.pool_seed_start,
+                problem_file=run.problem_file,
             ),
             output_dir=output_dir,
             sqlite_path=sqlite_path,
@@ -198,7 +194,7 @@ def _bind_optimizer(  # noqa: PLR0913
             settings=settings,
             engine=engine,
             experiment=experiment,
-            family=family,
+            problem=problem,
             proposer=evaluation.proposer,
         )
     if isinstance(settings, GepaSettings):
@@ -207,7 +203,7 @@ def _bind_optimizer(  # noqa: PLR0913
             store=store,
             engine=engine,
             experiment=experiment,
-            family=family,
+            problem=problem,
             run_id=run.run_id,
             proposer=evaluation.proposer,
         )
@@ -216,7 +212,7 @@ def _bind_optimizer(  # noqa: PLR0913
         store=store,
         engine=engine,
         experiment=experiment,
-        family=family,
+        problem=problem,
         proposer=evaluation.proposer,
     )
 
@@ -289,9 +285,9 @@ def _prepare_launch(  # noqa: PLR0913
     run_id: str,
     experiment: Experiment,
     engine: EvalEngine,
-    family: FamilySpec,
+    problem: OptimizationProblem,
 ) -> OptimRunLaunch:
-    render_contract = family.render_contract()
+    render_contract = problem.contract.render_contract()
     if isinstance(bound, CodexBinding):
         return prepare_codex_run(
             runtime,
@@ -299,7 +295,7 @@ def _prepare_launch(  # noqa: PLR0913
             control=bound.control,
             experiment=experiment,
             render_contract=render_contract,
-            mutation_field=family.mutation_field,
+            mutation_field=problem.contract.mutation_field,
             # Binding already proved the session; do not run a second probe.
             preflight=_codex_preflight_already_proven,
         )
@@ -310,7 +306,7 @@ def _prepare_launch(  # noqa: PLR0913
             control=bound.control,
             experiment=experiment,
             render_contract=render_contract,
-            mutation_field=family.mutation_field,
+            mutation_field=problem.contract.mutation_field,
         )
     if isinstance(bound, Miprov2Binding):
         control = bound.control
@@ -330,10 +326,10 @@ def _prepare_launch(  # noqa: PLR0913
                 engine=engine,
                 experiment=experiment,
                 adapter=miprov2_adapter,
-                family=family,
+                problem=problem,
             ),
             render_contract=render_contract,
-            mutation_field=family.mutation_field,
+            mutation_field=problem.contract.mutation_field,
         )
     return prepare_copro_run(
         runtime,
@@ -341,7 +337,7 @@ def _prepare_launch(  # noqa: PLR0913
         control=bound.control,
         experiment=experiment,
         render_contract=render_contract,
-        mutation_field=family.mutation_field,
+        mutation_field=problem.contract.mutation_field,
     )
 
 
@@ -357,12 +353,10 @@ def _publish_result(
     )
     trajectory = project_trajectory_report(
         store=store,
-        prepared=run.prepared,
+        prepared=run.problem.prepared,
         result_ref=result_ref,
         result=result,
         transport=run.spec.transport,
-        model=run.spec.model,
-        split_sizes=run.spec.split_sizes,
     )
     publish_trajectory_report(output, trajectory)
 
@@ -370,6 +364,8 @@ def _publish_result(
 def run_optimizer(
     spec: RunSpec,
     *,
+    problem: OptimizationProblem,
+    problem_file: Path | None = None,
     codex_test_seam: CodexTestSeam | None = None,
     codex_prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> Path:
@@ -388,7 +384,7 @@ def run_optimizer(
             test_seam=codex_test_seam,
             allow_real_codex=spec.optimizer.allow_real_codex,
         )
-    run = _prepare_run(spec)
+    run = _prepare_run(spec, problem, problem_file)
     output = prepare_output_root(
         spec.output_dir or default_output_dir(run.run_id)
     )
@@ -408,7 +404,7 @@ def run_optimizer(
         with _build_run_runtime(
             store=store,
             engine=evaluation.engine,
-            experiment=run.prepared.experiment,
+            experiment=run.problem.prepared.experiment,
             bound=bound,
             run_id=run.run_id,
             sqlite_path=sqlite_path,
@@ -417,9 +413,9 @@ def run_optimizer(
                 runtime=runtime,
                 bound=bound,
                 run_id=run.run_id,
-                experiment=run.prepared.experiment,
+                experiment=run.problem.prepared.experiment,
                 engine=evaluation.engine,
-                family=run.family,
+                problem=run.problem,
             )
             request = copro_run_request(
                 launch,

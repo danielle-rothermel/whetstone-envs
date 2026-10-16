@@ -66,11 +66,9 @@ build-backend = "hatchling.build"
 dev = [
     "actionlint-py==1.7.12.24",
     "pre-commit>=4.6.0",
-    "pytest>=9.1.1",
     "ruff>=0.15.18",
     "ty>=0.0.51",
 ]
-browser-test = ["playwright==1.58.0"]
 
 [tool.uv]
 required-version = "==0.12.3"
@@ -86,24 +84,12 @@ artifacts = [
     "src/whetstone_envs/c23/manifest.json",
 ]
 
-[tool.pytest.ini_options]
-# The real-Codex ladder is deselected by default: every one of its rungs
-# drives the real Codex CLI against a live subscription session, so it is
-# opt-in twice over (the marker here, and WHETSTONE_ENVS_REAL_CODEX=1).
-addopts = ["--import-mode=importlib", "-m", "not real_codex"]
-testpaths = ["tests"]
-markers = [
-    "integration: opt-in checks that run in CI or with --run-integration",
-    "real_transport: opt-in rungs that spend real money on the OpenRouter transport",
-    "real_codex: drives the real Codex CLI against a live session (manual)",
-]
-
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
 
 [tool.ruff]
-include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
+include = ["scripts/**/*.py", "src/**/*.py"]
 extend-exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
@@ -158,7 +144,6 @@ ignore = ["PLR1711", "S101", "TRY003"]
 "src/whetstone_envs/c18/probes.py" = ["E501"]
 "src/whetstone_envs/reporting/cli.py" = ["PLC0415"]
 "src/whetstone_envs/reporting/html.py" = ["PLC0415"]
-"tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
 
 [tool.ruff.lint.flake8-type-checking]
@@ -169,7 +154,7 @@ runtime-evaluated-base-classes = [
 ]
 
 [tool.ty.src]
-include = ["scripts", "src", "tests"]
+include = ["scripts", "src"]
 exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
@@ -184,13 +169,6 @@ include = [
     "src/whetstone_envs/optim/**",
     "src/whetstone_envs/evaluation/**",
     "src/whetstone_envs/reporting/**",
-    "tests/optim/**",
-    "tests/real_codex/**",
-    "tests/reporting/**",
-    # Only the anti-drift test, which reaches for the optimizer's own
-    # eval-node runners on purpose to prove they agree with the
-    # whetstone-free scorer registry.
-    "tests/scoring/test_families.py",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

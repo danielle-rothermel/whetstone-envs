@@ -1,17 +1,6 @@
-"""The shared optimizer runner every task family reaches through.
-
-``run_optimizer`` drives one optimizer over one family's prepared
-experiment and writes the run's artifacts off-repo. It reads family-specific
-knowledge only from the :mod:`whetstone_envs.optim.families` registry, so it
-carries no family literal of its own -- that is the C3 generality property
-the second family exercises.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
@@ -157,21 +146,6 @@ DEFAULT_COPRO_DEPTH = 1
 GEPA_DEFAULT_SEED = 0
 MIPROV2_DEFAULT_SEED = 9
 
-#: The MIPROv2 candidate count below which minibatching exhausted the
-#: search space and raised inside the durable run boundary (D3's defect
-#: (d), whetstone-ai #137). Two candidates and a minibatch let consecutive
-#: full-eval steps promote every observed combination, and
-#: ``select_promotion`` fell out of its ranked loop into a bare
-#: ``ValueError: No valid program found in param_score_dict``.
-MIPROV2_MINIBATCH_MIN_CANDIDATES = 3
-
-MIPROV2_SPENT_COMBINATION_FIX_VERSION = (0, 1, 9)
-
-#: Where the refusal points a reader who wants the upstream story.
-MIPROV2_SPENT_COMBINATION_ISSUE = (
-    "https://github.com/danielle-rothermel/whetstone-ai/pull/137"
-)
-
 #: The default split, kept small so an unparameterised run stays a smoke run.
 DEFAULT_SPLIT_SIZES = (2, 2, 0)
 
@@ -180,158 +154,37 @@ DEFAULT_SPLIT_SIZES = (2, 2, 0)
 class RunSpec:
     optimizer: str
     transport: str
-    #: The registered task family this run drives.
     family: str = FamilyId.C19.value
     split_sizes: tuple[int, int, int] = DEFAULT_SPLIT_SIZES
     output_dir: Path | None = None
     run_id: str | None = None
     model: str = "openai/gpt-4.1-nano"
     task_reasoning_effort: ReasoningEffort | None = None
-    #: The proposer's model. ``None`` reuses ``model`` for both roles.
     proposer_model: str | None = None
-    #: MIPROv2's demonstration regime; ignored by COPRO and GEPA.
     demo_mode: str = Miprov2DemoMode.FEWSHOT.value
-    #: Repeats per task (K_REPEAT). One seed keeps a run deterministic.
     num_seeds: int = 1
-    #: Instances generated per category. ``None`` takes the family default.
     n_per_category: int | None = None
-    #: First generator seed for the pool. ``None`` takes the family default.
     pool_seed_start: int | None = None
     seed: int | None = None
-    #: COPRO candidates proposed per step.
     copro_breadth: int = DEFAULT_COPRO_BREADTH
-    #: COPRO search depth; step count is ``depth + 1``.
     copro_depth: int = DEFAULT_COPRO_DEPTH
-    #: GEPA's paid metric-call ceiling. ``None`` keeps the family default of
-    #: one full pass over the trainset plus one reflection minibatch.
     gepa_max_metric_calls: int | None = None
     gepa_reflection_minibatch_size: int | None = None
-    #: Whether MIPROv2 evaluates each trial on a sampled minibatch rather
-    #: than the whole validation split. Off by default, which is the
-    #: schedule this runner has always produced; the protocol's auto-light
-    #: configuration turns it on.
     miprov2_minibatch: bool = DEFAULT_MIPROV2_MINIBATCH
-    #: Tasks per minibatched trial. ``None`` takes the whole validation
-    #: split, which is what a non-minibatched trial evaluates.
     miprov2_minibatch_size: int | None = None
-    #: Trials between full-validation re-evaluations of the incumbent.
     miprov2_minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS
-    #: How many task evaluations run against the provider at once.
-    #:
-    #: An execution property, not an algorithmic one: it changes how long
-    #: the run takes, never what it computes, so it is not part of any
-    #: control record and no optimizer reads it. It sets the evaluation
-    #: engine's worker pool and widens the HTTP connection pool to match.
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
-    #: MIPROv2 optimization trials. The default is this runner's own shape,
-    #: which is below the protocol's auto-light 10; Wave 3's measured call
-    #: counts are the cost of the default, and raising this raises them.
     miprov2_num_trials: int = DEFAULT_MIPROV2_NUM_TRIALS
-    #: MIPROv2 instruction/fewshot candidates per component. The default is
-    #: below the protocol's auto-light 6, for the same reason.
     miprov2_num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES
-    #: The explicit train/val partition of the internal split, required by
-    #: every optimizer with a train/val concept (``miprov2`` and ``gepa``)
-    #: and refused on the others. The trainset is the first ``train_size``
-    #: tasks of the internal split and the valset the next ``val_size``, so
-    #: the two sets are disjoint and reproducible from the spec alone. They
-    #: have no default: an in-search improvement measured on tasks the
-    #: optimizer trained on cannot be told apart from memorization, so a
-    #: run must state the partition it is claiming.
     train_size: int | None = None
     val_size: int | None = None
-    #: Extra scripted proposer bodies for a fake-transport run, appended to
-    #: the family's own. The family scripts a ceiling draft and the naive
-    #: seed; the seed is rejected as a no-op mutation, so a fake round can
-    #: only ever land one accepted draft. Supplying further distinct bodies
-    #: is what lets a ``breadth`` above 2 produce a genuinely multi-draft
-    #: round. Each must satisfy the family's render contract, which the
-    #: proposal path re-validates. Refused on a real transport, where the
-    #: proposer -- not the runner -- writes the bodies.
     extra_proposal_bodies: tuple[str, ...] = ()
-    #: The Codex arm's admitted evaluate-call cap: the per-run
-    #: ``ToolCapacity.max_accepted_calls`` and the Step's ``tool_calls``
-    #: budget at once. ``None`` takes the arm's own cap,
-    #: :data:`~whetstone_envs.optim.codex.CODEX_EVALUATE_CALL_CAP`.
-    #: Rejected on other optimizers so it cannot look honoured when
-    #: nothing reads it.
     codex_capacity: int | None = None
-    #: The Codex CLI this run spawns. The default is the real binary,
-    #: resolved on the run PATH; a test overrides it to the scripted fake.
-    #: Rejected on other optimizers for the same reason as the cap.
     codex_binary: str = CODEX_DEFAULT_BINARY
-    #: Codex's own model, and how hard it reasons. ``None`` means the
-    #: arm's own default agent model -- *not* the run's ``model``, which
-    #: is the task model. The two are different products on different
-    #: routes: the task model is an OpenRouter route the Codex CLI cannot
-    #: run at all, and a subscription session refuses it before the agent
-    #: emits a token. See
-    #: :data:`~whetstone_envs.optim.codex.CODEX_DEFAULT_AGENT_MODEL`.
     codex_model: str | None = None
     codex_reasoning_effort: str = CodexReasoningEffort.MEDIUM.value
-    #: The Codex agent's wall budget in seconds. ``None`` keeps
-    #: whetstone-ai's own default.
     codex_wall_seconds: float | None = None
-    #: Half of the deliberate opt-in to a real, billed Codex session. A
-    #: Codex run without a test seam is refused unless this is set *and*
-    #: :data:`~whetstone_envs.optim.codex.ALLOW_REAL_CODEX_ENV` names the
-    #: opt-in in the process environment -- see
-    #: :func:`~whetstone_envs.optim.codex.refuse_unauthorized_real_codex`.
-    #: This field alone cannot authorize spend, which is why it is safe
-    #: for a serialized spec to carry it. Rejected on other optimizers,
-    #: like every other Codex-scoped setting.
     allow_real_codex: bool = False
-
-
-def installed_whetstone_ai_version() -> str | None:
-    """The installed whetstone-ai version string, or ``None`` if absent.
-
-    Absent is a real state on this repo's base install: the ``optim``
-    extra installs whetstone-ai only on Python 3.13+, and this module is
-    reachable from a spec-validation test that never builds a run.
-    """
-    try:
-        return package_version("whetstone-ai")
-    except PackageNotFoundError:
-        return None
-
-
-def _version_text(parts: tuple[int, ...]) -> str:
-    return ".".join(str(part) for part in parts)
-
-
-def _release_tuple(text: str) -> tuple[int, ...]:
-    """The leading numeric release of a version string.
-
-    Only the release segment is compared, so a pre-release or local
-    version of the fixed release still reads as the fixed release. A
-    segment that is not an integer stops the parse rather than raising:
-    the caller's fallback -- refuse -- is the safe answer for a version
-    this function cannot rank.
-    """
-    parts: list[int] = []
-    for segment in text.split("."):
-        digits = ""
-        for character in segment:
-            if not character.isdigit():
-                break
-            digits += character
-        if not digits:
-            break
-        parts.append(int(digits))
-        if len(digits) != len(segment):
-            break
-    return tuple(parts)
-
-
-def _miprov2_spent_combination_fixed() -> bool:
-    installed = installed_whetstone_ai_version()
-    if installed is None:
-        return False
-    release = _release_tuple(installed)
-    if not release:
-        return False
-    return release >= MIPROV2_SPENT_COMBINATION_FIX_VERSION
 
 
 def _validate_miprov2_settings(spec: RunSpec) -> None:
@@ -354,24 +207,6 @@ def _validate_miprov2_settings(spec: RunSpec) -> None:
         raise ValueError(
             "--miprov2-minibatch requires --miprov2-minibatch-size: left "
             "unset the batch is the whole validation split"
-        )
-    if (
-        spec.miprov2_minibatch
-        and spec.miprov2_num_candidates < MIPROV2_MINIBATCH_MIN_CANDIDATES
-        and not _miprov2_spent_combination_fixed()
-    ):
-        raise ValueError(
-            f"miprov2_num_candidates {spec.miprov2_num_candidates} with "
-            f"minibatching requires whetstone-ai "
-            f"{_version_text(MIPROV2_SPENT_COMBINATION_FIX_VERSION)} or "
-            f"newer; the installed "
-            f"{installed_whetstone_ai_version() or 'whetstone-ai'} raises "
-            f"'No valid program found in param_score_dict' inside the "
-            f"durable run boundary once consecutive full-eval steps have "
-            f"promoted every observed combination. Use at least "
-            f"{MIPROV2_MINIBATCH_MIN_CANDIDATES} candidates, turn "
-            f"minibatching off, or upgrade -- see "
-            f"{MIPROV2_SPENT_COMBINATION_ISSUE}"
         )
     if spec.miprov2_minibatch_full_eval_steps < 1:
         raise ValueError(
@@ -1195,9 +1030,6 @@ __all__ = [
     "GEPA_DEFAULT_SEED",
     "KNOWN_FAMILY_IDS",
     "MIPROV2_DEFAULT_SEED",
-    "MIPROV2_MINIBATCH_MIN_CANDIDATES",
-    "MIPROV2_SPENT_COMBINATION_FIX_VERSION",
-    "MIPROV2_SPENT_COMBINATION_ISSUE",
     "OPTIMIZERS",
     "TRAIN_VAL_OPTIMIZERS",
     "TRANSPORTS",
@@ -1205,7 +1037,6 @@ __all__ = [
     "CodexTestSeam",
     "RealCodexRefusedError",
     "RunSpec",
-    "installed_whetstone_ai_version",
     "registered_family_ids",
     "run_optimizer",
 ]

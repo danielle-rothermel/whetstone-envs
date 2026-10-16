@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Remove unused pytest/browser dependencies, configuration, workflow, and
+  contract check pointers. Remove the obsolete MIPROv2 old-version guard and
+  study-specific commentary from optimizer inputs and concurrency policy.
+
 - Standalone C19 execution lives in `whetstone_envs.evaluation`, runtime evidence
   extraction in `whetstone_envs.optim.extraction`, and shared run-directory
   handling in `whetstone_envs.artifacts`. Reporting owns presentation and CLI

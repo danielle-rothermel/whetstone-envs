@@ -12,7 +12,6 @@ rationale = """
 Caller mutation must not change a task instance's equality, hash, public prompt \
 identity, or persisted content."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/instances"
 
 [[contracts]]
 title = "Instance groups own ordered membership"
@@ -38,7 +37,6 @@ rationale = """
 Instance pools reject duplicate public tasks without claiming that input \
 identity uniquely determines rendered text."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/instances/test_identity.py tests/pools/test_pool.py"
 
 [[contracts]]
 title = "Default rendering does not expose private fields"
@@ -50,7 +48,6 @@ rationale = """
 The standard rendering path protects private fields while custom rendering \
 remains an explicit escalation boundary."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/probes/test_rendering.py"
 
 [[contracts]]
 title = "Aggregation requires a complete planned matrix"
@@ -64,7 +61,6 @@ rationale = """
 Failed or absent results must not masquerade as zero scores or silently \
 disappear, and larger instance categories must not dominate by population."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/scoring/test_aggregation.py"
 
 [[contracts]]
 title = "Instance pool splits own named disjoint groups"
@@ -97,7 +93,6 @@ rationale = """
 Repeated generation of evaluation cohorts must be reproducible while \
 representing scarce combinations as broadly as destination capacity permits."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/pools/test_splitting.py"
 
 [[contracts]]
 title = "Manifests pin retained pool content"
@@ -112,7 +107,6 @@ containment, counts, and an ordered versioned identity jointly pin the \
 generated instance pool without claiming anything about rejected generator \
 attempts."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/manifests"
 
 [[contracts]]
 title = "Foundational dependencies change through releases"
@@ -158,7 +152,6 @@ One bounded representation prevents equivalent persisted forms from drifting. \
 Atomic visibility depends on supported filesystem replacement semantics; this \
 contract does not claim locking, compare-and-set, or power-loss durability."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/manifests"
 
 [[contracts]]
 title = "Owning subpackages define the public API"
@@ -212,7 +205,6 @@ Offline debugging must remain reproducible and complete without reopening \
 mutable runtime storage, while validation or write failure must preserve an \
 existing report and incomplete execution must never masquerade as a zero."""
 date = "2026-08-21"
-check = "uv run --extra optim pytest -q tests/reporting tests/optim/test_e2e.py"
 
 [[contracts]]
 title = "HTML reports are deterministic inert offline projections"
@@ -234,7 +226,6 @@ schema; deterministic generation, inert text construction, and a closed CSP \
 make direct file inspection reproducible without turning recorded prompts or \
 outputs into executable content."""
 date = "2026-08-21"
-check = "uv run --extra optim pytest -q tests/reporting/test_html.py && uv run --group browser-test --extra optim pytest -q tests/reporting/test_browser.py"
 
 [[contracts]]
 title = "C11 generation is reproducible and oracle-grounded"
@@ -248,7 +239,6 @@ Oracle-derived gold keeps the benchmark independent of the input builders, \
 while deterministic balanced generation and a persisted pool identity make \
 runs reproducible and expose corpus drift."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c11"
 
 [[contracts]]
 title = "C22 scores its explicit constraint stack"
@@ -261,7 +251,6 @@ rationale = """
 The measured behavior must match the complete model-visible request without \
 claiming semantic grading that the deterministic oracle does not perform."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c22"
 
 [[contracts]]
 title = "C23 public evidence determines every scored answer"
@@ -277,7 +266,6 @@ Exact-match evaluation is interpretable only when the public evidence fixes \
 the expected answer rather than relying on an unobserved choice among \
 demo-consistent rules."""
 date = "2026-08-06"
-check = "uv run pytest -q --run-integration tests/c23/test_generation.py"
 
 [[contracts]]
 title = "C23 generation is deterministic and RNG-isolated"
@@ -291,7 +279,6 @@ rationale = """
 Regenerated experiment cohorts must not depend on ambient application state \
 or randomized set iteration."""
 date = "2026-08-06"
-check = "uv run pytest -q --run-integration tests/c23/test_generation.py"
 
 [[contracts]]
 title = "C18 generation is pinned and independently checked"
@@ -310,7 +297,6 @@ manifests make the published pool identities reproducible, and surface-text \
 label derivation prevents the generator's own answer from being the sole \
 evidence for correctness."""
 date = "2026-08-06"
-check = "uv run --extra c18 pytest -q --run-integration tests/c18"
 
 [[contracts]]
 title = "C19 generation is transition-complete and reproducible"
@@ -331,4 +317,3 @@ before it can corrupt private gold, while closed generated worlds, balanced \
 deterministic generation, exact runtime versions, and a canonical manifest \
 make the task family reproducible."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c19"

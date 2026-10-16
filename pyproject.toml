@@ -160,15 +160,16 @@ exclude = [
 ]
 
 [[tool.ty.overrides]]
-# The optional runtime packages import whetstone-ai,
-# which the `optim` extra installs only on Python 3.13+. The 3.12 check
-# therefore type-checks these files against no whetstone at all, so the
-# imports are unresolvable there by construction and nowhere else.
+# The optional runtime packages import whetstone-ai, and the prelim scripts
+# import gepa and httpx, which the `optim` extra installs only on Python
+# 3.13+. The 3.12 check therefore type-checks these files without them, so
+# the imports are unresolvable there by construction and nowhere else.
 include = [
     "src/whetstone_envs/optim/**",
     "src/whetstone_envs/evaluation/**",
     "tests/optim/**",
     "examples/**",
+    "scripts/prelim/**",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

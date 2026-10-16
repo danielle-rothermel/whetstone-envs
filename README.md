@@ -45,6 +45,10 @@ uv run python scripts/c22/viz.py --preset hard --count 3
 
 </details>
 
+[`scripts/prelim`](scripts/prelim) holds untested preliminary sweep tooling:
+a per-family OpenRouter runner for naive, format-fixed, null, and GEPA arms
+(`gepa_family.py`) and a file-based job queue with its jobs file.
+
 ## Scope
 
 This repo owns the environment data and evaluation rules shared by Whetstone's

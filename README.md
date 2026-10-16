@@ -38,7 +38,7 @@ execution-contract code:
   trajectory records, row accounting, paired comparisons, and bounded
   canonical report files without execution dependencies.
 - [**Reporting**][reporting-source] provides standalone evaluation execution,
-  terminal and self-contained HTML inspection, and study report generation.
+  terminal and self-contained HTML inspection.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
@@ -298,9 +298,12 @@ uv run --extra optim whetstone-study run \
   --study-dir STUDY_DIR --stage stage2 --transport openrouter \
   --allow-real-codex
 uv run --extra optim whetstone-study leakage-check --study-dir STUDY_DIR
-uv run --extra optim whetstone-study report \
-  --study-dir STUDY_DIR --out REPORT_DIR
+uv run --extra optim whetstone-study manifest check STUDY_DIR
 ```
+
+Study results live in `study.json` and the run artifacts it references.
+Use `plan` to inspect the stage ledger, `manifest check` to resolve its
+evidence pointers, and `leakage-check` before interpreting efficacy results.
 
 `init` regenerates the pinned population and records each split's task
 hashes, the pool manifest's content hash, and the sha256 of the protocol
@@ -333,7 +336,7 @@ historical value.
 
 The manifest records no separate assignment digest: Step 10's authorising
 assignment *is* the protocol document, so `assignment_doc_sha256` is
-absent and the report says so, rather than carrying the digest of a fixed
+absent, rather than carrying the digest of a fixed
 marker string that would verify nothing. `init` refuses to overwrite an existing `study.json`, because a
 second initialisation over a study that already holds evidence would reset
 a design that evidence refers to.
@@ -369,9 +372,9 @@ The opt-ins each stage needs, by name:
 
 Stage order is enforced rather than documented: `stage1` and `stage2`
 refuse without a recorded design, and `stage2` refuses without a `stage1`
-whose call-count gate passed. Run `leakage-check` before `report` -- it
-writes the L1-L5 verdict the report reads, and a report generated without
-it is marked invalid.
+whose call-count gate passed. Run `leakage-check` before interpreting study
+results. It writes the L1-L7 verdict to the manifest; an absent or failed
+check does not establish valid efficacy evidence.
 
 `--without-codex` authors the design with the Codex arm dropped. It exists
 for fake-transport rehearsals: the Codex guard fires on the *design*
@@ -381,8 +384,8 @@ strictly smaller design, not the pre-registration, and it says so on every
 axis a reader checks: its `study_id` gains a `-without-codex` suffix, its
 `models.codex_agent_model` records the omission instead of naming an agent
 no arm will reach, the manifest carries
-`design_projection: "without-codex"`, and the report's headline is
-prefixed with the projection so its numbers cannot be read as the study's.
+`design_projection: "without-codex"`. Interpret that projection's results
+as a rehearsal of the smaller design.
 
 #### Storage the study needs
 
@@ -420,7 +423,7 @@ A study stage evaluates on one of two transports, named per invocation:
 uv run --extra optim whetstone-study run \
   --study-dir STUDY_DIR --stage stage0 --transport openrouter
 uv run --extra optim whetstone-study plan --study-dir STUDY_DIR
-uv run --extra optim whetstone-study report --study-dir STUDY_DIR --out OUT_DIR
+uv run --extra optim whetstone-study manifest check STUDY_DIR
 ```
 
 `--transport fake` is the default and reaches no provider: the transport
@@ -443,7 +446,7 @@ seed — set or not. A control the study did not set reads `provider
 default` rather than being omitted, because "left to the provider" is a
 real state with a real bill: it is why the toy Stage 0 spent thousands of
 reasoning tokens per call. It is recorded, not hashed, like the transport
-itself, and the report prints it in the design section.
+itself, and is available in `study.json` alongside the registered design.
 
 **The transport is an invocation property that the manifest records.** Like
 `--allow-real-codex` it stays out of the pre-registration hash, so two
@@ -472,8 +475,8 @@ selections over those runs, the held-out claims and rows, the pilot's
 call-count gate, and the `leakage_check` verdict computed over those runs:
 the design changed and the evidence came from another experiment. Nothing
 is deleted silently — the drop is recorded as an `amendments` entry naming
-every run id it removed and every run directory it orphaned, and the report
-surfaces it. The arms themselves survive with empty run lists, because an
+every run id it removed and every run directory it orphaned. The arms
+themselves survive with empty run lists, because an
 arm is part of the design rather than evidence for it. **Paid evidence is
 never discarded automatically**: if any dropped run was measured on a
 billed transport the command refuses instead, before the calibration
@@ -506,8 +509,8 @@ merged rather than replaced when it re-runs: a stage that crashed after its
 manifest write executes nothing on resume, so replacing its row would
 discard the bill it already paid, and the fold of the existing spend with
 this invocation's keeps a stage row from ever shrinking. `whetstone-study plan`
-prints that ledger beneath its estimated budget, `run` echoes it, and the
-report prints it beside each stage's transport. A role with any unpriced
+prints that ledger beneath its estimated budget, and `run` echoes it
+alongside the stage's transport. A role with any unpriced
 call reports no USD total at all rather than a partial sum that would look
 authoritative.
 

@@ -367,8 +367,8 @@ def measured_per_task(
     anchor's to align task-for-task, and dropping a task silently shrinks
     ``T`` so the interval looks tighter than the data supports. Keeping
     it means the loss travels intact into the row's ``completeness``,
-    where the report reads it as ``VERDICT_INCOMPLETE`` -- the arm was
-    measured, and measured too shallowly to claim.
+    which records that the arm was measured too shallowly to claim when
+    it falls below the completeness backstop.
 
     This replaces an assertion that a lost task could never arrive.
     :func:`~whetstone_envs.optim.completeness.require_task_completeness`

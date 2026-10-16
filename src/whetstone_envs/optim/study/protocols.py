@@ -163,7 +163,7 @@ PROTOCOL_IDS: tuple[str, ...] = (
 # Init records the digest of the file it reads; this pin identifies the
 # packaged revision for verification.
 PROTOCOL_DOC_SHA256 = (
-    "8a9a271cd957b67548f00e0884d6b6a6602488b6c6bde08092cf930c9b61bd65"
+    "ad31d9ccdd67d1bc5b455e6856f2336672f47a83303458743dc357db57d910ef"
 )
 
 
@@ -977,7 +977,7 @@ def without_codex(protocol: StudyProtocol) -> StudyProtocol:
     the study's directory or be cited as the study's; and its
     ``codex_agent_model`` records the omission rather than naming an agent
     no arm will reach. ``init`` additionally stamps the manifest's
-    ``design_projection``, which is what the report prints.
+    ``design_projection``, which distinguishes the rehearsal's results.
     """
     return replace(
         protocol,

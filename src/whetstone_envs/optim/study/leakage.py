@@ -497,7 +497,7 @@ def check_l7_search_repeats_as_designed(
 
     The arm stage refuses such a run before recording it. This is the
     after-the-fact reading of the whole manifest, which covers runs the
-    refusal was not in force for and is the verdict the report prints.
+    refusal was not in force for. Its verdict is recorded in the manifest.
     """
     seen = tuple(observations)
     if not seen:

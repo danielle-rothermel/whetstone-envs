@@ -1,11 +1,9 @@
-"""``whetstone-study``: plan, run, report, and check one Step 10 study.
+"""``whetstone-study``: initialize, plan, run, and check one Step 10 study.
 
 The CLI is a dispatcher, not a harness. Every side of the study that costs
-money or takes hours lives behind an injected callable -- ``run`` reaches
-the stage harness through :class:`StageRunner` and ``report`` reaches the
-report generator through :class:`ReportGenerator` -- so this module is
-testable without either, and neither can be reached by accident from a
-subcommand that was only meant to print.
+money or takes hours lives behind :class:`StageRunner`, so the dispatcher
+can be exercised without executing a stage. Commands that only inspect
+the study do not reach the stage harness.
 
 ``plan`` is the one subcommand that computes something itself, and it
 computes only arithmetic over a :class:`StudySpecLike`: the run matrix and
@@ -16,10 +14,9 @@ provider.
 Injection is by protocol, not by import. Every collaborator defaults to the
 real implementation -- :func:`load_study_spec` over the study's own
 manifest, :func:`default_stage_ledger` and :func:`default_stage0_gate` over
-what that manifest has recorded, :func:`run_stage` over the stage harness,
-and :func:`default_report_generator` over the report package. Tests pass
-their own collaborators, which is how the ordering and the wiring are
-verified separately.
+what that manifest has recorded, and :func:`run_stage` over the stage
+harness. Callers can pass their own collaborators to verify ordering and
+wiring separately.
 """
 
 from __future__ import annotations
@@ -107,7 +104,6 @@ from whetstone_envs.optim.study.selection import SelectionError
 from whetstone_envs.optim.study.spec import load_study_spec
 from whetstone_envs.optim.study.stages import StageError
 from whetstone_envs.optim.study.stages import run_stage as _run_stage_harness
-from whetstone_envs.reporting.study_report import generate_study_report
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -272,18 +268,6 @@ class StageRunner(Protocol):
         provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
         allow_width_change: bool = False,
     ) -> StudyManifest: ...
-
-
-class ReportGenerator(Protocol):
-    """Generate the report packet from a manifest, returning its directory.
-
-    It takes the manifest itself, not the study directory, because the
-    report is defined to read only the manifest and the evidence the
-    manifest names. :func:`default_report_generator` is the implementation
-    this CLI binds.
-    """
-
-    def __call__(self, *, manifest: StudyManifest, out_dir: Path) -> Path: ...
 
 
 # --------------------------------------------------------------------------
@@ -948,53 +932,6 @@ def _run_stage(  # noqa: PLR0913
     return EXIT_OK
 
 
-def _run_report(
-    *,
-    study_dir: Path,
-    out_dir: Path,
-    generate_report: ReportGenerator,
-) -> int:
-    """Read the manifest and hand it to the generator.
-
-    The study directory is opened once, here, and only the manifest crosses
-    into the generator: that is what keeps "the report reads the manifest
-    and the evidence it names" a property of the wiring rather than a
-    convention the generator is trusted to follow.
-    """
-    manifest = read_study_manifest(study_dir)
-    print(generate_report(manifest=manifest, out_dir=out_dir))
-    return EXIT_OK
-
-
-def _report_generator_for(
-    study_dir: Path, generate_report: ReportGenerator
-) -> ReportGenerator:
-    """Bind the study's own evidence store to ``generate_report``.
-
-    The default generator reads the manifest only. The study directory
-    keeps its run store beside that manifest, and resolving it turns the
-    audit-finding tables from "did not resolve" into real rows, so the CLI
-    supplies it when it is there.
-
-    An injected generator is returned untouched. A test that passes its own
-    collaborator is testing the wiring, and silently handing it a store it
-    did not ask for would change what it is testing.
-    """
-    if generate_report is not default_report_generator:
-        return generate_report
-    store_path = _default_store_path(study_dir)
-    if not store_path.is_file():
-        return generate_report
-
-    def generate(*, manifest: StudyManifest, out_dir: Path) -> Path:
-        with open_sqlite(str(store_path)) as store:
-            return generate_study_report(
-                manifest=manifest, out_dir=out_dir, store=store
-            )
-
-    return generate
-
-
 def _run_leakage_check(*, study_dir: Path) -> int:
     """Run L1-L7 over the study's manifest and report every rule's verdict.
 
@@ -1002,7 +939,7 @@ def _run_leakage_check(*, study_dir: Path) -> int:
     manifest is where the study records what it selected, what it measured
     on held-out, and which task hashes each split holds, and re-deriving
     those from artifacts would check a different set of facts than the ones
-    the report will print.
+    recorded in the manifest.
 
     L1 is the exception, and it is read from the runs themselves. It is a
     rule over each optimizer run's own evaluations, which live in the run
@@ -1015,13 +952,10 @@ def _run_leakage_check(*, study_dir: Path) -> int:
     as a violated one does: from the reader's side, a study whose L1
     nobody checked and one whose L1 failed make the same claim.
 
-    **The verdict is recorded, not only printed.** The report gates its
-    headline and every arm verdict on ``manifest.leakage_check``, treating
-    an absent block exactly as it treats a failed one, so a study whose
-    rules passed on the terminal but were never written back would report
-    as though nobody had checked it. Writing the block here is what closes
-    that gap, and it is written whether the rules passed or failed --
-    a recorded failure is the finding the report must print.
+    **The verdict is recorded, not only printed.** Writing
+    ``manifest.leakage_check`` preserves the result for later interpretation,
+    whether the rules passed or failed. An absent block does not establish
+    that the study passed its leakage checks.
     """
     manifest = read_study_manifest(study_dir)
     report = _leakage_report(
@@ -1314,7 +1248,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROGRAM_NAME,
         description=(
-            "Plan, run, report, and check a Step 10 validation study."
+            "Initialize, plan, run, and check a Step 10 validation study."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1502,15 +1436,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    report = commands.add_parser(
-        "report", help="Generate the report packet from the manifest."
-    )
-    report.add_argument("--study-dir", type=Path, required=True)
-    report.add_argument("--out", type=Path, required=True)
-
     leakage = commands.add_parser(
         "leakage-check",
-        help="Run L1-L7 over a study directory before it reports.",
+        help="Run L1-L7 over a study directory before interpreting results.",
     )
     leakage.add_argument("--study-dir", type=Path, required=True)
 
@@ -1591,30 +1519,13 @@ def default_stage_runner(  # noqa: PLR0913
         )
 
 
-def default_report_generator(
-    *, manifest: StudyManifest, out_dir: Path
-) -> Path:
-    """Write the report packet from the manifest alone.
-
-    This is the CLI's default :class:`ReportGenerator` and it deliberately
-    opens no store: the :class:`ReportGenerator` contract carries a manifest
-    and an output directory, and a generator that went looking for a store
-    the contract did not give it would be reading evidence its caller never
-    named. ``report`` binds the study directory's own store separately, in
-    :func:`_report_generator_for`, which is where the study directory is
-    still in scope.
-    """
-    return generate_study_report(manifest=manifest, out_dir=out_dir)
-
-
-def _dispatch(  # noqa: PLR0913
+def _dispatch(
     arguments: argparse.Namespace,
     *,
     load_spec: StudySpecLoader,
     load_stages: StageLedgerLoader,
     load_stage0_gate: Stage0GateLoader,
     run_stage: StageRunner,
-    generate_report: ReportGenerator,
 ) -> int:
     """Route one parsed invocation to its subcommand body.
 
@@ -1653,34 +1564,24 @@ def _dispatch(  # noqa: PLR0913
             ),
             allow_width_change=arguments.allow_width_change,
         )
-    if arguments.command == "report":
-        return _run_report(
-            study_dir=arguments.study_dir,
-            out_dir=arguments.out,
-            generate_report=_report_generator_for(
-                arguments.study_dir, generate_report
-            ),
-        )
     if arguments.command == "leakage-check":
         return _run_leakage_check(study_dir=arguments.study_dir)
     return _run_manifest_check(path=arguments.path, store_path=arguments.store)
 
 
-def main(  # noqa: PLR0913
+def main(
     argv: Sequence[str] | None = None,
     *,
     load_spec: StudySpecLoader | None = None,
     load_stages: StageLedgerLoader | None = None,
     load_stage0_gate: Stage0GateLoader | None = None,
     run_stage: StageRunner | None = None,
-    generate_report: ReportGenerator | None = None,
 ) -> int:
     """Dispatch one study subcommand.
 
     Every collaborator defaults to the real implementation -- the
-    manifest-backed spec loader, the stage ledger and gate readers, the
-    stage harness, and the report package's generator -- so the CLI is the
-    study's actual entry point rather than a shell around one. Tests pass
+    manifest-backed spec loader, the stage ledger and gate readers, and
+    stage harness -- so the CLI is the study's actual entry point. Tests pass
     their own collaborators, which is how the ordering is verified
     independently of the wiring.
 
@@ -1699,7 +1600,6 @@ def main(  # noqa: PLR0913
             load_stages=load_stages or default_stage_ledger,
             load_stage0_gate=load_stage0_gate or default_stage0_gate,
             run_stage=run_stage or default_stage_runner,
-            generate_report=generate_report or default_report_generator,
         )
     except (StageError, SelectionError) as error:
         # A refused stage and a refused selection are the study saying no:
@@ -1746,14 +1646,12 @@ __all__ = [
     "STAGE0_GATE_HEADING",
     "STAGE_SPEND_HEADING",
     "UNLEDGERED_SPEND",
-    "ReportGenerator",
     "Stage0GateLoader",
     "StageLedgerLoader",
     "StageRunner",
     "StudySpecLike",
     "StudySpecLoader",
     "build_parser",
-    "default_report_generator",
     "default_stage0_gate",
     "default_stage_ledger",
     "default_stage_runner",

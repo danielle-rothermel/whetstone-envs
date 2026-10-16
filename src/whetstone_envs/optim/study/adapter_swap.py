@@ -229,7 +229,7 @@ def differing_modules(*, root: Path | None = None) -> tuple[str, ...]:
 def adapter_swap_record(*, root: Path | None = None) -> AdapterSwapRecord:
     """The C3 assertion in the shape the manifest persists.
 
-    ``passed`` is the conjunction the report reads: no shared-path module
+    ``passed`` records the conjunction: no shared-path module
     names or imports a family outside the adapter set. The modules are
     persisted rather than reduced to the boolean because a failure names
     *which* module leaked, and that name is the finding.

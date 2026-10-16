@@ -12,6 +12,13 @@ permitted mid-run change is the staged `K` escalation in §3.6 and the abort
 rules in §3.9. Any other change invalidates the confirmatory claim and forces a
 fresh run on a new `study_id`.
 
+**Presentation update — 2026-10-15.** The repository provides study execution
+and persisted evidence without an automatic Markdown/HTML study report.
+Section 6.3 describes evidence inspection and human interpretation. This
+changes the presentation deliverable only; the registered experimental
+design, scoring, selection, leakage rules, and cost accounting are unchanged.
+Existing studies retain the protocol digest recorded at initialization.
+
 ---
 
 ## Revision 2 — 2026-08-23
@@ -125,8 +132,8 @@ directly and is not multiplied again.
 **On the fidelity arms.** MIPROv2's `zeroshot` and `ground_only` modes are
 fidelity evidence for the `MIPRO_ZEROSHOT_GROUNDING` and
 `MIPRO_GROUND_ONLY_DEVIATION` invariants. They are **not efficacy arms**: they
-carry no held-out claim, they do not enter the Holm family, and the report lists
-them without a verdict. The Holm family is exactly the four real optimizers
+carry no held-out claim and do not enter the Holm family. Interpret their
+audit evidence separately from efficacy. The Holm family is exactly the four real optimizers
 (§3.7). This was always the intent (§5.3 pre-registers `fewshot` as the mode
 carrying the MIPROv2 claim); revision 2 makes it structural rather than
 conventional, via an arm role recorded in the manifest.
@@ -415,8 +422,8 @@ L5. **Split identity is content-addressed.** `EvalConfigs.held_out_task_hashes`
 L6. **Mechanical check.** A `study_leakage_check` function over all run
     artifacts asserts L1 and L5 by set intersection of task hashes across roles,
     and asserts L3 by counting held-out `EvalEvidence` records per candidate
-    (exactly one). It runs before the report is generated and fails the study
-    loudly.
+    (exactly one). Run it before interpreting efficacy results; a failure or
+    absent check does not establish valid efficacy evidence.
 
 ### 3.3 What "improvement" means
 
@@ -1186,7 +1193,7 @@ New CLI flags this protocol requires (all in Step 12 or Step 10's own envs PR):
 
 ---
 
-## 6. Artifacts and report skeleton
+## 6. Artifacts and interpretation
 
 ### 6.1 Run artifacts (existing conventions)
 
@@ -1242,23 +1249,23 @@ balance: {before_stage0_usd, before_stage1_usd, before_stage2_usd, after_usd}
 leakage_check: {passed, checks: [...]}
 ```
 
-Every number printed in the report is either a field of this manifest or a
-deterministic function of the referenced evidence — the manifest names the
-`(schema_name, content_hash)` pair for each. Report generation reads only the
-manifest and the store; it never recomputes a score from a loose file.
+Every study measurement is either a field of this manifest or a deterministic
+function of the referenced evidence — the manifest names the
+`(schema_name, content_hash)` pair for each. Inspect the manifest and the store
+rather than recomputing scores from loose files.
 
-### 6.3 Report — Markdown + polished HTML
+### 6.3 Study evidence and interpretation
 
-Location per report conventions:
-`~/drotherm/data/.claude/whetstone-ai/<YYYY-MM-DD>/<HHMM>-step10-validation-report/`
-as a multi-file packet (`report.md`, `report.html`, `study.json`, `doc.css`,
-figures). Long human-facing HTML follows the `html-doc-polish` skill at
-`~/drotherm/repos/dotfiles/agents/skills/html-doc-polish/`, with the Markdown
-source retained beside it.
+The supported study artifact is `study.json` and the run evidence it names.
+`whetstone-study plan --study-dir STUDY_DIR` displays the stage ledger;
+`whetstone-study manifest
+check STUDY_DIR` resolves evidence pointers; `whetstone-study leakage-check
+--study-dir STUDY_DIR` records the leakage verdict. Evaluation and trajectory
+JSON can also be inspected through `whetstone-eval`'s terminal and HTML views.
 
-Skeleton:
+Human interpretation should cover:
 
-1. **Verdict table** — one row per optimizer: fidelity pass/fail, held-out Δ with
+1. **Assessment per optimizer** — fidelity pass/fail, held-out Δ with
    95% CI, uncorrected and Holm-corrected significance, spend. Three-state
    verdict: *validated* / *not validated (fidelity)* / *no detected improvement*.
 2. **Design summary** — splits, sizes, K, models, MDE, and the pre-registered
@@ -1339,7 +1346,7 @@ deadlines through the dr-exec pool; `RowDispatchStatus` discriminates
 exhaust the planned matrix. *Attack surface:* the envs `CategorySummary`
 validator sets `score = None` whenever `present != denominator`. A study where
 1% of rows time out therefore produces `None` scores for whole categories, and a
-naive report generator could quietly drop them, biasing toward whichever categories
+naive evidence consumer could quietly drop them, biasing toward whichever categories
 completed. The protocol needs an explicit rule: **any arm with less than 98%
 row completeness on held-out is reported as incomplete and its CI is not
 claimed.** (This is added here; the reviewer should check whether 98% is the
@@ -1514,9 +1521,10 @@ Ordered, each item independently verifiable.
 5. envs: c18 optim adapter (`build_c18_experiment`, `c18_render_contract`,
    family dispatch) and the adapter-swap assertion test.
 6. envs: `study.json` schema + writer + `study_leakage_check` (L6).
-7. envs: report generator reading only `study.json` + the store; Markdown and
-   polished HTML per §6.3.
+7. envs: manifest pointer checks and persisted run evidence available for
+   inspection and human interpretation per §6.3.
 8. whetstone-ai: `OptimResult.cost` per-role calls/tokens with the
    `usd`-only-when-fully-priced rule (§5.4) — prerequisite, not Step 10 work.
 9. CI: every audit runs against the existing fake-transport e2e artifacts.
-10. Stage 0 run → gate; Stage 1 pilot → gate; Stage 2 full → report.
+10. Stage 0 run → gate; Stage 1 pilot → gate; Stage 2 full → evidence checks
+    and human interpretation.

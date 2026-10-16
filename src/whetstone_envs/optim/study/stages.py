@@ -1341,11 +1341,9 @@ def _without_amended_evidence(
     ``leakage_check`` is L6's mechanical pass over the very run artifacts
     being dropped, so keeping it would leave the manifest asserting a
     clean result about runs the study no longer holds --
-    indistinguishable, to a regenerated report, from a study whose
-    leakage rules passed over its current runs.
-    :func:`~whetstone_envs.reporting.study_report.study_leakage_failed`
-    reads an absent block as not-established, so clearing it is what makes
-    the report's claim honest rather than merely unstated.
+    indistinguishable from a study whose leakage rules passed over its
+    current runs. Clearing the block requires the leakage check to be run
+    over the replacement evidence before interpreting its efficacy.
 
     The other verdicts are deliberately left alone, because they are not
     measurements of these runs: ``gepa_sizing`` and ``fanout_check`` are
@@ -2025,12 +2023,8 @@ def _record_c18_evidence(
 ) -> None:
     """Write the C3 block, for a study whose population is c18.
 
-    **The record is the study's generality evidence, so it is written by
-    the study rather than asserted about it.** Until now ``C18Record`` was
-    a shape the report could render and nothing produced: a c18 study ran
-    its arms, spent its budget, and left a manifest whose generality
-    section said "no second family was run" -- which was true of the
-    artifact and false of the study.
+    The record preserves the study's generality evidence alongside its
+    other measurements, so the manifest records that the second family ran.
 
     Two things go in, and they are the two things section 4.1 asks for.
     The **runs** are this stage's own, exactly the records the arms block
@@ -2301,10 +2295,9 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     arg-max over and no prompt a held-out evaluation could measure. No
     selection is persisted and no provider call is made -- issuing either
     would be inventing a result for an arm that produced none. The arm's
-    failed runs stay on the manifest, and the report renders it from those
-    records as ``VERDICT_NOT_VALIDATED``, which is what an arm with no
-    completed run is. Returning rather than raising is the same rule the
-    refused-claim branch below follows, for the same reason: one arm's
+    failed runs stay on the manifest; an arm with no completed run has not
+    established fidelity or efficacy. Returning rather than raising follows
+    the same rule as the refused-claim branch below: one arm's
     failure must not discard every other arm's paid evidence.
 
     ``report_arm`` persists each arm's selection as it goes and the ledger
@@ -2335,7 +2328,7 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
     held-out number. The evaluation ran and was billed, and a fixed rule
     judged it unfit to report, so re-issuing would buy the same verdict
     again. The arm returns with ``held_out=None``, keeps its selection and
-    official scores, and the report renders it ``VERDICT_UNMEASURED``. This
+    official scores, and records no held-out measurement. This
     is the whole reason the refusal is recorded: a settled outcome the pass
     can continue past, rather than a state only a hand-edited manifest
     could clear.
@@ -2382,8 +2375,7 @@ def _report_or_rebuild_arm(  # noqa: PLR0913
             # report. L3 is satisfied and spent, so it is not re-issued --
             # and the arm is *returned* rather than raised over. It keeps
             # its selection and its official scores, contributes no
-            # held-out row, and the report renders it
-            # ``VERDICT_UNMEASURED``.
+            # held-out row, and remains unmeasured on held-out.
             #
             # Raising here would have been the same wedge this branch
             # exists to remove: nothing in this package catches

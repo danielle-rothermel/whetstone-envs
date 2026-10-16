@@ -13,7 +13,7 @@ An audit performs no network access, no re-execution, and no re-scoring, so
 it is equally valid in CI against fake-transport artifacts and against a
 paid run days later. A failing audit does not abort a run -- the paid
 evidence is still worth keeping -- but marks that run's fidelity failed,
-which propagates to the study report and downgrades its efficacy number to
+which is recorded in the study manifest. Interpret its efficacy number as
 descriptive only.
 """
 

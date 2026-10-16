@@ -336,8 +336,8 @@ def run_stage0(  # noqa: PLR0913
             ceiling_per_task=held_out.ceiling_per_task,
         ),
         # Null-B's expected magnitude, computable here because it depends
-        # only on the evaluation's own nondeterminism. The report shows the
-        # observed null-B delta against this floor.
+        # only on the evaluation's own nondeterminism. Compare the observed
+        # null-B delta against this recorded floor.
         null_b_expected_delta=nondeterminism_floor(
             sigma_sq=decomposition.within_sample_var,
             n_tasks=len(held_out.task_hashes),

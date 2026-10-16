@@ -231,10 +231,9 @@ def write_held_out_analysis(  # noqa: PLR0913
     measurements = _measurements_by_name(arms=arms, references=references)
     # Fidelity arms are analysed for nothing: they carry no efficacy claim,
     # so they get no delta, no interval, and no held-out row. They still
-    # ran and were audited -- that is their purpose, and the report lists
-    # them under its own fidelity section. Computing a delta here and then
-    # declining to print it would leave the number one refactor away from
-    # being claimed, and would put a fifth statistic in a manifest whose
+    # ran and were audited -- that is their purpose. Computing a delta
+    # here and then declining to use it would leave it one refactor away
+    # from being claimed, and put a fifth statistic in a manifest whose
     # design pre-registers four hypotheses.
     fidelity = _fidelity_arm_ids(manifest)
     measurements = {
@@ -387,10 +386,9 @@ def _measurements_by_name(
     An arm whose held-out evaluation was spent and refused carries no
     measurement, so it is skipped rather than represented by a placeholder.
     That is what makes it *unmeasured* downstream: no entry here means no
-    delta, no interval, and no held-out row, and the report reads a missing
-    row as ``VERDICT_UNMEASURED``. Substituting a zero or an empty vector
-    would put a number nobody measured into a manifest that a reader would
-    then have no way to distinguish from one that was.
+    delta, no interval, and no held-out row. Substituting a zero or an empty
+    vector would put a number nobody measured into a manifest that a reader
+    would then have no way to distinguish from one that was.
     """
     measurements: dict[str, HeldOutMeasurement] = {
         NAIVE_CANDIDATE_NAME: references[NAIVE_CANDIDATE_NAME]

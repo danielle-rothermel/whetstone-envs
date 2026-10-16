@@ -425,10 +425,9 @@ class ArmReport:
     ``held_out`` is ``None`` for an arm whose one held-out evaluation was
     spent and refused. That arm was selected, scored on official, and
     billed, but produced no number anybody may report -- so it carries its
-    selection and its official evidence into the report and contributes no
-    held-out row, which the report renders as ``VERDICT_UNMEASURED``. The
-    alternative is what this replaced: raising, and taking every *other*
-    arm's already-paid evidence down with it.
+    selection and its official evidence into the manifest and contributes
+    no held-out row. The alternative is what this replaced: raising, and
+    taking every *other* arm's already-paid evidence down with it.
     """
 
     arm_id: str

@@ -529,7 +529,7 @@ def gepa_metric_call_budget(evidence: RunEvidence) -> AuditFinding:
       no step continues past it, and no step terminalizes below it.
 
     It also requires ``total_metric_calls`` on the detailed result to equal
-    the terminal checkpoint's counter, so the number the report prints is
+    the terminal checkpoint's counter, so the recorded number is
     the number the harness accounted for.
 
     **A declared terminal failure exempts the below-ceiling stop.** A run

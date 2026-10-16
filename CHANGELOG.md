@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- Automatic study report generation, its Markdown/HTML renderers and
+  presentation assets, and the `whetstone-study report` command. Study
+  results remain in `study.json` and its referenced evidence; the CLI
+  retains planning, execution, leakage checks, and pointer checks.
 - The `models` and `pools` packages; instance APIs are imported from
   `whetstone_envs.instances`.
 - The `make_instance` constructor, standalone `public_prompt_identity` helper,

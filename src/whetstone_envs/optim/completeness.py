@@ -20,14 +20,13 @@ report is this module's.
 **The floor bounds a claim; it does not demand a perfect evaluation.**
 Losing rows, and even whole tasks, is an infrastructure outcome the study
 tolerates: a lost task is carried at zero weight into the reported row,
-where it lowers the achieved completeness and the report downgrades the
-arm to ``VERDICT_INCOMPLETE`` rather than claiming it. What this module
-refuses is only the evaluation too thin to report any number from --
+where it lowers the achieved completeness. Interpret an arm below the
+completeness backstop as measured but incomplete, not claimed. This module
+refuses only an evaluation too thin to report any number from --
 below :data:`~whetstone_envs.optim.experiment.MIN_TASK_COMPLETENESS` of
 planned tasks measured to full depth. Aborting on the *first* lost task
 was the opposite trade: it discarded a whole stage's paid evidence to
-avoid publishing a number the report was already equipped to mark as
-incomplete.
+avoid recording an incomplete measurement.
 """
 
 from __future__ import annotations
@@ -172,8 +171,7 @@ def require_task_completeness(
     in the vector with a count of zero, O7's weighting drives its
     contribution to nothing, and the resulting ``completeness`` falls below
     :data:`~whetstone_envs.optim.study.manifest.COMPLETENESS_BACKSTOP` --
-    which the report reads as ``VERDICT_INCOMPLETE``, an arm measured but
-    not claimed.
+    so the arm is measured but incomplete and must not be claimed.
 
     That is strictly more informative than the abort it replaces. Raising
     here killed the whole stage over one chronically slow task, discarding

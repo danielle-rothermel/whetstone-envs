@@ -1,11 +1,10 @@
 """The study manifest: ``study.json``, its schema, writer, and reader.
 
-The manifest is the study's single accounting surface. Every number the
-report prints is a field here or a deterministic function of evidence this
-file names, and it names that evidence as an :class:`EvidencePointer` --
-a ``(schema_name, content_hash)`` pair the run's object store resolves. The
-report generator therefore never recomputes a score from a loose file; it
-reads the manifest and dereferences pointers.
+The manifest is the study's single accounting surface. Measurements are
+fields here or deterministic functions of evidence this file names as an
+:class:`EvidencePointer` -- a ``(schema_name, content_hash)`` pair the run's
+object store resolves. Consumers read the manifest and dereference its
+pointers rather than recomputing scores from loose files.
 
 **Schema in the repo, instances outside it.** The schema is a
 persisted-format contract, so it lives here with its literals pinned by a
@@ -213,8 +212,8 @@ STUDY_MANIFEST_SCHEMA_NAME = "whetstone_envs.step10_study"
 #: filed at all -- the stage raised where it should have recorded, and one
 #: arm's budget failure discarded every sibling run's and every later arm's
 #: already-paid evidence. Recording the failure is what makes the
-#: pre-registered sentence true and what lets the arm degrade to
-#: ``VERDICT_NOT_VALIDATED`` while the stage finishes.
+#: pre-registered sentence true while the stage finishes with the arm's
+#: failed fidelity recorded.
 #:
 #: Recorded rather than hashed, like the transport and the width: whether a
 #: run hit its wall is what that execution *did*, not what the design
@@ -1484,8 +1483,8 @@ class RunRecord(_StrictModel):
     than trust it.
 
     ``spend`` and ``cost_ref`` are the same facts twice on purpose: the
-    inline records are what the report prints, and the pointer is the run's
-    own ``cost.json`` in the store, so ``manifest check`` proves the printed
+    inline records feed the CLI ledger, and the pointer is the run's own
+    ``cost.json`` in the store, so ``manifest check`` proves the recorded
     numbers were not typed in by hand. ``result.json`` remains the
     authority; ``cost.json`` is a pinned-key projection of it.
     """
@@ -2062,8 +2061,8 @@ class StageRecord(_StrictModel):
     the pre-registration hash, and two studies that differ only in it
     pre-register identically. It is recorded all the same, because a stage
     calibrated on the fake transport and a stage calibrated against a
-    provider are different evidence for the same claim, and every number
-    the report prints downstream of a stage inherits which one it was.
+    provider are different evidence for the same claim. Interpret each
+    stage's measurements in the context of its recorded transport.
 
     ``spend`` is what the stage's *runs* cost, one entry per role, in the
     same record shape a run reports. Stage 0's anchors spend through the
@@ -2349,7 +2348,7 @@ class OfficialScoreEntry(_StrictModel):
 
 #: Why an amendment dropped evidence: the design was replaced onto a
 #: transport the dropped evidence was not measured on. Pinned because the
-#: report reads it back and an operator greps for it.
+#: manifest persists it and operators use it to identify the amendment.
 AMENDMENT_REASON_TRANSPORT_CHANGE = "replace-design-across-transports"
 
 #: Every amendment reason the manifest accepts.
@@ -2465,7 +2464,7 @@ class AmendmentRecord(_StrictModel):
 def run_widths(arms: tuple[ArmRecord, ...]) -> tuple[int, ...]:
     """Every distinct provider concurrency the recorded runs ran at.
 
-    Sorted and deduplicated, because the question both renderers ask is
+    Sorted and deduplicated, because the question the CLI ledger asks is
     "did this study's runs all run at one width", and the answer is a set
     rather than a sequence. One element is the ordinary case and is what
     the stage record already says; two or more is a study whose runs span
@@ -2473,10 +2472,7 @@ def run_widths(arms: tuple[ArmRecord, ...]) -> tuple[int, ...]:
     produce -- and is the case a single stage-level field structurally
     cannot report.
 
-    Owned here beside the record rather than at each caller, because the
-    CLI ledger and the report packet ask the same question and a
-    divergence between them would be a difference in what the study
-    appears to have done.
+    Derived here beside the records that own the recorded widths.
     """
     return tuple(
         sorted({run.provider_concurrency for arm in arms for run in arm.runs})
@@ -2615,7 +2611,7 @@ def _validate_reporting_purchases(
 
 
 class StudyManifest(_StrictModel):
-    """``study.json``: everything the report is allowed to print.
+    """``study.json``: the study's registered design and recorded evidence.
 
     ``schema`` is stored so a reader identifies the document without
     guessing from its shape, and it is validated against this module's
@@ -2644,8 +2640,8 @@ class StudyManifest(_StrictModel):
     assignment_doc_sha256: StrictStr | None = None
     #: Whether this manifest holds the registered design or a projection
     #: of it. A ``--without-codex`` rehearsal is a strictly smaller
-    #: design, and the report prints this so a projection's numbers cannot
-    #: be read as the study's.
+    #: design, and this field distinguishes its results from the full
+    #: study's.
     design_projection: StrictStr = DESIGN_PROJECTION_FULL
     population: PopulationRecord
     splits: SplitsRecord

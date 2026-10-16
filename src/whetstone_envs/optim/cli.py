@@ -8,6 +8,23 @@ from pathlib import Path
 from dr_providers import ReasoningEffort
 
 from whetstone_envs.artifacts import DurableRunError, default_output_dir
+from whetstone_envs.optim.codex import (
+    ALLOW_REAL_CODEX_ENV,
+    ALLOW_REAL_CODEX_ENV_VALUE,
+    CODEX_DEFAULT_BINARY,
+    CODEX_EVALUATE_CALL_CAP,
+    CODEX_REASONING_EFFORTS,
+    CodexReasoningEffort,
+)
+from whetstone_envs.optim.families import FamilyId, registered_family_ids
+from whetstone_envs.optim.miprov2 import (
+    DEFAULT_MIPROV2_FULL_EVAL_STEPS,
+    DEFAULT_MIPROV2_MINIBATCH,
+    DEFAULT_MIPROV2_NUM_CANDIDATES,
+    DEFAULT_MIPROV2_NUM_TRIALS,
+    DEMO_MODES,
+    Miprov2DemoMode,
+)
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
     MAX_UNFORCED_PROVIDER_CONCURRENCY,
@@ -15,28 +32,24 @@ from whetstone_envs.optim.provider import (
     PROVIDER_CONCURRENCY_FORCE_FLAG,
     resolve_provider_concurrency,
 )
-from whetstone_envs.optim.run import (
-    ALLOW_REAL_CODEX_ENV,
-    ALLOW_REAL_CODEX_ENV_VALUE,
-    CODEX_DEFAULT_BINARY,
-    CODEX_EVALUATE_CALL_CAP,
-    CODEX_REASONING_EFFORTS,
+from whetstone_envs.optim.run import run_optimizer
+from whetstone_envs.optim.spec import (
     DEFAULT_COPRO_BREADTH,
     DEFAULT_COPRO_DEPTH,
-    DEFAULT_MIPROV2_FULL_EVAL_STEPS,
-    DEFAULT_MIPROV2_MINIBATCH,
-    DEFAULT_MIPROV2_NUM_CANDIDATES,
-    DEFAULT_MIPROV2_NUM_TRIALS,
     DEFAULT_SPLIT_SIZES,
-    DEMO_MODES,
-    MIN_COPRO_BREADTH,
-    OPTIMIZERS,
-    TRANSPORTS,
-    CodexReasoningEffort,
+    GEPA_DEFAULT_SEED,
+    MIPROV2_DEFAULT_SEED,
+    CodexSettings,
+    CoproSettings,
+    GepaSettings,
+    Miprov2Settings,
+    OptimizerKind,
+    OptimizerSettings,
     RunSpec,
-    registered_family_ids,
-    run_optimizer,
+    TrainValSizes,
+    TransportKind,
 )
+from whetstone_envs.optim.split import MIN_COPRO_BREADTH
 
 
 def _split_sizes(value: str) -> tuple[int, int, int]:
@@ -109,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--optimizer",
-        choices=OPTIMIZERS,
+        choices=tuple(OptimizerKind),
         required=True,
         help="Optimizer to run.",
     )
@@ -121,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--transport",
-        choices=TRANSPORTS,
+        choices=tuple(TransportKind),
         default="fake",
     )
     parser.add_argument(
@@ -348,8 +361,97 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _optimizer_settings(
+    arguments: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> OptimizerSettings:
+    kind = OptimizerKind(arguments.optimizer)
+    groups = (
+        (OptimizerKind.COPRO, ("copro_breadth", "copro_depth")),
+        (OptimizerKind.GEPA, ("gepa_max_metric_calls",)),
+        (
+            OptimizerKind.MIPROV2,
+            (
+                "demo_mode",
+                "miprov2_minibatch",
+                "miprov2_minibatch_size",
+                "miprov2_minibatch_full_eval_steps",
+                "miprov2_num_trials",
+                "miprov2_num_candidates",
+            ),
+        ),
+        (
+            OptimizerKind.CODEX,
+            (
+                "codex_capacity",
+                "codex_binary",
+                "codex_model",
+                "codex_reasoning_effort",
+                "codex_wall_seconds",
+                "allow_real_codex",
+            ),
+        ),
+    )
+    for owner, names in groups:
+        if kind is owner:
+            continue
+        for name in names:
+            if getattr(arguments, name) != parser.get_default(name):
+                raise ValueError(
+                    f"--{name.replace('_', '-')} applies only "
+                    f"to --optimizer {owner}"
+                )
+    if kind in (OptimizerKind.COPRO, OptimizerKind.CODEX):
+        if (
+            arguments.train_size is not None
+            or arguments.val_size is not None
+            or arguments.seed is not None
+        ):
+            raise ValueError(
+                "train/val sizes and seed apply only to GEPA or MIPROv2"
+            )
+        if kind is OptimizerKind.COPRO:
+            return CoproSettings(
+                breadth=arguments.copro_breadth, depth=arguments.copro_depth
+            )
+        return CodexSettings(
+            capacity=arguments.codex_capacity,
+            binary=arguments.codex_binary,
+            model=arguments.codex_model,
+            reasoning_effort=CodexReasoningEffort(
+                arguments.codex_reasoning_effort
+            ),
+            wall_seconds=arguments.codex_wall_seconds,
+            allow_real_codex=arguments.allow_real_codex,
+        )
+    partition = TrainValSizes(
+        train_size=arguments.train_size, val_size=arguments.val_size
+    )
+    if kind is OptimizerKind.GEPA:
+        return GepaSettings(
+            partition=partition,
+            seed=GEPA_DEFAULT_SEED
+            if arguments.seed is None
+            else arguments.seed,
+            max_metric_calls=arguments.gepa_max_metric_calls,
+        )
+    return Miprov2Settings(
+        partition=partition,
+        seed=MIPROV2_DEFAULT_SEED
+        if arguments.seed is None
+        else arguments.seed,
+        demo_mode=Miprov2DemoMode(arguments.demo_mode),
+        minibatch=arguments.miprov2_minibatch,
+        minibatch_size=arguments.miprov2_minibatch_size,
+        minibatch_full_eval_steps=arguments.miprov2_minibatch_full_eval_steps,
+        num_trials=arguments.miprov2_num_trials,
+        num_candidates=arguments.miprov2_num_candidates,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv)
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
     run_id = arguments.run_id
     output = arguments.output
     if output is None and run_id is not None:
@@ -357,44 +459,27 @@ def main(argv: list[str] | None = None) -> int:
     try:
         path = run_optimizer(
             RunSpec(
-                optimizer=arguments.optimizer,
-                transport=arguments.transport,
+                optimizer=_optimizer_settings(arguments, parser),
+                transport=TransportKind(arguments.transport),
                 provider_concurrency=resolve_provider_concurrency(
                     arguments.provider_concurrency,
                     force=arguments.force_provider_concurrency,
                 ),
-                family=arguments.family,
+                family=FamilyId(arguments.family),
                 split_sizes=arguments.split_sizes,
                 output_dir=output,
                 run_id=run_id,
                 model=arguments.model,
                 task_reasoning_effort=arguments.task_reasoning_effort,
                 proposer_model=arguments.proposer_model,
-                demo_mode=arguments.demo_mode,
                 num_seeds=arguments.num_seeds,
                 n_per_category=arguments.n_per_category,
                 pool_seed_start=arguments.pool_seed_start,
-                seed=arguments.seed,
-                copro_breadth=arguments.copro_breadth,
-                copro_depth=arguments.copro_depth,
-                gepa_max_metric_calls=arguments.gepa_max_metric_calls,
-                miprov2_minibatch=arguments.miprov2_minibatch,
-                miprov2_minibatch_size=arguments.miprov2_minibatch_size,
-                miprov2_minibatch_full_eval_steps=(
-                    arguments.miprov2_minibatch_full_eval_steps
-                ),
-                miprov2_num_trials=arguments.miprov2_num_trials,
-                miprov2_num_candidates=arguments.miprov2_num_candidates,
-                train_size=arguments.train_size,
-                val_size=arguments.val_size,
-                codex_capacity=arguments.codex_capacity,
-                codex_binary=arguments.codex_binary,
-                codex_model=arguments.codex_model,
-                codex_reasoning_effort=arguments.codex_reasoning_effort,
-                codex_wall_seconds=arguments.codex_wall_seconds,
-                allow_real_codex=arguments.allow_real_codex,
             )
         )
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     except DurableRunError as error:
         traceback.print_exception(error.cause)
         print(error.directory, file=sys.stderr)

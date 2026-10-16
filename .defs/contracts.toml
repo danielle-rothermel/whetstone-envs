@@ -317,3 +317,19 @@ before it can corrupt private gold, while closed generated worlds, balanced \
 deterministic generation, exact runtime versions, and a canonical manifest \
 make the task family reproducible."""
 date = "2026-08-06"
+
+
+[[contracts]]
+title = "Optimizer inputs select one validated settings variant"
+statement = """
+RunSpec is a strict frozen Pydantic boundary containing exactly one \
+optimizer settings variant. COPRO, GEPA, MIPROv2, and Codex settings own \
+their applicable controls; GEPA and MIPROv2 compose validated train/validation \
+sizes. Partitions fit the internal split and GEPA partitions cover it exactly. \
+The CLI translates its flags into the selected variant and rejects unrelated \
+nondefault options before creating a run directory. Codex runtime authorization \
+remains an explicit process-state check rather than model validation."""
+rationale = """
+A valid input must describe the controls the selected optimizer will honor, \
+while environment-dependent authorization remains at the execution boundary."""
+date = "2026-10-16"

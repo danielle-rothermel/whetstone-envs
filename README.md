@@ -142,6 +142,19 @@ the executable, `--codex-capacity` bounds admitted evaluate calls (default
 8), and `--codex-wall-seconds` sets the agent's wall budget. The agent's
 selected tool-call candidate is recorded in the terminal optimization result.
 
+Optimizer Python inputs are imported from `whetstone_envs.optim.spec`.
+`RunSpec` contains one `CoproSettings`, `GepaSettings`, `Miprov2Settings`, or
+`CodexSettings` object. GEPA and MIPROv2 compose `TrainValSizes` as `partition`.
+Inputs validate at construction; unknown fields and invalid combinations fail
+before creating a run directory. CLI flags are translated into these models.
+
+```python
+from whetstone_envs.optim.run import run_optimizer
+from whetstone_envs.optim.spec import CoproSettings, RunSpec, TransportKind
+
+run_optimizer(RunSpec(optimizer=CoproSettings(), transport=TransportKind.FAKE))
+```
+
 ## Evaluation and trajectory reports
 
 Explain C19, run a standalone fake evaluation, and inspect the saved report:

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from dr_providers import ProviderCallConfig, ProviderKind, ReasoningEffort
+from dr_providers import ProviderCallConfig, ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     RegisteredRuntime,
@@ -60,15 +59,9 @@ from whetstone_envs.artifacts import (
 )
 from whetstone_envs.evidence import publish_trajectory_report
 from whetstone_envs.optim.codex import (
-    ALLOW_REAL_CODEX_ENV,
-    ALLOW_REAL_CODEX_ENV_VALUE,
     CODEX_ADAPTER_KEY,
-    CODEX_DEFAULT_BINARY,
-    CODEX_EVALUATE_CALL_CAP,
-    CODEX_REASONING_EFFORTS,
     CodexReasoningEffort,
     CodexTestSeam,
-    RealCodexRefusedError,
     build_codex_adapter,
     build_codex_control,
     codex_run_root,
@@ -84,27 +77,17 @@ from whetstone_envs.optim.extraction.trajectory import (
     project_trajectory_report,
 )
 from whetstone_envs.optim.families import (
-    KNOWN_FAMILY_IDS,
-    FamilyId,
     FamilySpec,
     family_spec,
-    registered_family_ids,
 )
 from whetstone_envs.optim.gepa import build_gepa_adapter
 from whetstone_envs.optim.miprov2 import (
-    DEFAULT_MIPROV2_FULL_EVAL_STEPS,
-    DEFAULT_MIPROV2_MINIBATCH,
-    DEFAULT_MIPROV2_NUM_CANDIDATES,
-    DEFAULT_MIPROV2_NUM_TRIALS,
-    DEMO_MODES,
-    Miprov2DemoMode,
     build_miprov2_adapter,
     build_miprov2_control,
     build_miprov2_state,
     miprov2_run_ref,
 )
 from whetstone_envs.optim.provider import (
-    DEFAULT_PROVIDER_CONCURRENCY,
     bind_openrouter_transport,
     fake_gold_by_prompt,
     fake_transport_factory,
@@ -112,15 +95,20 @@ from whetstone_envs.optim.provider import (
     openrouter_seeded_call_config,
     widened_execution_policy,
 )
+from whetstone_envs.optim.spec import (
+    CodexSettings,
+    CoproSettings,
+    GepaSettings,
+    Miprov2Settings,
+    RunSpec,
+)
 from whetstone_envs.optim.split import (
-    GEPA_OPTIMIZER,
-    MIN_COPRO_BREADTH,
-    TRAIN_VAL_OPTIMIZERS,
     partition_internal_split,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from dr_store import ObjectStore
     from whetstone.coordination.harness_run_controller import OptimRunLaunch
@@ -132,157 +120,6 @@ if TYPE_CHECKING:
     from whetstone.optim.proposal.proposer import ProposerTransport
 
     from whetstone_envs.optim.codex_runtime import CodexRuntimeTransport
-
-OPTIMIZERS = ("codex", "copro", "gepa", "miprov2")
-
-TRANSPORTS = ("fake", "openrouter")
-
-#: Retained COPRO search shape: two drafts per step, one step of depth.
-DEFAULT_COPRO_BREADTH = 2
-DEFAULT_COPRO_DEPTH = 1
-#: Each optimizer's own seed default, used when a spec names none. These
-#: mirror the values ``configure_gepa`` and ``configure_miprov2`` already
-#: default to, so an unseeded run keeps the control identity it always had.
-GEPA_DEFAULT_SEED = 0
-MIPROV2_DEFAULT_SEED = 9
-
-#: The default split, kept small so an unparameterised run stays a smoke run.
-DEFAULT_SPLIT_SIZES = (2, 2, 0)
-
-
-@dataclass(frozen=True, slots=True)
-class RunSpec:
-    optimizer: str
-    transport: str
-    family: str = FamilyId.C19.value
-    split_sizes: tuple[int, int, int] = DEFAULT_SPLIT_SIZES
-    output_dir: Path | None = None
-    run_id: str | None = None
-    model: str = "openai/gpt-4.1-nano"
-    task_reasoning_effort: ReasoningEffort | None = None
-    proposer_model: str | None = None
-    demo_mode: str = Miprov2DemoMode.FEWSHOT.value
-    num_seeds: int = 1
-    n_per_category: int | None = None
-    pool_seed_start: int | None = None
-    seed: int | None = None
-    copro_breadth: int = DEFAULT_COPRO_BREADTH
-    copro_depth: int = DEFAULT_COPRO_DEPTH
-    gepa_max_metric_calls: int | None = None
-    gepa_reflection_minibatch_size: int | None = None
-    miprov2_minibatch: bool = DEFAULT_MIPROV2_MINIBATCH
-    miprov2_minibatch_size: int | None = None
-    miprov2_minibatch_full_eval_steps: int = DEFAULT_MIPROV2_FULL_EVAL_STEPS
-    provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY
-    miprov2_num_trials: int = DEFAULT_MIPROV2_NUM_TRIALS
-    miprov2_num_candidates: int = DEFAULT_MIPROV2_NUM_CANDIDATES
-    train_size: int | None = None
-    val_size: int | None = None
-    extra_proposal_bodies: tuple[str, ...] = ()
-    codex_capacity: int | None = None
-    codex_binary: str = CODEX_DEFAULT_BINARY
-    codex_model: str | None = None
-    codex_reasoning_effort: str = CodexReasoningEffort.MEDIUM.value
-    codex_wall_seconds: float | None = None
-    allow_real_codex: bool = False
-
-
-def _validate_miprov2_settings(spec: RunSpec) -> None:
-    non_default = (
-        spec.miprov2_minibatch != DEFAULT_MIPROV2_MINIBATCH
-        or spec.miprov2_minibatch_size is not None
-        or spec.miprov2_minibatch_full_eval_steps
-        != DEFAULT_MIPROV2_FULL_EVAL_STEPS
-        or spec.miprov2_num_trials != DEFAULT_MIPROV2_NUM_TRIALS
-        or spec.miprov2_num_candidates != DEFAULT_MIPROV2_NUM_CANDIDATES
-    )
-    if non_default and spec.optimizer != "miprov2":
-        raise ValueError("miprov2 settings apply only to --optimizer miprov2")
-    if (
-        spec.miprov2_minibatch_size is not None
-        and spec.miprov2_minibatch_size < 1
-    ):
-        raise ValueError("miprov2_minibatch_size must be at least 1")
-    if spec.miprov2_minibatch and spec.miprov2_minibatch_size is None:
-        raise ValueError(
-            "--miprov2-minibatch requires --miprov2-minibatch-size: left "
-            "unset the batch is the whole validation split"
-        )
-    if spec.miprov2_minibatch_full_eval_steps < 1:
-        raise ValueError(
-            "miprov2_minibatch_full_eval_steps must be at least 1"
-        )
-    if spec.miprov2_num_trials < 1:
-        raise ValueError("miprov2_num_trials must be at least 1")
-    if spec.miprov2_num_candidates < 1:
-        raise ValueError("miprov2_num_candidates must be at least 1")
-
-
-def _validate_train_val_split(spec: RunSpec) -> None:
-    supplied = spec.train_size is not None or spec.val_size is not None
-    if spec.optimizer not in TRAIN_VAL_OPTIMIZERS:
-        if supplied:
-            raise ValueError(
-                "train_size and val_size apply only to "
-                f"--optimizer {{{', '.join(TRAIN_VAL_OPTIMIZERS)}}}"
-            )
-        return
-    if spec.train_size is None or spec.val_size is None:
-        raise ValueError(
-            f"--optimizer {spec.optimizer} requires an explicit "
-            "--train-size and --val-size partition of the internal split"
-        )
-    if spec.train_size < 1:
-        raise ValueError("train_size must be at least 1")
-    if spec.val_size < 1:
-        raise ValueError("val_size must be at least 1")
-    internal = spec.split_sizes[0]
-    if spec.train_size + spec.val_size > internal:
-        raise ValueError(
-            f"train_size {spec.train_size} + val_size {spec.val_size} "
-            f"exceeds the internal split of {internal}"
-        )
-    if (
-        spec.optimizer == GEPA_OPTIMIZER
-        and spec.train_size + spec.val_size != internal
-    ):
-        # GEPA is stricter than the others by construction: whetstone's
-        # GEPA factory builds its data registry from the whole internal
-        # split and then requires the control's trainset and valset to
-        # *cover* it exactly, so a partition that merely fits inside the
-        # split is rejected. That rejection happens inside the durable run
-        # boundary, after the run directory exists, so the same rule is
-        # restated here at pure spec validation -- a partial partition then
-        # refuses before anything is written.
-        raise ValueError(
-            f"--optimizer {spec.optimizer} requires train_size + val_size "
-            f"to cover the internal split exactly: {spec.train_size} + "
-            f"{spec.val_size} = {spec.train_size + spec.val_size}, not "
-            f"{internal}. GEPA's data registry is built from the whole "
-            "internal split and its trainset and valset must partition it"
-        )
-
-
-def _validate_codex_settings(spec: RunSpec) -> None:
-    non_default = (
-        spec.codex_capacity is not None
-        or spec.codex_binary != CODEX_DEFAULT_BINARY
-        or spec.codex_model is not None
-        or spec.codex_reasoning_effort != CodexReasoningEffort.MEDIUM.value
-        or spec.codex_wall_seconds is not None
-        or spec.allow_real_codex
-    )
-    if non_default and spec.optimizer != "codex":
-        raise ValueError("codex settings apply only to --optimizer codex")
-    if spec.codex_capacity is not None and spec.codex_capacity < 1:
-        raise ValueError("codex_capacity must be at least 1")
-    if spec.codex_wall_seconds is not None and spec.codex_wall_seconds <= 0:
-        raise ValueError("codex_wall_seconds must be positive")
-    if spec.codex_reasoning_effort not in CODEX_REASONING_EFFORTS:
-        raise ValueError(
-            "codex_reasoning_effort must be one of "
-            f"{list(CODEX_REASONING_EFFORTS)}"
-        )
 
 
 def _proposal_contract(family: FamilySpec) -> CoproProposalContractRecord:
@@ -337,87 +174,26 @@ def _copro_adapter(  # noqa: PLR0913
 
 
 @dataclass(frozen=True, slots=True)
-class _ValidatedSpec:
-    """A spec proven runnable, with its family and demo mode resolved."""
-
+class _ResolvedSpec:
     family: FamilySpec
-    demo_mode: Miprov2DemoMode
     n_per_category: int
     pool_seed_start: int
 
 
-def _validate_gepa_settings(spec: RunSpec) -> None:
-    """Reject GEPA controls a non-GEPA run could not honour.
-
-    Refused rather than ignored, for ``_validate_miprov2_settings``'s
-    reason: a control that looks honoured and is not is how a run comes to
-    misdescribe itself. Both settings are refused here, at spec validation,
-    rather than inside the durable run boundary where the failure would
-    leave a run directory behind.
-    """
-    settings = (
-        ("gepa_max_metric_calls", spec.gepa_max_metric_calls),
-        (
-            "gepa_reflection_minibatch_size",
-            spec.gepa_reflection_minibatch_size,
-        ),
-    )
-    for name, value in settings:
-        if value is None:
-            continue
-        if spec.optimizer != GEPA_OPTIMIZER:
-            raise ValueError(f"{name} applies only to --optimizer gepa")
-        if value < 1:
-            raise ValueError(f"{name} must be at least 1")
-
-
-def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
-    """Reject an unrunnable spec before any durable effect happens."""
-    if spec.optimizer not in set(OPTIMIZERS):
-        raise ValueError(f"unsupported optimizer {spec.optimizer!r}")
-    if spec.transport not in set(TRANSPORTS):
-        raise ValueError(f"unsupported transport {spec.transport!r}")
-    if spec.num_seeds < 1:
-        raise ValueError("num_seeds must be at least 1")
-    if spec.copro_breadth < MIN_COPRO_BREADTH:
-        # Refusing here keeps the failure at spec validation instead of
-        # inside the durable run boundary, where it would leave a run
-        # directory behind.
-        raise ValueError(f"copro_breadth must be at least {MIN_COPRO_BREADTH}")
-    if spec.copro_depth < 0:
-        raise ValueError("copro_depth must be non-negative")
-    _validate_gepa_settings(spec)
-    _validate_miprov2_settings(spec)
-    _validate_train_val_split(spec)
-    if spec.extra_proposal_bodies and spec.transport != "fake":
-        raise ValueError(
-            "extra_proposal_bodies applies only to --transport fake"
-        )
-    _validate_codex_settings(spec)
+def _resolve_spec(spec: RunSpec) -> _ResolvedSpec:
     family = family_spec(spec.family)
-    n_per_category = (
-        family.default_n_per_category
-        if spec.n_per_category is None
-        else spec.n_per_category
-    )
-    if n_per_category < 1:
-        raise ValueError("n_per_category must be at least 1")
-    pool_seed_start = (
-        family.default_pool_seed_start
-        if spec.pool_seed_start is None
-        else spec.pool_seed_start
-    )
-    try:
-        demo_mode = Miprov2DemoMode(spec.demo_mode)
-    except ValueError as error:
-        raise ValueError(
-            f"unsupported demo mode {spec.demo_mode!r}"
-        ) from error
-    return _ValidatedSpec(
+    return _ResolvedSpec(
         family=family,
-        demo_mode=demo_mode,
-        n_per_category=n_per_category,
-        pool_seed_start=pool_seed_start,
+        n_per_category=(
+            family.default_n_per_category
+            if spec.n_per_category is None
+            else spec.n_per_category
+        ),
+        pool_seed_start=(
+            family.default_pool_seed_start
+            if spec.pool_seed_start is None
+            else spec.pool_seed_start
+        ),
     )
 
 
@@ -434,7 +210,7 @@ class _BoundOptimizer:
 
 
 def build_codex_runtime_config(
-    *, spec: RunSpec, validated: _ValidatedSpec
+    *, spec: RunSpec, validated: _ResolvedSpec
 ) -> EnvsCodexRuntimeConfig:
     """The runtime config the Codex MCP evaluation server rebuilds from.
 
@@ -470,7 +246,7 @@ def build_codex_runtime_config(
 def _bind_optimizer(  # noqa: PLR0913
     *,
     spec: RunSpec,
-    validated: _ValidatedSpec,
+    validated: _ResolvedSpec,
     store: ObjectStore,
     engine: EvalEngine,
     experiment: Experiment,
@@ -489,16 +265,18 @@ def _bind_optimizer(  # noqa: PLR0913
     Registry membership is part of controller identity, so a run registers
     its own optimizer and nothing else.
     """
-    if spec.optimizer == "codex":
+    if isinstance(spec.optimizer, CodexSettings):
         codex_control = build_codex_control(
             engine=engine,
             experiment=experiment,
             family=validated.family,
-            model=resolve_codex_agent_model(spec.codex_model),
-            max_tool_calls=spec.codex_capacity,
-            codex_binary=spec.codex_binary,
-            reasoning_effort=CodexReasoningEffort(spec.codex_reasoning_effort),
-            wall_seconds=spec.codex_wall_seconds,
+            model=resolve_codex_agent_model(spec.optimizer.model),
+            max_tool_calls=spec.optimizer.capacity,
+            codex_binary=spec.optimizer.binary,
+            reasoning_effort=CodexReasoningEffort(
+                spec.optimizer.reasoning_effort
+            ),
+            wall_seconds=spec.optimizer.wall_seconds,
         )
         return _BoundOptimizer(
             adapter_key=CODEX_ADAPTER_KEY,
@@ -520,7 +298,7 @@ def _bind_optimizer(  # noqa: PLR0913
             ),
             codex_control=codex_control,
         )
-    if spec.optimizer == "copro":
+    if isinstance(spec.optimizer, CoproSettings):
         return _BoundOptimizer(
             adapter_key=COPRO_ADAPTER_KEY,
             adapter=_copro_adapter(
@@ -529,19 +307,16 @@ def _bind_optimizer(  # noqa: PLR0913
                 prompt_adapter=prompt_adapter,
                 proposer_transport=proposer_transport,
                 family=validated.family,
-                extra_proposal_bodies=spec.extra_proposal_bodies,
+                extra_proposal_bodies=spec.optimizer.extra_proposal_bodies,
             ),
         )
-    # Both remaining optimizers take a train/val split; ``_validate_spec``
-    # has already proven the two sizes are present and fit the internal
-    # split, so this is a pure re-derivation of the same partition the
-    # spec names.
+    assert isinstance(spec.optimizer, (GepaSettings, Miprov2Settings))
     trainset_task_hashes, valset_task_hashes = partition_internal_split(
         tuple(engine.sampling.task_hashes),
-        train_size=cast("int", spec.train_size),
-        val_size=cast("int", spec.val_size),
+        train_size=spec.optimizer.partition.train_size,
+        val_size=spec.optimizer.partition.val_size,
     )
-    if spec.optimizer == "gepa":
+    if isinstance(spec.optimizer, GepaSettings):
         gepa_adapter = build_gepa_adapter(
             store=store,
             engine=engine,
@@ -550,9 +325,9 @@ def _bind_optimizer(  # noqa: PLR0913
             run_id=run_id,
             proposer_transport=proposer_transport,
             proposer_config_ref=proposer_config_ref,
-            max_metric_calls=spec.gepa_max_metric_calls,
-            reflection_minibatch_size=spec.gepa_reflection_minibatch_size,
-            seed=GEPA_DEFAULT_SEED if spec.seed is None else spec.seed,
+            max_metric_calls=spec.optimizer.max_metric_calls,
+            reflection_minibatch_size=spec.optimizer.reflection_minibatch_size,
+            seed=spec.optimizer.seed,
             trainset_task_hashes=trainset_task_hashes,
             valset_task_hashes=valset_task_hashes,
         )
@@ -561,18 +336,19 @@ def _bind_optimizer(  # noqa: PLR0913
             adapter=gepa_adapter,
             gepa_control=gepa_adapter.control,
         )
+    assert isinstance(spec.optimizer, Miprov2Settings)
     miprov2_control = build_miprov2_control(
         engine=engine,
         experiment=experiment,
         family=validated.family,
         proposer_config_ref=proposer_config_ref,
-        demo_mode=validated.demo_mode,
-        seed=MIPROV2_DEFAULT_SEED if spec.seed is None else spec.seed,
-        minibatch=spec.miprov2_minibatch,
-        minibatch_size=spec.miprov2_minibatch_size,
-        minibatch_full_eval_steps=spec.miprov2_minibatch_full_eval_steps,
-        num_trials=spec.miprov2_num_trials,
-        num_candidates=spec.miprov2_num_candidates,
+        demo_mode=spec.optimizer.demo_mode,
+        seed=spec.optimizer.seed,
+        minibatch=spec.optimizer.minibatch,
+        minibatch_size=spec.optimizer.minibatch_size,
+        minibatch_full_eval_steps=spec.optimizer.minibatch_full_eval_steps,
+        num_trials=spec.optimizer.num_trials,
+        num_candidates=spec.optimizer.num_candidates,
         trainset_task_hashes=trainset_task_hashes,
         valset_task_hashes=valset_task_hashes,
     )
@@ -774,21 +550,25 @@ def run_optimizer(  # noqa: PLR0915
     codex_test_seam: CodexTestSeam | None = None,
     codex_prompt_builder: Callable[[CodexPromptContext], str] | None = None,
 ) -> Path:
-    if codex_test_seam is not None and spec.optimizer != "codex":
+    if codex_test_seam is not None and not isinstance(
+        spec.optimizer, CodexSettings
+    ):
         raise ValueError("codex_test_seam applies only to --optimizer codex")
-    if codex_prompt_builder is not None and spec.optimizer != "codex":
+    if codex_prompt_builder is not None and not isinstance(
+        spec.optimizer, CodexSettings
+    ):
         raise ValueError(
             "codex_prompt_builder applies only to --optimizer codex"
         )
-    validated = _validate_spec(spec)
-    if spec.optimizer == "codex":
+    validated = _resolve_spec(spec)
+    if isinstance(spec.optimizer, CodexSettings):
         refuse_unauthorized_real_codex(
             test_seam=codex_test_seam,
-            allow_real_codex=spec.allow_real_codex,
+            allow_real_codex=spec.optimizer.allow_real_codex,
         )
     family = validated.family
     resolved_run_id = spec.run_id or (
-        f"{family.run_id_prefix}-{spec.optimizer}-{uuid4().hex[:8]}"
+        f"{family.run_id_prefix}-{spec.optimizer.kind}-{uuid4().hex[:8]}"
     )
     provider = None
     api_key_env = "WHETSTONE_TOY_API_KEY"
@@ -900,9 +680,14 @@ def run_optimizer(  # noqa: PLR0915
             ),
             prompt_adapter=prompt_adapter,
         )
+        copro_settings = (
+            spec.optimizer
+            if isinstance(spec.optimizer, CoproSettings)
+            else CoproSettings()
+        )
         copro_control = configure_copro(
-            breadth=spec.copro_breadth,
-            depth=spec.copro_depth,
+            breadth=copro_settings.breadth,
+            depth=copro_settings.depth,
             track_stats=False,
             defaults=defaults,
         )
@@ -1012,31 +797,4 @@ def _proposer_route(
     return _ProposerRoute(config=config, ref=provider_config_ref(config))
 
 
-__all__ = [
-    "ALLOW_REAL_CODEX_ENV",
-    "ALLOW_REAL_CODEX_ENV_VALUE",
-    "CODEX_DEFAULT_BINARY",
-    "CODEX_EVALUATE_CALL_CAP",
-    "CODEX_REASONING_EFFORTS",
-    "COPRO_EXECUTOR_SCHEMA_SUFFIX",
-    "DEFAULT_COPRO_BREADTH",
-    "DEFAULT_COPRO_DEPTH",
-    "DEFAULT_MIPROV2_FULL_EVAL_STEPS",
-    "DEFAULT_MIPROV2_MINIBATCH",
-    "DEFAULT_MIPROV2_NUM_CANDIDATES",
-    "DEFAULT_MIPROV2_NUM_TRIALS",
-    "DEFAULT_SPLIT_SIZES",
-    "DEMO_MODES",
-    "GEPA_DEFAULT_SEED",
-    "KNOWN_FAMILY_IDS",
-    "MIPROV2_DEFAULT_SEED",
-    "OPTIMIZERS",
-    "TRAIN_VAL_OPTIMIZERS",
-    "TRANSPORTS",
-    "CodexReasoningEffort",
-    "CodexTestSeam",
-    "RealCodexRefusedError",
-    "RunSpec",
-    "registered_family_ids",
-    "run_optimizer",
-]
+__all__ = ["build_codex_runtime_config", "run_optimizer"]

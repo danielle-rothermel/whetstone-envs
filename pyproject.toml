@@ -150,6 +150,7 @@ ignore = ["PLR1711", "S101", "TRY003"]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]
 runtime-evaluated-base-classes = [
     "whetstone_envs.evaluation.spec._EvaluationInput",
+    "whetstone_envs.optim.spec._RunInput",
     "whetstone_envs.evidence._models._StrictModel",
 ]
 

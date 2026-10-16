@@ -316,3 +316,20 @@ exported_symbols = [
     "whetstone_envs.artifacts.prepare_output_root",
     "whetstone_envs.artifacts.validate_output_root",
 ]
+
+
+[[terms]]
+name = "optimizer run input"
+definition = """
+Validated execution and task-generation parameters with exactly one \
+optimizer-specific settings variant and an explicit transport."""
+exported_symbols = [
+    "whetstone_envs.optim.spec.RunSpec",
+    "whetstone_envs.optim.spec.CoproSettings",
+    "whetstone_envs.optim.spec.GepaSettings",
+    "whetstone_envs.optim.spec.Miprov2Settings",
+    "whetstone_envs.optim.spec.CodexSettings",
+    "whetstone_envs.optim.spec.TrainValSizes",
+    "whetstone_envs.optim.spec.OptimizerKind",
+    "whetstone_envs.optim.spec.TransportKind",
+]

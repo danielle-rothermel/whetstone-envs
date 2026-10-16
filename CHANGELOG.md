@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Optimizer inputs are strict frozen Pydantic models in `optim/spec.py`, with
+  one nested settings variant and composed train/validation sizes. The CLI
+  preserves its flags and rejects options belonging to another optimizer;
+  programmatic callers construct the selected settings model directly.
+
 - Remove unused pytest/browser dependencies, configuration, workflow, and
   contract check pointers. Remove the obsolete MIPROv2 old-version guard and
   study-specific commentary from optimizer inputs and concurrency policy.

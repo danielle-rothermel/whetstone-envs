@@ -10,18 +10,16 @@ from rich.table import Table
 from rich.text import Text
 
 from whetstone_envs.c19._info import C19_INFO, NamedDescription
-from whetstone_envs.reporting.derivations import (
-    ComparisonRow,
-    compare_buckets,
-)
-from whetstone_envs.reporting.schema import (
+from whetstone_envs.evidence import (
     EvalReport,
     EvalSuccess,
     Observation,
     ObservationState,
     RoleSpend,
     TrajectoryReport,
+    compare_candidates,
 )
+from whetstone_envs.reporting._comparison import comparison_label
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -254,8 +252,10 @@ def render_compare(
     for candidate in (candidate_a, candidate_b):
         if candidate not in known:
             raise ValueError(f"unknown candidate {candidate!r}")
-    rows = compare_buckets(report, candidate_a, candidate_b)
-    counts = Counter(row.bucket for row in rows)
+    rows = compare_candidates(report, candidate_a, candidate_b)
+    counts = Counter(
+        comparison_label(row.outcome, candidate_a, candidate_b) for row in rows
+    )
     console.print(
         Panel(
             Text(
@@ -271,7 +271,7 @@ def render_compare(
         table.add_column(Text(column))
     for row in rows:
         table.add_row(
-            Text(row.bucket),
+            Text(comparison_label(row.outcome, candidate_a, candidate_b)),
             Text(row.task_id),
             Text(str(row.seed_index)),
             Text(_comparison_value(report, candidate_a, row.candidate_a)),
@@ -479,8 +479,6 @@ def _format_budget(
 
 
 __all__ = [
-    "ComparisonRow",
-    "compare_buckets",
     "render_c19_info",
     "render_compare",
     "render_failures",

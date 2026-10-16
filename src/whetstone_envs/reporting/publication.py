@@ -1,23 +1,11 @@
 from __future__ import annotations
 
-import json
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from dr_store import CanonicalJsonFile
-from pydantic import BaseModel
-
-from whetstone_envs.reporting.schema import EvalReport, TrajectoryReport
-
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-EVAL_REPORT_NAME = "eval-report.json"
-TRAJECTORY_REPORT_NAME = "trajectory-report.json"
-# A canonical C19 manifest is small, but reports retain full prompts, outputs,
-# and component traces for every candidate/repeat row.
-MAX_REPORT_BYTES = 128 * 1024 * 1024
 
 
 class DurableRunError(RuntimeError):
@@ -72,60 +60,10 @@ def prepare_output_root(path: Path) -> Path:
     return resolved
 
 
-def _document(directory: Path, name: str) -> CanonicalJsonFile:
-    return CanonicalJsonFile(directory, name, max_bytes=MAX_REPORT_BYTES)
-
-
-def publish_eval_report(directory: Path, report: EvalReport) -> Path:
-    validated = EvalReport.model_validate_json(report.model_dump_json())
-    document = _document(directory, EVAL_REPORT_NAME)
-    document.publish(validated.model_dump(mode="json"))
-    return document.path
-
-
-def publish_trajectory_report(
-    directory: Path, report: TrajectoryReport
-) -> Path:
-    validated = TrajectoryReport.model_validate_json(report.model_dump_json())
-    document = _document(directory, TRAJECTORY_REPORT_NAME)
-    document.publish(validated.model_dump(mode="json"))
-    return document.path
-
-
-def _load[Report: BaseModel](
-    directory_or_file: Path, name: str, model: type[Report]
-) -> Report:
-    path = directory_or_file.resolve()
-    directory, filename = (
-        (path.parent, path.name) if path.is_file() else (path, name)
-    )
-    raw = _document(directory, filename).read()
-    return model.model_validate_json(json.dumps(raw))
-
-
-def load_eval_report(directory_or_file: Path) -> EvalReport:
-    return _load(directory_or_file, EVAL_REPORT_NAME, EvalReport)
-
-
-def load_trajectory_report(directory_or_file: Path) -> TrajectoryReport:
-    return _load(
-        directory_or_file,
-        TRAJECTORY_REPORT_NAME,
-        TrajectoryReport,
-    )
-
-
 __all__ = [
-    "EVAL_REPORT_NAME",
-    "MAX_REPORT_BYTES",
-    "TRAJECTORY_REPORT_NAME",
     "DurableRunError",
     "durable_run_boundary",
-    "load_eval_report",
-    "load_trajectory_report",
     "prepare_output_root",
-    "publish_eval_report",
-    "publish_trajectory_report",
     "repository_roots",
     "validate_output_root",
 ]

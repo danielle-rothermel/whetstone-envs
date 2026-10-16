@@ -30,7 +30,7 @@ than inventing them:
   never fabricates an invariant list.
 * **The internal trajectory and the proposed prompts.** Both live in the run
   artifacts rather than in the manifest. The generator reads them through
-  :func:`~whetstone_envs.reporting.publication.load_trajectory_report` when
+  :func:`~whetstone_envs.evidence.load_trajectory_report` when
   the run's ``artifact_dir`` holds a projected trajectory report, and reports
   their absence otherwise.
 
@@ -50,6 +50,11 @@ from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
+from whetstone_envs.evidence import (
+    TRAJECTORY_REPORT_NAME,
+    TrajectoryReport,
+    load_trajectory_report,
+)
 from whetstone_envs.optim.study.manifest import (
     DESIGN_PROJECTION_FULL,
     PROVENANCE_AMENDED,
@@ -62,12 +67,7 @@ from whetstone_envs.optim.study.manifest import (
     TransportName,
     run_widths,
 )
-from whetstone_envs.reporting.publication import (
-    TRAJECTORY_REPORT_NAME,
-    load_trajectory_report,
-    validate_output_root,
-)
-from whetstone_envs.reporting.schema import TrajectoryReport
+from whetstone_envs.reporting.publication import validate_output_root
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence

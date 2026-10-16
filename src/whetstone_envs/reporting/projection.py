@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 from dataclasses import dataclass
 from importlib.metadata import version
 from typing import TYPE_CHECKING, cast, get_args
@@ -34,16 +33,13 @@ from whetstone.optim.contracts import (
 )
 from whetstone.optim.cost import RoleCost, RunCostReport
 
-from whetstone_envs.optim.study.spend import stage_spend_records
-from whetstone_envs.probes import normalize
-from whetstone_envs.reporting.schema import (
+from whetstone_envs.evidence import (
     EVAL_REPORT_SCHEMA,
     SPEND_SCHEMA_VERSION,
     SPLIT_ROLE_BY_REPORT_ROLE,
     TRAJECTORY_REPORT_SCHEMA,
     CandidateRecord,
     CandidateSource,
-    CategorySummary,
     EvalFailed,
     EvalRejected,
     EvalReport,
@@ -67,8 +63,12 @@ from whetstone_envs.reporting.schema import (
     TrajectoryReport,
     TrajectoryResolution,
     TrajectoryStep,
+    account_observations,
+    summarize_categories,
     two_stage_task_mean,
 )
+from whetstone_envs.optim.study.spend import stage_spend_records
+from whetstone_envs.probes import normalize
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -207,49 +207,6 @@ def _provider_error_projection(
     )
 
 
-def _accounting(observations: tuple[Observation, ...]) -> RowAccounting:
-    counts = Counter(row.state for row in observations)
-    return RowAccounting(
-        planned=len(observations),
-        present=counts[ObservationState.SCORED],
-        missing=counts[ObservationState.MISSING],
-        failed=counts[ObservationState.FAILED],
-        invalid=counts[ObservationState.INVALID],
-    )
-
-
-def _summaries(
-    observations: tuple[Observation, ...], tasks: tuple[TaskRecord, ...]
-) -> tuple[CategorySummary, ...]:
-    task_by_id = {task.task_id: task for task in tasks}
-    labels = tuple(
-        dict.fromkeys(label for task in tasks for label in task.categories)
-    )
-    summaries: list[CategorySummary] = []
-    for label in labels:
-        rows = tuple(
-            row
-            for row in observations
-            if label in task_by_id[row.task_id].categories
-        )
-        accounting = _accounting(rows)
-        # Categories partition tasks, not rows, so a category's score gets the
-        # same two-stage treatment as the overall score: each task's
-        # repeats reduce to one value, then those are meaned across the
-        # category's tasks. ``numerator``/``denominator`` stay row-level.
-        numerator = sum(row.score == 1.0 for row in rows)
-        summaries.append(
-            CategorySummary(
-                category=label,
-                numerator=numerator,
-                denominator=len(rows),
-                accounting=accounting,
-                score=two_stage_task_mean(rows),
-            )
-        )
-    return tuple(summaries)
-
-
 def _success_projection(
     *,
     store: ObjectStore,
@@ -344,7 +301,7 @@ def _success_projection(
             )
         )
     projected = tuple(observations)
-    accounting = _accounting(projected)
+    accounting = account_observations(projected)
     reported = RowAccounting.model_validate(
         evidence.row_accounting.model_dump(mode="json")
     )
@@ -390,7 +347,7 @@ def _success_projection(
         numerator=numerator,
         denominator=len(projected),
         score=score,
-        categories=_summaries(projected, tuple(tasks)),
+        categories=summarize_categories(tuple(tasks), projected),
     )
     return success, tuple(tasks), projected
 

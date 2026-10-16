@@ -2,6 +2,10 @@
 
 Status: implemented
 
+Historical implementation plan. Portable report models, canonical report files,
+accounting, and comparisons are currently owned by `whetstone_envs.evidence`;
+the module allocation below records the original implementation.
+
 ## Outcome
 
 Add a terminal-first debugging tool to `whetstone-envs` that can:

@@ -11,17 +11,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from whetstone_envs.c19._info import C19_INFO
-from whetstone_envs.reporting.derivations import compare_buckets
-from whetstone_envs.reporting.publication import (
-    load_eval_report,
-    load_trajectory_report,
-    validate_output_root,
-)
-from whetstone_envs.reporting.schema import (
+from whetstone_envs.evidence import (
     EvalReport,
     EvalSuccess,
     TrajectoryReport,
+    compare_candidates,
+    load_eval_report,
+    load_trajectory_report,
 )
+from whetstone_envs.reporting._comparison import comparison_label
+from whetstone_envs.reporting.publication import validate_output_root
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -99,14 +98,14 @@ def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
     names = [candidate.name for candidate in report.candidates]
     for left_index, left in enumerate(names):
         for right in names[left_index + 1 :]:
-            rows = compare_buckets(report, left, right)
+            rows = compare_candidates(report, left, right)
             key = f"{left_index}:{names.index(right)}"
             pairs[key] = {
                 "left": left,
                 "right": right,
                 "rows": [
                     {
-                        "bucket": row.bucket,
+                        "bucket": comparison_label(row.outcome, left, right),
                         "task_id": row.task_id,
                         "seed_index": row.seed_index,
                     }

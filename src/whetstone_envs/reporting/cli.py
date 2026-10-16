@@ -322,7 +322,7 @@ def _dispatch(arguments: argparse.Namespace) -> int:
         )
         return 0
 
-    from whetstone_envs.reporting.publication import (
+    from whetstone_envs.evidence import (
         load_eval_report,
         load_trajectory_report,
     )

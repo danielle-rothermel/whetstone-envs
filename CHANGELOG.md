@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Portable evaluation and trajectory models, canonical report file operations,
+  accounting, and comparisons are owned by `whetstone_envs.evidence`.
+  Reporting and optimizer callers use that package directly; the reporting
+  schema, derivations, and model exports are removed. Validators use focused
+  checks and shared summary calculations. Comparisons return typed outcomes
+  with presentation labels supplied by reporting. Persisted formats and CLI
+  behavior are unchanged.
 - `InstancePoolSplit` lives with `InstancePool` in `instances/instance_pool.py`.
   It retains its source `pool`, stores ordered `split_groups`, and exposes
   a cached read-only `splits` mapping. Selected instances must match the source

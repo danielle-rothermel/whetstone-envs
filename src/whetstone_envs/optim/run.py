@@ -64,6 +64,7 @@ from whetstone.optim.tools.execution import EvaluatingToolExecutor
 from whetstone.optim.tools.facade import ToolAdmissionAuthority
 from whetstone.provider.language_model import PlainPromptAdapter
 
+from whetstone_envs.evidence import publish_trajectory_report
 from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
@@ -130,7 +131,6 @@ from whetstone_envs.reporting.projection import project_trajectory_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
     prepare_output_root,
-    publish_trajectory_report,
 )
 
 if TYPE_CHECKING:

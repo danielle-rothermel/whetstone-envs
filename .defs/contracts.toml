@@ -166,8 +166,10 @@ statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.probes, and \
 whetstone_envs.scoring. InstancePool, InstancePoolSplit, and the allocation \
-helpers live together in instances/instance_pool.py. Strict report models \
-are imported from whetstone_envs.reporting. Task-family contracts are imported from their owning \
+helpers live together in instances/instance_pool.py. Portable report models, \
+file operations, accounting, and comparisons are imported from \
+whetstone_envs.evidence, which depends on neither reporting nor the optimizer \
+stack. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
 whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23. The optional \
 whetstone_envs.optim extra maps those contracts onto whetstone-ai experiments \

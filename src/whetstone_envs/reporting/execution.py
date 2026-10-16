@@ -15,6 +15,13 @@ from whetstone.eval.schema import EvalEvidence
 from whetstone.experiment.candidate import CandidateRef, candidate_reference
 
 from whetstone_envs.c19 import PROBES, generate_pool
+from whetstone_envs.evidence import (
+    SPLIT_ROLE_BY_REPORT_ROLE,
+    CandidateSource,
+    EvalReport,
+    EvalRoleName,
+    publish_eval_report,
+)
 from whetstone_envs.optim.completeness import require_task_completeness
 from whetstone_envs.optim.experiment import (
     C19_MUTATION_FIELD,
@@ -39,13 +46,6 @@ from whetstone_envs.reporting.projection import project_eval_report
 from whetstone_envs.reporting.publication import (
     durable_run_boundary,
     prepare_output_root,
-    publish_eval_report,
-)
-from whetstone_envs.reporting.schema import (
-    SPLIT_ROLE_BY_REPORT_ROLE,
-    CandidateSource,
-    EvalReport,
-    EvalRoleName,
 )
 
 if TYPE_CHECKING:

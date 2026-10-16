@@ -58,6 +58,7 @@ from whetstone.provider.policy import (
     ProviderExecutionPolicy,
 )
 
+from whetstone_envs.evidence import TRAJECTORY_REPORT_NAME
 from whetstone_envs.optim.audit._evidence import load_run_evidence
 from whetstone_envs.optim.audit.registry import audit_evidence
 from whetstone_envs.optim.audit.schema import AUDIT_REPORT_SCHEMA
@@ -101,7 +102,6 @@ from whetstone_envs.optim.study.selection import (
 )
 from whetstone_envs.optim.study.spend import ReportSpendLedger
 from whetstone_envs.optim.study.stages import ArmRunResult, StageError
-from whetstone_envs.reporting.publication import TRAJECTORY_REPORT_NAME
 
 if TYPE_CHECKING:
     from pydantic import JsonValue

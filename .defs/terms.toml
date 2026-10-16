@@ -253,8 +253,8 @@ observations, exact accounting, aggregate evidence, prompts, outputs, private \
 gold, safe typed provider-failure metadata, and component traces without raw \
 provider messages, credentials, or SQLite content."""
 exported_symbols = [
-    "whetstone_envs.reporting.EVAL_REPORT_SCHEMA",
-    "whetstone_envs.reporting.EvalReport",
+    "whetstone_envs.evidence.EVAL_REPORT_SCHEMA",
+    "whetstone_envs.evidence.EvalReport",
 ]
 
 [[terms]]
@@ -265,8 +265,8 @@ exact terminal optimization result, preserving ordered steps and resolutions, \
 full candidate payloads and mutation text, per-step budget deltas, cumulative \
 budget state, and exact hydrated evaluation reports for offline debugging."""
 exported_symbols = [
-    "whetstone_envs.reporting.TRAJECTORY_REPORT_SCHEMA",
-    "whetstone_envs.reporting.TrajectoryReport",
+    "whetstone_envs.evidence.TRAJECTORY_REPORT_SCHEMA",
+    "whetstone_envs.evidence.TrajectoryReport",
 ]
 
 [[terms]]

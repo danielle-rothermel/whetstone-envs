@@ -18,6 +18,7 @@ from whetstone.eval.runtime_engine import (
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.experiment.sampling import HELD_OUT, INTERNAL_EVAL, OFFICIAL
 
+from whetstone_envs.evidence import SPLIT_ROLE_BY_REPORT_ROLE
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
@@ -53,7 +54,6 @@ from whetstone_envs.optim.study.spec import (
     CODEX_WALL_SECONDS,
 )
 from whetstone_envs.optim.study.stages import StageEnvironment, StageError
-from whetstone_envs.reporting.schema import SPLIT_ROLE_BY_REPORT_ROLE
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

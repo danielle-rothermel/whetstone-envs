@@ -34,9 +34,11 @@ execution-contract code:
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
   string transformations across four ISL and OSL categories.
-- [**Reporting**][reporting-source] owns strict local evaluation and
-  optimization-trajectory reports plus read-only terminal and self-contained
-  HTML inspection.
+- [**Evidence**][evidence-source] owns strict evaluation and optimization
+  trajectory records, row accounting, paired comparisons, and bounded
+  canonical report files without execution dependencies.
+- [**Reporting**][reporting-source] provides standalone evaluation execution,
+  terminal and self-contained HTML inspection, and study report generation.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
@@ -633,6 +635,13 @@ classification and typed transport status metadata; raw provider messages,
 response bodies, headers, and metadata are excluded. Keep reports outside
 every Git repository and do not publish them casually.
 
+Portable report models and file operations are imported from
+`whetstone_envs.evidence`, including `EvalReport`, `TrajectoryReport`,
+`load_eval_report`, and `load_trajectory_report`. The package also owns
+`account_observations`, `summarize_categories`, and `compare_candidates`.
+Comparisons return frozen `ComparisonRow` values with typed
+`ComparisonOutcome` members; display labels belong to reporting.
+
 ## Instances and groups
 
 [`whetstone_envs.instances`][instances-source] owns the immutable
@@ -1128,3 +1137,4 @@ uv run python -m whetstone_envs.c19.regenerate
 [c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23
 [optim-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/optim
 [reporting-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/reporting
+[evidence-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/evidence

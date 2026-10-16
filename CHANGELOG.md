@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Pinned `whetstone-ai` to 0.1.19** (from 0.1.17) in the `optim` extra,
+  whose wheel ships the GEPA `source_manifest.json`. It brings `dr-exec` 0.1.16
+  and `dr-providers` 0.3.5, and requires `dr-store` 0.2.7 (from 0.2.6) and
+  `pydantic` 2.14.1 (from 2.13.4), which are pinned to match.
+
 - Installed-wheel base-import validation follows the optional evaluation-package
   boundary; evaluation runtime imports require the optimizer extra.
 

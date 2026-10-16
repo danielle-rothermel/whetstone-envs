@@ -88,7 +88,7 @@ execution-contract code:
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
-3.13 or 3.14 and pins published `whetstone-ai==0.1.17`.
+3.13 or 3.14 and pins published `whetstone-ai==0.1.19`.
 
 `optim.extraction` reads Whetstone runtime evidence into portable reports.
 Reporting reads those reports without importing the runtime stack.
@@ -114,7 +114,7 @@ Codex against an explicitly prepared problem:
 uv add 'whetstone-envs[optim]'
 ```
 
-The extra requires Python 3.13 or 3.14 and pins `whetstone-ai==0.1.17`.
+The extra requires Python 3.13 or 3.14 and pins `whetstone-ai==0.1.19`.
 The shared runner accepts an `OptimizationProblem` from a Python input file.
 The file defines `problem` with a prepared experiment and its source split,
 prompt contract, evaluation runner, proposer context, and explicit fake replies

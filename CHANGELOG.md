@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `scripts/c19/viz.py`, `scripts/c22/viz.py`, and `scripts/c23/viz.py`. Each
   separates public inputs from private debugging gold, identifies the instance
   and generation seed, and optionally displays both rendered probes.
+  C22 also shows a passing response and a failing response for each instance,
+  with oracle scores and per-constraint outcomes.
 
 - Focused standard-library tests for shared instance, split, manifest, evidence,
   report-rendering, and optimizer contracts. Repository checks run core tests

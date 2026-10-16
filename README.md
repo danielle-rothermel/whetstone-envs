@@ -15,7 +15,7 @@ labeled private gold. No model or provider calls are made.
 | C11: JSON canonicalization | `uv run python scripts/c11/viz.py` | Original and canonical JSON, with escaped views to expose whitespace and control characters. |
 | C18: deductive entailment | `uv run --extra c18 python scripts/c18/viz.py` | Facts, rules, query, expected verdict, deduction depth, and distractor policy. |
 | C19: MiniGrid state prediction | `uv run python scripts/c19/viz.py` | Grid with row/column coordinates, ordered actions, question, and expected final-state answer. |
-| C22: instruction constraints | `uv run python scripts/c22/viz.py` | Numbered public constraints and decoded private scoring parameters. |
+| C22: instruction constraints | `uv run python scripts/c22/viz.py` | Numbered constraints, private scoring parameters, and passing/failing responses with overall and per-constraint scores. |
 | C23: string induction | `uv run python scripts/c23/viz.py` | Demonstrations, quoted query and expected output, rule family, and context length. |
 
 Every script accepts `--count N` (default `1`) and `--probes` to show both
@@ -27,6 +27,10 @@ pool order. C11, C18, and C19 also accept `--seed-start`.
 Use `--hard` for C18's hard configuration or `--preset hard` for C22's fixed
 hard pool. C22 and C23 retain their configured generation seeds. C23 instances
 retain expected output rather than the sampled hidden rule itself.
+
+For each C22 instance, the viewer constructs a passing response and modifies it
+to fail a constraint. Both responses are scored by C22's actual oracle. These
+are illustrative responses; other responses can also satisfy the same stack.
 
 ```bash
 uv run python scripts/c11/viz.py --count 5 --probes

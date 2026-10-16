@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from whetstone.experiment.candidate import Candidate
     from whetstone.provider.policy import ProviderExecutionPolicy
 
-    from whetstone_envs.models import PoolSplit
+    from whetstone_envs.instances import InstancePoolSplit
 
 __all__ = [
     "FAKE_TRANSPORT",
@@ -155,7 +155,7 @@ def anchor_candidates(family_id: str) -> tuple[Candidate, Candidate]:
 
 
 def _require_recorded_population(
-    split: PoolSplit, recorded: SplitsRecord
+    split: InstancePoolSplit, recorded: SplitsRecord
 ) -> None:
     """Compare recorded task hashes, rather than just IDs or counts."""
     for role, instances, record in (

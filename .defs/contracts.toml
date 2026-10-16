@@ -19,7 +19,7 @@ title = "Instance groups own ordered membership"
 statement = """
 An instance group has a nonblank string name and an immutable ordered tuple \
 of validated task instances with unique identifiers. Empty groups are valid. \
-A task pool contains one instance group and additionally rejects duplicate \
+An instance pool contains one instance group and additionally rejects duplicate \
 public prompt identities; its stratum index is derived from that group's \
 ordered instances."""
 rationale = """
@@ -32,11 +32,11 @@ title = "Public prompt identity excludes private data"
 statement = """
 Public prompt identity is the sorted tuple of a task instance's prompt-input \
 items; identifier, seed, task strata, and gold do not participate, and every \
-task pool rejects duplicate public prompt identities while leaving \
+instance pool rejects duplicate public prompt identities while leaving \
 rendered-prompt uniqueness to its renderer and template."""
 rationale = """
-Task pools reject duplicate public tasks without claiming that input identity \
-uniquely determines rendered text."""
+Instance pools reject duplicate public tasks without claiming that input \
+identity uniquely determines rendered text."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/instances/test_identity.py tests/pools/test_pool.py"
 
@@ -67,12 +67,13 @@ date = "2026-08-06"
 check = "uv run pytest -q tests/scoring/test_aggregation.py"
 
 [[contracts]]
-title = "Pool splits own named disjoint groups"
+title = "Instance pool splits own named disjoint groups"
 statement = """
-A pool split contains an immutable ordered tuple of validated instance groups \
-with unique names and no task-instance identifier shared across groups. Named \
-lookup returns the corresponding group and raises KeyError for an absent \
-name. Empty groups and an empty collection of groups are valid."""
+An instance pool split contains an immutable ordered tuple of validated \
+instance groups with unique names and no task-instance identifier shared \
+across groups. Named lookup returns the corresponding group and raises \
+KeyError for an absent name. Empty groups and an empty collection of groups \
+are valid."""
 rationale = """
 Group membership has one owner, while the split enforces the cross-group \
 invariants independently of any evaluation protocol or allocation algorithm."""
@@ -81,7 +82,7 @@ date = "2026-10-15"
 [[contracts]]
 title = "Pool splitting preserves deterministic cohorts"
 statement = """
-Task-pool splitting accepts a mapping of nonblank group names to exact \
+Instance-pool splitting accepts a mapping of nonblank group names to exact \
 nonnegative integer sizes and uses its insertion order as destination order, \
 including for allocation ties. It selects without replacement by each task \
 instance's complete ordered task-strata tuple, fills exactly the requested nonnegative \
@@ -99,13 +100,13 @@ check = "uv run pytest -q tests/pools/test_splitting.py"
 title = "Manifests pin retained pool content"
 statement = """
 A pool manifest accepts exactly its closed persisted schema at the supported \
-schema version, and it matches a task pool only when every retained seed lies \
-in the declared half-open seed range and both per-stratum counts and the \
+schema version, and it matches an instance pool only when every retained \
+seed lies in the declared half-open seed range and both per-stratum counts and the \
 versioned dr-serialize identity-document hash match."""
 rationale = """
 Generator metadata alone cannot detect retained-content drift; seed \
 containment, counts, and an ordered versioned identity jointly pin the \
-generated task pool without claiming anything about rejected generator \
+generated instance pool without claiming anything about rejected generator \
 attempts."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/manifests"
@@ -159,10 +160,11 @@ check = "uv run pytest -q tests/manifests"
 [[contracts]]
 title = "Owning subpackages define the public API"
 statement = """
-Consumers import public contracts from whetstone_envs.models, \
+Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.probes, and \
-whetstone_envs.scoring. Strict report models are imported from \
-whetstone_envs.reporting. Task-family contracts are imported from their owning \
+whetstone_envs.scoring. InstancePool.split and its private allocation helpers \
+live together in instances/instance_pool.py. Strict report models are imported \
+from whetstone_envs.reporting. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
 whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23. The optional \
 whetstone_envs.optim extra maps those contracts onto whetstone-ai experiments \
@@ -290,7 +292,7 @@ reserved seed range, the vendored generator runs in isolated Python mode from \
 copied runtime files in a temporary directory, its JSON crosses a strict 16 \
 MiB and depth-bounded validated boundary, and an independent forward-chaining \
 oracle must derive the generated label from the public question and query \
-before the instance enters a task pool."""
+before the instance enters an instance pool."""
 rationale = """
 Validated generation inputs support explicit custom cohorts, canonical \
 manifests make the published pool identities reproducible, and surface-text \

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from whetstone_envs.models.instance import Instance  # noqa: TC001
+from whetstone_envs.instances.instance import Instance  # noqa: TC001
 
 
 class InstanceGroup(BaseModel):

@@ -6,13 +6,15 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from whetstone_envs.models.instance_group import InstanceGroup  # noqa: TC001
+from whetstone_envs.instances.instance_group import (
+    InstanceGroup,  # noqa: TC001
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-class PoolSplit(BaseModel):
+class InstancePoolSplit(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     instance_groups: tuple[InstanceGroup, ...]

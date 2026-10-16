@@ -46,8 +46,8 @@ if TYPE_CHECKING:
 
     from dr_providers import ProviderCallConfig
 
+    from whetstone_envs.instances import InstancePool
     from whetstone_envs.manifests import Manifest
-    from whetstone_envs.models import TaskPool
     from whetstone_envs.optim.experiment import PreparedSplitExperiment
 
 __all__ = [
@@ -123,7 +123,7 @@ def c18_candidate(*, candidate_id: str, template: str):
     return C18_CONTRACT.candidate(candidate_id=candidate_id, template=template)
 
 
-def c18_generate_pool(*, n_per_stratum: int, seed_start: int) -> TaskPool:
+def c18_generate_pool(*, n_per_stratum: int, seed_start: int) -> InstancePool:
     """Generate a C18 pool under the registry's calling convention.
 
     ``whetstone_envs.c18.generate_pool`` takes its seed start from a
@@ -168,13 +168,13 @@ def c18_pool_manifest(*, n_per_stratum: int, seed_start: int) -> Manifest:
     )
 
 
-def c18_protocol_split_sizes(pool: TaskPool) -> tuple[int, int, int]:
+def c18_protocol_split_sizes(pool: InstancePool) -> tuple[int, int, int]:
     """The split sizes C18's own configuration derives for ``pool``."""
     return default_split_sizes(pool, DEFAULT_CONFIG)
 
 
 def prepare_c18_experiment(
-    pool: TaskPool,
+    pool: InstancePool,
     *,
     split_sizes: tuple[int, int, int],
     num_seeds: int = 1,

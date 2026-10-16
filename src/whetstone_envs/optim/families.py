@@ -54,8 +54,8 @@ if TYPE_CHECKING:
         TemplateRenderContract,
     )
 
+    from whetstone_envs.instances import InstancePool
     from whetstone_envs.manifests import Manifest
-    from whetstone_envs.models import TaskPool
     from whetstone_envs.optim.experiment import PreparedExperiment
 
 __all__ = [
@@ -90,9 +90,11 @@ KNOWN_FAMILY_IDS: tuple[str, ...] = tuple(member.value for member in FamilyId)
 
 
 class PoolGenerator(Protocol):
-    """Generate a family's deterministic task pool."""
+    """Generate a family's deterministic instance pool."""
 
-    def __call__(self, *, n_per_stratum: int, seed_start: int) -> TaskPool: ...
+    def __call__(
+        self, *, n_per_stratum: int, seed_start: int
+    ) -> InstancePool: ...
 
 
 class ExperimentBuilder(Protocol):
@@ -100,7 +102,7 @@ class ExperimentBuilder(Protocol):
 
     def __call__(
         self,
-        pool: TaskPool,
+        pool: InstancePool,
         *,
         split_sizes: tuple[int, int, int],
         num_seeds: int,

@@ -51,11 +51,11 @@ from whetstone.experiment.sampling import (
 )
 
 from whetstone_envs.c19 import PROBES
-from whetstone_envs.models import PoolSplit
+from whetstone_envs.instances import InstancePoolSplit
 from whetstone_envs.optim.rows import TaskRow, task_rows_from_instances
 
 if TYPE_CHECKING:
-    from whetstone_envs.models import TaskPool
+    from whetstone_envs.instances import InstancePool
 
 C19_NAMESPACE = "whetstone_envs.c19"
 C19_DATASET_REVISION = "c19/v1"
@@ -90,7 +90,7 @@ class PreparedExperiment(Protocol):
     def experiment(self) -> Experiment: ...
 
     @property
-    def split(self) -> PoolSplit: ...
+    def split(self) -> InstancePoolSplit: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +98,7 @@ class PreparedSplitExperiment:
     """Retain source cohorts because eval configs contain only task hashes."""
 
     experiment: Experiment
-    split: PoolSplit
+    split: InstancePoolSplit
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,7 +350,7 @@ def c19_candidate(*, candidate_id: str, template: str) -> Candidate:
 
 
 def _required_evaluation_rows(
-    split: PoolSplit,
+    split: InstancePoolSplit,
     *,
     namespace: str,
 ) -> tuple[tuple[TaskRow, ...], tuple[TaskRow, ...]]:
@@ -366,7 +366,7 @@ def _required_evaluation_rows(
 
 
 def prepare_experiment(
-    pool: TaskPool,
+    pool: InstancePool,
     *,
     contract: ExperimentContract,
     split_sizes: tuple[int, int, int],
@@ -429,7 +429,7 @@ def prepare_experiment(
 
 
 def prepare_c19_experiment(
-    pool: TaskPool,
+    pool: InstancePool,
     *,
     split_sizes: tuple[int, int, int],
     num_seeds: int = 1,

@@ -163,7 +163,7 @@ PROTOCOL_IDS: tuple[str, ...] = (
 # Init records the digest of the file it reads; this pin identifies the
 # packaged revision for verification.
 PROTOCOL_DOC_SHA256 = (
-    "5c80955a1497824563b2a4b9555ac636a605b81904f70ddaeeb6cbaef9f7608c"
+    "79e50016d557a4c1a76ac52cf8d736cfd2b30e877436032fd63e020d0414be4e"
 )
 
 

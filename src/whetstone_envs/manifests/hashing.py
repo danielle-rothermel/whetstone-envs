@@ -5,7 +5,7 @@ from dr_serialize import (
     identity_document_hash,
 )
 
-from whetstone_envs.models import Instance, TaskPool
+from whetstone_envs.instances import Instance, InstancePool
 
 _POOL_IDENTITY_SCHEMA = "whetstone_envs.task_pool"
 _POOL_IDENTITY_SCHEMA_VERSION = 1
@@ -21,7 +21,7 @@ def _identity_instance(instance: Instance) -> dict[str, Jsonable]:
     }
 
 
-def content_hash(pool: TaskPool) -> Sha256Digest:
+def content_hash(pool: InstancePool) -> Sha256Digest:
     """Return the versioned identity hash for the pool's ordered content.
 
     The identity schema freezes which task-instance facts participate. Pool

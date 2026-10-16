@@ -31,7 +31,7 @@ from whetstone_envs.manifests.validation import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from whetstone_envs.models import TaskPool
+    from whetstone_envs.instances import InstancePool
 
 _MANIFEST_MAX_BYTES = 1 << 20
 _PERSISTED_FIELDS = frozenset(
@@ -46,7 +46,7 @@ _PERSISTED_FIELDS = frozenset(
 
 
 def _retained_seeds_within_range(
-    pool: TaskPool,
+    pool: InstancePool,
     seed_range: tuple[int, int],
 ) -> bool:
     start, end = seed_range
@@ -125,7 +125,7 @@ class Manifest(BaseModel):
     @classmethod
     def from_pool(
         cls,
-        pool: TaskPool,
+        pool: InstancePool,
         *,
         generator_version: str,
         seed_range: tuple[int, int],
@@ -181,7 +181,7 @@ class Manifest(BaseModel):
     def read(cls, path: Path) -> Manifest:
         return cls.from_dict(_manifest_document(path).read())
 
-    def matches_pool(self, pool: TaskPool) -> bool:
+    def matches_pool(self, pool: InstancePool) -> bool:
         return (
             _retained_seeds_within_range(pool, self.seed_range)
             and self.stratum_counts == pool.stratum_counts()

@@ -19,7 +19,7 @@ from whetstone_envs.c23._inductionbench import (
 from whetstone_envs.c23._prompts import render_demonstrations
 from whetstone_envs.c23._selection import select_task
 from whetstone_envs.c23._transducers import apply_reference
-from whetstone_envs.models import Instance, InstanceGroup, TaskPool
+from whetstone_envs.instances import Instance, InstanceGroup, InstancePool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -63,7 +63,9 @@ class GenerationExhaustedError(RuntimeError):
     pass
 
 
-def generate_pool(*, n_per_stratum: int = DEFAULT_N_PER_STRATUM) -> TaskPool:
+def generate_pool(
+    *, n_per_stratum: int = DEFAULT_N_PER_STRATUM
+) -> InstancePool:
     """Generate the deterministic C23 pool with one public size override."""
     if type(n_per_stratum) is not int:
         raise TypeError("n_per_stratum must be an integer")
@@ -76,7 +78,7 @@ def _generate_pool(
     config: GenerationConfiguration,
     *,
     n_per_stratum: int,
-) -> TaskPool:
+) -> InstancePool:
     @cache
     def apply_hypothesis(hypothesis: Hypothesis, value: str) -> str:
         return apply_reference(hypothesis, value)
@@ -124,7 +126,7 @@ def _generate_pool(
         for row in range(n_per_stratum)
         for stratum_index in range(len(per_stratum))
     )
-    return TaskPool(
+    return InstancePool(
         instance_group=InstanceGroup(name="c23", instances=tuple(instances)),
     )
 
@@ -158,7 +160,7 @@ def _make_instance(
     )
 
 
-def default_split_sizes(pool: TaskPool) -> tuple[int, int, int]:
+def default_split_sizes(pool: InstancePool) -> tuple[int, int, int]:
     """Validate a balanced C23 pool and return fixed 10/20/20 allocations."""
     expected_labels = tuple(stratum.label for stratum in DEFAULT_CONFIG.strata)
     if pool.strata != expected_labels:

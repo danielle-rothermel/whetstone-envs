@@ -10,11 +10,11 @@ This repo owns the environment data and evaluation rules shared by Whetstone's
 quick-test task families. Core packages have no dependency on optimizer or
 execution-contract code:
 
-- [**Instances and groups**][models-source] define immutable task inputs,
+- [**Instances and groups**][instances-source] define immutable task inputs,
   private gold data, generation seeds, task strata, public prompt identity,
   and named ordered instance collections.
-- [**Pools**][models-source] validate ordered instance collections, and
-  [**splitting**][pools-source] allocates deterministic named cohorts.
+- [**Pools**][instances-source] validate ordered instance collections, and
+  [**splitting**][instances-source] allocates deterministic named cohorts.
 - [**Probes**][probes-source] pair naive and ceiling templates,
   render public prompt inputs, and normalize predictions for evaluation.
 - [**Scoring**][scoring-source] represents scored, failed, and
@@ -635,7 +635,7 @@ every Git repository and do not publish them casually.
 
 ## Instances and groups
 
-[`whetstone_envs.models`][models-source] owns the immutable
+[`whetstone_envs.instances`][instances-source] owns the immutable
 unit passed through generation, prompting, scoring, splitting, and persistence.
 Prompt inputs are public; `gold` remains private evaluation data.
 
@@ -679,18 +679,19 @@ class InstanceGroup(BaseModel):
 
 An instance group requires a nonblank name and unique instance identifiers.
 Its ordered membership is immutable, and an empty tuple is valid. Groups may
-contain repeated public prompt identities; task pools apply that stronger
-uniqueness rule. Both models are imported from `whetstone_envs.models`.
+contain repeated public prompt identities; instance pools apply that stronger
+uniqueness rule. Both models are imported from `whetstone_envs.instances`.
 
 ## Pools and splits
 
-[`whetstone_envs.models`][models-source] owns `TaskPool`, which contains one
-`InstanceGroup` and rejects duplicate public prompt identities, and `PoolSplit`,
-which contains named disjoint groups. The allocation algorithm lives in
-[`whetstone_envs.pools`][pools-source] and delegates optimization to `dr-graph`.
+[`whetstone_envs.instances`][instances-source] owns `InstancePool`, which contains
+one `InstanceGroup` and rejects duplicate public prompt identities, and
+`InstancePoolSplit`, which contains named disjoint groups. `InstancePool.split`
+and its private allocation helpers live together in `instances/instance_pool.py`
+and delegate optimization to `dr-graph`.
 
 ```python
-class PoolSplit(BaseModel):
+class InstancePoolSplit(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     instance_groups: tuple[InstanceGroup, ...]
@@ -699,7 +700,7 @@ class PoolSplit(BaseModel):
 ```
 
 ```python
-class TaskPool(BaseModel):
+class InstancePool(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     instance_group: InstanceGroup
@@ -712,11 +713,11 @@ class TaskPool(BaseModel):
     def split(
         self,
         sizes: Mapping[str, int],
-    ) -> PoolSplit: ...
+    ) -> InstancePoolSplit: ...
 ```
 
 Construct a pool with
-`TaskPool(instance_group=InstanceGroup(name="example", instances=(instance,)))`.
+`InstancePool(instance_group=InstanceGroup(name="example", instances=(instance,)))`.
 Access its ordered members through `pool.instance_group.instances`. Group names
 do not participate in the versioned pool content hash. Generated groups use
 their task-family identifier as the name.
@@ -820,7 +821,7 @@ class Manifest(BaseModel):
     @classmethod
     def from_pool(
         cls,
-        pool: TaskPool,
+        pool: InstancePool,
         *,
         generator_version: str,
         seed_range: tuple[int, int],
@@ -829,11 +830,11 @@ class Manifest(BaseModel):
     def write(self, path: Path) -> None: ...
     @classmethod
     def read(cls, path: Path) -> "Manifest": ...
-    def matches_pool(self, pool: TaskPool) -> bool: ...
+    def matches_pool(self, pool: InstancePool) -> bool: ...
 ```
 
 ```python
-def content_hash(pool: TaskPool) -> Sha256Digest: ...
+def content_hash(pool: InstancePool) -> Sha256Digest: ...
 ```
 
 ## C11 JSON canonicalization
@@ -861,9 +862,9 @@ def generate_pool(
     *,
     n_per_stratum: int = ...,
     seed_start: int = ...,
-) -> TaskPool: ...
+) -> InstancePool: ...
 
-def build_manifest(pool: TaskPool) -> Manifest: ...
+def build_manifest(pool: InstancePool) -> Manifest: ...
 def canonicalize(input_json: str) -> str: ...
 ```
 
@@ -908,15 +909,15 @@ def generate_pool(
     config: GenerationConfig = DEFAULT_CONFIG,
     *,
     n_per_stratum: int | None = None,
-) -> TaskPool: ...
+) -> InstancePool: ...
 
 def default_split_sizes(
-    pool: TaskPool,
+    pool: InstancePool,
     config: GenerationConfig = DEFAULT_CONFIG,
 ) -> tuple[int, int, int]: ...
 
 def build_manifest(
-    pool: TaskPool,
+    pool: InstancePool,
     config: GenerationConfig = DEFAULT_CONFIG,
 ) -> Manifest: ...
 
@@ -980,7 +981,7 @@ def generate_pool(
     *,
     n_per_stratum: int = ...,
     seed_start: int = ...,
-) -> TaskPool: ...
+) -> InstancePool: ...
 
 def build_manifest(
     *,
@@ -1014,7 +1015,7 @@ def score(gold: str, response: str) -> int: ...
 ```
 
 ```python
-def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool: ...
+def generate_pool(preset: Preset = Preset.DEFAULT) -> InstancePool: ...
 def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest: ...
 ```
 
@@ -1045,8 +1046,8 @@ class RuleConfiguration:
 GENERATOR_VERSION: str
 PROBES: ProbePair
 
-def generate_pool(*, n_per_stratum: int = 50) -> TaskPool: ...
-def default_split_sizes(pool: TaskPool) -> tuple[int, int, int]: ...
+def generate_pool(*, n_per_stratum: int = 50) -> InstancePool: ...
+def default_split_sizes(pool: InstancePool) -> tuple[int, int, int]: ...
 ```
 
 ```python
@@ -1107,10 +1108,9 @@ uv run python -m whetstone_envs.c19.regenerate
 [c11-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c11
 [c18-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c18
 [c19-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c19
-[models-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/models
+[instances-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/instances
 [c22-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c22
 [manifests-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/manifests
-[pools-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/pools
 [probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes
 [scoring-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/scoring
 [c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23

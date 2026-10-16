@@ -333,8 +333,8 @@ pool = generate_pool(n_per_stratum=32, seed_start=1_000_000)   # 704 instances
 generator version (`c19-custom-v2`). The pool manifest content hash is recorded
 in the study manifest; any change to it is a new `study_id`.
 
-**Split sizes** (`TaskPool.split` is deterministic, strata-balanced, and
-disjoint by construction — `models/pool_split.py:PoolSplit` validates unique
+**Split sizes** (`InstancePool.split` is deterministic, strata-balanced, and
+disjoint by construction — `instances/instance_pool_split.py:InstancePoolSplit` validates unique
 group names and disjoint instance IDs). Experiment preparation requests
 `internal_eval`, `official`, and `held_out` in that order, preserving the
 allocation order and cohort membership:
@@ -346,7 +346,7 @@ allocation order and cohort membership:
 | held-out | reporting only, touched once per optimizer | **440** (20/stratum) | sized in §3.4; raised from 220 by note 19 |
 
 Remaining pool tail (704 − 660 = 44) stays unassigned;
-`split_pool` explicitly permits an unused tail.
+`InstancePool.split` explicitly permits an unused tail.
 
 **Train/val inside the internal split (note 18, pre-registered).** Every
 optimizer that has the concept runs with an **explicit, disjoint train/val
@@ -1297,8 +1297,8 @@ rather than rediscover the risk.
 
 **R1 — Split leakage.** *Answer:* §3.2 L1–L6, with L6 a mechanical set-intersection
 check over persisted task hashes. *Attack surface:* `derive_eval_split` derives
-internal and official from the same `PoolSplit`; if `split_pool`'s strata
-balancing ever assigned an instance to two groups, `PoolSplit` validation
+internal and official from the same `InstancePoolSplit`; if `InstancePool.split`'s strata
+balancing ever assigned an instance to two groups, `InstancePoolSplit` validation
 rejects the result — but that validation is on instance IDs,
 while the eval configs key on **task hashes**. If two distinct instances ever
 produced the same task hash, L5 would pass while the splits overlapped

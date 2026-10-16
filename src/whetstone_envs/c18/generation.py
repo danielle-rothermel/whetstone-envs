@@ -6,8 +6,8 @@ from whetstone_envs.c18.config import (
     DistractorMode,
     GenerationConfig,
 )
+from whetstone_envs.instances import Instance, InstanceGroup, InstancePool
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 
 def _validated_count(
@@ -73,7 +73,7 @@ def generate_pool(
     config: GenerationConfig = DEFAULT_CONFIG,
     *,
     n_per_stratum: int | None = None,
-) -> TaskPool:
+) -> InstancePool:
     """Generate a deterministic C18 pool for ``config``.
 
     One fresh seed is consumed per configured depth. Instances use
@@ -90,7 +90,7 @@ def generate_pool(
         )
         for index, stratum in enumerate(config.strata)
     )
-    return TaskPool(
+    return InstancePool(
         instance_group=InstanceGroup(
             name="c18",
             instances=tuple(
@@ -101,7 +101,7 @@ def generate_pool(
 
 
 def build_manifest(
-    pool: TaskPool,
+    pool: InstancePool,
     config: GenerationConfig = DEFAULT_CONFIG,
 ) -> Manifest:
     """Build the canonical retained-pool manifest for ``config``."""
@@ -113,7 +113,7 @@ def build_manifest(
 
 
 def default_split_sizes(
-    pool: TaskPool,
+    pool: InstancePool,
     config: GenerationConfig = DEFAULT_CONFIG,
 ) -> tuple[int, int, int]:
     """Return split sizes scaled to a generated pool's uniform strata."""

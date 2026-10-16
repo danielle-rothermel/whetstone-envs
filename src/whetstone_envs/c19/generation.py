@@ -18,8 +18,8 @@ from whetstone_envs.c19.scenarios import (
     C19Size,
     build_scenario,
 )
+from whetstone_envs.instances import Instance, InstanceGroup, InstancePool
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 if TYPE_CHECKING:
     from whetstone_envs.c19._minigrid import MiniGridState
@@ -198,14 +198,14 @@ def generate_pool(
     *,
     n_per_stratum: int = DEFAULT_N_PER_STRATUM,
     seed_start: int = DEFAULT_SEED_START,
-) -> TaskPool:
-    """Generate the deterministic 22-stratum C19 task pool.
+) -> InstancePool:
+    """Generate the deterministic 22-stratum C19 instance pool.
 
     ``n_per_stratum`` must be between 1 and ``MAX_N_PER_STRATUM`` (128),
     inclusive.
 
     Each family-size scene seed is reused across all applicable fact
-    projections. Pool order is scene-index-major so the actual TaskPool split
+    projections. Pool order is scene-index-major so the InstancePool split
     schedule receives alternating carrying=yes/no outcomes within every
     carrying stratum.
     """
@@ -242,7 +242,7 @@ def generate_pool(
                 )
                 for fact in _facts(scenario)
             )
-    return TaskPool(
+    return InstancePool(
         instance_group=InstanceGroup(name="c19", instances=tuple(instances)),
     )
 

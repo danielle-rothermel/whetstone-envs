@@ -22,8 +22,8 @@ from whetstone_envs.c22.constraints import (
     RequiredKeyword,
     Title,
 )
+from whetstone_envs.instances import Instance, InstanceGroup, InstancePool
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 GENERATOR_VERSION = "c22-1"
 PUBLISHED_KEY_MAX = 3757
@@ -251,7 +251,7 @@ def _generate_pool(
     preset: Preset,
     *,
     instances_per_stratum: int,
-) -> TaskPool:
+) -> InstancePool:
     if type(instances_per_stratum) is not int or instances_per_stratum <= 0:
         msg = "instances_per_stratum must be a positive integer"
         raise ValueError(msg)
@@ -274,12 +274,12 @@ def _generate_pool(
                     )
                 )
                 seed += 1
-    return TaskPool(
+    return InstancePool(
         instance_group=InstanceGroup(name="c22", instances=tuple(instances)),
     )
 
 
-def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool:
+def generate_pool(preset: Preset = Preset.DEFAULT) -> InstancePool:
     """Generate one of the two fixed, reproducible C22 pools."""
     return _generate_pool(
         preset,

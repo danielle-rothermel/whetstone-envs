@@ -65,8 +65,8 @@ engine:
   selected deterministically and validated as a strict string.
 - `TaskRow` intentionally contains only task ID, prompt inputs, and gold. It
   does not carry seed or strata. Report construction must join evidence to the
-  source `Instance`/`PoolSplit`; it must not parse semantic facts back out of a
-  task ID.
+  source `Instance`/`InstancePoolSplit`; it must not parse semantic facts back
+  out of a task ID.
 
 ## CLI surface
 
@@ -316,8 +316,8 @@ separate:
   the actual C19 enums and probes; private implementation, not a second public
   task API.
 - `src/whetstone_envs/optim/experiment.py`: prepare a C19 experiment together
-  with its exact `PoolSplit`, so report projection receives seed/strata from
-  authoritative `Instance` objects.
+  with its exact `InstancePoolSplit`, so report projection receives seed/strata
+  from authoritative `Instance` objects.
 - `src/whetstone_envs/optim/run.py`: publish the trajectory projection before
   closing the run store.
 - `tests/reporting/`: schema, projection, publication, CLI, and fixed-width Rich
@@ -325,8 +325,8 @@ separate:
 
 Replace the internal experiment-construction path rather than maintaining two
 ways to create the C19 experiment. A small frozen prepared-experiment value
-should carry `Experiment` plus `PoolSplit`; update the optimizer and tests to
-use it. Do not add a generic family registry while C19 is the only consumer;
+should carry `Experiment` plus `InstancePoolSplit`; update the optimizer and
+tests to use it. Do not add a generic family registry while C19 is the only consumer;
 CLI dispatch may name C19 explicitly.
 
 Add an exact Rich pin to the `optim` extra and lockfile. Keep imports of Rich

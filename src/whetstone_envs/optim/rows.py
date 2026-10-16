@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from whetstone_envs.models import Instance
+    from whetstone_envs.instances import Instance
 
 
 @dataclass(frozen=True, slots=True)

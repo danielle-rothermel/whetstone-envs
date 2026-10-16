@@ -9,8 +9,8 @@ from enum import UNIQUE, StrEnum, verify
 from types import MappingProxyType
 
 from whetstone_envs.c11.oracle import canonicalize
+from whetstone_envs.instances import Instance, InstanceGroup, InstancePool
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.models import Instance, InstanceGroup, TaskPool
 
 GENERATOR_VERSION = "c11-generation-2"
 INPUT_JSON_FIELD = "input_json"
@@ -231,8 +231,8 @@ def generate_pool(
     *,
     n_per_stratum: int = DEFAULT_N_PER_STRATUM,
     seed_start: int = DEFAULT_SEED_START,
-) -> TaskPool:
-    """Generate a deterministic, balanced C11 task pool."""
+) -> InstancePool:
+    """Generate a deterministic, balanced C11 instance pool."""
     n_per_stratum, seed_start = _validate_generation_inputs(
         n_per_stratum,
         seed_start,
@@ -264,12 +264,12 @@ def generate_pool(
     ordered = (
         block[index] for index in range(n_per_stratum) for block in by_stratum
     )
-    return TaskPool(
+    return InstancePool(
         instance_group=InstanceGroup(name="c11", instances=tuple(ordered)),
     )
 
 
-def build_manifest(pool: TaskPool) -> Manifest:
+def build_manifest(pool: InstancePool) -> Manifest:
     """Describe the retained C11 pool with the shared manifest contract."""
     if not pool.instance_group.instances:
         msg = "C11 manifests require a nonempty pool"

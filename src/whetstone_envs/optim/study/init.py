@@ -38,7 +38,7 @@ from whetstone_envs.optim.study.stages import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from whetstone_envs.models import Instance
+    from whetstone_envs.instances import Instance
     from whetstone_envs.optim.study.protocols import ArmDesign
 
 __all__ = [

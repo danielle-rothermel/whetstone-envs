@@ -8,42 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `InstanceGroup` in `models/instance_group.py`: a strict, frozen model with
+- `InstanceGroup` in `instances/instance_group.py`: a strict, frozen model with
   a nonblank name and ordered instances with unique identifiers.
 
 ### Changed
 
-- `PoolSplit` is a strict, frozen model in `models/pool_split.py` containing
-  ordered named `InstanceGroup` objects. Group names must be unique and
-  instance IDs must be disjoint across groups; `split[name]` retrieves a group.
-- `TaskPool.split` accepts a name-to-size mapping with any number of
+- Instance representations, validation, and allocation share one capability
+  package, `whetstone_envs.instances`. `InstancePool.split` owns allocation
+  directly alongside its private helpers in `instances/instance_pool.py`.
+- `Instance` is a strict, frozen Pydantic model with detached read-only prompt
+  inputs, model serialization, and content-based hashing. Construction requires
+  keyword arguments; invalid fields and frozen assignments raise
+  `ValidationError`. Public prompt identity is a read-only property.
+- `TaskPool` is renamed to `InstancePool`, a strict, frozen model containing
+  one `instance_group`.
+  Callers access members through `pool.instance_group.instances`. Public
+  prompt uniqueness, stratum indexing, and persisted pool identities are
+  preserved; group names do not enter the content hash.
+- `PoolSplit` is renamed to `InstancePoolSplit`, a strict, frozen model
+  containing ordered named `InstanceGroup` objects. Group names must be unique
+  and instance IDs must be disjoint across groups; `split[name]` retrieves a group.
+- `InstancePool.split` accepts a name-to-size mapping with any number of
   destinations. Request order controls group order and allocation ties.
   Evaluation consumers retain their three named roles, existing cohorts,
   and persisted evaluation identities. Protocol implementation references
   are updated and the packaged document digest is re-pinned.
-- `TaskPool` is a strict, frozen model in `models/task_pool.py`, imported from
-  `whetstone_envs.models` and constructed with one `instance_group` field.
-  Callers access members through `pool.instance_group.instances`. Public
-  prompt uniqueness, stratum indexing, three-way splitting, and persisted
-  pool identities are preserved; group names do not enter the content hash.
-- `Instance` is imported from `whetstone_envs.models` and defined in
-  `models/instance.py`.
-- `Instance` is a strict, frozen Pydantic model with validated construction,
-  detached read-only prompt inputs, model serialization, and content-based
-  hashing. Invalid fields and frozen assignments raise `ValidationError`;
-  direct construction requires keyword arguments.
-- Public prompt identity is the read-only `Instance.public_prompt_identity`
-  property, shared by hashing, generation, and pool deduplication.
 
 ### Removed
 
-- The `whetstone_envs.pools.PoolSplit` export, its three fixed cohort fields,
-  and the three positional size arguments to `TaskPool.split`.
-- The `whetstone_envs.pools.TaskPool` export and `pools/pool.py` implementation.
-- The `whetstone_envs.instances` package.
-- The `make_instance` convenience constructor. Task families construct
-  `Instance` directly with explicit stratum tuples.
-- The standalone `public_prompt_identity` helper and its `identity.py` module.
+- The `models` and `pools` packages; instance APIs are imported from
+  `whetstone_envs.instances`.
+- The `make_instance` constructor, standalone `public_prompt_identity` helper,
+  fixed cohort fields on `InstancePoolSplit`, and three positional split-size
+  arguments.
 
 ## [0.2.15] - 2026-10-08
 

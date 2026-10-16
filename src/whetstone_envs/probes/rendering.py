@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from whetstone_envs.models import Instance
+from whetstone_envs.instances import Instance
 
 
 def render_with_prompt_inputs(template: str, instance: Instance) -> str:

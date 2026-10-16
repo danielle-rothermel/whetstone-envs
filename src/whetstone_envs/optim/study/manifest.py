@@ -514,7 +514,7 @@ class EvidenceStore(Protocol):
 
 
 class PopulationRecord(_StrictModel):
-    """The task pool the study drew every split from."""
+    """The instance pool the study drew every split from."""
 
     family: StrictStr
     generator_version: StrictStr

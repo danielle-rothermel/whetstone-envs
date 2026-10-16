@@ -212,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "First generator seed for the task pool. Defaults to the "
+            "First generator seed for the instance pool. Defaults to the "
             "family's own start."
         ),
     )

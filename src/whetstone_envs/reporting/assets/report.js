@@ -270,10 +270,10 @@ function taskTable(evalReport, view) {
   const section = panel('Task observations'); const rows = taskRows(evalReport, view);
   section.append(filterControls(), node('p', { text: `Showing ${rows.length} observation rows. Complete run denominator remains ${evalReport.observations.length}.`, className: 'sr-status' }));
   const wrap = node('div', { className: 'table-wrap' }); const table = node('table'); const head = node('thead'); const headRow = node('tr');
-  for (const label of ['Task', 'Strata / repeat', 'Candidate', 'Observed output', 'Gold', 'Score / state', 'Paired outcome', 'Detail']) headRow.append(node('th', { text: label }));
+  for (const label of ['Task', 'Categories / repeat', 'Candidate', 'Observed output', 'Gold', 'Score / state', 'Paired outcome', 'Detail']) headRow.append(node('th', { text: label }));
   head.append(headRow); const body = node('tbody');
   for (const item of rows) {
-    const row = node('tr'); for (const value of [item.row.task_id, `${item.task.strata.join(', ')} · ${item.row.seed_index}`, item.row.candidate_name, preview(item.row.normalized_output ?? '—'), item.task.gold, rowState(item.row), item.bucket]) row.append(node('td', { text: value }));
+    const row = node('tr'); for (const value of [item.row.task_id, `${item.task.categories.join(', ')} · ${item.row.seed_index}`, item.row.candidate_name, preview(item.row.normalized_output ?? '—'), item.task.gold, rowState(item.row), item.bucket]) row.append(node('td', { text: value }));
     const detail = node('td'); detail.append(button('Open', () => openTask(evalReport, item.task, item.row.seed_index))); row.append(detail); body.append(row);
   }
   table.append(head, body); wrap.append(table); section.append(wrap); return section;
@@ -281,7 +281,7 @@ function taskTable(evalReport, view) {
 function rowState(row) { return row.state !== 'scored' ? `${row.state} · ${row.failure_code || 'no code'}` : (row.score === 1 ? '✓ correct' : '✕ wrong'); }
 function openTask(evalReport, task, seedIndex) {
   state.task = `${task.task_id}:${seedIndex}`; saveFragment(); const dialog = byId('task-dialog'); clear(dialog);
-  dialog.append(node('h2', { id: 'task-title', text: `${task.task_id} · repeat ${seedIndex}` }), node('p', { text: `hash ${task.task_hash} · seed ${task.seed} · strata ${task.strata.join(', ')}` }), textBlock('ASCII grid', task.prompt_inputs.grid), textBlock('Action script', task.prompt_inputs.command), textBlock('Question', task.prompt_inputs.question), textBlock('Private gold', task.gold));
+  dialog.append(node('h2', { id: 'task-title', text: `${task.task_id} · repeat ${seedIndex}` }), node('p', { text: `hash ${task.task_hash} · seed ${task.seed} · categories ${task.categories.join(', ')}` }), textBlock('ASCII grid', task.prompt_inputs.grid), textBlock('Action script', task.prompt_inputs.command), textBlock('Question', task.prompt_inputs.question), textBlock('Private gold', task.gold));
   const rows = evalReport.observations.filter((item) => item.task_id === task.task_id && item.seed_index === seedIndex && state.selected.includes(item.candidate_name));
   const tabs = node('div', { className: 'tabs' }); const details = node('div', { className: 'detail-grid' });
   rows.forEach((item, index) => {
@@ -369,10 +369,10 @@ function trajectoryDiagnosis(resolution, candidate) {
   if (diagnosis && diagnosis.overall) {
     const overall = diagnosis.overall; section.append(node('h3', { text: 'Overall observed change' }), node('p', { text: `${scoreText(overall.before)} (${overall.before_numerator}/${overall.denominator}) → ${scoreText(overall.after)} (${overall.after_numerator}/${overall.denominator}); Δ ${signedScore(overall.change)}` }));
   }
-  if (diagnosis && diagnosis.strata.length) {
-    const table = node('table'); const head = node('thead'); const headRow = node('tr'); for (const label of ['Stratum', 'Before', 'After', 'Observed change']) headRow.append(node('th', { text: label })); head.append(headRow); const body = node('tbody');
-    for (const item of diagnosis.strata) { const row = node('tr'); for (const value of [item.stratum, `${scoreText(item.before)} · ${item.before_numerator}/${item.denominator}`, `${scoreText(item.after)} · ${item.after_numerator}/${item.denominator}`, signedScore(item.change)]) row.append(node('td', { text: value })); body.append(row); }
-    table.append(head, body); section.append(node('h3', { text: 'Per-stratum observed changes' }), table);
+  if (diagnosis && diagnosis.categories.length) {
+    const table = node('table'); const head = node('thead'); const headRow = node('tr'); for (const label of ['Category', 'Before', 'After', 'Observed change']) headRow.append(node('th', { text: label })); head.append(headRow); const body = node('tbody');
+    for (const item of diagnosis.categories) { const row = node('tr'); for (const value of [item.category, `${scoreText(item.before)} · ${item.before_numerator}/${item.denominator}`, `${scoreText(item.after)} · ${item.after_numerator}/${item.denominator}`, signedScore(item.change)]) row.append(node('td', { text: value })); body.append(row); }
+    table.append(head, body); section.append(node('h3', { text: 'Per-category observed changes' }), table);
   }
   if (diagnosis && diagnosis.changed_rows.length) {
     const links = node('div', { className: 'buckets' });

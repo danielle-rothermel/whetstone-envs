@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Instance classification uses category terminology throughout the API,
+  generators, scoring, CLI, and reports: `categories`, `category_counts`,
+  `in_category`, and `--n-per-category`.
+- `InstancePool.split` separates grouping by category combination, balanced
+  selection, coverage-first allocation, instance assignment, and named group
+  construction. Selected cohorts, tie order, and source ordering are preserved.
+- Pool manifests and pool identity payloads use schema version 2. Evaluation
+  reports use `whetstone_envs.eval_report/v3`, trajectory reports use
+  `whetstone_envs.trajectory_report/v2`, and study manifests use
+  `whetstone_envs.step10_study/v16`. Category field names replace strata names
+  in the persisted formats; packaged pool manifests and protocol digest are
+  regenerated. Pool content hashes change with the versioned identity payload.
+  Older persisted schemas are rejected; recorded run files are left untouched.
 - Instance representations, validation, and allocation share one capability
   package, `whetstone_envs.instances`. `InstancePool.split` owns allocation
   directly alongside its private helpers in `instances/instance_pool.py`.
@@ -23,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `TaskPool` is renamed to `InstancePool`, a strict, frozen model containing
   one `instance_group`.
   Callers access members through `pool.instance_group.instances`. Public
-  prompt uniqueness, stratum indexing, and persisted pool identities are
+  prompt uniqueness, category indexing, and instance content are
   preserved; group names do not enter the content hash.
 - `PoolSplit` is renamed to `InstancePoolSplit`, a strict, frozen model
   containing ordered named `InstanceGroup` objects. Group names must be unique

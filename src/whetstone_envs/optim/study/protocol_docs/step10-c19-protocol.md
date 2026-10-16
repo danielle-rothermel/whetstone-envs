@@ -312,9 +312,9 @@ invariant that the 0.1.2 rerun note demonstrated by hand.
 
 ### 3.1 Population and splits
 
-c19's pool is generated, not sampled from a fixed corpus: 22 strata
-(`scenario|size|fact`, `c19/generation.py:strata_labels`), `n_per_stratum`
-instances each, `DEFAULT_N_PER_STRATUM = 16`, `MAX_N_PER_STRATUM = 128`,
+c19's pool is generated, not sampled from a fixed corpus: 22 categories
+(`scenario|size|fact`, `c19/generation.py:categories_labels`), `n_per_category`
+instances each, `DEFAULT_N_PER_CATEGORY = 16`, `MAX_N_PER_CATEGORY = 128`,
 `DEFAULT_SPLIT_SIZES = (88, 132, 132)` over a 352-instance pool.
 
 This differs from the 76-task HumanEval population in the power plan, and the
@@ -326,14 +326,14 @@ transfers; its *task ceiling* does not.
 **Pinned population for Step 10.**
 
 ```
-pool = generate_pool(n_per_stratum=32, seed_start=1_000_000)   # 704 instances
+pool = generate_pool(n_per_category=32, seed_start=1_000_000)   # 704 instances
 ```
 
-`n_per_stratum=32` doubles the default and keeps the manifest's existing
+`n_per_category=32` doubles the default and keeps the manifest's existing
 generator version (`c19-custom-v2`). The pool manifest content hash is recorded
 in the study manifest; any change to it is a new `study_id`.
 
-**Split sizes** (`InstancePool.split` is deterministic, strata-balanced, and
+**Split sizes** (`InstancePool.split` is deterministic, categories-balanced, and
 disjoint by construction — `instances/instance_pool_split.py:InstancePoolSplit` validates unique
 group names and disjoint instance IDs). Experiment preparation requests
 `internal_eval`, `official`, and `held_out` in that order, preserving the
@@ -341,9 +341,9 @@ allocation order and cohort membership:
 
 | Split | Role | Size | Rationale |
 |---|---|---|---|
-| internal | optimizer's own search signal | **88** (4/stratum) | matches `DEFAULT_SPLIT_SIZES[0]`; large enough that COPRO/GEPA/MIPROv2 see a non-degenerate ranking signal, small enough that per-step search cost stays bounded |
-| official | model selection across the K repeats of one optimizer | **132** (6/stratum) | selection needs less resolution than the confirmatory test |
-| held-out | reporting only, touched once per optimizer | **440** (20/stratum) | sized in §3.4; raised from 220 by note 19 |
+| internal | optimizer's own search signal | **88** (4/category) | matches `DEFAULT_SPLIT_SIZES[0]`; large enough that COPRO/GEPA/MIPROv2 see a non-degenerate ranking signal, small enough that per-step search cost stays bounded |
+| official | model selection across the K repeats of one optimizer | **132** (6/category) | selection needs less resolution than the confirmatory test |
+| held-out | reporting only, touched once per optimizer | **440** (20/category) | sized in §3.4; raised from 220 by note 19 |
 
 Remaining pool tail (704 − 660 = 44) stays unassigned;
 `InstancePool.split` explicitly permits an unused tail.
@@ -365,7 +365,7 @@ deleted. Selection on official and reporting on held-out are unchanged.
 
 **c18 splits** use `default_split_sizes(pool, DEFAULT_CONFIG)` unchanged:
 `SplitPlan(internal_eval=6, official=12, held_out=12)` scaled over 4 depth
-strata at `n_per_stratum=30` → `(24, 48, 48)`. c18 is C3 only; it gets no power
+categories at `n_per_category=30` → `(24, 48, 48)`. c18 is C3 only; it gets no power
 analysis.
 
 ### 3.2 Leakage rules (pre-registered, mechanically checked)
@@ -473,7 +473,7 @@ at K=3 repeats and T=440:
 sd(Δ̂) ≤ sqrt( (τ² + 2(0.25)/3) / 440 ) = sqrt( (τ² + 0.167)/440 )
 ```
 
-With `τ² = 0.05` (a plausible between-task heterogeneity for a strata-balanced
+With `τ² = 0.05` (a plausible between-task heterogeneity for a categories-balanced
 generated pool), `sd(Δ̂) ≈ 0.0222`, giving a two-sided 95%/80%-power MDE of
 `2.80 × 0.0222 ≈ 0.062`. With `τ² = 0.10`, MDE ≈ 0.069.
 
@@ -565,7 +565,7 @@ Mirrors the `K_CAL` staged procedure of `1836`, adapted: the pilot is a
 
 **Stage 0 — anchor calibration (no optimizers).**
 Evaluate naive and ceiling on internal, official, and held-out at
-`K_REPEAT = 3`, on c19 with `n_per_stratum=32`. Uses the existing envs eval CLI
+`K_REPEAT = 3`, on c19 with `n_per_category=32`. Uses the existing envs eval CLI
 (`whetstone_envs.reporting.cli run`), not the optimizer runner.
 Outputs: `Δ_headroom = ceiling − naive` on held-out, per-task vectors for
 `analyze_power`, `τ̂²`, `σ̂²`, and the re-inverted MDE.
@@ -801,7 +801,7 @@ candidate.
 The claim is mechanical, so the evidence is mechanical.
 
 1. **One budgeted run per optimizer on c18** (`--family c18`), splits
-   `(24, 48, 48)` from `DEFAULT_CONFIG` at `n_per_stratum=30`, `K_REPEAT = 3`,
+   `(24, 48, 48)` from `DEFAULT_CONFIG` at `n_per_category=30`, `K_REPEAT = 3`,
    `K_RUN = 1`. Report each run's held-out accuracy vs naive and ceiling with a
    CI — descriptive, not a claim; T=48 has an MDE around 0.20.
    **Task-model reasoning effort: `minimal`** for this family (item 23), against
@@ -1217,8 +1217,8 @@ schema `whetstone_envs.step10_study/v1`, golden-tested literals.
 
 ```
 study_id, created_at, protocol_doc_path (this file), protocol_doc_sha256
-population: {family, generator_version, n_per_stratum, seed_start,
-             pool_manifest_content_hash, stratum_counts}
+population: {family, generator_version, n_per_category, seed_start,
+             pool_manifest_content_hash, category_counts}
 splits: {internal: {size, task_hashes[], eval_config_hash},
          official: {...}, held_out: {size, task_hashes[]}}
 models: {task_model, proposer_model, temperature: "unset",
@@ -1297,12 +1297,12 @@ rather than rediscover the risk.
 
 **R1 — Split leakage.** *Answer:* §3.2 L1–L6, with L6 a mechanical set-intersection
 check over persisted task hashes. *Attack surface:* `derive_eval_split` derives
-internal and official from the same `InstancePoolSplit`; if `InstancePool.split`'s strata
+internal and official from the same `InstancePoolSplit`; if `InstancePool.split`'s categories
 balancing ever assigned an instance to two groups, `InstancePoolSplit` validation
 rejects the result — but that validation is on instance IDs,
 while the eval configs key on **task hashes**. If two distinct instances ever
 produced the same task hash, L5 would pass while the splits overlapped
-semantically. Is the hash collision-free by construction across strata?
+semantically. Is the hash collision-free by construction across categories?
 
 **R2 — Selection on the reporting split.** *Answer:* L2/L3, and held-out
 evaluated exactly once, after selection is frozen. *Attack surface:* the report
@@ -1335,10 +1335,10 @@ compare to Stage 0 as a drift probe (cost: 1,320 calls at T=440).
 deadlines through the dr-exec pool; `RowDispatchStatus` discriminates
 `NOT_DISPATCHED` from `OPERATION_DEADLINE`; failed rows are visible in
 `RowAccounting` and the envs reporting schema refuses accounting that does not
-exhaust the planned matrix. *Attack surface:* the envs `StratumSummary`
+exhaust the planned matrix. *Attack surface:* the envs `CategorySummary`
 validator sets `score = None` whenever `present != denominator`. A study where
-1% of rows time out therefore produces `None` scores for whole strata, and a
-naive report generator could quietly drop them, biasing toward whichever strata
+1% of rows time out therefore produces `None` scores for whole categories, and a
+naive report generator could quietly drop them, biasing toward whichever categories
 completed. The protocol needs an explicit rule: **any arm with less than 98%
 row completeness on held-out is reported as incomplete and its CI is not
 claimed.** (This is added here; the reviewer should check whether 98% is the
@@ -1360,7 +1360,7 @@ surface:* prompt-optimization gains on a deterministic simulation family may
 plausibly be 3–5 points, in which case the study is guaranteed to report "no
 detected improvement" for every optimizer and the result is uninformative about
 the optimizers. Is a bigger held-out split (the pool tail has 264 spare
-instances, and `n_per_stratum` can go to 128 → 2,816 instances) the better trade
+instances, and `n_per_category` can go to 128 → 2,816 instances) the better trade
 against spend? This is the design's most consequential open trade.
 
 **R8 — Nulls as calibration, and the identity null's degenerate structure.**
@@ -1398,7 +1398,7 @@ small. §3.4 therefore reports the closed-form MDE alongside `analyze_power`'s;
 a reviewer should decide whether the two should be reconciled before the study
 or whether reporting both is honest enough.
 
-**R12 — One study, many degrees of freedom.** Splits, `n_per_stratum`, K, demo
+**R12 — One study, many degrees of freedom.** Splits, `n_per_category`, K, demo
 mode, breadth/depth, GEPA auto level, Codex cap — all chosen here, none forced.
 *Answer:* this document pre-registers all of them and the golden-hashed
 `study.json` records them. *Attack surface:* pre-registration written by the
@@ -1421,7 +1421,7 @@ pre-registered. The original options are retained below as the reasoning behind
 the choice.
 
 Options: (a) T=220 as specified,
-MDE ≈ 9–10 points, ~127k calls; (b) T=440 (20/stratum, `n_per_stratum=48`),
+MDE ≈ 9–10 points, ~127k calls; (b) T=440 (20/category, `n_per_category=48`),
 MDE ≈ 6–7 points, adds ~4,000 calls for anchors and ~1,300 per reported
 candidate — roughly +15k calls total, since held-out is evaluated once per arm,
 not per run; (c) keep T=220 but raise `K_REPEAT` to 5, which only shrinks the

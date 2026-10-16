@@ -1,1 +1,1 @@
-{"content_hash":"b848626a3790c3ce188786f24b290ccad10510b4b52fb6deb0a34f5be79cee2b","generator_version":"c22-1+hard","schema_version":1,"seed_range":[2000000,2000060],"stratum_counts":{"n3_hard":20,"n6_hard":20,"n8_hard":20}}
+{"category_counts":{"n3_hard":20,"n6_hard":20,"n8_hard":20},"content_hash":"3d5378dc6658935a5a784303ade07864701ccd6fbc0800fa6b6dcd7437dc66a7","generator_version":"c22-1+hard","schema_version":2,"seed_range":[2000000,2000060]}

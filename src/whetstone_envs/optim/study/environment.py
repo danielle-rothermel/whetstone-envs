@@ -481,7 +481,7 @@ def bound_stage_environment(  # noqa: PLR0913
     population = manifest.population
     family = family_spec(population.family)
     pool = family.generate_pool(
-        n_per_stratum=population.n_per_stratum,
+        n_per_category=population.n_per_category,
         seed_start=population.pool_seed_start,
     )
     split_sizes = (
@@ -673,7 +673,7 @@ def bound_stage_environment(  # noqa: PLR0913
             family_id=population.family,
             transport=transport,
             split_sizes=split_sizes,
-            n_per_stratum=population.n_per_stratum,
+            n_per_category=population.n_per_category,
             pool_seed_start=population.pool_seed_start,
             task_model=manifest.models.task_model,
             # The pinned effort, reaching the *in-search* evaluations.

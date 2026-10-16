@@ -167,7 +167,7 @@ def _arm_records(protocol: StudyProtocol) -> tuple[ArmRecord, ...]:
 def _regenerated_split_records(protocol: StudyProtocol) -> SplitsRecord:
     family = family_spec(protocol.family)
     pool = family.generate_pool(
-        n_per_stratum=protocol.n_per_stratum,
+        n_per_category=protocol.n_per_category,
         seed_start=protocol.pool_seed_start,
     )
     split = family.build_experiment(
@@ -198,7 +198,7 @@ def _regenerated_split_records(protocol: StudyProtocol) -> SplitsRecord:
 def _population_record(protocol: StudyProtocol) -> PopulationRecord:
     """The pinned population and the content hash of its own manifest."""
     pool_manifest = family_spec(protocol.family).pool_manifest(
-        n_per_stratum=protocol.n_per_stratum,
+        n_per_category=protocol.n_per_category,
         seed_start=protocol.pool_seed_start,
     )
     return PopulationRecord(
@@ -207,10 +207,10 @@ def _population_record(protocol: StudyProtocol) -> PopulationRecord:
         # protocol: the generator version describes the pool that was
         # generated, so the thing that generated it is what should name it.
         generator_version=pool_manifest.generator_version,
-        n_per_stratum=protocol.n_per_stratum,
+        n_per_category=protocol.n_per_category,
         pool_seed_start=protocol.pool_seed_start,
         pool_manifest_content_hash=pool_manifest.content_hash,
-        stratum_counts=dict(pool_manifest.stratum_counts),
+        category_counts=dict(pool_manifest.category_counts),
     )
 
 

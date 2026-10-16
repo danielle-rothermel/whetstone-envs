@@ -12,19 +12,19 @@ from whetstone_envs.manifests import Manifest
 
 def _validated_count(
     config: GenerationConfig,
-    n_per_stratum: int | None,
+    n_per_category: int | None,
 ) -> int:
-    count = config.n_per_stratum if n_per_stratum is None else n_per_stratum
+    count = config.n_per_category if n_per_category is None else n_per_category
     if type(count) is not int:
-        msg = "n_per_stratum must be an int"
+        msg = "n_per_category must be an int"
         raise TypeError(msg)
     if count <= 0:
-        msg = f"n_per_stratum must be positive, got {count}"
+        msg = f"n_per_category must be positive, got {count}"
         raise ValueError(msg)
     return count
 
 
-def _build_stratum(
+def _build_category(
     *,
     hops: int,
     distractors: DistractorMode,
@@ -58,7 +58,7 @@ def _build_stratum(
             Instance(
                 id=f"c18-D{hops}-{seed}-{index:04d}",
                 seed=seed,
-                strata=(f"D{hops}",),
+                categories=(f"D{hops}",),
                 prompt_inputs={
                     "question": raw.question,
                     "query": raw.query,
@@ -72,7 +72,7 @@ def _build_stratum(
 def generate_pool(
     config: GenerationConfig = DEFAULT_CONFIG,
     *,
-    n_per_stratum: int | None = None,
+    n_per_category: int | None = None,
 ) -> InstancePool:
     """Generate a deterministic C18 pool for ``config``.
 
@@ -80,15 +80,15 @@ def generate_pool(
     depth-interleaved order because pool order participates in the persisted
     dataset identity.
     """
-    count = _validated_count(config, n_per_stratum)
+    count = _validated_count(config, n_per_category)
     blocks = tuple(
-        _build_stratum(
-            hops=stratum.hops,
-            distractors=stratum.distractors,
+        _build_category(
+            hops=category.hops,
+            distractors=category.distractors,
             seed=config.seed_start + index,
             count=count,
         )
-        for index, stratum in enumerate(config.strata)
+        for index, category in enumerate(config.categories)
     )
     return InstancePool(
         instance_group=InstanceGroup(
@@ -116,26 +116,26 @@ def default_split_sizes(
     pool: InstancePool,
     config: GenerationConfig = DEFAULT_CONFIG,
 ) -> tuple[int, int, int]:
-    """Return split sizes scaled to a generated pool's uniform strata."""
-    expected_labels = tuple(stratum.label for stratum in config.strata)
-    counts = pool.stratum_counts()
+    """Return split sizes scaled to a generated pool's uniform categories."""
+    expected_labels = tuple(category.label for category in config.categories)
+    counts = pool.category_counts()
     if tuple(counts) != expected_labels:
         msg = (
-            f"C18 pool strata {tuple(counts)!r} do not match "
+            f"C18 pool categories {tuple(counts)!r} do not match "
             f"configuration {expected_labels!r}"
         )
         raise ValueError(msg)
     unique_counts = set(counts.values())
     if len(unique_counts) != 1:
-        msg = f"C18 split sizing requires uniform strata, got {counts!r}"
+        msg = f"C18 split sizing requires uniform categories, got {counts!r}"
         raise ValueError(msg)
-    per_stratum = unique_counts.pop()
-    internal, official, held_out = config.split.scale(per_stratum)
-    strata_count = len(config.strata)
+    per_category = unique_counts.pop()
+    internal, official, held_out = config.split.scale(per_category)
+    category_count = len(config.categories)
     return (
-        internal * strata_count,
-        official * strata_count,
-        held_out * strata_count,
+        internal * category_count,
+        official * category_count,
+        held_out * category_count,
     )
 
 

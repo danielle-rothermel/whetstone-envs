@@ -97,25 +97,25 @@ def render_summary(console: Console, report: EvalReport) -> None:
                 Text(result.message),
             )
     console.print(table)
-    strata = Table(title="C19 strata")
-    strata.add_column("candidate")
-    strata.add_column("stratum")
-    strata.add_column("score")
+    categories = Table(title="C19 categories")
+    categories.add_column("candidate")
+    categories.add_column("category")
+    categories.add_column("score")
     for result in report.results:
         if not isinstance(result, EvalSuccess):
             continue
-        for summary in result.strata:
+        for summary in result.categories:
             value = (
                 "incomplete"
                 if summary.score is None
                 else f"{summary.score:.3f}"
             )
-            strata.add_row(
+            categories.add_row(
                 Text(result.candidate_name),
-                Text(summary.stratum),
+                Text(summary.category),
                 Text(f"{summary.numerator}/{summary.denominator} ({value})"),
             )
-    console.print(strata)
+    console.print(categories)
 
 
 def _matches(  # noqa: PLR0913
@@ -130,7 +130,7 @@ def _matches(  # noqa: PLR0913
     if candidate is not None and row.candidate_name != candidate:
         return False
     task = report.tasks[row.task_index]
-    parts = task.strata[0].split("|")
+    parts = task.categories[0].split("|")
     return all(
         expected is None or actual == expected
         for actual, expected in zip(parts, (scenario, size, fact), strict=True)
@@ -200,7 +200,7 @@ def render_task(console: Console, report: EvalReport, task_id: str) -> None:
         Panel(
             Text(
                 f"hash={task.task_hash}\nseed={task.seed}\n"
-                f"strata={', '.join(task.strata)}\n"
+                f"categories={', '.join(task.categories)}\n"
                 + "\n".join(
                     f"{key}:\n{value}"
                     for key, value in task.prompt_inputs.items()

@@ -11,7 +11,7 @@ quick-test task families. Core packages have no dependency on optimizer or
 execution-contract code:
 
 - [**Instances and groups**][instances-source] define immutable task inputs,
-  private gold data, generation seeds, task strata, public prompt identity,
+  private gold data, generation seeds, instance categories, public prompt identity,
   and named ordered instance collections.
 - [**Pools**][instances-source] validate ordered instance collections, and
   [**splitting**][instances-source] allocates deterministic named cohorts.
@@ -19,7 +19,7 @@ execution-contract code:
   render public prompt inputs, and normalize predictions for evaluation.
 - [**Scoring**][scoring-source] represents scored, failed, and
   missing observations and aggregates complete repeat matrices through task,
-  stratum, and overall levels.
+  category, and overall levels.
 - [**Manifests**][manifests-source] pin generated pools with
   versioned identities and bounded canonical persistence.
 - [**C11 JSON canonicalization**][c11-source] provides deterministic RFC 8785
@@ -33,7 +33,7 @@ execution-contract code:
 - [**C22 instruction constraints**][c22-source] provides fixed seeded pools of
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
-  string transformations across four ISL and OSL strata.
+  string transformations across four ISL and OSL categories.
 - [**Reporting**][reporting-source] owns strict local evaluation and
   optimization-trajectory reports plus read-only terminal and self-contained
   HTML inspection.
@@ -144,8 +144,8 @@ design's minimum detectable effect depends on it (`0.0622` at `tau^2 = 0.05`,
 pinned by a golden test. A study manifest records them in its `splits` block,
 and every stage reads them from there rather than from either constant.
 
-C18's splits come from its own `SplitPlan` at `n_per_stratum=30` over four
-depth strata. Its internal split of 24 is below MIPROv2's default minibatch
+C18's splits come from its own `SplitPlan` at `n_per_category=30` over four
+depth categories. Its internal split of 24 is below MIPROv2's default minibatch
 size of 35, so C18 runs keep `minibatch=False`, which is what the shared
 control builder already does.
 
@@ -167,7 +167,7 @@ uv run --extra optim python scripts/run-optim.py \
   --transport fake --split-sizes 2,2,0 --train-size 1 --val-size 1
 uv run --extra optim python scripts/run-optim.py \
   --family c18 --optimizer copro --transport fake --split-sizes 2,2,0 \
-  --n-per-stratum 1
+  --n-per-category 1
 ```
 
 `--optimizer codex` is deliberately absent from that list — see below.
@@ -639,6 +639,10 @@ every Git repository and do not publish them casually.
 unit passed through generation, prompting, scoring, splitting, and persistence.
 Prompt inputs are public; `gold` remains private evaluation data.
 
+An instance category classifies the kind of problem an instance represents.
+Each instance carries one or more category labels, used to balance split
+allocation and summarize performance.
+
 ```python
 class Instance(BaseModel):
     model_config = ConfigDict(
@@ -647,7 +651,7 @@ class Instance(BaseModel):
 
     id: str = Field(min_length=1)
     seed: int
-    strata: tuple[str, ...] = Field(min_length=1)
+    categories: tuple[str, ...] = Field(min_length=1)
     prompt_inputs: Mapping[str, str] = Field(default_factory=dict)
     gold: str = ""
 
@@ -655,10 +659,10 @@ class Instance(BaseModel):
     def public_prompt_identity(self) -> tuple[tuple[str, str], ...]: ...
 ```
 
-Construct instances directly with keyword arguments and a tuple of strata,
-such as `Instance(id="task-1", seed=1, strata=("example",))`. Construction
+Construct instances directly with keyword arguments and a tuple of categories,
+such as `Instance(id="task-1", seed=1, categories=("example",))`. Construction
 strictly validates field types, requires an exact Python integer seed, and
-rejects unknown fields. Strata must be nonblank and are deduplicated in
+rejects unknown fields. Categories must be nonblank and are deduplicated in
 first-seen order. Prompt inputs are copied and exposed as a read-only mapping,
 including when omitted; model serialization emits a plain dictionary.
 Invalid fields and frozen attribute assignments raise Pydantic
@@ -666,7 +670,7 @@ Invalid fields and frozen attribute assignments raise Pydantic
 insertion order.
 
 `instance.public_prompt_identity` is the sorted tuple of public prompt-input
-items. It excludes identifier, seed, strata, and private gold, does not
+items. It excludes identifier, seed, categories, and private gold, does not
 necessarily identify rendered text, and is not included in model serialization.
 
 ```python
@@ -706,10 +710,10 @@ class InstancePool(BaseModel):
     instance_group: InstanceGroup
 
     @property
-    def strata(self) -> tuple[str, ...]: ...
+    def categories(self) -> tuple[str, ...]: ...
 
-    def stratum_counts(self) -> dict[str, int]: ...
-    def in_stratum(self, label: str) -> tuple[Instance, ...]: ...
+    def category_counts(self) -> dict[str, int]: ...
+    def in_category(self, label: str) -> tuple[Instance, ...]: ...
     def split(
         self,
         sizes: Mapping[str, int],
@@ -729,7 +733,7 @@ training_instances = split["train"].instances
 
 Group names must be nonblank and sizes must be exact nonnegative integers.
 Request insertion order determines group order and allocation tie-breaking.
-The allocator selects by complete ordered strata tuples, maximizes combination
+The allocator selects by complete ordered categories tuples, maximizes combination
 coverage before balancing counts, and preserves source-pool order within each
 group. Unselected instances remain outside the split. Empty groups are valid;
 an empty request produces an empty split. Missing group lookup raises
@@ -794,14 +798,14 @@ class Aggregate:
 
 def aggregate(
     observations: Iterable[Observation],
-    task_strata: Mapping[str, tuple[str, ...]],
+    task_categories: Mapping[str, tuple[str, ...]],
     *,
     expected_repeat_ids: Iterable[int],
 ) -> Aggregate: ...
 ```
 
 `exact_match`, `scored`, `failed`, and `missing` provide the primary leaf-level
-constructors. `aggregate_task`, `aggregate_stratum`, and `aggregate_overall`
+constructors. `aggregate_task`, `aggregate_category`, and `aggregate_overall`
 expose the individual aggregation steps when callers already own the hierarchy.
 
 ## Manifests
@@ -814,7 +818,7 @@ boundary for regenerated pool identity. Manifests use a closed Pydantic schema,
 class Manifest(BaseModel):
     generator_version: str
     seed_range: tuple[int, int]
-    stratum_counts: Mapping[str, int]
+    category_counts: Mapping[str, int]
     content_hash: Sha256Digest
     schema_version: int = MANIFEST_SCHEMA_VERSION
 
@@ -846,7 +850,7 @@ the shared harness owns splitting, prompting, scoring, and persistence.
 
 ```python
 @verify(UNIQUE)
-class C11Stratum(StrEnum):
+class C11Category(StrEnum):
     WHITESPACE = "c11/whitespace"
     KEY_ORDER = "c11/key-order"
     NUMBER = "c11/number"
@@ -860,7 +864,7 @@ PROBES: ProbePair
 
 def generate_pool(
     *,
-    n_per_stratum: int = ...,
+    n_per_category: int = ...,
     seed_start: int = ...,
 ) -> InstancePool: ...
 
@@ -881,7 +885,7 @@ class DistractorMode(StrEnum):
     RELEVANT = "relevant"
 
 @dataclass(frozen=True, slots=True)
-class DepthStratum:
+class DepthCategory:
     hops: int
     distractors: DistractorMode
 
@@ -895,8 +899,8 @@ class SplitPlan:
 class GenerationConfig:
     generator_version: str
     seed_start: int
-    n_per_stratum: int
-    strata: tuple[DepthStratum, ...]
+    n_per_category: int
+    categories: tuple[DepthCategory, ...]
     split: SplitPlan
 ```
 
@@ -908,7 +912,7 @@ PROBES: ProbePair
 def generate_pool(
     config: GenerationConfig = DEFAULT_CONFIG,
     *,
-    n_per_stratum: int | None = None,
+    n_per_category: int | None = None,
 ) -> InstancePool: ...
 
 def default_split_sizes(
@@ -979,13 +983,13 @@ PROBES: ProbePair
 
 def generate_pool(
     *,
-    n_per_stratum: int = ...,
+    n_per_category: int = ...,
     seed_start: int = ...,
 ) -> InstancePool: ...
 
 def build_manifest(
     *,
-    n_per_stratum: int = ...,
+    n_per_category: int = ...,
     seed_start: int = ...,
 ) -> Manifest: ...
 
@@ -996,7 +1000,7 @@ def derive_fact(grid_text: str, command: str, fact: C19Fact) -> str: ...
 
 [`whetstone_envs.c22`][c22-source] provides two fixed, seeded pools of
 composed Google Research IFEval constraints. The default preset crosses three,
-four, and five constraints with easy and mixed strata; the hard preset uses
+four, and five constraints with easy and mixed categories; the hard preset uses
 three, six, and eight constraints and includes every hard constraint in each
 task. C22 scores only this model-visible stack and claims no separate semantic
 task grading.
@@ -1022,7 +1026,7 @@ def load_manifest(preset: Preset = Preset.DEFAULT) -> Manifest: ...
 ## C23 subregular induction
 
 [`whetstone_envs.c23`][c23-source] is a higher-layer environment built on the
-shared harness. It generates four balanced single-rule strata: ISL k=2,
+shared harness. It generates four balanced single-rule categories: ISL k=2,
 left-OSL k=2, right-OSL k=2, and ISL k=3 over the fixed vocabulary `abcd`; each
 task has six demonstrations and a distinct nontrivial query whose output is
 determinate across the complete supported hypothesis class.
@@ -1046,7 +1050,7 @@ class RuleConfiguration:
 GENERATOR_VERSION: str
 PROBES: ProbePair
 
-def generate_pool(*, n_per_stratum: int = 50) -> InstancePool: ...
+def generate_pool(*, n_per_category: int = 50) -> InstancePool: ...
 def default_split_sizes(pool: InstancePool) -> tuple[int, int, int]: ...
 ```
 
@@ -1054,7 +1058,7 @@ def default_split_sizes(pool: InstancePool) -> tuple[int, int, int]: ...
 def score_gold(prediction: str, gold: str) -> int: ...
 ```
 
-Generation uses fixed fresh stratum seeds beginning at `555000000` and
+Generation uses fixed fresh category seeds beginning at `555000000` and
 private injected random-number generators. The adapted InductionBench
 reference transducers and generation path are pinned and attributed inside
 the package; no process-global random state is read or mutated.

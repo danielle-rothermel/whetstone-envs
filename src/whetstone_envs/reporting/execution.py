@@ -56,7 +56,7 @@ if TYPE_CHECKING:
         PreparedSplitExperiment,
     )
 
-_C19_STRATUM_COUNT = 22
+_C19_CATEGORY_COUNT = 22
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,12 +163,12 @@ def run_c19_evaluation(spec: C19EvalSpec) -> EvalRunOutput:
         )
         api_key_env = "OPENROUTER_API_KEY"
     requested_tasks = sum(spec.split_sizes)
-    n_per_stratum = max(
+    n_per_category = max(
         1,
-        (requested_tasks + _C19_STRATUM_COUNT - 1) // _C19_STRATUM_COUNT,
+        (requested_tasks + _C19_CATEGORY_COUNT - 1) // _C19_CATEGORY_COUNT,
     )
     pool = generate_pool(
-        n_per_stratum=n_per_stratum,
+        n_per_category=n_per_category,
         seed_start=765_432,
     )
     prepared = prepare_c19_experiment(

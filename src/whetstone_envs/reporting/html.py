@@ -62,16 +62,18 @@ def _strict_embedded_json(value: Mapping[str, JsonValue]) -> str:
     return escaped
 
 
-def _task_facets(strata: tuple[str, ...]) -> dict[str, str]:
-    parts = strata[0].split("|")
+def _task_facets(categories: tuple[str, ...]) -> dict[str, str]:
+    parts = categories[0].split("|")
     if len(parts) != _FACET_COUNT:
-        raise ValueError("C19 report task requires scenario|size|fact stratum")
+        raise ValueError(
+            "C19 report task requires scenario|size|fact category"
+        )
     return dict(zip(("scenario", "size", "fact"), parts, strict=True))
 
 
 def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
     task_facets = {
-        task.task_id: _task_facets(task.strata) for task in report.tasks
+        task.task_id: _task_facets(task.categories) for task in report.tasks
     }
     summaries: dict[str, JsonValue] = {}
     matrices: dict[str, JsonValue] = {}
@@ -87,8 +89,8 @@ def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
                 "message": result.message,
             }
             matrices[result.candidate_name] = {
-                item.stratum: item.model_dump(mode="json")
-                for item in result.strata
+                item.category: item.model_dump(mode="json")
+                for item in result.categories
             }
         else:
             summaries[result.candidate_name] = result.model_dump(mode="json")
@@ -180,7 +182,7 @@ def _comparison_view(
     parent_result = parent.results[0]
     current_result = current.results[0]
     overall: JsonValue = None
-    strata: list[JsonValue] = []
+    categories: list[JsonValue] = []
     if isinstance(parent_result, EvalSuccess) and isinstance(
         current_result, EvalSuccess
     ):
@@ -197,14 +199,16 @@ def _comparison_view(
             "after_numerator": current_result.numerator,
             "denominator": current_result.denominator,
         }
-        current_strata = {item.stratum: item for item in current_result.strata}
-        for before in parent_result.strata:
-            after = current_strata.get(before.stratum)
+        current_categories = {
+            item.category: item for item in current_result.categories
+        }
+        for before in parent_result.categories:
+            after = current_categories.get(before.category)
             if after is None:
                 continue
-            strata.append(
+            categories.append(
                 {
-                    "stratum": before.stratum,
+                    "category": before.category,
                     "before": before.score,
                     "after": after.score,
                     "change": (
@@ -219,7 +223,7 @@ def _comparison_view(
             )
     return {
         "overall": overall,
-        "strata": strata,
+        "categories": categories,
         "counts": counts,
         "changed_rows": changed_rows,
     }

@@ -22,7 +22,7 @@ class Instance(BaseModel):
 
     id: str = Field(min_length=1)
     seed: int
-    strata: tuple[str, ...] = Field(min_length=1)
+    categories: tuple[str, ...] = Field(min_length=1)
     prompt_inputs: Mapping[str, str] = Field(default_factory=dict)
     gold: str = ""
 
@@ -34,11 +34,11 @@ class Instance(BaseModel):
             raise ValueError(msg)
         return value
 
-    @field_validator("strata")
+    @field_validator("categories")
     @classmethod
-    def _validate_strata(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+    def _validate_categories(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if any(not label.strip() for label in value):
-            msg = "Instance stratum labels must be non-empty and not blank"
+            msg = "Instance category labels must be non-empty and not blank"
             raise ValueError(msg)
         return tuple(dict.fromkeys(value))
 
@@ -67,7 +67,7 @@ class Instance(BaseModel):
             (
                 self.id,
                 self.seed,
-                self.strata,
+                self.categories,
                 self.public_prompt_identity,
                 self.gold,
             ),

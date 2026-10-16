@@ -43,6 +43,7 @@ from whetstone_envs.reporting.schema import (
     TRAJECTORY_REPORT_SCHEMA,
     CandidateRecord,
     CandidateSource,
+    CategorySummary,
     EvalFailed,
     EvalRejected,
     EvalReport,
@@ -61,7 +62,6 @@ from whetstone_envs.reporting.schema import (
     RoleSpendName,
     RowAccounting,
     RunSpend,
-    StratumSummary,
     TaskRecord,
     TrajectoryCandidate,
     TrajectoryReport,
@@ -220,27 +220,27 @@ def _accounting(observations: tuple[Observation, ...]) -> RowAccounting:
 
 def _summaries(
     observations: tuple[Observation, ...], tasks: tuple[TaskRecord, ...]
-) -> tuple[StratumSummary, ...]:
+) -> tuple[CategorySummary, ...]:
     task_by_id = {task.task_id: task for task in tasks}
     labels = tuple(
-        dict.fromkeys(label for task in tasks for label in task.strata)
+        dict.fromkeys(label for task in tasks for label in task.categories)
     )
-    summaries: list[StratumSummary] = []
+    summaries: list[CategorySummary] = []
     for label in labels:
         rows = tuple(
             row
             for row in observations
-            if label in task_by_id[row.task_id].strata
+            if label in task_by_id[row.task_id].categories
         )
         accounting = _accounting(rows)
-        # Strata partition tasks, not rows, so a stratum's score gets the
+        # Categories partition tasks, not rows, so a category's score gets the
         # same two-stage treatment as the overall score: each task's
         # repeats reduce to one value, then those are meaned across the
-        # stratum's tasks. ``numerator``/``denominator`` stay row-level.
+        # category's tasks. ``numerator``/``denominator`` stay row-level.
         numerator = sum(row.score == 1.0 for row in rows)
         summaries.append(
-            StratumSummary(
-                stratum=label,
+            CategorySummary(
+                category=label,
                 numerator=numerator,
                 denominator=len(rows),
                 accounting=accounting,
@@ -297,7 +297,7 @@ def _success_projection(
                 task_id=instance.id,
                 task_hash=task_hash,
                 seed=instance.seed,
-                strata=instance.strata,
+                categories=instance.categories,
                 prompt_inputs=dict(instance.prompt_inputs),
                 gold=instance.gold,
             )
@@ -390,7 +390,7 @@ def _success_projection(
         numerator=numerator,
         denominator=len(projected),
         score=score,
-        strata=_summaries(projected, tuple(tasks)),
+        categories=_summaries(projected, tuple(tasks)),
     )
     return success, tuple(tasks), projected
 
@@ -456,7 +456,7 @@ def project_eval_report(  # noqa: PLR0913
                 task_id=instance.id,
                 task_hash=task_hash,
                 seed=instance.seed,
-                strata=instance.strata,
+                categories=instance.categories,
                 prompt_inputs=dict(instance.prompt_inputs),
                 gold=instance.gold,
             )

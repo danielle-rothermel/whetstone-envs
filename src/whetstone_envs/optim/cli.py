@@ -199,11 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--n-per-stratum",
+        "--n-per-category",
         type=_positive_int,
         default=None,
         help=(
-            "Instances generated per stratum. Defaults to the family's own "
+            "Instances generated per category. Defaults to the family's own "
             "pool size."
         ),
     )
@@ -386,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
                 proposer_model=arguments.proposer_model,
                 demo_mode=arguments.demo_mode,
                 num_seeds=arguments.num_seeds,
-                n_per_stratum=arguments.n_per_stratum,
+                n_per_category=arguments.n_per_category,
                 pool_seed_start=arguments.pool_seed_start,
                 seed=arguments.seed,
                 copro_breadth=arguments.copro_breadth,

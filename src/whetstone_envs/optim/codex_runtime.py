@@ -89,7 +89,7 @@ class EnvsCodexRuntimeConfig(BaseModel):
 
     family_id: StrictStr
     split_sizes: tuple[StrictInt, StrictInt, StrictInt]
-    n_per_stratum: StrictInt
+    n_per_category: StrictInt
     pool_seed_start: StrictInt
     num_seeds: StrictInt
     transport: CodexRuntimeTransport
@@ -200,7 +200,7 @@ class EnvsCodexRuntimeConfig(BaseModel):
         """
         family = family_spec(self.family_id)
         pool = family.generate_pool(
-            n_per_stratum=self.n_per_stratum,
+            n_per_category=self.n_per_category,
             seed_start=self.pool_seed_start,
         )
         prepared = family.build_experiment(

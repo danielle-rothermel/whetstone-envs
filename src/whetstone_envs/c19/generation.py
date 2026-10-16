@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 
 
 GENERATOR_VERSION = "c19-custom-v2"
-DEFAULT_N_PER_STRATUM = 16
-MAX_N_PER_STRATUM = 128
+DEFAULT_N_PER_CATEGORY = 16
+MAX_N_PER_CATEGORY = 128
 DEFAULT_SEED_START = 1_000_000
 DEFAULT_SPLIT_SIZES: tuple[int, int, int] = (88, 132, 132)
 
@@ -67,19 +67,19 @@ def _facts(scenario: C19Scenario) -> tuple[C19Fact, ...]:
     return _CARRYING_FACTS
 
 
-def stratum_label(
+def category_label(
     scenario: C19Scenario,
     size: C19Size,
     fact: C19Fact,
 ) -> str:
-    """Return the stable family|size|fact task-stratum label."""
+    """Return the stable family|size|fact task-category label."""
     return f"{scenario.value}|{size.name.lower()}|{fact.value}"
 
 
-def strata_labels() -> tuple[str, ...]:
-    """Return all 22 default strata in persisted generation order."""
+def category_labels() -> tuple[str, ...]:
+    """Return all 22 default categories in persisted generation order."""
     return tuple(
-        stratum_label(scenario, size, fact)
+        category_label(scenario, size, fact)
         for scenario in SCENARIO_ORDER
         for size in SIZE_ORDER
         for fact in _facts(scenario)
@@ -163,7 +163,7 @@ def _instance(
             f"{context.size.name.lower()}-{fact.value}-{context.seed}"
         ),
         seed=context.seed,
-        strata=(stratum_label(context.scenario, context.size, fact),),
+        categories=(category_label(context.scenario, context.size, fact),),
         prompt_inputs={
             "grid": grid_text,
             "command": command,
@@ -174,19 +174,19 @@ def _instance(
 
 
 def _validate_generation_inputs(
-    n_per_stratum: int,
+    n_per_category: int,
     seed_start: int,
 ) -> None:
-    if type(n_per_stratum) is not int:
-        msg = "n_per_stratum must be an int"
+    if type(n_per_category) is not int:
+        msg = "n_per_category must be an int"
         raise TypeError(msg)
-    if n_per_stratum <= 0:
-        msg = "n_per_stratum must be positive"
+    if n_per_category <= 0:
+        msg = "n_per_category must be positive"
         raise ValueError(msg)
-    if n_per_stratum > MAX_N_PER_STRATUM:
+    if n_per_category > MAX_N_PER_CATEGORY:
         msg = (
-            "n_per_stratum must be at most "
-            f"{MAX_N_PER_STRATUM}, got {n_per_stratum}"
+            "n_per_category must be at most "
+            f"{MAX_N_PER_CATEGORY}, got {n_per_category}"
         )
         raise ValueError(msg)
     if type(seed_start) is not int:
@@ -196,28 +196,28 @@ def _validate_generation_inputs(
 
 def generate_pool(
     *,
-    n_per_stratum: int = DEFAULT_N_PER_STRATUM,
+    n_per_category: int = DEFAULT_N_PER_CATEGORY,
     seed_start: int = DEFAULT_SEED_START,
 ) -> InstancePool:
-    """Generate the deterministic 22-stratum C19 instance pool.
+    """Generate the deterministic 22-category C19 instance pool.
 
-    ``n_per_stratum`` must be between 1 and ``MAX_N_PER_STRATUM`` (128),
+    ``n_per_category`` must be between 1 and ``MAX_N_PER_CATEGORY`` (128),
     inclusive.
 
     Each family-size scene seed is reused across all applicable fact
     projections. Pool order is scene-index-major so the InstancePool split
     schedule receives alternating carrying=yes/no outcomes within every
-    carrying stratum.
+    carrying category.
     """
-    _validate_generation_inputs(n_per_stratum, seed_start)
+    _validate_generation_inputs(n_per_category, seed_start)
     instances: list[Instance] = []
     family_sizes = tuple(
         (scenario, size) for scenario in SCENARIO_ORDER for size in SIZE_ORDER
     )
 
-    for scene_index in range(n_per_stratum):
+    for scene_index in range(n_per_category):
         for group_index, (scenario, size) in enumerate(family_sizes):
-            seed = seed_start + group_index * n_per_stratum + scene_index
+            seed = seed_start + group_index * n_per_category + scene_index
             carrying = (
                 None
                 if scenario is C19Scenario.NAVIGATION
@@ -249,12 +249,12 @@ def generate_pool(
 
 def build_manifest(
     *,
-    n_per_stratum: int = DEFAULT_N_PER_STRATUM,
+    n_per_category: int = DEFAULT_N_PER_CATEGORY,
     seed_start: int = DEFAULT_SEED_START,
 ) -> Manifest:
     """Generate one C19 pool and build its manifest."""
     pool = generate_pool(
-        n_per_stratum=n_per_stratum,
+        n_per_category=n_per_category,
         seed_start=seed_start,
     )
     seeds = tuple(instance.seed for instance in pool.instance_group.instances)

@@ -64,7 +64,7 @@ engine:
   `mutation_field`; C19 uses `prompt_template`. Candidate text can therefore be
   selected deterministically and validated as a strict string.
 - `TaskRow` intentionally contains only task ID, prompt inputs, and gold. It
-  does not carry seed or strata. Report construction must join evidence to the
+  does not carry seed or categories. Report construction must join evidence to the
   source `Instance`/`InstancePoolSplit`; it must not parse semantic facts back
   out of a task ID.
 
@@ -94,7 +94,7 @@ whetstone-eval info c19 --show-templates
 - the four facts (`coordinate`, `heading`, `front`, and `carrying`) with their
   exact answer forms;
 - exact-match normalization and binary scoring;
-- the default 22-stratum, 352-instance pool and split roles; and
+- the default 22-category, 352-instance pool and split roles; and
 - candidate terminology:
   - **candidate**: one complete prompt template evaluated against a fixed task
     set;
@@ -226,8 +226,8 @@ future raw-record command may expose other payload fields.
 Persisted-format names and schema versions are explicit constants with golden
 tests:
 
-- `whetstone_envs.eval_report/v1`
-- `whetstone_envs.trajectory_report/v1`
+- `whetstone_envs.eval_report/v3`
+- `whetstone_envs.trajectory_report/v2`
 
 Strict frozen Pydantic models reject unknown fields, scalar coercion,
 non-finite numbers, duplicate coordinates, and inconsistent references.
@@ -241,7 +241,7 @@ non-finite numbers, duplicate coordinates, and inconsistent references.
    and source package version.
 2. **Candidates**: stable ID, exact record reference, source
    (`naive`/`ceiling`/`custom`), full payload, and selected prompt template.
-3. **Tasks**: task ID/hash, seed, ordered strata, prompt inputs, and gold from
+3. **Tasks**: task ID/hash, seed, ordered categories, prompt inputs, and gold from
    the source `Instance`.
 4. **Observations**: candidate/task/repeat coordinate, rendered prompt, raw
   output, normalized output when present, exact binary score, row state, typed
@@ -252,7 +252,7 @@ non-finite numbers, duplicate coordinates, and inconsistent references.
 
 Tasks and candidates are not duplicated into every observation. Observation
 coordinates must cover the exact planned matrix for successful evidence. The
-projection recomputes candidate totals and C19 stratum summaries from
+projection recomputes candidate totals and C19 category summaries from
 observations and verifies them against Whetstone's reported accounting and
 aggregate before publication.
 
@@ -316,7 +316,7 @@ separate:
   the actual C19 enums and probes; private implementation, not a second public
   task API.
 - `src/whetstone_envs/optim/experiment.py`: prepare a C19 experiment together
-  with its exact `InstancePoolSplit`, so report projection receives seed/strata
+  with its exact `InstancePoolSplit`, so report projection receives seed/categories
   from authoritative `Instance` objects.
 - `src/whetstone_envs/optim/run.py`: publish the trajectory projection before
   closing the run store.
@@ -369,7 +369,7 @@ Focused tests must cover:
 - strict report version and unknown-field rejection;
 - exact persisted string literals and canonical candidate/task/observation
   ordering;
-- task joins that preserve source seed and strata without parsing IDs;
+- task joins that preserve source seed and categories without parsing IDs;
 - complete planned matrices, explicit failed/missing rows, and aggregate
   reconciliation;
 - fake naive/ceiling eval publication and reloading;

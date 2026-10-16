@@ -78,7 +78,7 @@ __all__ = [
     "MEASURED_MIPROV2_TRAINSET_TASKS",
     "MEASURED_MIPROV2_ZEROSHOT_TASK_CALLS",
     "MEASUREMENT_NUM_SEEDS",
-    "MEASUREMENT_N_PER_STRATUM",
+    "MEASUREMENT_N_PER_CATEGORY",
     "MEASUREMENT_POOL_SEED_START",
     "MEASUREMENT_SPLIT_SIZES",
     "MIPROV2_BOOTSTRAPPING_PLANS",
@@ -519,12 +519,12 @@ def estimate_optimizer_calls(  # noqa: PLR0913
 #
 #   python -m whetstone_envs.optim.cli --optimizer miprov2 \
 #       --demo-mode fewshot --transport fake --split-sizes 88,132,220 \
-#       --n-per-stratum 32 --pool-seed-start 1000000 --num-seeds 1 \
+#       --n-per-category 32 --pool-seed-start 1000000 --num-seeds 1 \
 #       --seed 2000 --miprov2-minibatch --miprov2-minibatch-size 35 \
 #       --miprov2-minibatch-full-eval-steps 5 --run-id <id> --output <dir>
 #
 #   python -m whetstone_envs.optim.cli --optimizer gepa --transport fake \
-#       --split-sizes 88,132,220 --n-per-stratum 32 \
+#       --split-sizes 88,132,220 --n-per-category 32 \
 #       --pool-seed-start 1000000 --num-seeds 1 --seed 3000 \
 #       --gepa-max-metric-calls 732 --run-id <id> --output <dir>
 
@@ -540,8 +540,8 @@ MEASUREMENT_SPLIT_SIZES = (88, 132, 220)
 #: that says so is harder to forget than a flag in a comment.
 MEASUREMENT_NUM_SEEDS = 1
 
-#: The c19 pool those splits were drawn from: 22 strata x 32 = 704 tasks.
-MEASUREMENT_N_PER_STRATUM = 32
+#: The c19 pool those splits were drawn from: 22 categories x 32 = 704 tasks.
+MEASUREMENT_N_PER_CATEGORY = 32
 MEASUREMENT_POOL_SEED_START = 1_000_000
 
 # --------------------------------------------------------------------------

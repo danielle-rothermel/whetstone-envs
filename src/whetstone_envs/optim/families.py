@@ -30,7 +30,7 @@ from whetstone_envs.c19.generation import (
 )
 from whetstone_envs.optim.c18_experiment import (
     C18_CONTRACT,
-    C18_DEFAULT_N_PER_STRATUM,
+    C18_DEFAULT_N_PER_CATEGORY,
     C18_DEFAULT_POOL_SEED_START,
     C18_TASK_CONTEXT,
     C18VerdictEvalProcedureRunner,
@@ -93,7 +93,7 @@ class PoolGenerator(Protocol):
     """Generate a family's deterministic instance pool."""
 
     def __call__(
-        self, *, n_per_stratum: int, seed_start: int
+        self, *, n_per_category: int, seed_start: int
     ) -> InstancePool: ...
 
 
@@ -120,7 +120,9 @@ class PoolManifestBuilder(Protocol):
     generation module directly -- the domain leak C3 exists to catch.
     """
 
-    def __call__(self, *, n_per_stratum: int, seed_start: int) -> Manifest: ...
+    def __call__(
+        self, *, n_per_category: int, seed_start: int
+    ) -> Manifest: ...
 
 
 class EvalRunnerFactory(Protocol):
@@ -174,8 +176,8 @@ class FamilySpec:
     build_experiment: ExperimentBuilder
     #: Scores one generation against a task's frozen gold.
     eval_runner: EvalRunnerFactory
-    #: Default pool size per stratum when a run does not choose one.
-    default_n_per_stratum: int
+    #: Default pool size per category when a run does not choose one.
+    default_n_per_category: int
     #: Default first generator seed when a run does not choose one.
     default_pool_seed_start: int
     run_id_prefix: str
@@ -184,10 +186,10 @@ class FamilySpec:
         if not self.prompt_fields:
             msg = f"family {self.family_id!r} declares no prompt fields"
             raise ValueError(msg)
-        if self.default_n_per_stratum < 1:
+        if self.default_n_per_category < 1:
             msg = (
-                f"family {self.family_id!r} default_n_per_stratum must be "
-                f"at least 1, got {self.default_n_per_stratum}"
+                f"family {self.family_id!r} default_n_per_category must be "
+                f"at least 1, got {self.default_n_per_category}"
             )
             raise ValueError(msg)
 
@@ -311,7 +313,7 @@ _C19_SPEC = FamilySpec(
     eval_runner=ExactMatchEvalProcedureRunner,
     # The historical runner default, retained so an unparameterised run
     # keeps generating the pool it always generated.
-    default_n_per_stratum=2,
+    default_n_per_category=2,
     default_pool_seed_start=765_432,
     run_id_prefix=FamilyId.C19.value,
 )
@@ -334,7 +336,7 @@ _C18_SPEC = FamilySpec(
     pool_manifest=c18_pool_manifest,
     build_experiment=prepare_c18_experiment,
     eval_runner=C18VerdictEvalProcedureRunner,
-    default_n_per_stratum=C18_DEFAULT_N_PER_STRATUM,
+    default_n_per_category=C18_DEFAULT_N_PER_CATEGORY,
     default_pool_seed_start=C18_DEFAULT_POOL_SEED_START,
     run_id_prefix=FamilyId.C18.value,
 )

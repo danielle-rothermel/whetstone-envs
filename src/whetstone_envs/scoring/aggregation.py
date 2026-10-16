@@ -19,9 +19,10 @@ class Aggregate:
     """An equal-weighted mean with leaf/path contribution counts.
 
     Aggregation helpers return ``mean=None`` for empty or incomplete
-    contributions. ``label`` identifies task or stratum nodes returned by
+    contributions. ``label`` identifies task or category nodes returned by
     :func:`aggregate`. Counters record leaf/path contributions, so a
-    task/repeat cell in multiple strata counts once per stratum at the root.
+    task/repeat cell in multiple categories counts once per category at
+    the root.
     """
 
     mean: float | None
@@ -174,57 +175,57 @@ def aggregate_task(observations: Iterable[Observation]) -> Aggregate:
     return _mean_of_observations(materialized, label=label)
 
 
-def aggregate_stratum(task_aggregates: list[Aggregate]) -> Aggregate:
+def aggregate_category(task_aggregates: list[Aggregate]) -> Aggregate:
     return _mean_of_children(task_aggregates)
 
 
-def aggregate_overall(stratum_aggregates: list[Aggregate]) -> Aggregate:
-    return _mean_of_children(stratum_aggregates)
+def aggregate_overall(category_aggregates: list[Aggregate]) -> Aggregate:
+    return _mean_of_children(category_aggregates)
 
 
-def _validate_task_strata(
-    task_strata: Mapping[str, tuple[str, ...]],
+def _validate_task_categories(
+    task_categories: Mapping[str, tuple[str, ...]],
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    planned_tasks = tuple(task_strata.items())
-    for task_id, strata in planned_tasks:
-        if not isinstance(strata, tuple):
+    planned_tasks = tuple(task_categories.items())
+    for task_id, categories in planned_tasks:
+        if not isinstance(categories, tuple):
             msg = (
-                f"task_strata for task {task_id!r} must be a tuple of "
-                "stratum labels"
+                f"task_categories for task {task_id!r} must be a tuple of "
+                "category labels"
             )
             raise TypeError(msg)
-        if not strata:
-            msg = f"task {task_id!r} must declare at least one stratum"
+        if not categories:
+            msg = f"task {task_id!r} must declare at least one category"
             raise ValueError(msg)
-        seen_strata: set[str] = set()
-        for stratum in strata:
-            if not isinstance(stratum, str):
-                msg = f"stratum labels for task {task_id!r} must be strings"
+        seen_categories: set[str] = set()
+        for category in categories:
+            if not isinstance(category, str):
+                msg = f"category labels for task {task_id!r} must be strings"
                 raise TypeError(msg)
-            if not stratum.strip():
-                msg = f"stratum labels for task {task_id!r} must be nonblank"
+            if not category.strip():
+                msg = f"category labels for task {task_id!r} must be nonblank"
                 raise ValueError(msg)
-            if stratum in seen_strata:
+            if category in seen_categories:
                 msg = (
-                    f"duplicate stratum label {stratum!r} for task "
+                    f"duplicate category label {category!r} for task "
                     f"{task_id!r}; labels must be deduplicated"
                 )
                 raise ValueError(msg)
-            seen_strata.add(stratum)
+            seen_categories.add(category)
     return planned_tasks
 
 
 def aggregate(
     observations: Iterable[Observation],
-    task_strata: Mapping[str, tuple[str, ...]],
+    task_categories: Mapping[str, tuple[str, ...]],
     *,
     expected_repeat_ids: Iterable[int],
 ) -> Aggregate:
     """Aggregate the complete planned task/repeat matrix.
 
     Missing cells become ``MISSING``. Repeats within tasks, tasks within
-    strata, and strata into the root are equally weighted. Unknown task or
-    repeat IDs and duplicate expected or observed cells raise.
+    categories, and categories into the root are equally weighted. Unknown
+    task or repeat IDs and duplicate expected or observed cells raise.
     """
     expected_repeats = tuple(expected_repeat_ids)
     expected_repeat_set: set[int] = set()
@@ -237,13 +238,16 @@ def aggregate(
             raise ValueError(msg)
         expected_repeat_set.add(repeat_id)
 
-    planned_tasks = _validate_task_strata(task_strata)
+    planned_tasks = _validate_task_categories(task_categories)
     expected_task_ids = {task_id for task_id, _ in planned_tasks}
 
     observations_by_cell: dict[tuple[str, int], Observation] = {}
     for observation in observations:
         if observation.task_id not in expected_task_ids:
-            msg = f"task {observation.task_id!r} has no stratum in task_strata"
+            msg = (
+                f"task {observation.task_id!r} has no category "
+                "in task_categories"
+            )
             raise KeyError(msg)
         if observation.repeat_id not in expected_repeat_set:
             msg = (
@@ -260,8 +264,8 @@ def aggregate(
             raise ValueError(msg)
         observations_by_cell[cell] = observation
 
-    by_stratum: dict[str, list[Aggregate]] = {}
-    for task_id, strata in planned_tasks:
+    by_category: dict[str, list[Aggregate]] = {}
+    for task_id, categories in planned_tasks:
         task_observations = [
             observations_by_cell[(task_id, repeat_id)]
             if (task_id, repeat_id) in observations_by_cell
@@ -272,11 +276,11 @@ def aggregate(
             task_observations,
             label=task_id,
         )
-        for stratum in strata:
-            by_stratum.setdefault(stratum, []).append(task_aggregate)
+        for category in categories:
+            by_category.setdefault(category, []).append(task_aggregate)
 
-    stratum_aggregates = [
-        _mean_of_children(tasks, label=stratum)
-        for stratum, tasks in by_stratum.items()
+    category_aggregates = [
+        _mean_of_children(tasks, label=category)
+        for category, tasks in by_category.items()
     ]
-    return aggregate_overall(stratum_aggregates)
+    return aggregate_overall(category_aggregates)

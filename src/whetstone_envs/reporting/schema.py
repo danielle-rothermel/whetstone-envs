@@ -20,13 +20,8 @@ from whetstone_envs.scoring.families import family_score
 
 # Persisted literals are owned here and pinned directly by golden tests.
 
-#: v2 adds ``spend``: what the evaluation's own provider calls cost.
-#: v1 published a report for a run that had reached a provider and said
-#: nothing about the bill, so a held-out evaluation -- the role every
-#: efficacy claim is finally made against -- spent money no artifact
-#: recorded.
-EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v2"
-TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v1"
+EVAL_REPORT_SCHEMA = "whetstone_envs.eval_report/v3"
+TRAJECTORY_REPORT_SCHEMA = "whetstone_envs.trajectory_report/v2"
 #: The only whetstone-ai cost-report schema version this package projects.
 #: An embedded report at any other version carries semantics this schema has
 #: not been checked against, so it is rejected rather than reinterpreted.
@@ -158,7 +153,7 @@ class TaskRecord(_StrictModel):
     task_id: StrictStr
     task_hash: StrictStr
     seed: StrictInt
-    strata: tuple[StrictStr, ...]
+    categories: tuple[StrictStr, ...]
     prompt_inputs: dict[StrictStr, StrictStr]
     gold: StrictStr
 
@@ -166,10 +161,12 @@ class TaskRecord(_StrictModel):
     def _validate_task(self) -> TaskRecord:
         if not self.task_id.strip() or not self.task_hash.strip():
             raise ValueError("task ID and hash must be nonblank")
-        if not self.strata or any(not label.strip() for label in self.strata):
-            raise ValueError("tasks require nonblank strata")
-        if len(set(self.strata)) != len(self.strata):
-            raise ValueError("task strata must be unique and ordered")
+        if not self.categories or any(
+            not label.strip() for label in self.categories
+        ):
+            raise ValueError("tasks require nonblank categories")
+        if len(set(self.categories)) != len(self.categories):
+            raise ValueError("task categories must be unique and ordered")
         if not self.prompt_inputs:
             raise ValueError("tasks require at least one prompt input")
         if any(not name.strip() for name in self.prompt_inputs):
@@ -387,19 +384,19 @@ class RowAccounting(_StrictModel):
         return self
 
 
-class StratumSummary(_StrictModel):
-    stratum: StrictStr
+class CategorySummary(_StrictModel):
+    category: StrictStr
     numerator: StrictInt
     denominator: StrictInt
     accounting: RowAccounting
     score: StrictFloat | None
 
     @model_validator(mode="after")
-    def _validate_summary(self) -> StratumSummary:
+    def _validate_summary(self) -> CategorySummary:
         if self.denominator != self.accounting.planned:
-            raise ValueError("stratum denominator must equal planned rows")
+            raise ValueError("category denominator must equal planned rows")
         if self.numerator < 0 or self.numerator > self.accounting.present:
-            raise ValueError("stratum numerator is outside present rows")
+            raise ValueError("category numerator is outside present rows")
         # ``score`` is the two-stage per-task mean (see
         # ``two_stage_task_mean``), so it is *not* ``numerator /
         # denominator``: those stay the honest row-level pass count for
@@ -412,15 +409,15 @@ class StratumSummary(_StrictModel):
         # A score exists iff *some* row was present, not iff every row
         # was: partial presence still reports a number, because
         # ``two_stage_task_mean`` means over present rows the way
-        # whetstone-ai's aggregation does. Only a stratum with nothing
+        # whetstone-ai's aggregation does. Only a category with nothing
         # scored anywhere reports no number.
         scored_anything = self.accounting.present > 0
         if scored_anything != (self.score is not None):
             raise ValueError(
-                "stratum score must be present iff some row was scored"
+                "category score must be present iff some row was scored"
             )
         if self.score is not None and not 0.0 <= self.score <= 1.0:
-            raise ValueError("stratum score must be a unit-interval mean")
+            raise ValueError("category score must be a unit-interval mean")
         return self
 
 
@@ -446,7 +443,7 @@ class EvalSuccess(_StrictModel):
     numerator: StrictInt
     denominator: StrictInt
     score: StrictFloat | None
-    strata: tuple[StratumSummary, ...]
+    categories: tuple[CategorySummary, ...]
 
 
 class EvalFailed(_StrictModel):
@@ -472,7 +469,7 @@ EvaluationResult = Annotated[
 
 
 class EvalReport(_StrictModel):
-    schema_version: Literal["whetstone_envs.eval_report/v2"]
+    schema_version: Literal["whetstone_envs.eval_report/v3"]
     run: EvalRun
     candidates: tuple[CandidateRecord, ...]
     tasks: tuple[TaskRecord, ...]
@@ -587,42 +584,43 @@ class EvalReport(_StrictModel):
                 )
             labels = tuple(
                 dict.fromkeys(
-                    label for task in self.tasks for label in task.strata
+                    label for task in self.tasks for label in task.categories
                 )
             )
-            expected_strata: list[StratumSummary] = []
+            expected_categories: list[CategorySummary] = []
             for label in labels:
-                stratum_rows = tuple(
+                category_rows = tuple(
                     row
                     for row in rows
-                    if label in task_by_id[row.task_id].strata
+                    if label in task_by_id[row.task_id].categories
                 )
-                stratum_states = {
-                    state: sum(row.state is state for row in stratum_rows)
+                category_states = {
+                    state: sum(row.state is state for row in category_rows)
                     for state in ObservationState
                 }
-                stratum_accounting = RowAccounting(
-                    planned=len(stratum_rows),
-                    present=stratum_states[ObservationState.SCORED],
-                    missing=stratum_states[ObservationState.MISSING],
-                    failed=stratum_states[ObservationState.FAILED],
-                    invalid=stratum_states[ObservationState.INVALID],
+                category_accounting = RowAccounting(
+                    planned=len(category_rows),
+                    present=category_states[ObservationState.SCORED],
+                    missing=category_states[ObservationState.MISSING],
+                    failed=category_states[ObservationState.FAILED],
+                    invalid=category_states[ObservationState.INVALID],
                 )
-                stratum_numerator = sum(
-                    row.score == 1.0 for row in stratum_rows
+                category_numerator = sum(
+                    row.score == 1.0 for row in category_rows
                 )
-                expected_strata.append(
-                    StratumSummary(
-                        stratum=label,
-                        numerator=stratum_numerator,
-                        denominator=len(stratum_rows),
-                        accounting=stratum_accounting,
-                        score=two_stage_task_mean(stratum_rows),
+                expected_categories.append(
+                    CategorySummary(
+                        category=label,
+                        numerator=category_numerator,
+                        denominator=len(category_rows),
+                        accounting=category_accounting,
+                        score=two_stage_task_mean(category_rows),
                     )
                 )
-            if result.strata != tuple(expected_strata):
+            if result.categories != tuple(expected_categories):
                 raise ValueError(
-                    "evaluation strata disagree with observation accounting"
+                    "evaluation categories disagree with "
+                    "observation accounting"
                 )
         return self
 
@@ -805,7 +803,7 @@ class TrajectoryStep(_StrictModel):
 
 
 class TrajectoryReport(_StrictModel):
-    schema_version: Literal["whetstone_envs.trajectory_report/v1"]
+    schema_version: Literal["whetstone_envs.trajectory_report/v2"]
     result_ref: ReportRef
     run_id: StrictStr
     mutation_field: StrictStr

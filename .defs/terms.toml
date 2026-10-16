@@ -7,7 +7,7 @@
 name = "task instance"
 definition = """
 A single generated evaluation problem within a task family, carrying a stable \
-identifier, generation seed, one or more task strata, public prompt inputs, \
+identifier, generation seed, one or more instance categories, public prompt inputs, \
 and private gold data."""
 exported_symbols = [
     "whetstone_envs.instances.Instance",
@@ -21,17 +21,17 @@ identifiers. An instance group may be empty."""
 exported_symbols = ["whetstone_envs.instances.InstanceGroup"]
 
 [[terms]]
-name = "task stratum"
+name = "instance category"
 definition = """
 A nonblank label grouping task instances for split allocation and score \
-reporting. One task instance may belong to several task strata."""
+reporting. One task instance may belong to several instance categories."""
 
 [[terms]]
 name = "public prompt identity"
 definition = """
 The canonical identity of the information exposed by the default prompt \
 boundary: the sorted key-value pairs in a task instance's prompt inputs. It \
-excludes identifier, seed, task strata, and gold, and it is not rendered-prompt \
+excludes identifier, seed, instance categories, and gold, and it is not rendered-prompt \
 identity."""
 exported_symbols = ["whetstone_envs.instances.Instance.public_prompt_identity"]
 
@@ -85,13 +85,13 @@ exported_symbols = [
 [[terms]]
 name = "score aggregate"
 definition = """
-A task, task-stratum, or overall result containing an equal-weighted mean when \
+A task, category, or overall result containing an equal-weighted mean when \
 complete, contribution counts, and any child aggregates."""
 exported_symbols = [
     "whetstone_envs.scoring.Aggregate",
     "whetstone_envs.scoring.aggregate",
     "whetstone_envs.scoring.aggregate_task",
-    "whetstone_envs.scoring.aggregate_stratum",
+    "whetstone_envs.scoring.aggregate_category",
     "whetstone_envs.scoring.aggregate_overall",
 ]
 
@@ -121,7 +121,7 @@ exported_symbols = [
 name = "pool manifest"
 definition = """
 A persisted description of a generated instance pool recording its generator \
-version, retained seed range, per-stratum counts, versioned canonical pool \
+version, retained seed range, per-category counts, versioned canonical pool \
 identity, and schema version for reproducibility and drift detection."""
 exported_symbols = [
     "whetstone_envs.manifests.Manifest",
@@ -137,7 +137,7 @@ whitespace, key ordering, number rendering, Unicode escaping, and mixed cases, \
 with deterministic generation, standard cohort sizes, a naive-and-known-good \
 probe pair, and a reproducibility manifest."""
 exported_symbols = [
-    "whetstone_envs.c11.C11Stratum",
+    "whetstone_envs.c11.C11Category",
     "whetstone_envs.c11.DEFAULT_SPLIT_SIZES",
     "whetstone_envs.c11.PROBES",
     "whetstone_envs.c11.build_manifest",
@@ -163,7 +163,7 @@ exported_symbols = [
     "whetstone_envs.c18.DEFAULT_CONFIG",
     "whetstone_envs.c18.HARD_CONFIG",
     "whetstone_envs.c18.PROBES",
-    "whetstone_envs.c18.DepthStratum",
+    "whetstone_envs.c18.DepthCategory",
     "whetstone_envs.c18.DistractorMode",
     "whetstone_envs.c18.GenerationConfig",
     "whetstone_envs.c18.SplitPlan",

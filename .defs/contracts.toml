@@ -5,8 +5,8 @@
 title = "Task instances are immutable value objects"
 statement = """
 Every task instance has a nonempty string identifier, an integer seed, at least \
-one nonblank task stratum, string prompt-input keys and values, and string gold \
-data; its task strata are deduplicated in first-seen order, and its prompt \
+one nonblank instance category, string prompt-input keys and values, and string gold \
+data; its instance categories are deduplicated in first-seen order, and its prompt \
 inputs are detached from caller-owned state and exposed read-only."""
 rationale = """
 Caller mutation must not change a task instance's equality, hash, public prompt \
@@ -20,7 +20,7 @@ statement = """
 An instance group has a nonblank string name and an immutable ordered tuple \
 of validated task instances with unique identifiers. Empty groups are valid. \
 An instance pool contains one instance group and additionally rejects duplicate \
-public prompt identities; its stratum index is derived from that group's \
+public prompt identities; its category index is derived from that group's \
 ordered instances."""
 rationale = """
 Named membership and identifier uniqueness have one owner, while the task \
@@ -31,7 +31,7 @@ date = "2026-10-15"
 title = "Public prompt identity excludes private data"
 statement = """
 Public prompt identity is the sorted tuple of a task instance's prompt-input \
-items; identifier, seed, task strata, and gold do not participate, and every \
+items; identifier, seed, instance categories, and gold do not participate, and every \
 instance pool rejects duplicate public prompt identities while leaving \
 rendered-prompt uniqueness to its renderer and template."""
 rationale = """
@@ -56,13 +56,13 @@ check = "uv run pytest -q tests/probes/test_rendering.py"
 title = "Aggregation requires a complete planned matrix"
 statement = """
 Aggregation materializes every planned task-repeat cell, marks unobserved cells \
-missing, gives equal weight to repeats within tasks, tasks within task strata, \
-and task strata overall, and exposes no mean for any empty or incomplete \
+missing, gives equal weight to repeats within tasks, tasks within instance categories, \
+and instance categories overall, and exposes no mean for any empty or incomplete \
 aggregate. Expected and observed repeat identifiers are exact integers, and \
 every aggregate enforces consistency between its mean, counts, and children."""
 rationale = """
 Failed or absent results must not masquerade as zero scores or silently \
-disappear, and larger task strata must not dominate by population."""
+disappear, and larger instance categories must not dominate by population."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/scoring/test_aggregation.py"
 
@@ -85,7 +85,7 @@ statement = """
 Instance-pool splitting accepts a mapping of nonblank group names to exact \
 nonnegative integer sizes and uses its insertion order as destination order, \
 including for allocation ties. It selects without replacement by each task \
-instance's complete ordered task-strata tuple, fills exactly the requested nonnegative \
+instance's complete ordered category tuple, fills exactly the requested nonnegative \
 destination sizes without oversubscription, maximizes combination coverage \
 before balancing combination counts, preserves source-pool order in every \
 destination, and leaves unselected task instances unassigned. Exact separable \
@@ -101,7 +101,7 @@ title = "Manifests pin retained pool content"
 statement = """
 A pool manifest accepts exactly its closed persisted schema at the supported \
 schema version, and it matches an instance pool only when every retained \
-seed lies in the declared half-open seed range and both per-stratum counts and the \
+seed lies in the declared half-open seed range and both per-category counts and the \
 versioned dr-serialize identity-document hash match."""
 rationale = """
 Generator metadata alone cannot detect retained-content drift; seed \
@@ -179,8 +179,8 @@ date = "2026-08-21"
 title = "Evaluation reports are strict bounded local evidence"
 statement = """
 Evaluation and optimization inspection reads only strict canonical JSON using \
-the exact persisted literals `whetstone_envs.eval_report/v2` and \
-`whetstone_envs.trajectory_report/v1`. Publication validates a complete \
+the exact persisted literals `whetstone_envs.eval_report/v3` and \
+`whetstone_envs.trajectory_report/v2`. Publication validates a complete \
 candidate, task, observation, step, resolution, reference, ordering, matrix, \
 and finite-number contract under an explicit 128 MiB limit before bounded \
 same-directory atomic replacement. \
@@ -229,7 +229,7 @@ check = "uv run --extra optim pytest -q tests/reporting/test_html.py && uv run -
 title = "C11 generation is reproducible and oracle-grounded"
 statement = """
 The C11 task family deterministically generates unique noncanonical JSON inputs \
-across the whitespace, key-order, number, Unicode, and mixed strata; every \
+across the whitespace, key-order, number, Unicode, and mixed categories; every \
 task's private gold is the RFC 8785 canonical form of its public input, and the \
 default balanced pool is pinned by the committed canonical manifest."""
 rationale = """
@@ -311,7 +311,7 @@ closed wall, key, ball, and door object subset. MiniGrid 3.1.0, Gymnasium \
 answer-relevant physical-state oracle parses only the public grid and script \
 and agrees with the live MiniGrid adapter after every generated action prefix. \
 Default generation is deterministic and balanced across its 22 scenario, \
-size, and fact strata. The canonical manifest path accepts only those default \
+size, and fact categories. The canonical manifest path accepts only those default \
 generation parameters, and regeneration reproduces the committed 352-instance \
 pool identity."""
 rationale = """

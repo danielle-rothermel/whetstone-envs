@@ -2,7 +2,7 @@
 
 from whetstone_envs.c11.generation import (
     DEFAULT_SPLIT_SIZES,
-    C11Stratum,
+    C11Category,
     build_manifest,
     generate_pool,
 )
@@ -12,7 +12,7 @@ from whetstone_envs.c11.probes import PROBES
 __all__ = [
     "DEFAULT_SPLIT_SIZES",
     "PROBES",
-    "C11Stratum",
+    "C11Category",
     "build_manifest",
     "canonicalize",
     "generate_pool",

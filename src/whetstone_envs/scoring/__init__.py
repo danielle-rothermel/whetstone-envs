@@ -1,8 +1,8 @@
 from whetstone_envs.scoring.aggregation import (
     Aggregate,
     aggregate,
+    aggregate_category,
     aggregate_overall,
-    aggregate_stratum,
     aggregate_task,
 )
 from whetstone_envs.scoring.exact_match import exact_match
@@ -27,8 +27,8 @@ __all__ = [
     "Observation",
     "Outcome",
     "aggregate",
+    "aggregate_category",
     "aggregate_overall",
-    "aggregate_stratum",
     "aggregate_task",
     "exact_match",
     "failed",

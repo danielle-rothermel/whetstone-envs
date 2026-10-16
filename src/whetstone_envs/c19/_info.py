@@ -102,7 +102,7 @@ C19_INFO = C19Info(
         "exactly for a binary score."
     ),
     pool=(
-        "The default pool has 22 strata and 352 instances. Internal "
+        "The default pool has 22 categories and 352 instances. Internal "
         "evaluation has 88 tasks and supports optimization; official "
         "evaluation has 132 tasks and is rewardless evidence; 132 held-out "
         "tasks are hashes only."

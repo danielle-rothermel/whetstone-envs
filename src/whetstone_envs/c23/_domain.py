@@ -18,7 +18,7 @@ class RuleConfiguration:
 
 
 @dataclass(frozen=True, slots=True)
-class StratumConfiguration:
+class CategoryConfiguration:
     label: str
     rule: RuleConfiguration
     seed: int
@@ -27,7 +27,7 @@ class StratumConfiguration:
 @dataclass(frozen=True, slots=True)
 class GenerationConfiguration:
     vocab: tuple[str, ...]
-    strata: tuple[StratumConfiguration, ...]
+    categories: tuple[CategoryConfiguration, ...]
     demonstrations_per_instance: int
     maximum_query_length: int
     attempts_per_instance: int

@@ -16,7 +16,7 @@ special-cased in the runner:
   reasoned answer zero, so C18's eval runner extracts the terminal verdict
   first, exactly as :func:`whetstone_envs.c18.score_gold` does.
 * **Split sizes.** ``default_split_sizes`` at C18's own
-  ``n_per_stratum=30`` yields ``(24, 48, 48)`` across four depth strata --
+  ``n_per_category=30`` yields ``(24, 48, 48)`` across four depth categories --
   :data:`C18_PROTOCOL_SPLIT_SIZES`. The internal split of 24 is smaller
   than MIPROv2's default ``minibatch_size`` of 35, so a C18 MIPROv2 run
   must keep ``minibatch=False``; the runner's control builder already does,
@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 __all__ = [
     "C18_CONTRACT",
     "C18_DATASET_REVISION",
-    "C18_DEFAULT_N_PER_STRATUM",
+    "C18_DEFAULT_N_PER_CATEGORY",
     "C18_DEFAULT_POOL_SEED_START",
     "C18_MUTATION_FIELD",
     "C18_NAMESPACE",
@@ -88,12 +88,12 @@ C18_TASK_CONTEXT = (
 
 #: C18's own generation defaults, so an unparameterised C18 run generates
 #: the pool the family's ``DEFAULT_CONFIG`` describes.
-C18_DEFAULT_N_PER_STRATUM = DEFAULT_CONFIG.n_per_stratum
+C18_DEFAULT_N_PER_CATEGORY = DEFAULT_CONFIG.n_per_category
 C18_DEFAULT_POOL_SEED_START = DEFAULT_CONFIG.seed_start
 
 #: The study protocol's C18 split: ``DEFAULT_CONFIG``'s ``SplitPlan(6, 12,
-#: 12)`` scaled to ``n_per_stratum=30`` across four depth strata. Pinned as
-#: a literal and checked against :func:`default_split_sizes` by test, so a
+#: 12)`` scaled to ``n_per_category=30`` across four depth categories. Pinned
+#: as a literal and checked against :func:`default_split_sizes` by test, so a
 #: generator change that moves the split fails loudly instead of silently
 #: resizing the study's second family.
 C18_PROTOCOL_SPLIT_SIZES = (24, 48, 48)
@@ -123,7 +123,7 @@ def c18_candidate(*, candidate_id: str, template: str):
     return C18_CONTRACT.candidate(candidate_id=candidate_id, template=template)
 
 
-def c18_generate_pool(*, n_per_stratum: int, seed_start: int) -> InstancePool:
+def c18_generate_pool(*, n_per_category: int, seed_start: int) -> InstancePool:
     """Generate a C18 pool under the registry's calling convention.
 
     ``whetstone_envs.c18.generate_pool`` takes its seed start from a
@@ -138,15 +138,15 @@ def c18_generate_pool(*, n_per_stratum: int, seed_start: int) -> InstancePool:
         else GenerationConfig(
             generator_version=DEFAULT_CONFIG.generator_version,
             seed_start=seed_start,
-            n_per_stratum=DEFAULT_CONFIG.n_per_stratum,
-            strata=DEFAULT_CONFIG.strata,
+            n_per_category=DEFAULT_CONFIG.n_per_category,
+            categories=DEFAULT_CONFIG.categories,
             split=DEFAULT_CONFIG.split,
         )
     )
-    return _c18_generate_pool(config, n_per_stratum=n_per_stratum)
+    return _c18_generate_pool(config, n_per_category=n_per_category)
 
 
-def c18_pool_manifest(*, n_per_stratum: int, seed_start: int) -> Manifest:
+def c18_pool_manifest(*, n_per_category: int, seed_start: int) -> Manifest:
     """This family's manifest for the pool at these generation settings.
 
     Adapts PrOntoQA's own ``build_manifest``, which takes a pool and a
@@ -155,14 +155,16 @@ def c18_pool_manifest(*, n_per_stratum: int, seed_start: int) -> Manifest:
     describe a pool other than the one those settings produce.
     """
     return _c18_build_manifest(
-        c18_generate_pool(n_per_stratum=n_per_stratum, seed_start=seed_start),
+        c18_generate_pool(
+            n_per_category=n_per_category, seed_start=seed_start
+        ),
         DEFAULT_CONFIG
         if seed_start == C18_DEFAULT_POOL_SEED_START
         else GenerationConfig(
             generator_version=DEFAULT_CONFIG.generator_version,
             seed_start=seed_start,
-            n_per_stratum=DEFAULT_CONFIG.n_per_stratum,
-            strata=DEFAULT_CONFIG.strata,
+            n_per_category=DEFAULT_CONFIG.n_per_category,
+            categories=DEFAULT_CONFIG.categories,
             split=DEFAULT_CONFIG.split,
         ),
     )

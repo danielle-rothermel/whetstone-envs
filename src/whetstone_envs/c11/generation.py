@@ -15,7 +15,7 @@ from whetstone_envs.manifests import Manifest
 GENERATOR_VERSION = "c11-generation-2"
 INPUT_JSON_FIELD = "input_json"
 DEFAULT_SEED_START = 1_000_000
-DEFAULT_N_PER_STRATUM = 82
+DEFAULT_N_PER_CATEGORY = 82
 DEFAULT_SPLIT_SIZES: tuple[int, int, int] = (10, 200, 200)
 
 _MAX_ATTEMPTS_PER_INSTANCE = 100
@@ -73,8 +73,8 @@ _RFC8785_NUMBER_LEXEMES = (
 
 
 @verify(UNIQUE)
-class C11Stratum(StrEnum):
-    """The independently reported C11 task strata."""
+class C11Category(StrEnum):
+    """The independently reported C11 task categories."""
 
     WHITESPACE = "c11/whitespace"
     KEY_ORDER = "c11/key-order"
@@ -85,12 +85,12 @@ class C11Stratum(StrEnum):
 
 # Keep pool order explicit. Adding an enum member must not silently change
 # generated identities by changing persisted payload order.
-_STRATA = (
-    C11Stratum.WHITESPACE,
-    C11Stratum.KEY_ORDER,
-    C11Stratum.NUMBER,
-    C11Stratum.UNICODE,
-    C11Stratum.MIXED,
+_CATEGORIES = (
+    C11Category.WHITESPACE,
+    C11Category.KEY_ORDER,
+    C11Category.NUMBER,
+    C11Category.UNICODE,
+    C11Category.MIXED,
 )
 
 _Builder = Callable[[random.Random], str]
@@ -184,74 +184,74 @@ def _build_mixed(rng: random.Random) -> str:
     return "{" + ", ".join(members) + "}"
 
 
-_BUILDERS: Mapping[C11Stratum, _Builder] = MappingProxyType(
+_BUILDERS: Mapping[C11Category, _Builder] = MappingProxyType(
     {
-        C11Stratum.WHITESPACE: _build_whitespace,
-        C11Stratum.KEY_ORDER: _build_key_order,
-        C11Stratum.NUMBER: _build_number,
-        C11Stratum.UNICODE: _build_unicode,
-        C11Stratum.MIXED: _build_mixed,
+        C11Category.WHITESPACE: _build_whitespace,
+        C11Category.KEY_ORDER: _build_key_order,
+        C11Category.NUMBER: _build_number,
+        C11Category.UNICODE: _build_unicode,
+        C11Category.MIXED: _build_mixed,
     }
 )
 
 
-def _build_instance(stratum: C11Stratum, seed: int) -> Instance:
+def _build_instance(category: C11Category, seed: int) -> Instance:
     rng = random.Random(seed)  # noqa: S311 - deterministic task generation
-    input_json = _BUILDERS[stratum](rng)
+    input_json = _BUILDERS[category](rng)
     gold = canonicalize(input_json)
     if input_json == gold:
-        msg = f"{stratum.value} builder produced a canonical input"
+        msg = f"{category.value} builder produced a canonical input"
         raise RuntimeError(msg)
     return Instance(
-        id=f"c11-{stratum.name.lower()}-{seed}",
+        id=f"c11-{category.name.lower()}-{seed}",
         seed=seed,
-        strata=(stratum.value,),
+        categories=(category.value,),
         prompt_inputs={INPUT_JSON_FIELD: input_json},
         gold=gold,
     )
 
 
 def _validate_generation_inputs(
-    n_per_stratum: object,
+    n_per_category: object,
     seed_start: object,
 ) -> tuple[int, int]:
-    if type(n_per_stratum) is not int:
-        msg = "n_per_stratum must be an integer"
+    if type(n_per_category) is not int:
+        msg = "n_per_category must be an integer"
         raise TypeError(msg)
-    if n_per_stratum <= 0:
-        msg = "n_per_stratum must be positive"
+    if n_per_category <= 0:
+        msg = "n_per_category must be positive"
         raise ValueError(msg)
     if type(seed_start) is not int:
         msg = "seed_start must be an integer"
         raise TypeError(msg)
-    return n_per_stratum, seed_start
+    return n_per_category, seed_start
 
 
 def generate_pool(
     *,
-    n_per_stratum: int = DEFAULT_N_PER_STRATUM,
+    n_per_category: int = DEFAULT_N_PER_CATEGORY,
     seed_start: int = DEFAULT_SEED_START,
 ) -> InstancePool:
     """Generate a deterministic, balanced C11 instance pool."""
-    n_per_stratum, seed_start = _validate_generation_inputs(
-        n_per_stratum,
+    n_per_category, seed_start = _validate_generation_inputs(
+        n_per_category,
         seed_start,
     )
     next_seed = seed_start
     seen_identities: set[tuple[tuple[str, str], ...]] = set()
-    by_stratum: list[list[Instance]] = []
+    by_category: list[list[Instance]] = []
 
-    for stratum in _STRATA:
+    for category in _CATEGORIES:
         instances: list[Instance] = []
         attempts = 0
-        while len(instances) < n_per_stratum:
-            if attempts >= n_per_stratum * _MAX_ATTEMPTS_PER_INSTANCE:
+        while len(instances) < n_per_category:
+            if attempts >= n_per_category * _MAX_ATTEMPTS_PER_INSTANCE:
                 msg = (
-                    f"exhausted seed budget for {stratum.value}: retained "
-                    f"{len(instances)} of {n_per_stratum} instances"
+                    f"exhausted seed budget for {category.value}: retained "
+                    f"{len(instances)} of {n_per_category} instances"
                 )
                 raise RuntimeError(msg)
-            instance = _build_instance(stratum, next_seed)
+            instance = _build_instance(category, next_seed)
             next_seed += 1
             attempts += 1
             identity = instance.public_prompt_identity
@@ -259,10 +259,12 @@ def generate_pool(
                 continue
             seen_identities.add(identity)
             instances.append(instance)
-        by_stratum.append(instances)
+        by_category.append(instances)
 
     ordered = (
-        block[index] for index in range(n_per_stratum) for block in by_stratum
+        block[index]
+        for index in range(n_per_category)
+        for block in by_category
     )
     return InstancePool(
         instance_group=InstanceGroup(name="c11", instances=tuple(ordered)),

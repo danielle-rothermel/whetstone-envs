@@ -616,7 +616,7 @@ class StudySpec:
 
     study_id: str
     family: str
-    n_per_stratum: int
+    n_per_category: int
     pool_seed_start: int
     internal: SplitSpec
     official: SplitSpec
@@ -654,8 +654,8 @@ class StudySpec:
     def __post_init__(self) -> None:
         if not self.study_id.strip():
             raise ValueError("study_id must be nonblank")
-        if self.n_per_stratum < 1:
-            raise ValueError("n_per_stratum must be at least 1")
+        if self.n_per_category < 1:
+            raise ValueError("n_per_category must be at least 1")
         if not K_CAL_INITIAL <= self.k_cal <= K_CAL_CAP:
             raise ValueError(
                 f"k_cal must be between {K_CAL_INITIAL} and {K_CAL_CAP}"
@@ -883,7 +883,7 @@ def spec_from_manifest(
     return StudySpec(
         study_id=manifest.study_id,
         family=manifest.population.family,
-        n_per_stratum=manifest.population.n_per_stratum,
+        n_per_category=manifest.population.n_per_category,
         pool_seed_start=manifest.population.pool_seed_start,
         internal=_split_spec("internal", manifest.splits.internal),
         official=_split_spec("official", manifest.splits.official),

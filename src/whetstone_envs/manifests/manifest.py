@@ -22,10 +22,10 @@ from pydantic import (
 from whetstone_envs.manifests.hashing import content_hash
 from whetstone_envs.manifests.validation import (
     MANIFEST_SCHEMA_VERSION,
+    validate_category_counts,
     validate_generator_version,
     validate_schema_version,
     validate_seed_range,
-    validate_stratum_counts,
 )
 
 if TYPE_CHECKING:
@@ -39,7 +39,7 @@ _PERSISTED_FIELDS = frozenset(
         "schema_version",
         "generator_version",
         "seed_range",
-        "stratum_counts",
+        "category_counts",
         "content_hash",
     }
 )
@@ -68,7 +68,7 @@ def _manifest_document(path: Path) -> CanonicalJsonFile:
 class Manifest(BaseModel):
     """A validated, read-only description of a generated pool.
 
-    ``seed_range`` covers retained instances only, and ``stratum_counts`` is
+    ``seed_range`` covers retained instances only, and ``category_counts`` is
     detached and frozen. Matching retained seeds, counts, and the content hash
     to a pool is explicit via :meth:`matches_pool`.
     """
@@ -77,7 +77,7 @@ class Manifest(BaseModel):
 
     generator_version: str
     seed_range: tuple[int, int]
-    stratum_counts: Mapping[str, int]
+    category_counts: Mapping[str, int]
     content_hash: Sha256Digest
     schema_version: int = MANIFEST_SCHEMA_VERSION
 
@@ -107,16 +107,16 @@ class Manifest(BaseModel):
     def _validate_seed_range(cls, value: tuple[int, int]) -> tuple[int, int]:
         return validate_seed_range(value)
 
-    @field_validator("stratum_counts")
+    @field_validator("category_counts")
     @classmethod
-    def _validate_stratum_counts(
+    def _validate_category_counts(
         cls,
         value: Mapping[str, int],
     ) -> Mapping[str, int]:
-        return validate_stratum_counts(value)
+        return validate_category_counts(value)
 
-    @field_serializer("stratum_counts")
-    def _serialize_stratum_counts(
+    @field_serializer("category_counts")
+    def _serialize_category_counts(
         self,
         value: Mapping[str, int],
     ) -> dict[str, int]:
@@ -146,7 +146,7 @@ class Manifest(BaseModel):
         return cls(
             generator_version=generator_version,
             seed_range=validated_seed_range,
-            stratum_counts=pool.stratum_counts(),
+            category_counts=pool.category_counts(),
             content_hash=content_hash(pool),
         )
 
@@ -184,6 +184,6 @@ class Manifest(BaseModel):
     def matches_pool(self, pool: InstancePool) -> bool:
         return (
             _retained_seeds_within_range(pool, self.seed_range)
-            and self.stratum_counts == pool.stratum_counts()
+            and self.category_counts == pool.category_counts()
             and self.content_hash == content_hash(pool)
         )

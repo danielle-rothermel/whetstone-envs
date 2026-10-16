@@ -238,8 +238,8 @@ class RunSpec:
     demo_mode: str = Miprov2DemoMode.FEWSHOT.value
     #: Repeats per task (K_REPEAT). One seed keeps a run deterministic.
     num_seeds: int = 1
-    #: Instances generated per stratum. ``None`` takes the family default.
-    n_per_stratum: int | None = None
+    #: Instances generated per category. ``None`` takes the family default.
+    n_per_category: int | None = None
     #: First generator seed for the pool. ``None`` takes the family default.
     pool_seed_start: int | None = None
     #: This run's algorithmic seed. ``None`` keeps each optimizer's own
@@ -630,7 +630,7 @@ class _ValidatedSpec:
 
     family: FamilySpec
     demo_mode: Miprov2DemoMode
-    n_per_stratum: int
+    n_per_category: int
     pool_seed_start: int
 
 
@@ -683,13 +683,13 @@ def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
         )
     _validate_codex_settings(spec)
     family = family_spec(spec.family)
-    n_per_stratum = (
-        family.default_n_per_stratum
-        if spec.n_per_stratum is None
-        else spec.n_per_stratum
+    n_per_category = (
+        family.default_n_per_category
+        if spec.n_per_category is None
+        else spec.n_per_category
     )
-    if n_per_stratum < 1:
-        raise ValueError("n_per_stratum must be at least 1")
+    if n_per_category < 1:
+        raise ValueError("n_per_category must be at least 1")
     pool_seed_start = (
         family.default_pool_seed_start
         if spec.pool_seed_start is None
@@ -704,7 +704,7 @@ def _validate_spec(spec: RunSpec) -> _ValidatedSpec:
     return _ValidatedSpec(
         family=family,
         demo_mode=demo_mode,
-        n_per_stratum=n_per_stratum,
+        n_per_category=n_per_category,
         pool_seed_start=pool_seed_start,
     )
 
@@ -734,7 +734,7 @@ def build_codex_runtime_config(
     return EnvsCodexRuntimeConfig(
         family_id=validated.family.family_id,
         split_sizes=spec.split_sizes,
-        n_per_stratum=validated.n_per_stratum,
+        n_per_category=validated.n_per_category,
         pool_seed_start=validated.pool_seed_start,
         num_seeds=spec.num_seeds,
         transport=cast("CodexRuntimeTransport", spec.transport),
@@ -1143,7 +1143,7 @@ def run_optimizer(  # noqa: PLR0915
         )
         api_key_env = "OPENROUTER_API_KEY"
     pool = family.generate_pool(
-        n_per_stratum=validated.n_per_stratum,
+        n_per_category=validated.n_per_category,
         seed_start=validated.pool_seed_start,
     )
     prepared = family.build_experiment(

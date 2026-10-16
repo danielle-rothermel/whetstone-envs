@@ -2539,7 +2539,7 @@ def _colophon(manifest: StudyManifest) -> tuple[str, str]:
             "pointer where the manifest names one. Population "
             f"{manifest.population.family} at generator "
             f"{manifest.population.generator_version}, "
-            f"n_per_stratum {manifest.population.n_per_stratum}, pool "
+            f"n_per_category {manifest.population.n_per_category}, pool "
             f"{manifest.population.pool_manifest_content_hash[:12]}."
         ),
     )

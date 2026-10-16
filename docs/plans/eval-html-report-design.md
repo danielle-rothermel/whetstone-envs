@@ -135,7 +135,7 @@ Compact cards show:
 Incomplete evidence uses a visibly different status from a numeric zero. A
 missing aggregate never renders as `0%`.
 
-### 3. C19 stratum matrix
+### 3. C19 category matrix
 
 The principal overview is a small multiple for each grid size. Rows are the
 three scenario families; columns are coordinate, heading, front, and carrying.
@@ -177,7 +177,7 @@ The task table defaults to surprising rows first:
 5. both correct.
 
 Filters cover candidate, scenario, size, fact, row state, score, provider
-failure, and literal task ID. Columns include task, strata, repeat, candidate,
+failure, and literal task ID. Columns include task, categories, repeat, candidate,
 normalized output, gold, score/state, and a prompt/output preview. Sorting is
 stable and always falls back to planned task/repeat order.
 
@@ -190,7 +190,7 @@ Opening a row presents:
 
 - monospaced ASCII grid with spaces preserved;
 - action script and question;
-- task ID/hash, seed, ordered strata, and repeat;
+- task ID/hash, seed, ordered categories, and repeat;
 - selected candidate's complete template;
 - fully rendered prompt;
 - raw generation and normalized answer;
@@ -238,7 +238,7 @@ summary, and task rows. The complete candidate text is visible immediately.
 For a candidate and its parent, the report shows:
 
 - full prompt diff;
-- overall and per-stratum reward delta;
+- overall and per-category reward delta;
 - fail-to-pass and pass-to-fail task counts;
 - execution mismatches;
 - budget spent to propose/evaluate the change; and
@@ -326,7 +326,7 @@ The implementation satisfies these acceptance criteria:
 - a user can identify the run, task, candidate, and completion state without
   opening raw JSON;
 - full candidate text is visible and copyable without truncation;
-- every aggregate/stratum/trajectory selection reaches its exact contributing
+- every aggregate/category/trajectory selection reaches its exact contributing
   task rows;
 - naive, ceiling, candidate, scenario, action, and fact meanings are available
   in the report;

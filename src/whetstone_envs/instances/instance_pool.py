@@ -28,17 +28,17 @@ class InstancePool(BaseModel):
     instance_group: InstanceGroup
 
     @property
-    def strata(self) -> tuple[str, ...]:
-        return tuple(self._by_stratum)
+    def categories(self) -> tuple[str, ...]:
+        return tuple(self._by_category)
 
     @cached_property
-    def _by_stratum(self) -> Mapping[str, tuple[Instance, ...]]:
-        by_stratum: dict[str, list[Instance]] = {}
+    def _by_category(self) -> Mapping[str, tuple[Instance, ...]]:
+        by_category: dict[str, list[Instance]] = {}
         for inst in self.instance_group.instances:
-            for label in inst.strata:
-                by_stratum.setdefault(label, []).append(inst)
+            for label in inst.categories:
+                by_category.setdefault(label, []).append(inst)
         return MappingProxyType(
-            {key: tuple(value) for key, value in by_stratum.items()},
+            {key: tuple(value) for key, value in by_category.items()},
         )
 
     @model_validator(mode="after")
@@ -63,84 +63,121 @@ class InstancePool(BaseModel):
     def __len__(self) -> int:
         return len(self.instance_group.instances)
 
-    def stratum_counts(self) -> dict[str, int]:
-        return {key: len(value) for key, value in self._by_stratum.items()}
+    def category_counts(self) -> dict[str, int]:
+        return {key: len(value) for key, value in self._by_category.items()}
 
-    def in_stratum(self, label: str) -> tuple[Instance, ...]:
-        return self._by_stratum.get(label, ())
+    def in_category(self, label: str) -> tuple[Instance, ...]:
+        return self._by_category.get(label, ())
 
     def split(
         self,
         sizes: Mapping[str, int],
     ) -> InstancePoolSplit:
+        instances = self.instance_group.instances
         requested_sizes = _validate_split_sizes(
             sizes,
-            pool_size=len(self.instance_group.instances),
+            pool_size=len(instances),
         )
-        destination_sizes = tuple(requested_sizes.values())
-        total = sum(destination_sizes)
-
-        by_combination: dict[tuple[str, ...], deque[Instance]] = {}
-        for inst in self.instance_group.instances:
-            by_combination.setdefault(inst.strata, deque()).append(inst)
-
-        selected_by_combination = dict.fromkeys(by_combination, 0)
-        active = deque(by_combination)
-        selected = 0
-        while selected < total:
-            combination = active.popleft()
-            selected_by_combination[combination] += 1
-            selected += 1
-            if selected_by_combination[combination] < len(
-                by_combination[combination]
-            ):
-                active.append(combination)
-
-        destination_quotas = _allocate_destination_quotas(
+        instances_by_combination = _group_by_category_combination(instances)
+        selected_by_combination = _select_balanced_combination_counts(
+            instances_by_combination,
+            total=sum(requested_sizes.values()),
+        )
+        destination_counts = _allocate_combination_counts(
             selected_by_combination,
-            destination_sizes,
+            destination_sizes=tuple(requested_sizes.values()),
         )
-        combinations = tuple(by_combination)
-        destinations_by_combination = {
-            combination: [
-                destination
-                for destination, quotas in enumerate(destination_quotas)
-                for _ in range(quotas[combination])
-            ]
-            for combination in combinations
-        }
-
-        assignment_by_id: dict[str, int] = {}
-        for combination, combination_instances in by_combination.items():
-            destinations = destinations_by_combination[combination]
-            for instance, destination in zip(
-                tuple(combination_instances)[: len(destinations)],
-                destinations,
-                strict=True,
-            ):
-                assignment_by_id[instance.id] = destination
-
-        destination_instances = tuple(
-            tuple(
-                instance
-                for instance in self.instance_group.instances
-                if assignment_by_id.get(instance.id) == destination
-            )
-            for destination in range(len(destination_sizes))
+        assignment_by_id = _assign_instances_to_destinations(
+            instances_by_combination,
+            destination_counts,
         )
         return InstancePoolSplit(
-            instance_groups=tuple(
-                InstanceGroup(name=name, instances=instances)
-                for name, instances in zip(
-                    requested_sizes,
-                    destination_instances,
-                    strict=True,
-                )
+            instance_groups=_build_destination_groups(
+                instances,
+                destination_names=tuple(requested_sizes),
+                assignment_by_id=assignment_by_id,
             ),
         )
 
     def as_sequence(self) -> Sequence[Instance]:
         return self.instance_group.instances
+
+
+def _group_by_category_combination(
+    instances: tuple[Instance, ...],
+) -> dict[tuple[str, ...], list[Instance]]:
+    instances_by_combination: dict[tuple[str, ...], list[Instance]] = {}
+    for instance in instances:
+        instances_by_combination.setdefault(instance.categories, []).append(
+            instance,
+        )
+    return instances_by_combination
+
+
+def _select_balanced_combination_counts(
+    instances_by_combination: Mapping[tuple[str, ...], list[Instance]],
+    *,
+    total: int,
+) -> dict[tuple[str, ...], int]:
+    selected_counts = dict.fromkeys(instances_by_combination, 0)
+    active = deque(instances_by_combination)
+    for _ in range(total):
+        combination = active.popleft()
+        selected_counts[combination] += 1
+        if selected_counts[combination] < len(
+            instances_by_combination[combination],
+        ):
+            active.append(combination)
+    return selected_counts
+
+
+def _allocate_combination_counts(
+    selected_by_combination: dict[tuple[str, ...], int],
+    *,
+    destination_sizes: tuple[int, ...],
+) -> tuple[dict[tuple[str, ...], int], ...]:
+    combinations = tuple(selected_by_combination)
+    supplies = tuple(selected_by_combination.values())
+    problem = TransportProblem(
+        supplies=supplies,
+        demands=destination_sizes,
+        cells=_build_coverage_first_transport_cells(
+            supplies,
+            destination_sizes,
+        ),
+    )
+    solution = solve_separable_transport(problem)
+    return tuple(
+        {
+            combination: solution.allocations[combination_index][destination]
+            for combination_index, combination in enumerate(combinations)
+        }
+        for destination in range(len(destination_sizes))
+    )
+
+
+def _build_coverage_first_transport_cells(
+    combination_supplies: tuple[int, ...],
+    destination_sizes: tuple[int, ...],
+) -> tuple[TransportCell, ...]:
+    total = sum(destination_sizes)
+    cells: list[TransportCell] = []
+    for combination_index, supply in enumerate(combination_supplies):
+        for destination_index, demand in enumerate(destination_sizes):
+            marginal_costs = _coverage_first_marginal_costs(
+                combination_supply=supply,
+                destination_demand=demand,
+                total_flow=total,
+            )
+            if marginal_costs:
+                cells.append(
+                    TransportCell(
+                        source_index=combination_index,
+                        destination_index=destination_index,
+                        marginal_costs=marginal_costs,
+                    )
+                )
+    return tuple(cells)
 
 
 def _coverage_first_marginal_costs(
@@ -160,43 +197,43 @@ def _coverage_first_marginal_costs(
     )
 
 
-def _allocate_destination_quotas(
-    selected_by_combination: dict[tuple[str, ...], int],
-    destination_sizes: tuple[int, ...],
-) -> list[dict[tuple[str, ...], int]]:
-    combinations = tuple(selected_by_combination)
-    supplies = tuple(selected_by_combination.values())
-    total = sum(destination_sizes)
-    cells: list[TransportCell] = []
-    for combination_index, supply in enumerate(supplies):
-        for destination_index, demand in enumerate(destination_sizes):
-            marginal_costs = _coverage_first_marginal_costs(
-                combination_supply=supply,
-                destination_demand=demand,
-                total_flow=total,
-            )
-            if marginal_costs:
-                cells.append(
-                    TransportCell(
-                        source_index=combination_index,
-                        destination_index=destination_index,
-                        marginal_costs=marginal_costs,
-                    )
-                )
-    solution = solve_separable_transport(
-        TransportProblem(
-            supplies=supplies,
-            demands=destination_sizes,
-            cells=tuple(cells),
+def _assign_instances_to_destinations(
+    instances_by_combination: Mapping[tuple[str, ...], list[Instance]],
+    destination_counts: tuple[dict[tuple[str, ...], int], ...],
+) -> dict[str, int]:
+    assignment_by_id: dict[str, int] = {}
+    for combination, instances in instances_by_combination.items():
+        destinations = [
+            destination
+            for destination, counts in enumerate(destination_counts)
+            for _ in range(counts[combination])
+        ]
+        for instance, destination in zip(
+            instances[: len(destinations)],
+            destinations,
+            strict=True,
+        ):
+            assignment_by_id[instance.id] = destination
+    return assignment_by_id
+
+
+def _build_destination_groups(
+    instances: tuple[Instance, ...],
+    *,
+    destination_names: tuple[str, ...],
+    assignment_by_id: Mapping[str, int],
+) -> tuple[InstanceGroup, ...]:
+    return tuple(
+        InstanceGroup(
+            name=name,
+            instances=tuple(
+                instance
+                for instance in instances
+                if assignment_by_id.get(instance.id) == destination
+            ),
         )
+        for destination, name in enumerate(destination_names)
     )
-    return [
-        {
-            combination: solution.allocations[combination_index][destination]
-            for combination_index, combination in enumerate(combinations)
-        }
-        for destination in range(len(destination_sizes))
-    ]
 
 
 def _validate_split_sizes(

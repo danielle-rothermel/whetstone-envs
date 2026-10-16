@@ -465,7 +465,7 @@ class StudyOptimizerRunner:
     family_id: str
     transport: str
     split_sizes: tuple[int, int, int]
-    n_per_stratum: int
+    n_per_category: int
     pool_seed_start: int
     task_model: str
     #: The task route's pre-registered reasoning effort.
@@ -760,7 +760,7 @@ class StudyOptimizerRunner:
             task_reasoning_effort=self.task_reasoning_effort,
             proposer_model=self.proposer_model,
             num_seeds=self.num_seeds,
-            n_per_stratum=self.n_per_stratum,
+            n_per_category=self.n_per_category,
             pool_seed_start=self.pool_seed_start,
             seed=seed,
             # Unconditional, unlike the arm-scoped forwards below: every

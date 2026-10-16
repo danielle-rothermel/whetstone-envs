@@ -8,14 +8,14 @@ from dr_serialize import (
 from whetstone_envs.instances import Instance, InstancePool
 
 _POOL_IDENTITY_SCHEMA = "whetstone_envs.task_pool"
-_POOL_IDENTITY_SCHEMA_VERSION = 1
+_POOL_IDENTITY_SCHEMA_VERSION = 2
 
 
 def _identity_instance(instance: Instance) -> dict[str, Jsonable]:
     return {
         "id": instance.id,
         "seed": instance.seed,
-        "strata": list(instance.strata),
+        "categories": list(instance.categories),
         "prompt_inputs": dict(sorted(instance.prompt_inputs.items())),
         "gold": instance.gold,
     }

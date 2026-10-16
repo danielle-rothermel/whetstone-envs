@@ -354,8 +354,8 @@ def _required_evaluation_rows(
     *,
     namespace: str,
 ) -> tuple[tuple[TaskRow, ...], tuple[TaskRow, ...]]:
-    internal = task_rows_from_instances(split[INTERNAL_EVAL].instances)
-    official = task_rows_from_instances(split[OFFICIAL].instances)
+    internal = task_rows_from_instances(split.splits[INTERNAL_EVAL].instances)
+    official = task_rows_from_instances(split.splits[OFFICIAL].instances)
     if not internal or not official:
         msg = (
             f"{namespace} experiment requires non-empty internal and "
@@ -402,7 +402,7 @@ def prepare_experiment(
             num_seeds=num_seeds,
         )
 
-    held_out_rows = task_rows_from_instances(split[HELD_OUT].instances)
+    held_out_rows = task_rows_from_instances(split.splits[HELD_OUT].instances)
     eval_configs = EvalConfigs(
         env_name=contract.namespace,
         procedure_config_hash=procedure_hash,

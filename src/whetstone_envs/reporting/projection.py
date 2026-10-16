@@ -411,7 +411,9 @@ def project_eval_report(  # noqa: PLR0913
     if len(candidates) != len(results):
         raise ValueError("candidate/result counts disagree")
     eval_split = _eval_split_for_role(prepared, role)
-    all_instances = prepared.split[SPLIT_ROLE_BY_REPORT_ROLE[role]].instances
+    all_instances = prepared.split.splits[
+        SPLIT_ROLE_BY_REPORT_ROLE[role]
+    ].instances
     candidate_records = tuple(
         _candidate_record(name=name, source=source, candidate=candidate)
         for name, source, candidate in candidates

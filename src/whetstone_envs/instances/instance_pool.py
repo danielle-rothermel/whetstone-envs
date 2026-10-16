@@ -14,7 +14,6 @@ from dr_graph.flow.transport import (
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from whetstone_envs.instances.instance_group import InstanceGroup
-from whetstone_envs.instances.instance_pool_split import InstancePoolSplit
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -92,7 +91,8 @@ class InstancePool(BaseModel):
             destination_counts,
         )
         return InstancePoolSplit(
-            instance_groups=_build_destination_groups(
+            pool=self,
+            split_groups=_build_destination_groups(
                 instances,
                 destination_names=tuple(requested_sizes),
                 assignment_by_id=assignment_by_id,
@@ -101,6 +101,52 @@ class InstancePool(BaseModel):
 
     def as_sequence(self) -> Sequence[Instance]:
         return self.instance_group.instances
+
+
+class InstancePoolSplit(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    pool: InstancePool
+    split_groups: tuple[InstanceGroup, ...]
+
+    @cached_property
+    def splits(self) -> Mapping[str, InstanceGroup]:
+        return MappingProxyType(
+            {group.name: group for group in self.split_groups},
+        )
+
+    @model_validator(mode="after")
+    def _validate_split_groups(self) -> InstancePoolSplit:
+        source_by_id = {
+            instance.id: instance
+            for instance in self.pool.instance_group.instances
+        }
+        seen_names: set[str] = set()
+        group_by_instance_id: dict[str, str] = {}
+        for group in self.split_groups:
+            if group.name in seen_names:
+                raise ValueError(f"duplicate split group name: {group.name!r}")
+            seen_names.add(group.name)
+            for instance in group.instances:
+                if instance.id not in source_by_id:
+                    raise ValueError(
+                        f"split instance {instance.id!r} "
+                        "is not in source pool",
+                    )
+                if instance != source_by_id[instance.id]:
+                    raise ValueError(
+                        f"split instance {instance.id!r} does not match "
+                        "source pool instance",
+                    )
+                if instance.id in group_by_instance_id:
+                    previous_group = group_by_instance_id[instance.id]
+                    raise ValueError(
+                        f"split is not disjoint: instance {instance.id!r} "
+                        f"appears in both {previous_group!r} and "
+                        f"{group.name!r}",
+                    )
+                group_by_instance_id[instance.id] = group.name
+        return self
 
 
 def _group_by_category_combination(

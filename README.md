@@ -690,17 +690,19 @@ uniqueness rule. Both models are imported from `whetstone_envs.instances`.
 
 [`whetstone_envs.instances`][instances-source] owns `InstancePool`, which contains
 one `InstanceGroup` and rejects duplicate public prompt identities, and
-`InstancePoolSplit`, which contains named disjoint groups. `InstancePool.split`
-and its private allocation helpers live together in `instances/instance_pool.py`
-and delegate optimization to `dr-graph`.
+`InstancePoolSplit`, which records an allocation from a source pool into named
+disjoint groups. Both models and the private allocation helpers live together
+in `instances/instance_pool.py` and delegate optimization to `dr-graph`.
 
 ```python
 class InstancePoolSplit(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    instance_groups: tuple[InstanceGroup, ...]
+    pool: InstancePool
+    split_groups: tuple[InstanceGroup, ...]
 
-    def __getitem__(self, name: str) -> InstanceGroup: ...
+    @cached_property
+    def splits(self) -> Mapping[str, InstanceGroup]: ...
 ```
 
 ```python
@@ -728,16 +730,22 @@ their task-family identifier as the name.
 
 ```python
 split = pool.split(sizes={"train": 8, "validation": 2})
-training_instances = split["train"].instances
+training_instances = split.splits["train"].instances
+assert split.pool is pool
 ```
 
 Group names must be nonblank and sizes must be exact nonnegative integers.
 Request insertion order determines group order and allocation tie-breaking.
-The allocator selects by complete ordered categories tuples, maximizes combination
-coverage before balancing counts, and preserves source-pool order within each
-group. Unselected instances remain outside the split. Empty groups are valid;
-an empty request produces an empty split. Missing group lookup raises
+The allocator selects by complete ordered category tuples, maximizes
+combination coverage before balancing counts, and preserves source-pool order
+within each group. Unselected instances remain unassigned to destination
+groups. Empty groups are valid; an empty request produces no destination
+groups while retaining the source pool. Missing group lookup raises
 `KeyError`. Group names and instance IDs across groups must be unique.
+Every selected instance must match the source pool's instance with the same
+ID. `split.split_groups` stores the ordered groups; `split.splits` derives a
+cached, read-only mapping by name. Serialization includes `pool` and
+`split_groups`, and named lookup is reconstructed from them.
 
 Experiment preparation requests `internal_eval`, `official`, and `held_out`
 in that order. The optimizer CLI and persisted evaluation/study schemas retain

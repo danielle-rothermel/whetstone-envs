@@ -159,9 +159,9 @@ def _require_recorded_population(
 ) -> None:
     """Compare recorded task hashes, rather than just IDs or counts."""
     for role, instances, record in (
-        ("internal", split[INTERNAL_EVAL].instances, recorded.internal),
-        ("official", split[OFFICIAL].instances, recorded.official),
-        ("held_out", split[HELD_OUT].instances, recorded.held_out),
+        ("internal", split.splits[INTERNAL_EVAL].instances, recorded.internal),
+        ("official", split.splits[OFFICIAL].instances, recorded.official),
+        ("held_out", split.splits[HELD_OUT].instances, recorded.held_out),
     ):
         if not record.task_hashes:
             # A manifest written before its splits were measured records
@@ -631,13 +631,14 @@ def bound_stage_environment(  # noqa: PLR0913
 
         task_ids_by_role = {
             EvalRole.INTERNAL: tuple(
-                instance.id for instance in split[INTERNAL_EVAL].instances
+                instance.id
+                for instance in split.splits[INTERNAL_EVAL].instances
             ),
             EvalRole.OFFICIAL: tuple(
-                instance.id for instance in split[OFFICIAL].instances
+                instance.id for instance in split.splits[OFFICIAL].instances
             ),
             EvalRole.HELD_OUT: tuple(
-                instance.id for instance in split[HELD_OUT].instances
+                instance.id for instance in split.splits[HELD_OUT].instances
             ),
         }
         # The design's repeat count, not the calibration's: an arm stage

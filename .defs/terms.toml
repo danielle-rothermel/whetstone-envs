@@ -45,9 +45,10 @@ exported_symbols = ["whetstone_envs.instances.InstancePool"]
 [[terms]]
 name = "instance pool split"
 definition = """
-An ordered collection of named instance groups selected from an instance pool. \
-Group names are unique and task-instance identifiers are disjoint across \
-groups; the selected groups need not exhaust the source pool."""
+A source instance pool and an ordered collection of named groups allocated \
+from it, with lookup by group name. Group names are unique, instances match \
+the source pool, and identifiers are disjoint across groups; allocation need \
+not exhaust the pool."""
 exported_symbols = ["whetstone_envs.instances.InstancePoolSplit"]
 
 [[terms]]

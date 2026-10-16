@@ -179,17 +179,17 @@ def _regenerated_split_records(protocol: StudyProtocol) -> SplitsRecord:
     return SplitsRecord(
         internal=SplitRecord(
             size=protocol.internal_size,
-            task_hashes=_task_hashes(split[INTERNAL_EVAL].instances),
+            task_hashes=_task_hashes(split.splits[INTERNAL_EVAL].instances),
             eval_config_hash=PENDING_EVAL_CONFIG_HASH,
         ),
         official=SplitRecord(
             size=protocol.official_size,
-            task_hashes=_task_hashes(split[OFFICIAL].instances),
+            task_hashes=_task_hashes(split.splits[OFFICIAL].instances),
             eval_config_hash=PENDING_EVAL_CONFIG_HASH,
         ),
         held_out=SplitRecord(
             size=protocol.held_out_size,
-            task_hashes=_task_hashes(split[HELD_OUT].instances),
+            task_hashes=_task_hashes(split.splits[HELD_OUT].instances),
             eval_config_hash=PENDING_EVAL_CONFIG_HASH,
         ),
     )

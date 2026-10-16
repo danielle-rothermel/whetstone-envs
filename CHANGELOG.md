@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `InstancePoolSplit` lives with `InstancePool` in `instances/instance_pool.py`.
+  It retains its source `pool`, stores ordered `split_groups`, and exposes
+  a cached read-only `splits` mapping. Selected instances must match the source
+  pool. Callers use `split.splits[name]`; the direct indexing shortcut and
+  separate `instance_pool_split.py` module are removed.
 - Instance classification uses category terminology throughout the API,
   generators, scoring, CLI, and reports: `categories`, `category_counts`,
   `in_category`, and `--n-per-category`.
@@ -39,8 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   prompt uniqueness, category indexing, and instance content are
   preserved; group names do not enter the content hash.
 - `PoolSplit` is renamed to `InstancePoolSplit`, a strict, frozen model
-  containing ordered named `InstanceGroup` objects. Group names must be unique
-  and instance IDs must be disjoint across groups; `split[name]` retrieves a group.
+  containing a source pool and ordered named `InstanceGroup` objects. Group
+  names must be unique and instance IDs must be disjoint across groups.
 - `InstancePool.split` accepts a name-to-size mapping with any number of
   destinations. Request order controls group order and allocation ties.
   Evaluation consumers retain their three named roles, existing cohorts,

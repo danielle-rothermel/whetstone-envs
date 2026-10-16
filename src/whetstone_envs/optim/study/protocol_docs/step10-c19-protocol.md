@@ -334,9 +334,10 @@ generator version (`c19-custom-v2`). The pool manifest content hash is recorded
 in the study manifest; any change to it is a new `study_id`.
 
 **Split sizes** (`InstancePool.split` is deterministic, categories-balanced, and
-disjoint by construction — `instances/instance_pool_split.py:InstancePoolSplit` validates unique
-group names and disjoint instance IDs). Experiment preparation requests
-`internal_eval`, `official`, and `held_out` in that order, preserving the
+disjoint by construction — `instances/instance_pool.py:InstancePoolSplit`
+validates source membership, unique group names, and disjoint instance IDs).
+Experiment preparation requests `internal_eval`, `official`, and `held_out`
+in that order, preserving the
 allocation order and cohort membership:
 
 | Split | Role | Size | Rationale |

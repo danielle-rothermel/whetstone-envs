@@ -69,14 +69,17 @@ check = "uv run pytest -q tests/scoring/test_aggregation.py"
 [[contracts]]
 title = "Instance pool splits own named disjoint groups"
 statement = """
-An instance pool split contains an immutable ordered tuple of validated \
-instance groups with unique names and no task-instance identifier shared \
-across groups. Named lookup returns the corresponding group and raises \
-KeyError for an absent name. Empty groups and an empty collection of groups \
-are valid."""
+An instance pool split retains its source pool and an immutable ordered \
+split_groups tuple. Group names are unique, every selected instance equals \
+the source instance with the same identifier, and no identifier is shared \
+across groups. Its splits property is a cached read-only mapping in group \
+order; lookup raises KeyError for an absent name. Serialization includes the \
+pool and split_groups fields, with splits derived from them. Empty groups and \
+an empty collection of groups are valid."""
 rationale = """
-Group membership has one owner, while the split enforces the cross-group \
-invariants independently of any evaluation protocol or allocation algorithm."""
+Group membership has one owner, while the split establishes source membership \
+and cross-group disjointness independently of any evaluation protocol or \
+allocation algorithm."""
 date = "2026-10-15"
 
 [[contracts]]
@@ -162,9 +165,9 @@ title = "Owning subpackages define the public API"
 statement = """
 Consumers import public contracts from whetstone_envs.instances, \
 whetstone_envs.manifests, whetstone_envs.probes, and \
-whetstone_envs.scoring. InstancePool.split and its private allocation helpers \
-live together in instances/instance_pool.py. Strict report models are imported \
-from whetstone_envs.reporting. Task-family contracts are imported from their owning \
+whetstone_envs.scoring. InstancePool, InstancePoolSplit, and the allocation \
+helpers live together in instances/instance_pool.py. Strict report models \
+are imported from whetstone_envs.reporting. Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
 whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23. The optional \
 whetstone_envs.optim extra maps those contracts onto whetstone-ai experiments \

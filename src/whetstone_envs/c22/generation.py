@@ -22,15 +22,14 @@ from whetstone_envs.c22.constraints import (
     RequiredKeyword,
     Title,
 )
-from whetstone_envs.instances import Instance, make_instance
+from whetstone_envs.instances import Instance, InstanceGroup, InstancePool
 from whetstone_envs.manifests import Manifest
-from whetstone_envs.pools import TaskPool
 
 GENERATOR_VERSION = "c22-1"
 PUBLISHED_KEY_MAX = 3757
 DEFAULT_SEED_START = 1_000_000
 HARD_SEED_START = 2_000_000
-_INSTANCES_PER_STRATUM = 20
+_INSTANCES_PER_CATEGORY = 20
 _MAX_GENERATION_ATTEMPTS = 100
 
 _NONCE_KEYWORDS = (
@@ -230,10 +229,10 @@ def _make_instance(
         if block in used_blocks:
             continue
         used_blocks.add(block)
-        return make_instance(
+        return Instance(
             id=f"c22-{seed}",
             seed=seed,
-            strata=f"n{count}_{mix.value}",
+            categories=(f"n{count}_{mix.value}",),
             prompt_inputs={"constraints": block},
             gold=stack.to_gold(),
         )
@@ -251,10 +250,10 @@ def _make_instance(
 def _generate_pool(
     preset: Preset,
     *,
-    instances_per_stratum: int,
-) -> TaskPool:
-    if type(instances_per_stratum) is not int or instances_per_stratum <= 0:
-        msg = "instances_per_stratum must be a positive integer"
+    instances_per_category: int,
+) -> InstancePool:
+    if type(instances_per_category) is not int or instances_per_category <= 0:
+        msg = "instances_per_category must be a positive integer"
         raise ValueError(msg)
     config = _config_for(preset)
     if config.seed_start <= PUBLISHED_KEY_MAX:
@@ -265,7 +264,7 @@ def _generate_pool(
     seed = config.seed_start
     for count in config.constraint_counts:
         for mix in config.mixes:
-            for _ in range(instances_per_stratum):
+            for _ in range(instances_per_category):
                 instances.append(
                     _make_instance(
                         seed=seed,
@@ -275,14 +274,16 @@ def _generate_pool(
                     )
                 )
                 seed += 1
-    return TaskPool(instances)
+    return InstancePool(
+        instance_group=InstanceGroup(name="c22", instances=tuple(instances)),
+    )
 
 
-def generate_pool(preset: Preset = Preset.DEFAULT) -> TaskPool:
+def generate_pool(preset: Preset = Preset.DEFAULT) -> InstancePool:
     """Generate one of the two fixed, reproducible C22 pools."""
     return _generate_pool(
         preset,
-        instances_per_stratum=_INSTANCES_PER_STRATUM,
+        instances_per_category=_INSTANCES_PER_CATEGORY,
     )
 
 

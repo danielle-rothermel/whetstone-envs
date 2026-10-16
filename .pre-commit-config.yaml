@@ -12,7 +12,7 @@ repos:
     hooks:
       - id: pre-check
         name: pre-check
-        entry: scripts/pre-check.sh
+        entry: scripts/dev/pre-check.sh
         language: system
         pass_filenames: false
         always_run: true

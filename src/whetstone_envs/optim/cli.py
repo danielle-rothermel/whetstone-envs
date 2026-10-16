@@ -5,49 +5,48 @@ import sys
 import traceback
 from pathlib import Path
 
-from dr_providers import ReasoningEffort
-
-from whetstone_envs.optim.provider import (
+from whetstone_envs.artifacts import DurableRunError, default_output_dir
+from whetstone_envs.evaluation.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
     MAX_UNFORCED_PROVIDER_CONCURRENCY,
     PROVIDER_CONCURRENCY_FLAG,
     PROVIDER_CONCURRENCY_FORCE_FLAG,
     resolve_provider_concurrency,
 )
-from whetstone_envs.optim.run import (
+from whetstone_envs.evaluation.runtime import TransportKind
+from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
     CODEX_DEFAULT_BINARY,
     CODEX_EVALUATE_CALL_CAP,
     CODEX_REASONING_EFFORTS,
-    DEFAULT_COPRO_BREADTH,
-    DEFAULT_COPRO_DEPTH,
+    CodexReasoningEffort,
+)
+from whetstone_envs.optim.miprov2 import (
     DEFAULT_MIPROV2_FULL_EVAL_STEPS,
     DEFAULT_MIPROV2_MINIBATCH,
     DEFAULT_MIPROV2_NUM_CANDIDATES,
     DEFAULT_MIPROV2_NUM_TRIALS,
-    DEFAULT_SPLIT_SIZES,
     DEMO_MODES,
-    MIN_COPRO_BREADTH,
-    OPTIMIZERS,
-    TRANSPORTS,
-    CodexReasoningEffort,
-    RunSpec,
-    default_output_dir,
-    registered_family_ids,
-    run_optimizer,
+    Miprov2DemoMode,
 )
-from whetstone_envs.reporting.publication import DurableRunError
-
-
-def _split_sizes(value: str) -> tuple[int, int, int]:
-    try:
-        internal, official, held_out = (int(part) for part in value.split(","))
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            "split sizes must be three comma-separated integers"
-        ) from error
-    return (internal, official, held_out)
+from whetstone_envs.optim.problem import load_problem
+from whetstone_envs.optim.run import run_optimizer
+from whetstone_envs.optim.spec import (
+    DEFAULT_COPRO_BREADTH,
+    DEFAULT_COPRO_DEPTH,
+    GEPA_DEFAULT_SEED,
+    MIPROV2_DEFAULT_SEED,
+    CodexSettings,
+    CoproSettings,
+    GepaSettings,
+    Miprov2Settings,
+    OptimizerKind,
+    OptimizerSettings,
+    RunSpec,
+    TrainValSizes,
+)
+from whetstone_envs.optim.split import MIN_COPRO_BREADTH
 
 
 def _int_at_least(value: str, *, minimum: int) -> int:
@@ -100,25 +99,20 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run COPRO, GEPA, or MIPROv2 on a named whetstone-envs family."
+            "Run Codex, COPRO, GEPA, or MIPROv2 on a prepared problem."
         ),
     )
     parser.add_argument(
-        "--family",
-        choices=registered_family_ids(),
-        default="c19",
+        "--problem",
+        type=Path,
+        required=True,
+        help="Python file defining an OptimizationProblem named problem.",
     )
     parser.add_argument(
         "--optimizer",
-        choices=OPTIMIZERS,
+        choices=tuple(OptimizerKind),
         required=True,
-        help=(
-            "The arm to run. 'null-random' is null-A, the "
-            "selection-on-noise control: it drives COPRO's search shape "
-            "with an uninformative proposer, so it honours "
-            "--copro-breadth and --copro-depth and produces the same "
-            "evidence a COPRO run does."
-        ),
+        help="Optimizer to run.",
     )
     parser.add_argument(
         "--demo-mode",
@@ -128,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--transport",
-        choices=TRANSPORTS,
+        choices=tuple(TransportKind),
         default="fake",
     )
     parser.add_argument(
@@ -153,39 +147,14 @@ def build_parser() -> argparse.ArgumentParser:
             f"{MAX_UNFORCED_PROVIDER_CONCURRENCY}."
         ),
     )
-    parser.add_argument(
-        "--split-sizes",
-        type=_split_sizes,
-        default=DEFAULT_SPLIT_SIZES,
-    )
     parser.add_argument("--run-id")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--model", default="openai/gpt-4.1-nano")
-    parser.add_argument(
-        "--task-reasoning-effort",
-        type=ReasoningEffort,
-        default=None,
-        choices=list(ReasoningEffort),
-        help=(
-            "Reasoning effort for the task route. Omitted sends no "
-            "reasoning key and leaves the route on the provider's "
-            "default. The proposer route never takes it."
-        ),
-    )
     parser.add_argument(
         "--proposer-model",
         default=None,
         help=(
-            "Model for the proposer role. Defaults to --model, which keeps "
-            "a single-model run identical to one that never named a "
-            "proposer."
+            "Proposer model. Defaults to the prepared experiment task route."
         ),
-    )
-    parser.add_argument(
-        "--num-seeds",
-        type=_positive_int,
-        default=1,
-        help="Repeats per task (K_REPEAT).",
     )
     parser.add_argument(
         "--seed",
@@ -196,24 +165,6 @@ def build_parser() -> argparse.ArgumentParser:
             "their controls; COPRO has no control seed, so its runs are "
             "seeded only by the provider SEED control. Omit to keep each "
             "optimizer's own default."
-        ),
-    )
-    parser.add_argument(
-        "--n-per-stratum",
-        type=_positive_int,
-        default=None,
-        help=(
-            "Instances generated per stratum. Defaults to the family's own "
-            "pool size."
-        ),
-    )
-    parser.add_argument(
-        "--pool-seed-start",
-        type=int,
-        default=None,
-        help=(
-            "First generator seed for the task pool. Defaults to the "
-            "family's own start."
         ),
     )
     parser.add_argument(
@@ -271,19 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--miprov2-num-trials",
         type=_positive_int,
         default=DEFAULT_MIPROV2_NUM_TRIALS,
-        help=(
-            "MIPROv2 optimization trials. The default is this runner's own "
-            "shape; the protocol's auto-light configuration assumes 10."
-        ),
+        help="MIPROv2 optimization trials.",
     )
     parser.add_argument(
         "--miprov2-num-candidates",
         type=_positive_int,
         default=DEFAULT_MIPROV2_NUM_CANDIDATES,
-        help=(
-            "MIPROv2 candidates per component. The default is this "
-            "runner's own shape; the protocol's auto-light assumes 6."
-        ),
+        help="MIPROv2 candidates per component.",
     )
     parser.add_argument(
         "--train-size",
@@ -327,9 +272,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--codex-model",
         default=None,
         help=(
-            "The Codex agent's own model. Defaults to --model, the task "
-            "model. The agent's own spend is not on the study's key and "
-            "is not priced in the run's cost report."
+            "The Codex agent's own model. Omit to use the adapter's "
+            "default agent model."
         ),
     )
     parser.add_argument(
@@ -362,8 +306,97 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _optimizer_settings(
+    arguments: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> OptimizerSettings:
+    kind = OptimizerKind(arguments.optimizer)
+    groups = (
+        (OptimizerKind.COPRO, ("copro_breadth", "copro_depth")),
+        (OptimizerKind.GEPA, ("gepa_max_metric_calls",)),
+        (
+            OptimizerKind.MIPROV2,
+            (
+                "demo_mode",
+                "miprov2_minibatch",
+                "miprov2_minibatch_size",
+                "miprov2_minibatch_full_eval_steps",
+                "miprov2_num_trials",
+                "miprov2_num_candidates",
+            ),
+        ),
+        (
+            OptimizerKind.CODEX,
+            (
+                "codex_capacity",
+                "codex_binary",
+                "codex_model",
+                "codex_reasoning_effort",
+                "codex_wall_seconds",
+                "allow_real_codex",
+            ),
+        ),
+    )
+    for owner, names in groups:
+        if kind is owner:
+            continue
+        for name in names:
+            if getattr(arguments, name) != parser.get_default(name):
+                raise ValueError(
+                    f"--{name.replace('_', '-')} applies only "
+                    f"to --optimizer {owner}"
+                )
+    if kind in (OptimizerKind.COPRO, OptimizerKind.CODEX):
+        if (
+            arguments.train_size is not None
+            or arguments.val_size is not None
+            or arguments.seed is not None
+        ):
+            raise ValueError(
+                "train/val sizes and seed apply only to GEPA or MIPROv2"
+            )
+        if kind is OptimizerKind.COPRO:
+            return CoproSettings(
+                breadth=arguments.copro_breadth, depth=arguments.copro_depth
+            )
+        return CodexSettings(
+            capacity=arguments.codex_capacity,
+            binary=arguments.codex_binary,
+            model=arguments.codex_model,
+            reasoning_effort=CodexReasoningEffort(
+                arguments.codex_reasoning_effort
+            ),
+            wall_seconds=arguments.codex_wall_seconds,
+            allow_real_codex=arguments.allow_real_codex,
+        )
+    partition = TrainValSizes(
+        train_size=arguments.train_size, val_size=arguments.val_size
+    )
+    if kind is OptimizerKind.GEPA:
+        return GepaSettings(
+            partition=partition,
+            seed=GEPA_DEFAULT_SEED
+            if arguments.seed is None
+            else arguments.seed,
+            max_metric_calls=arguments.gepa_max_metric_calls,
+        )
+    return Miprov2Settings(
+        partition=partition,
+        seed=MIPROV2_DEFAULT_SEED
+        if arguments.seed is None
+        else arguments.seed,
+        demo_mode=Miprov2DemoMode(arguments.demo_mode),
+        minibatch=arguments.miprov2_minibatch,
+        minibatch_size=arguments.miprov2_minibatch_size,
+        minibatch_full_eval_steps=arguments.miprov2_minibatch_full_eval_steps,
+        num_trials=arguments.miprov2_num_trials,
+        num_candidates=arguments.miprov2_num_candidates,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv)
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
     run_id = arguments.run_id
     output = arguments.output
     if output is None and run_id is not None:
@@ -371,44 +404,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         path = run_optimizer(
             RunSpec(
-                optimizer=arguments.optimizer,
-                transport=arguments.transport,
+                optimizer=_optimizer_settings(arguments, parser),
+                transport=TransportKind(arguments.transport),
                 provider_concurrency=resolve_provider_concurrency(
                     arguments.provider_concurrency,
                     force=arguments.force_provider_concurrency,
                 ),
-                family=arguments.family,
-                split_sizes=arguments.split_sizes,
                 output_dir=output,
                 run_id=run_id,
-                model=arguments.model,
-                task_reasoning_effort=arguments.task_reasoning_effort,
                 proposer_model=arguments.proposer_model,
-                demo_mode=arguments.demo_mode,
-                num_seeds=arguments.num_seeds,
-                n_per_stratum=arguments.n_per_stratum,
-                pool_seed_start=arguments.pool_seed_start,
-                seed=arguments.seed,
-                copro_breadth=arguments.copro_breadth,
-                copro_depth=arguments.copro_depth,
-                gepa_max_metric_calls=arguments.gepa_max_metric_calls,
-                miprov2_minibatch=arguments.miprov2_minibatch,
-                miprov2_minibatch_size=arguments.miprov2_minibatch_size,
-                miprov2_minibatch_full_eval_steps=(
-                    arguments.miprov2_minibatch_full_eval_steps
-                ),
-                miprov2_num_trials=arguments.miprov2_num_trials,
-                miprov2_num_candidates=arguments.miprov2_num_candidates,
-                train_size=arguments.train_size,
-                val_size=arguments.val_size,
-                codex_capacity=arguments.codex_capacity,
-                codex_binary=arguments.codex_binary,
-                codex_model=arguments.codex_model,
-                codex_reasoning_effort=arguments.codex_reasoning_effort,
-                codex_wall_seconds=arguments.codex_wall_seconds,
-                allow_real_codex=arguments.allow_real_codex,
-            )
+            ),
+            problem=load_problem(arguments.problem),
+            problem_file=arguments.problem.resolve(),
         )
+    except (ValueError, TypeError, OSError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
     except DurableRunError as error:
         traceback.print_exception(error.cause)
         print(error.directory, file=sys.stderr)

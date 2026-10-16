@@ -5,32 +5,29 @@ import hashlib
 import json
 import os
 import tempfile
-from dataclasses import asdict
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from whetstone_envs.c19._info import C19_INFO
-from whetstone_envs.reporting.derivations import compare_buckets
-from whetstone_envs.reporting.publication import (
-    load_eval_report,
-    load_trajectory_report,
-    validate_output_root,
-)
-from whetstone_envs.reporting.schema import (
+from whetstone_envs.artifacts import validate_output_root
+from whetstone_envs.evidence import (
     EvalReport,
     EvalSuccess,
     TrajectoryReport,
+    compare_candidates,
+    load_eval_report,
+    load_trajectory_report,
 )
+from whetstone_envs.reporting._comparison import comparison_label
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from typing import JsonValue
+
+    from pydantic import JsonValue
 
 EVAL_HTML_NAME = "eval-report.html"
 TRAJECTORY_HTML_NAME = "trajectory-report.html"
 _ASSET_PACKAGE = "whetstone_envs.reporting.assets"
-_FACET_COUNT = 3
 
 
 def _asset(name: str) -> str:
@@ -62,49 +59,19 @@ def _strict_embedded_json(value: Mapping[str, JsonValue]) -> str:
     return escaped
 
 
-def _task_facets(strata: tuple[str, ...]) -> dict[str, str]:
-    parts = strata[0].split("|")
-    if len(parts) != _FACET_COUNT:
-        raise ValueError("C19 report task requires scenario|size|fact stratum")
-    return dict(zip(("scenario", "size", "fact"), parts, strict=True))
-
-
 def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
-    task_facets = {
-        task.task_id: _task_facets(task.strata) for task in report.tasks
-    }
-    summaries: dict[str, JsonValue] = {}
-    matrices: dict[str, JsonValue] = {}
-    for result in report.results:
-        if isinstance(result, EvalSuccess):
-            summaries[result.candidate_name] = {
-                "kind": result.kind,
-                "numerator": result.numerator,
-                "denominator": result.denominator,
-                "score": result.score,
-                "accounting": result.accounting.model_dump(mode="json"),
-                "classification": result.classification,
-                "message": result.message,
-            }
-            matrices[result.candidate_name] = {
-                item.stratum: item.model_dump(mode="json")
-                for item in result.strata
-            }
-        else:
-            summaries[result.candidate_name] = result.model_dump(mode="json")
-
     pairs: dict[str, JsonValue] = {}
     names = [candidate.name for candidate in report.candidates]
     for left_index, left in enumerate(names):
         for right in names[left_index + 1 :]:
-            rows = compare_buckets(report, left, right)
+            rows = compare_candidates(report, left, right)
             key = f"{left_index}:{names.index(right)}"
             pairs[key] = {
                 "left": left,
                 "right": right,
                 "rows": [
                     {
-                        "bucket": row.bucket,
+                        "bucket": comparison_label(row.outcome, left, right),
                         "task_id": row.task_id,
                         "seed_index": row.seed_index,
                     }
@@ -119,9 +86,6 @@ def _eval_view(report: EvalReport) -> dict[str, JsonValue]:
         for name in names
     }
     return {
-        "task_facets": task_facets,
-        "summaries": summaries,
-        "matrices": matrices,
         "pairs": pairs,
         "provider_errors": provider_errors,
     }
@@ -180,7 +144,7 @@ def _comparison_view(
     parent_result = parent.results[0]
     current_result = current.results[0]
     overall: JsonValue = None
-    strata: list[JsonValue] = []
+    categories: list[JsonValue] = []
     if isinstance(parent_result, EvalSuccess) and isinstance(
         current_result, EvalSuccess
     ):
@@ -197,14 +161,16 @@ def _comparison_view(
             "after_numerator": current_result.numerator,
             "denominator": current_result.denominator,
         }
-        current_strata = {item.stratum: item for item in current_result.strata}
-        for before in parent_result.strata:
-            after = current_strata.get(before.stratum)
+        current_categories = {
+            item.category: item for item in current_result.categories
+        }
+        for before in parent_result.categories:
+            after = current_categories.get(before.category)
             if after is None:
                 continue
-            strata.append(
+            categories.append(
                 {
-                    "stratum": before.stratum,
+                    "category": before.category,
                     "before": before.score,
                     "after": after.score,
                     "change": (
@@ -219,7 +185,7 @@ def _comparison_view(
             )
     return {
         "overall": overall,
-        "strata": strata,
+        "categories": categories,
         "counts": counts,
         "changed_rows": changed_rows,
     }
@@ -285,7 +251,6 @@ def _payload(
     return {
         "kind": kind,
         "report": report.model_dump(mode="json"),
-        "info": asdict(C19_INFO),
         "view": (
             _eval_view(report)
             if isinstance(report, EvalReport)

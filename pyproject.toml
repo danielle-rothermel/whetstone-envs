@@ -14,7 +14,7 @@ license-files = [
     "src/whetstone_envs/c23/attribution/PROVENANCE.md",
 ]
 authors = [
-    { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
+    { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" },
 ]
 requires-python = ">=3.12"
 classifiers = [
@@ -39,17 +39,14 @@ dependencies = [
     "numpy==2.5.1",
     "pydantic==2.13.4",
     "rfc8785==0.1.4",
+    "rich>=15.0.0",
 ]
 
 [project.scripts]
 whetstone-eval = "whetstone_envs.reporting.cli:main"
-whetstone-study = "whetstone_envs.optim.study.cli:main"
 
 [project.optional-dependencies]
-c18 = [
-    "numpy==2.5.1",
-    "scipy==1.18.0",
-]
+c18 = ["numpy==2.5.1", "scipy==1.18.0"]
 optim = [
     "rich==15.0.0",
     "whetstone-ai==0.1.17; python_version >= '3.13' and python_version < '3.15'",
@@ -69,16 +66,12 @@ build-backend = "hatchling.build"
 dev = [
     "actionlint-py==1.7.12.24",
     "pre-commit>=4.6.0",
-    "pytest>=9.1.1",
     "ruff>=0.15.18",
     "ty>=0.0.51",
 ]
-browser-test = [
-    "playwright==1.58.0",
-]
 
 [tool.uv]
-required-version = "==0.11.25"
+required-version = "==0.12.3"
 
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]
@@ -89,19 +82,6 @@ artifacts = [
     "src/whetstone_envs/c23/attribution/LICENSE",
     "src/whetstone_envs/c23/attribution/PROVENANCE.md",
     "src/whetstone_envs/c23/manifest.json",
-    "src/whetstone_envs/optim/study/protocol_docs/*.md",
-]
-
-[tool.pytest.ini_options]
-# The real-Codex ladder is deselected by default: every one of its rungs
-# drives the real Codex CLI against a live subscription session, so it is
-# opt-in twice over (the marker here, and WHETSTONE_ENVS_REAL_CODEX=1).
-addopts = ["--import-mode=importlib", "-m", "not real_codex"]
-testpaths = ["tests"]
-markers = [
-    "integration: opt-in checks that run in CI or with --run-integration",
-    "real_transport: opt-in rungs that spend real money on the OpenRouter transport",
-    "real_codex: drives the real Codex CLI against a live session (manual)",
 ]
 
 [tool.pyright]
@@ -109,14 +89,10 @@ venvPath = "."
 venv = ".venv"
 
 [tool.ruff]
-include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
+include = ["examples/**/*.py", "scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
 extend-exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
-    # A standalone script run against a *different* whetstone-ai
-    # checkout than the one installed here, so its imports cannot
-    # resolve against this environment by construction.
-    "tests/optim/audit/fixtures/generate.py",
 ]
 line-length = 79
 
@@ -165,46 +141,34 @@ select = [
 ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PT009", "PT027", "S603"]
 "src/whetstone_envs/c18/probes.py" = ["E501"]
-"src/whetstone_envs/reporting/cli.py" = ["PLC0415"]
-"src/whetstone_envs/reporting/html.py" = ["PLC0415"]
-"tests/**/*.py" = ["PLC0415", "PLR2004", "PT011"]
-# A standalone fixture generator, run by hand against a whetstone-ai
-# checkout rather than imported: it must set sys.path before importing
-# whetstone at all, and it mirrors a CodexRunner signature it does not
-# use every argument of.
-"tests/optim/audit/fixtures/generate.py" = ["ARG002", "E402", "PLR0913"]
 "src/whetstone_envs/c22/generation.py" = ["S311"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]
+runtime-evaluated-base-classes = [
+    "whetstone_envs.optim.spec._RunInput",
+    "whetstone_envs.evidence._models._StrictModel",
+]
 
 [tool.ty.src]
-include = ["scripts", "src", "tests"]
+include = ["examples", "scripts", "src", "tests"]
 exclude = [
     "src/whetstone_envs/c18/_vendor/**",
     "src/whetstone_envs/c22/_vendor/**",
-    # A standalone script run against a *different* whetstone-ai
-    # checkout than the one installed here, so its imports cannot
-    # resolve against this environment by construction.
-    "tests/optim/audit/fixtures/generate.py",
 ]
 
 [[tool.ty.overrides]]
-# The optimizer, audit, study, and reporting packages import whetstone-ai,
+# The optional runtime packages import whetstone-ai,
 # which the `optim` extra installs only on Python 3.13+. The 3.12 check
 # therefore type-checks these files against no whetstone at all, so the
 # imports are unresolvable there by construction and nowhere else.
 include = [
     "src/whetstone_envs/optim/**",
-    "src/whetstone_envs/reporting/**",
+    "src/whetstone_envs/evaluation/**",
     "tests/optim/**",
-    "tests/real_codex/**",
-    "tests/reporting/**",
-    # Only the anti-drift test, which reaches for the optimizer's own
-    # eval-node runners on purpose to prove they agree with the
-    # whetstone-free scorer registry.
-    "tests/scoring/test_families.py",
+    "examples/**",
 ]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

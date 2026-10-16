@@ -9,52 +9,18 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from whetstone_envs.c19._info import C19_INFO, NamedDescription
-from whetstone_envs.reporting.derivations import (
-    ComparisonRow,
-    compare_buckets,
-)
-from whetstone_envs.reporting.schema import (
+from whetstone_envs.evidence import (
     EvalReport,
     EvalSuccess,
     Observation,
     ObservationState,
-    RoleSpend,
     TrajectoryReport,
+    compare_candidates,
 )
+from whetstone_envs.reporting._comparison import comparison_label
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
-
-
-def _description_table(title: str, rows: Iterable[NamedDescription]) -> Table:
-    table = Table(title=title, box=None, show_header=False)
-    table.add_column(style="bold")
-    table.add_column()
-    for row in rows:
-        table.add_row(row.name, row.description)
-    return table
-
-
-def render_c19_info(console: Console, *, show_templates: bool) -> None:
-    console.print(Panel(C19_INFO.objective, title="C19"))
-    for title, rows in (
-        ("Public inputs and private gold", C19_INFO.public_inputs),
-        ("Grid sizes", C19_INFO.sizes),
-        ("Scenario families", C19_INFO.scenarios),
-        ("Actions and no-op rules", C19_INFO.actions),
-        ("Grid tokens and coordinates", C19_INFO.tokens),
-        ("Facts and exact answer forms", C19_INFO.facts),
-    ):
-        console.print(_description_table(title, rows))
-    console.print(Panel(C19_INFO.scoring, title="Normalization and scoring"))
-    console.print(Panel(C19_INFO.pool, title="Default pool and split roles"))
-    console.print(
-        _description_table("Candidate terminology", C19_INFO.terminology)
-    )
-    if show_templates:
-        console.print(Panel(Text(C19_INFO.naive_template), title="naive"))
-        console.print(Panel(Text(C19_INFO.ceiling_template), title="ceiling"))
+    from collections.abc import Mapping
 
 
 def _accounting_text(result: EvalSuccess) -> str:
@@ -97,54 +63,32 @@ def render_summary(console: Console, report: EvalReport) -> None:
                 Text(result.message),
             )
     console.print(table)
-    strata = Table(title="C19 strata")
-    strata.add_column("candidate")
-    strata.add_column("stratum")
-    strata.add_column("score")
+    categories = Table(title="Categories")
+    categories.add_column("candidate")
+    categories.add_column("category")
+    categories.add_column("score")
     for result in report.results:
         if not isinstance(result, EvalSuccess):
             continue
-        for summary in result.strata:
+        for summary in result.categories:
             value = (
                 "incomplete"
                 if summary.score is None
                 else f"{summary.score:.3f}"
             )
-            strata.add_row(
+            categories.add_row(
                 Text(result.candidate_name),
-                Text(summary.stratum),
+                Text(summary.category),
                 Text(f"{summary.numerator}/{summary.denominator} ({value})"),
             )
-    console.print(strata)
+    console.print(categories)
 
 
-def _matches(  # noqa: PLR0913
-    row: Observation,
-    report: EvalReport,
-    *,
-    candidate: str | None,
-    scenario: str | None,
-    size: str | None,
-    fact: str | None,
-) -> bool:
-    if candidate is not None and row.candidate_name != candidate:
-        return False
-    task = report.tasks[row.task_index]
-    parts = task.strata[0].split("|")
-    return all(
-        expected is None or actual == expected
-        for actual, expected in zip(parts, (scenario, size, fact), strict=True)
-    )
-
-
-def render_failures(  # noqa: PLR0913
+def render_failures(
     console: Console,
     report: EvalReport,
     *,
     candidate: str | None = None,
-    scenario: str | None = None,
-    size: str | None = None,
-    fact: str | None = None,
 ) -> None:
     if candidate is not None and candidate not in {
         item.name for item in report.candidates
@@ -155,14 +99,9 @@ def render_failures(  # noqa: PLR0913
         table.add_column(column)
     selected: list[tuple[int, str, Observation]] = []
     for ordinal, row in enumerate(report.observations):
-        if not _matches(
-            row,
-            report,
-            candidate=candidate,
-            scenario=scenario,
-            size=size,
-            fact=fact,
-        ) or (row.state is ObservationState.SCORED and row.score == 1.0):
+        if (candidate is not None and row.candidate_name != candidate) or (
+            row.state is ObservationState.SCORED and row.score == 1.0
+        ):
             continue
         outcome = (
             "incorrect"
@@ -200,7 +139,7 @@ def render_task(console: Console, report: EvalReport, task_id: str) -> None:
         Panel(
             Text(
                 f"hash={task.task_hash}\nseed={task.seed}\n"
-                f"strata={', '.join(task.strata)}\n"
+                f"categories={', '.join(task.categories)}\n"
                 + "\n".join(
                     f"{key}:\n{value}"
                     for key, value in task.prompt_inputs.items()
@@ -254,8 +193,10 @@ def render_compare(
     for candidate in (candidate_a, candidate_b):
         if candidate not in known:
             raise ValueError(f"unknown candidate {candidate!r}")
-    rows = compare_buckets(report, candidate_a, candidate_b)
-    counts = Counter(row.bucket for row in rows)
+    rows = compare_candidates(report, candidate_a, candidate_b)
+    counts = Counter(
+        comparison_label(row.outcome, candidate_a, candidate_b) for row in rows
+    )
     console.print(
         Panel(
             Text(
@@ -271,7 +212,7 @@ def render_compare(
         table.add_column(Text(column))
     for row in rows:
         table.add_row(
-            Text(row.bucket),
+            Text(comparison_label(row.outcome, candidate_a, candidate_b)),
             Text(row.task_id),
             Text(str(row.seed_index)),
             Text(_comparison_value(report, candidate_a, row.candidate_a)),
@@ -303,7 +244,6 @@ def render_trajectory(
             title=Text(f"Optimization trajectory: {report.run_id}"),
         )
     )
-    _render_spend(console, report)
     for step in report.steps:
         sections: list[Text | Padding] = [
             _trajectory_line(
@@ -428,37 +368,6 @@ def render_trajectory(
     console.print(Group(*panels))
 
 
-def _render_spend(console: Console, report: TrajectoryReport) -> None:
-    """Show what the run spent, per provider role."""
-    spend = report.spend
-    if spend is None:
-        return
-    table = Table(title="Run spend", box=None)
-    table.add_column("Role")
-    table.add_column("Calls", justify="right")
-    table.add_column("Cached", justify="right")
-    table.add_column("In tokens", justify="right")
-    table.add_column("Out tokens", justify="right")
-    table.add_column("USD", justify="right")
-    for role in (spend.task_model, spend.proposer):
-        table.add_row(
-            role.role,
-            str(role.calls),
-            str(role.cached_calls),
-            str(role.input_tokens),
-            str(role.output_tokens),
-            _format_usd(role),
-        )
-    console.print(table)
-
-
-def _format_usd(role: RoleSpend) -> str:
-    """A total only when every billable call carried a price."""
-    if role.usd is None:
-        return f"unpriced ({role.unpriced_calls}/{role.calls})"
-    return f"${role.usd:.6f}"
-
-
 def _trajectory_line(label: str, value: str) -> Text:
     line = Text()
     line.append(f"{label}: ", style="bold")
@@ -479,9 +388,6 @@ def _format_budget(
 
 
 __all__ = [
-    "ComparisonRow",
-    "compare_buckets",
-    "render_c19_info",
     "render_compare",
     "render_failures",
     "render_summary",

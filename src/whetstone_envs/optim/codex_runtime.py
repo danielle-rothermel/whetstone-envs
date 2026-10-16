@@ -1,132 +1,48 @@
-"""The eval runtime config the out-of-process Codex MCP server rebuilds.
-
-Codex evaluates through an MCP server whetstone starts in a *separate
-process*, and that process rebuilds its evaluation engine from one
-serialized config and nothing else
-(``whetstone.optim.codex.mcp_server.build_server_from_env``). whetstone-ai
-ships :class:`~whetstone.eval.reference_runtime.ReferenceEvalRuntimeConfig`
-for this, but its experiment is always the in-memory *toy* experiment --
-it can carry a launch's ``mutation_field`` and ``render_contract``, but it
-has no way to carry the launch's ``Experiment``. whetstone-ai names that
-limitation itself, in ``platform/cli.py``'s ``ToyExperimentOnlyError``: a
-launch's persisted record cannot supply an experiment, because an
-``Experiment`` owns a live ``rollout_graph`` and the launch persists only
-identity hashes over the eval config.
-
-The consequence for a study run is not a crash: the server comes up
-happily on the toy experiment, its Eval Config hash does not match the
-run's Tool Config, and **every** tool call is refused as
-``tool config is not bound to the engine's exact Eval Config``. The agent
-then has nothing to select and the Step terminalizes. That is what this
-module exists to prevent.
-
-**Why an envs-owned config is the right shape.** ``EvalRuntimeConfig`` is
-an open ``typing.Protocol``, and the server loads whichever class the
-runner names by ``module:Class`` path, so supplying one is the extension
-point whetstone-ai already provides rather than a workaround. And envs
-*can* do what a persisted launch cannot: a family's experiment is a pure
-function of its generation parameters, so this config carries those
-parameters -- the family id, the split sizes, the pool shape, the repeat
-count, and the task route -- and rebuilds the identical experiment on the
-other side.
-
-**Determinism is the whole contract.** The rebuilt engine must produce
-the same ``eval_config_ref`` as the harness's, or every call is refused
-exactly as above. That holds because ``FamilySpec.generate_pool`` is
-seeded and ``build_experiment`` is a pure function of the pool and the
-split sizes. :func:`build_codex_runtime_config` derives every field from
-the same :class:`~whetstone_envs.optim.run.RunSpec` the in-process engine
-was built from, so the two cannot drift apart silently; the run asserts
-the two hashes agree before it spawns anything.
-"""
-
 from __future__ import annotations
 
+from functools import cached_property
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from dr_providers import ProviderKind, ReasoningEffort
-from pydantic import BaseModel, ConfigDict, PositiveFloat, StrictInt, StrictStr
-from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
-from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-from whetstone.eval.runtime_engine import RuntimeEvalEngine
-
-from whetstone_envs.optim.families import family_spec
-from whetstone_envs.optim.provider import (
-    DEFAULT_PROVIDER_CONCURRENCY,
-    bind_openrouter_transport,
-    fake_gold_by_prompt,
-    fake_transport_factory,
-    hardened_execution_policy,
-    openrouter_seeded_call_config,
-    widened_execution_policy,
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveFloat,
+    StrictInt,
+    StrictStr,
 )
+
+from whetstone_envs.evaluation.concurrency import DEFAULT_PROVIDER_CONCURRENCY
+from whetstone_envs.evaluation.runtime import (
+    TransportKind,
+    evaluation_execution_policy,
+    evaluation_reference_config,
+    prepare_evaluation_runtime,
+)
+from whetstone_envs.optim.problem import OptimizationProblem, load_problem
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
     from whetstone.eval.protocol import EvalEngine
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.experiment.candidate import TemplateRenderContract
     from whetstone.provider.policy import ProviderExecutionPolicy
 
-#: The two transports a run may name, mirroring ``RunSpec.transport``.
-#: Spelled here as a persisted enumeration because this config crosses a
-#: process boundary.
+    from whetstone_envs.optim.spec import RunSpec
+
+
 CodexRuntimeTransport = Literal["fake", "openrouter"]
 
 
 class EnvsCodexRuntimeConfig(BaseModel):
-    """One family's evaluation runtime, rebuildable in another process.
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    Every field is a *generation parameter*, not a derived artifact: the
-    experiment is rebuilt from them rather than serialized, because an
-    ``Experiment`` owns a live rollout graph that does not serialize.
-
-    This is a persisted cross-process contract -- the MCP server validates
-    it out of a subprocess environment variable -- so it is a frozen,
-    ``extra="forbid"`` model and its field spellings are pinned by a
-    golden test.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    family_id: StrictStr
-    split_sizes: tuple[StrictInt, StrictInt, StrictInt]
-    n_per_stratum: StrictInt
-    pool_seed_start: StrictInt
-    num_seeds: StrictInt
+    problem_file: StrictStr
     transport: CodexRuntimeTransport
-    model: StrictStr
-
-    #: The task route's reasoning effort, or ``None`` for the provider's
-    #: default.
-    #:
-    #: Carried across the process boundary because the effort is part of
-    #: the bound provider call config, and therefore part of the Eval
-    #: Config the server must land on: ``build_codex_adapter`` compares
-    #: this process's ``task_model_identity_hash`` against the harness's
-    #: and refuses a rebuild that disagrees. A runtime that dropped the
-    #: field would not evaluate at an unpinned effort -- it would fail to
-    #: start, loudly, which is the guard working.
-    #:
-    #: Defaulted to ``None`` rather than required so a config written
-    #: before this field existed still validates under ``extra="forbid"``,
-    #: and so the fake transport keeps the identity it always had.
-    reasoning_effort: ReasoningEffort | None = None
-
-    #: How many task evaluations the server runs against the provider at
-    #: once.
-    #:
-    #: Carried across the process boundary rather than defaulted on the
-    #: far side, because the server has no other way to learn it: it
-    #: rebuilds its engine from this config and nothing else, so an
-    #: unset field means the Codex arm silently evaluates at whetstone's
-    #: default width while every other arm runs at the operator's. Two
-    #: arms measured at different widths is not a correctness problem,
-    #: but it is a wall-clock one, and it is invisible without this
-    #: field.
-    provider_concurrency: StrictInt = DEFAULT_PROVIDER_CONCURRENCY
-
-    # The three fields ``EvalRuntimeConfig`` requires structurally. They
-    # are delegated straight to the reference config, so a Codex run gets
-    # the same driver settings every other run does.
+    provider_concurrency: StrictInt = Field(
+        default=DEFAULT_PROVIDER_CONCURRENCY, ge=1
+    )
     partial_log_path: StrictStr | None = None
     prompt_cache_path: StrictStr | None = None
     row_job_entrypoint: StrictStr = (
@@ -134,135 +50,72 @@ class EnvsCodexRuntimeConfig(BaseModel):
     )
     unit_deadline_seconds: PositiveFloat = 86_400.0
 
+    @cached_property
+    def _problem(self) -> OptimizationProblem:
+        return load_problem(Path(self.problem_file))
+
     @property
     def _reference(self) -> ReferenceEvalRuntimeConfig:
-        """The whetstone-ai config this one delegates its driver settings to.
-
-        Only the experiment is envs' concern; everything about *how* a row
-        is executed stays whetstone-ai's, so it is not restated here.
-        """
-        family = family_spec(self.family_id)
-        return ReferenceEvalRuntimeConfig(
-            partial_log_path=self.partial_log_path,
-            prompt_cache_path=self.prompt_cache_path,
-            row_job_entrypoint=self.row_job_entrypoint,
-            unit_deadline_seconds=self.unit_deadline_seconds,
-            transport_api_key_env=(
-                "OPENROUTER_API_KEY"
-                if self.transport == "openrouter"
-                else "WHETSTONE_TOY_API_KEY"
-            ),
-            provider_kind=(
-                ProviderKind.OPENROUTER
-                if self.transport == "openrouter"
-                else ProviderKind.OPENAI
-            ),
-            mutation_field=family.mutation_field,
-            render_contract=family.render_contract(),
+        return evaluation_reference_config(
+            TransportKind(self.transport)
+        ).model_copy(
+            update={
+                "partial_log_path": self.partial_log_path,
+                "prompt_cache_path": self.prompt_cache_path,
+                "row_job_entrypoint": self.row_job_entrypoint,
+                "unit_deadline_seconds": self.unit_deadline_seconds,
+                "mutation_field": self.mutation_field,
+                "render_contract": self.render_contract,
+            }
         )
 
     @property
     def execution_policy(self) -> ProviderExecutionPolicy:
-        """The reference policy, widened and -- when paid -- hardened.
-
-        The same two transforms the study path applies, in the same
-        order, because this process evaluates the same tasks against the
-        same provider. Without them the hosted-MCP evaluator ran at
-        whetstone's 30 s chat-completion timeout with no waiting retry,
-        which is precisely the pair of defects that aborted the live
-        Stage 0 -- and it ran that way *in another process*, where the
-        study's own hardening could not reach it.
-        """
-        policy = widened_execution_policy(
-            self._reference.execution_policy,
+        return evaluation_execution_policy(
+            self._reference,
+            transport=TransportKind(self.transport),
             concurrency=self.provider_concurrency,
         )
-        if self.transport == "openrouter":
-            return hardened_execution_policy(policy)
-        return policy
 
     @property
     def mutation_field(self) -> str:
-        """The launch's mutation field, which the MCP server cross-checks."""
-        return family_spec(self.family_id).mutation_field
+        return self._problem.contract.mutation_field
 
     @property
-    def render_contract(self):
-        """The launch's render contract; the MCP server requires one."""
-        return family_spec(self.family_id).render_contract()
+    def render_contract(self) -> TemplateRenderContract:
+        return self._problem.contract.render_contract()
 
     def build_engine(self, store: ObjectStore) -> EvalEngine:
-        """Rebuild this run's exact evaluation engine from its parameters.
-
-        The engine this returns must address the same ``eval_config_ref``
-        as the harness's, because the Tool Config is bound to that hash
-        and the evaluator refuses any call whose config does not match.
-        """
-        family = family_spec(self.family_id)
-        pool = family.generate_pool(
-            n_per_stratum=self.n_per_stratum,
-            seed_start=self.pool_seed_start,
-        )
-        prepared = family.build_experiment(
-            pool,
-            split_sizes=self.split_sizes,
-            num_seeds=self.num_seeds,
-            provider_call_config=(
-                openrouter_seeded_call_config(
-                    model=self.model,
-                    reasoning_effort=self.reasoning_effort,
-                )
-                if self.transport == "openrouter"
-                else None
-            ),
-        )
-        experiment = prepared.experiment
-        execution_policy = self.execution_policy
-        if self.transport == "openrouter":
-            # The retrying wrapper, not the bare client: a 429 in this
-            # process is the same 429, and the study's own wrapper is on
-            # the other side of a process boundary. Bound once here so
-            # every tool call the agent makes shares one connection pool.
-            _, transport_factory = bind_openrouter_transport(execution_policy)
-        else:
-            transport_factory = fake_transport_factory(
-                gold_by_prompt=fake_gold_by_prompt(
-                    experiment,
-                    render_contract=family.render_contract(),
-                    ceiling_template=family.probes.ceiling_template,
-                )
-            )
-        # Assembled here rather than through ``_reference.build_engine``,
-        # which accepts neither a policy nor a concurrency and would
-        # therefore discard both -- rebuilding the engine at whetstone's
-        # default width over the unwidened, unhardened policy. This is
-        # the same in-process pair that helper builds for
-        # ``driver_mode="in_process"``, which is this config's mode.
-        driver = GraphRolloutEvalDriver(
-            eval_runner=family.eval_runner(),
-            mutation_field=family.mutation_field,
-            render_contract=family.render_contract(),
-            transport_factory=transport_factory,
-        )
-        return RuntimeEvalEngine(
-            store=store,
-            experiment=experiment,
-            sampling=experiment.eval_configs.split_for(
-                self._reference.split_role
-            ),
-            execution_policy=execution_policy,
-            driver=driver,
+        problem = self._problem
+        runtime = prepare_evaluation_runtime(
+            experiment=problem.prepared.experiment,
+            eval_runner=problem.eval_runner,
+            mutation_field=self.mutation_field,
+            render_contract=self.render_contract,
+            fake_replies=problem.fake_replies,
+            reference=self._reference,
+            transport=TransportKind(self.transport),
             concurrency=self.provider_concurrency,
         )
+        return runtime.build_engine(store)
 
 
-#: The ``module:Class`` path the Codex runner records so the MCP server
-#: can load this config. It is a persisted string crossing a process
-#: boundary, so it is named here and pinned by a golden test rather than
-#: derived from ``__name__`` at a call site.
+# Persisted subprocess loader path.
 ENVS_CODEX_RUNTIME_CONFIG_CLASS = (
     "whetstone_envs.optim.codex_runtime:EnvsCodexRuntimeConfig"
 )
+
+
+def runtime_config_for_run(
+    *, spec: RunSpec, problem_file: Path | None
+) -> EnvsCodexRuntimeConfig:
+    if problem_file is None:
+        raise ValueError("Codex requires a problem_file")
+    return EnvsCodexRuntimeConfig(
+        problem_file=str(problem_file.resolve()),
+        transport=spec.transport.value,
+        provider_concurrency=spec.provider_concurrency,
+    )
 
 
 __all__ = [

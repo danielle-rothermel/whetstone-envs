@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping  # noqa: TC003
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
 from dr_serialize import (
@@ -20,18 +21,91 @@ from pydantic import (
 )
 
 from whetstone_envs.manifests.hashing import content_hash
-from whetstone_envs.manifests.validation import (
-    MANIFEST_SCHEMA_VERSION,
-    validate_generator_version,
-    validate_schema_version,
-    validate_seed_range,
-    validate_stratum_counts,
-)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from whetstone_envs.pools import TaskPool
+    from whetstone_envs.instances import InstancePool
+
+MANIFEST_SCHEMA_VERSION = 2
+_SEED_RANGE_LEN = 2
+
+
+def _require_integer(value: object, *, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"manifest {field_name} must be an integer"
+        raise TypeError(msg)
+    return value
+
+
+def _validate_schema_version(value: object) -> int:
+    schema_version = _require_integer(
+        value,
+        field_name="schema_version",
+    )
+    if schema_version != MANIFEST_SCHEMA_VERSION:
+        msg = (
+            f"manifest schema_version {schema_version} is unsupported; "
+            f"expected {MANIFEST_SCHEMA_VERSION}"
+        )
+        raise ValueError(msg)
+    return schema_version
+
+
+def _validate_generator_version(value: object) -> str:
+    if not isinstance(value, str):
+        msg = "manifest generator_version must be a string"
+        raise TypeError(msg)
+    if not value:
+        msg = "manifest generator_version must be a nonempty string"
+        raise ValueError(msg)
+    return value
+
+
+def _validate_seed_range(value: object) -> tuple[int, int]:
+    if not isinstance(value, tuple) or len(value) != _SEED_RANGE_LEN:
+        msg = "manifest seed_range must be a two-element tuple"
+        raise TypeError(msg)
+    start = _require_integer(value[0], field_name="seed_range")
+    end = _require_integer(value[1], field_name="seed_range")
+    if start >= end:
+        msg = "manifest seed_range must be ordered with start less than end"
+        raise ValueError(msg)
+    return (start, end)
+
+
+def _validate_category_counts(
+    value: object,
+) -> MappingProxyType[str, int]:
+    """Validate positive counts and return a detached, read-only mapping."""
+    if not isinstance(value, Mapping):
+        msg = "manifest category_counts must be an object"
+        raise TypeError(msg)
+
+    counts: dict[str, int] = {}
+    for name, raw_count in value.items():
+        if not isinstance(name, str):
+            msg = "manifest category_counts names must be strings"
+            raise TypeError(msg)
+        if not name.strip():
+            msg = "manifest category_counts names must be nonblank strings"
+            raise ValueError(msg)
+        count = _require_integer(
+            raw_count,
+            field_name="category_counts",
+        )
+        if count < 0:
+            msg = "manifest category_counts values must be non-negative"
+            raise ValueError(msg)
+        if count == 0:
+            msg = "manifest category_counts values must be positive"
+            raise ValueError(msg)
+        counts[name] = count
+    if sum(counts.values()) == 0:
+        msg = "manifest category_counts must have a positive total"
+        raise ValueError(msg)
+    return MappingProxyType(counts)
+
 
 _MANIFEST_MAX_BYTES = 1 << 20
 _PERSISTED_FIELDS = frozenset(
@@ -39,18 +113,21 @@ _PERSISTED_FIELDS = frozenset(
         "schema_version",
         "generator_version",
         "seed_range",
-        "stratum_counts",
+        "category_counts",
         "content_hash",
     }
 )
 
 
 def _retained_seeds_within_range(
-    pool: TaskPool,
+    pool: InstancePool,
     seed_range: tuple[int, int],
 ) -> bool:
     start, end = seed_range
-    return all(start <= instance.seed < end for instance in pool.instances)
+    return all(
+        start <= instance.seed < end
+        for instance in pool.instance_group.instances
+    )
 
 
 def _manifest_document(path: Path) -> CanonicalJsonFile:
@@ -65,7 +142,7 @@ def _manifest_document(path: Path) -> CanonicalJsonFile:
 class Manifest(BaseModel):
     """A validated, read-only description of a generated pool.
 
-    ``seed_range`` covers retained instances only, and ``stratum_counts`` is
+    ``seed_range`` covers retained instances only, and ``category_counts`` is
     detached and frozen. Matching retained seeds, counts, and the content hash
     to a pool is explicit via :meth:`matches_pool`.
     """
@@ -74,19 +151,19 @@ class Manifest(BaseModel):
 
     generator_version: str
     seed_range: tuple[int, int]
-    stratum_counts: Mapping[str, int]
+    category_counts: Mapping[str, int]
     content_hash: Sha256Digest
     schema_version: int = MANIFEST_SCHEMA_VERSION
 
     @field_validator("schema_version")
     @classmethod
     def _validate_schema_version(cls, value: int) -> int:
-        return validate_schema_version(value)
+        return _validate_schema_version(value)
 
     @field_validator("generator_version")
     @classmethod
     def _validate_generator_version(cls, value: str) -> str:
-        return validate_generator_version(value)
+        return _validate_generator_version(value)
 
     @field_validator("seed_range", mode="before")
     @classmethod
@@ -102,18 +179,18 @@ class Manifest(BaseModel):
     @field_validator("seed_range")
     @classmethod
     def _validate_seed_range(cls, value: tuple[int, int]) -> tuple[int, int]:
-        return validate_seed_range(value)
+        return _validate_seed_range(value)
 
-    @field_validator("stratum_counts")
+    @field_validator("category_counts")
     @classmethod
-    def _validate_stratum_counts(
+    def _validate_category_counts(
         cls,
         value: Mapping[str, int],
     ) -> Mapping[str, int]:
-        return validate_stratum_counts(value)
+        return _validate_category_counts(value)
 
-    @field_serializer("stratum_counts")
-    def _serialize_stratum_counts(
+    @field_serializer("category_counts")
+    def _serialize_category_counts(
         self,
         value: Mapping[str, int],
     ) -> dict[str, int]:
@@ -122,7 +199,7 @@ class Manifest(BaseModel):
     @classmethod
     def from_pool(
         cls,
-        pool: TaskPool,
+        pool: InstancePool,
         *,
         generator_version: str,
         seed_range: tuple[int, int],
@@ -132,7 +209,7 @@ class Manifest(BaseModel):
         Retained seeds must lie in the declared half-open range. The manifest
         says nothing about generator attempts producing no retained instance.
         """
-        validated_seed_range = validate_seed_range(seed_range)
+        validated_seed_range = _validate_seed_range(seed_range)
         if not _retained_seeds_within_range(pool, validated_seed_range):
             start, end = validated_seed_range
             msg = (
@@ -143,7 +220,7 @@ class Manifest(BaseModel):
         return cls(
             generator_version=generator_version,
             seed_range=validated_seed_range,
-            stratum_counts=pool.stratum_counts(),
+            category_counts=pool.category_counts(),
             content_hash=content_hash(pool),
         )
 
@@ -178,9 +255,9 @@ class Manifest(BaseModel):
     def read(cls, path: Path) -> Manifest:
         return cls.from_dict(_manifest_document(path).read())
 
-    def matches_pool(self, pool: TaskPool) -> bool:
+    def matches_pool(self, pool: InstancePool) -> bool:
         return (
             _retained_seeds_within_range(pool, self.seed_range)
-            and self.stratum_counts == pool.stratum_counts()
+            and self.category_counts == pool.category_counts()
             and self.content_hash == content_hash(pool)
         )

@@ -16,8 +16,8 @@ class DistractorMode(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class DepthStratum:
-    """One deduction-depth stratum and its upstream distractor policy."""
+class DepthCategory:
+    """One deduction-depth category and its upstream distractor policy."""
 
     hops: int
     distractors: DistractorMode
@@ -40,7 +40,7 @@ class DepthStratum:
 
 @dataclass(frozen=True, slots=True)
 class SplitPlan:
-    """Per-stratum split proportions for the three evaluation cohorts."""
+    """Per-category split proportions for the three evaluation cohorts."""
 
     internal_eval: int
     official: int
@@ -58,18 +58,18 @@ class SplitPlan:
             msg = "C18 split counts must have a positive total"
             raise ValueError(msg)
 
-    def scale(self, n_per_stratum: int) -> tuple[int, int, int]:
-        """Scale cumulative split proportions to an actual stratum size."""
-        _validate_positive_count(n_per_stratum, name="n_per_stratum")
+    def scale(self, n_per_category: int) -> tuple[int, int, int]:
+        """Scale cumulative split proportions to an actual category size."""
+        _validate_positive_count(n_per_category, name="n_per_category")
         total = self.internal_eval + self.official + self.held_out
-        internal = n_per_stratum * self.internal_eval // total
+        internal = n_per_category * self.internal_eval // total
         official_boundary = (
-            n_per_stratum * (self.internal_eval + self.official) // total
+            n_per_category * (self.internal_eval + self.official) // total
         )
         return (
             internal,
             official_boundary - internal,
-            n_per_stratum - official_boundary,
+            n_per_category - official_boundary,
         )
 
 
@@ -79,8 +79,8 @@ class GenerationConfig:
 
     generator_version: str
     seed_start: int
-    n_per_stratum: int
-    strata: tuple[DepthStratum, ...]
+    n_per_category: int
+    categories: tuple[DepthCategory, ...]
     split: SplitPlan
 
     def __post_init__(self) -> None:
@@ -100,25 +100,26 @@ class GenerationConfig:
             )
             raise ValueError(msg)
         _validate_positive_count(
-            self.n_per_stratum,
-            name="n_per_stratum",
+            self.n_per_category,
+            name="n_per_category",
         )
-        if not isinstance(self.strata, tuple):
-            msg = "C18 strata must be a tuple of DepthStratum values"
+        if not isinstance(self.categories, tuple):
+            msg = "C18 categories must be a tuple of DepthCategory values"
             raise TypeError(msg)
-        if not self.strata:
-            msg = "C18 requires at least one depth stratum"
+        if not self.categories:
+            msg = "C18 requires at least one depth category"
             raise ValueError(msg)
         if any(
-            not isinstance(stratum, DepthStratum) for stratum in self.strata
+            not isinstance(category, DepthCategory)
+            for category in self.categories
         ):
-            msg = "C18 strata must contain only DepthStratum values"
+            msg = "C18 categories must contain only DepthCategory values"
             raise TypeError(msg)
-        depths = tuple(stratum.hops for stratum in self.strata)
+        depths = tuple(category.hops for category in self.categories)
         if len(depths) != len(set(depths)):
-            msg = f"C18 requires distinct depth strata, got {depths!r}"
+            msg = f"C18 requires distinct depth categories, got {depths!r}"
             raise ValueError(msg)
-        final_seed = self.seed_start + len(self.strata) - 1
+        final_seed = self.seed_start + len(self.categories) - 1
         if final_seed > PRONTOQA_SEED_MAX:
             msg = (
                 f"C18 allocated seeds must not exceed {PRONTOQA_SEED_MAX}, "
@@ -131,7 +132,7 @@ class GenerationConfig:
 
     @property
     def seed_range(self) -> tuple[int, int]:
-        return (self.seed_start, self.seed_start + len(self.strata))
+        return (self.seed_start, self.seed_start + len(self.categories))
 
 
 def _validate_positive_count(value: int, *, name: str) -> None:
@@ -146,9 +147,9 @@ def _validate_positive_count(value: int, *, name: str) -> None:
 DEFAULT_CONFIG = GenerationConfig(
     generator_version="c18-generate-1",
     seed_start=1_000_000_000,
-    n_per_stratum=30,
-    strata=tuple(
-        DepthStratum(hops, DistractorMode.RELEVANT) for hops in (1, 2, 3, 5)
+    n_per_category=30,
+    categories=tuple(
+        DepthCategory(hops, DistractorMode.RELEVANT) for hops in (1, 2, 3, 5)
     ),
     split=SplitPlan(internal_eval=6, official=12, held_out=12),
 )
@@ -156,11 +157,11 @@ DEFAULT_CONFIG = GenerationConfig(
 HARD_CONFIG = GenerationConfig(
     generator_version="c18-generate-1+hard",
     seed_start=2_000_000_000,
-    n_per_stratum=20,
-    strata=(
-        DepthStratum(5, DistractorMode.RELEVANT),
-        DepthStratum(8, DistractorMode.NONE),
-        DepthStratum(10, DistractorMode.NONE),
+    n_per_category=20,
+    categories=(
+        DepthCategory(5, DistractorMode.RELEVANT),
+        DepthCategory(8, DistractorMode.NONE),
+        DepthCategory(10, DistractorMode.NONE),
     ),
     split=SplitPlan(internal_eval=2, official=6, held_out=12),
 )
@@ -169,7 +170,7 @@ HARD_CONFIG = GenerationConfig(
 __all__ = [
     "DEFAULT_CONFIG",
     "HARD_CONFIG",
-    "DepthStratum",
+    "DepthCategory",
     "DistractorMode",
     "GenerationConfig",
     "SplitPlan",

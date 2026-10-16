@@ -1,7 +1,7 @@
 from whetstone_envs.c18.config import (
     DEFAULT_CONFIG,
     HARD_CONFIG,
-    DepthStratum,
+    DepthCategory,
     DistractorMode,
     GenerationConfig,
     SplitPlan,
@@ -18,7 +18,7 @@ __all__ = [
     "DEFAULT_CONFIG",
     "HARD_CONFIG",
     "PROBES",
-    "DepthStratum",
+    "DepthCategory",
     "DistractorMode",
     "GenerationConfig",
     "SplitPlan",

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from whetstone_envs.c19.generation import (
-    DEFAULT_N_PER_STRATUM,
+    DEFAULT_N_PER_CATEGORY,
     DEFAULT_SEED_START,
     build_manifest,
 )
@@ -19,13 +19,13 @@ if TYPE_CHECKING:
 def regenerate(
     manifest_path: Path,
     *,
-    n_per_stratum: int = DEFAULT_N_PER_STRATUM,
+    n_per_category: int = DEFAULT_N_PER_CATEGORY,
     seed_start: int = DEFAULT_SEED_START,
 ) -> Manifest:
     """Generate and atomically publish one C19 manifest."""
     canonical_manifest_path = Path(__file__).with_name("manifest.json")
     custom_generation = (
-        n_per_stratum != DEFAULT_N_PER_STRATUM
+        n_per_category != DEFAULT_N_PER_CATEGORY
         or seed_start != DEFAULT_SEED_START
     )
     if custom_generation and manifest_path.resolve() == (
@@ -35,7 +35,7 @@ def regenerate(
         raise ValueError(msg)
 
     manifest = build_manifest(
-        n_per_stratum=n_per_stratum,
+        n_per_category=n_per_category,
         seed_start=seed_start,
     )
     manifest.write(manifest_path)
@@ -53,9 +53,9 @@ def _main(argv: Sequence[str] | None = None) -> int:
         default=Path(__file__).with_name("manifest.json"),
     )
     parser.add_argument(
-        "--n-per-stratum",
+        "--n-per-category",
         type=int,
-        default=DEFAULT_N_PER_STRATUM,
+        default=DEFAULT_N_PER_CATEGORY,
     )
     parser.add_argument(
         "--seed-start",
@@ -66,7 +66,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
     try:
         regenerate(
             args.manifest,
-            n_per_stratum=args.n_per_stratum,
+            n_per_category=args.n_per_category,
             seed_start=args.seed_start,
         )
     except ValueError as error:

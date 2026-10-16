@@ -6,6 +6,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Task-specific terminal viewers in `scripts/c11/viz.py`, `scripts/c18/viz.py`,
+  `scripts/c19/viz.py`, `scripts/c22/viz.py`, and `scripts/c23/viz.py`. Each
+  separates public inputs from private debugging gold, identifies the instance
+  and generation seed, and optionally displays both rendered probes.
+  C22 also shows a passing response and a failing response for each instance,
+  with oracle scores and per-constraint outcomes.
+
+- Focused standard-library tests for shared instance, split, manifest, evidence,
+  report-rendering, and optimizer contracts. Repository checks run core tests
+  on all supported Python versions and optimizer checks on Python 3.13+.
+
+- `InstanceGroup` in `instances/instance_group.py`: a strict, frozen model with
+  a nonblank name and ordered instances with unique identifiers.
+
+### Changed
+
+- Installed-wheel base-import validation follows the optional evaluation-package
+  boundary; evaluation runtime imports require the optimizer extra.
+
+- Optimizer execution accepts an explicit `OptimizationProblem` from Python
+  code or `--problem` input files. Shared evaluation owns experiment preparation,
+  task rows, provider transport, and concurrency. Remove built-in C18/C19
+  registrations, adapters, task generation flags, and prompt-specific defaults.
+  Codex rebuilds the supplied input file and checks its runtime identities.
+
+- Evaluation evidence v5 and trajectory evidence v4 accept nonblank task-family
+  identifiers and record the candidate mutation field explicitly. Evidence
+  validates binary scores and accounting without importing task graders.
+
+- Provider transports use concrete generation requests, invocation evidence,
+  call configs, and Whetstone's transport signature. Fake tasks use the owned
+  task-row type; retry policy, attempt limits, delay bounds, and jitter remain
+  unchanged. Remove redundant provider comments and docstrings.
+
+- Optimizer execution and Codex subprocess rebuilding share policy, transport,
+  and evaluation-engine assembly in
+  `evaluation/runtime.py`. Transport kinds have the same owner. Codex retains
+  its persisted configuration contract and explicit runtime authorization.
+
+- Optimizer orchestration delegates preparation, binding, runtime setup, and
+  publication to focused helpers. Optimizer modules own their construction;
+  concrete frozen binding records replace optional controls, and COPRO controls
+  are constructed only for COPRO. Shared proposer routing has its own module.
+
+- Optimizer inputs are strict frozen Pydantic models in `optim/spec.py`, with
+  one nested settings variant and composed train/validation sizes. The CLI
+  rejects options belonging to another optimizer;
+  programmatic callers construct the selected settings model directly.
+
+- Remove unused pytest/browser dependencies, configuration, workflow, and
+  contract check pointers. Remove the obsolete MIPROv2 old-version guard and
+  study-specific commentary from optimizer inputs and concurrency policy.
+
+- Shared experiment preparation lives in `whetstone_envs.evaluation`, runtime
+  evidence extraction in `whetstone_envs.optim.extraction`, and shared
+  run-directory handling in `whetstone_envs.artifacts`. Reporting owns
+  presentation and CLI dispatch. Runtime execution no longer imports reporting.
+  Extraction uses focused joining, hydration, accounting, and ordered-history
+  helpers.
+
+- Portable evaluation and trajectory models, canonical report file operations,
+  accounting, and comparisons are owned by `whetstone_envs.evidence`.
+  Reporting and optimizer callers use that package directly; the reporting
+  schema, derivations, and model exports are removed. Validators use focused
+  checks and shared summary calculations. Comparisons return typed outcomes
+  with presentation labels supplied by reporting.
+- `InstancePoolSplit` lives with `InstancePool` in `instances/instance_pool.py`.
+  It retains its source `pool`, stores ordered `split_groups`, and exposes
+  a cached read-only `splits` mapping. Selected instances must match the source
+  pool. Callers use `split.splits[name]`; the direct indexing shortcut and
+  separate `instance_pool_split.py` module are removed.
+- Instance classification uses category terminology throughout the API,
+  generators, scoring, CLI, and reports: `categories`, `category_counts`,
+  `in_category`, and `--n-per-category`.
+- `InstancePool.split` separates grouping by category combination, balanced
+  selection, coverage-first allocation, instance assignment, and named group
+  construction. Selected cohorts, tie order, and source ordering are preserved.
+- Pool manifests and pool identity payloads use schema version 2. Evaluation
+  reports use `whetstone_envs.eval_report/v5` and trajectory reports use
+  `whetstone_envs.trajectory_report/v4`. Category field names replace strata names
+  in the persisted formats; packaged pool manifests are regenerated.
+  Pool content hashes change with the versioned identity payload.
+  Older persisted schemas are rejected; recorded run files are left untouched.
+- Instance representations, validation, and allocation share one capability
+  package, `whetstone_envs.instances`. `InstancePool.split` owns allocation
+  directly alongside its private helpers in `instances/instance_pool.py`.
+- `Instance` is a strict, frozen Pydantic model with detached read-only prompt
+  inputs, model serialization, and content-based hashing. Construction requires
+  keyword arguments; invalid fields and frozen assignments raise
+  `ValidationError`. Public prompt identity is a read-only property.
+- `TaskPool` is renamed to `InstancePool`, a strict, frozen model containing
+  one `instance_group`.
+  Callers access members through `pool.instance_group.instances`. Public
+  prompt uniqueness, category indexing, and instance content are
+  preserved; group names do not enter the content hash.
+- `PoolSplit` is renamed to `InstancePoolSplit`, a strict, frozen model
+  containing a source pool and ordered named `InstanceGroup` objects. Group
+  names must be unique and instance IDs must be disjoint across groups.
+- `InstancePool.split` accepts a name-to-size mapping with any number of
+  destinations. Request order controls group order and allocation ties.
+  Evaluation consumers retain their three named roles, existing cohorts,
+  and persisted evaluation identities.
+
+### Removed
+
+- Unused scoring observations and aggregation hierarchy, the retired C19 report
+  guide data, the pool sequence wrapper, and unused optimizer-name constants.
+  Manifest-only validation now lives with `Manifest`. Remove the unused
+  standalone Codex preflight and one-operation model/path wrappers.
+
+- Standalone C19 evaluation, its launcher and CLI commands, and C19-specific
+  report guides, matrices, filters, and layouts. Evidence inspection displays
+  recorded category labels and prompt inputs without task-specific parsing.
+- The exploration-specific `optim.study` package, registered protocols,
+  study CLI, optimizer fidelity audits, and null-control optimizers. Remove
+  study-only family manifest/rehearsal hooks, retry telemetry counters, and
+  the study completeness gate applied to standalone evaluations.
+- Spend models, billing projections, `cost.json` publication, and spend
+  displays. Evaluation and trajectory formats omit spend fields under new
+  schema versions; older report schemas are rejected. Existing recorded
+  run artifacts are untouched. Whetstone runtime records retain the
+  telemetry required by their upstream schema.
+- Automatic study report generation, its Markdown/HTML renderers and
+  presentation assets, and the `whetstone-study report` command. Study
+  artifacts remain in existing `study.json` files and their referenced
+  evidence; no study CLI remains.
+- The `models` and `pools` packages; instance APIs are imported from
+  `whetstone_envs.instances`.
+- The `make_instance` constructor, standalone `public_prompt_identity` helper,
+  fixed cohort fields on `InstancePoolSplit`, and three positional split-size
+  arguments.
+
 ## [0.2.15] - 2026-10-08
 
 ### Changed

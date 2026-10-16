@@ -5,27 +5,38 @@
 title = "Task instances are immutable value objects"
 statement = """
 Every task instance has a nonempty string identifier, an integer seed, at least \
-one nonblank task stratum, string prompt-input keys and values, and string gold \
-data; its task strata are deduplicated in first-seen order, and its prompt \
+one nonblank instance category, string prompt-input keys and values, and string gold \
+data; its instance categories are deduplicated in first-seen order, and its prompt \
 inputs are detached from caller-owned state and exposed read-only."""
 rationale = """
 Caller mutation must not change a task instance's equality, hash, public prompt \
 identity, or persisted content."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/instances"
+
+[[contracts]]
+title = "Instance groups own ordered membership"
+statement = """
+An instance group has a nonblank string name and an immutable ordered tuple \
+of validated task instances with unique identifiers. Empty groups are valid. \
+An instance pool contains one instance group and additionally rejects duplicate \
+public prompt identities; its category index is derived from that group's \
+ordered instances."""
+rationale = """
+Named membership and identifier uniqueness have one owner, while the instance \
+pool retains the stronger public-task uniqueness required for evaluation."""
+date = "2026-10-15"
 
 [[contracts]]
 title = "Public prompt identity excludes private data"
 statement = """
 Public prompt identity is the sorted tuple of a task instance's prompt-input \
-items; identifier, seed, task strata, and gold do not participate, and every \
-task pool rejects duplicate public prompt identities while leaving \
+items; identifier, seed, instance categories, and gold do not participate, and every \
+instance pool rejects duplicate public prompt identities while leaving \
 rendered-prompt uniqueness to its renderer and template."""
 rationale = """
-Task pools reject duplicate public tasks without claiming that input identity \
-uniquely determines rendered text."""
+Instance pools reject duplicate public tasks without claiming that input \
+identity uniquely determines rendered text."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/instances/test_identity.py tests/pools/test_pool.py"
 
 [[contracts]]
 title = "Default rendering does not expose private fields"
@@ -37,27 +48,43 @@ rationale = """
 The standard rendering path protects private fields while custom rendering \
 remains an explicit escalation boundary."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/probes/test_rendering.py"
 
 [[contracts]]
 title = "Aggregation requires a complete planned matrix"
 statement = """
 Aggregation materializes every planned task-repeat cell, marks unobserved cells \
-missing, gives equal weight to repeats within tasks, tasks within task strata, \
-and task strata overall, and exposes no mean for any empty or incomplete \
+missing, gives equal weight to repeats within tasks, tasks within instance categories, \
+and instance categories overall, and exposes no mean for any empty or incomplete \
 aggregate. Expected and observed repeat identifiers are exact integers, and \
 every aggregate enforces consistency between its mean, counts, and children."""
 rationale = """
 Failed or absent results must not masquerade as zero scores or silently \
-disappear, and larger task strata must not dominate by population."""
+disappear, and larger instance categories must not dominate by population."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/scoring/test_aggregation.py"
+
+[[contracts]]
+title = "Instance pool splits own named disjoint groups"
+statement = """
+An instance pool split retains its source pool and an immutable ordered \
+split_groups tuple. Group names are unique, every selected instance equals \
+the source instance with the same identifier, and no identifier is shared \
+across groups. Its splits property is a cached read-only mapping in group \
+order; lookup raises KeyError for an absent name. Serialization includes the \
+pool and split_groups fields, with splits derived from them. Empty groups and \
+an empty collection of groups are valid."""
+rationale = """
+Group membership has one owner, while the split establishes source membership \
+and cross-group disjointness independently of any evaluation protocol or \
+allocation algorithm."""
+date = "2026-10-15"
 
 [[contracts]]
 title = "Pool splitting preserves deterministic cohorts"
 statement = """
-Task-pool splitting selects without replacement by each task instance's \
-complete ordered task-strata tuple, fills exactly the requested nonnegative \
+Instance-pool splitting accepts a mapping of nonblank group names to exact \
+nonnegative integer sizes and uses its insertion order as destination order, \
+including for allocation ties. It selects without replacement by each task \
+instance's complete ordered category tuple, fills exactly the requested nonnegative \
 destination sizes without oversubscription, maximizes combination coverage \
 before balancing combination counts, preserves source-pool order in every \
 destination, and leaves unselected task instances unassigned. Exact separable \
@@ -66,22 +93,20 @@ rationale = """
 Repeated generation of evaluation cohorts must be reproducible while \
 representing scarce combinations as broadly as destination capacity permits."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/pools/test_splitting.py"
 
 [[contracts]]
 title = "Manifests pin retained pool content"
 statement = """
 A pool manifest accepts exactly its closed persisted schema at the supported \
-schema version, and it matches a task pool only when every retained seed lies \
-in the declared half-open seed range and both per-stratum counts and the \
+schema version, and it matches an instance pool only when every retained \
+seed lies in the declared half-open seed range and both per-category counts and the \
 versioned dr-serialize identity-document hash match."""
 rationale = """
 Generator metadata alone cannot detect retained-content drift; seed \
 containment, counts, and an ordered versioned identity jointly pin the \
-generated task pool without claiming anything about rejected generator \
+generated instance pool without claiming anything about rejected generator \
 attempts."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/manifests"
 
 [[contracts]]
 title = "Foundational dependencies change through releases"
@@ -127,20 +152,28 @@ One bounded representation prevents equivalent persisted forms from drifting. \
 Atomic visibility depends on supported filesystem replacement semantics; this \
 contract does not claim locking, compare-and-set, or power-loss durability."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/manifests"
 
 [[contracts]]
 title = "Owning subpackages define the public API"
 statement = """
 Consumers import public contracts from whetstone_envs.instances, \
-whetstone_envs.manifests, whetstone_envs.pools, whetstone_envs.probes, and \
-whetstone_envs.scoring. Strict report models are imported from \
-whetstone_envs.reporting. Task-family contracts are imported from their owning \
+whetstone_envs.manifests, whetstone_envs.probes, and \
+whetstone_envs.scoring. InstancePool, InstancePoolSplit, and the allocation \
+helpers live together in instances/instance_pool.py. Portable report models, \
+file operations, accounting, and comparisons are imported from \
+whetstone_envs.evidence, which depends on neither reporting nor the optimizer \
+stack. Shared experiment preparation, engine assembly, provider transport, and \
+concurrency are owned by whetstone_envs.evaluation, \
+runtime evidence extraction by whetstone_envs.optim.extraction, and shared \
+run-directory handling by whetstone_envs.artifacts. Evaluation and optimizer \
+execution depend on extraction and portable evidence, never on reporting; \
+reporting owns inspection and presentation of saved evidence. \
+Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
 whetstone_envs.c19, whetstone_envs.c22, and whetstone_envs.c23. The optional \
-whetstone_envs.optim extra maps those contracts onto whetstone-ai experiments \
-and is importable only for its extra-free symbols without installing \
-whetstone-ai; the root whetstone_envs namespace exports no API."""
+optim extra supplies whetstone-ai for evaluation support and optimizer bindings; \
+portable evidence and reporting need no optimizer dependencies. The root \
+whetstone_envs namespace exports no API."""
 rationale = """
 One owning import path per public symbol keeps capability boundaries \
 discoverable and prevents a second flattened API surface."""
@@ -150,12 +183,13 @@ date = "2026-08-21"
 title = "Evaluation reports are strict bounded local evidence"
 statement = """
 Evaluation and optimization inspection reads only strict canonical JSON using \
-the exact persisted literals `whetstone_envs.eval_report/v2` and \
-`whetstone_envs.trajectory_report/v1`. Publication validates a complete \
+the exact persisted literals `whetstone_envs.eval_report/v5` and \
+`whetstone_envs.trajectory_report/v4`. Reports contain no spend projection. \
+Publication validates a complete \
 candidate, task, observation, step, resolution, reference, ordering, matrix, \
 and finite-number contract under an explicit 128 MiB limit before bounded \
 same-directory atomic replacement. \
-Standalone observation order is candidate-major then exact task and seed \
+Evaluation observation order is candidate-major then exact task and seed \
 order; trajectory order is exact step and resolution order, including repeated \
 evaluations. COPRO projections follow intent resolutions; GEPA projections \
 follow unique evaluate effects in persisted transcript order without \
@@ -164,15 +198,15 @@ prompts, outputs, traces, full \
 candidate payloads, exact mutation text, safe typed provider failure metadata, \
 and both per-step and cumulative budgets. Raw provider messages, bodies, and \
 metadata, credentials, headers, environment values, and SQLite bytes never \
-enter reports. C19 scored observations are exact binary normalized matches to \
-their report task gold, and every hydrated trajectory evaluation binds its \
+enter reports. Scored observations carry binary scores supplied by the runtime \
+scorer; report validation checks structural consistency and accounting rather \
+than regrading recorded outputs. Every hydrated trajectory evaluation binds its \
 exact candidate, evaluation result, and reward references."""
 rationale = """
 Offline debugging must remain reproducible and complete without reopening \
 mutable runtime storage, while validation or write failure must preserve an \
 existing report and incomplete execution must never masquerade as a zero."""
 date = "2026-08-21"
-check = "uv run --extra optim pytest -q tests/reporting tests/optim/test_e2e.py"
 
 [[contracts]]
 title = "HTML reports are deterministic inert offline projections"
@@ -194,13 +228,12 @@ schema; deterministic generation, inert text construction, and a closed CSP \
 make direct file inspection reproducible without turning recorded prompts or \
 outputs into executable content."""
 date = "2026-08-21"
-check = "uv run --extra optim pytest -q tests/reporting/test_html.py && uv run --group browser-test --extra optim pytest -q tests/reporting/test_browser.py"
 
 [[contracts]]
 title = "C11 generation is reproducible and oracle-grounded"
 statement = """
 The C11 task family deterministically generates unique noncanonical JSON inputs \
-across the whitespace, key-order, number, Unicode, and mixed strata; every \
+across the whitespace, key-order, number, Unicode, and mixed categories; every \
 task's private gold is the RFC 8785 canonical form of its public input, and the \
 default balanced pool is pinned by the committed canonical manifest."""
 rationale = """
@@ -208,7 +241,6 @@ Oracle-derived gold keeps the benchmark independent of the input builders, \
 while deterministic balanced generation and a persisted pool identity make \
 runs reproducible and expose corpus drift."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c11"
 
 [[contracts]]
 title = "C22 scores its explicit constraint stack"
@@ -221,7 +253,6 @@ rationale = """
 The measured behavior must match the complete model-visible request without \
 claiming semantic grading that the deterministic oracle does not perform."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c22"
 
 [[contracts]]
 title = "C23 public evidence determines every scored answer"
@@ -237,7 +268,6 @@ Exact-match evaluation is interpretable only when the public evidence fixes \
 the expected answer rather than relying on an unobserved choice among \
 demo-consistent rules."""
 date = "2026-08-06"
-check = "uv run pytest -q --run-integration tests/c23/test_generation.py"
 
 [[contracts]]
 title = "C23 generation is deterministic and RNG-isolated"
@@ -251,7 +281,6 @@ rationale = """
 Regenerated experiment cohorts must not depend on ambient application state \
 or randomized set iteration."""
 date = "2026-08-06"
-check = "uv run pytest -q --run-integration tests/c23/test_generation.py"
 
 [[contracts]]
 title = "C18 generation is pinned and independently checked"
@@ -263,14 +292,13 @@ reserved seed range, the vendored generator runs in isolated Python mode from \
 copied runtime files in a temporary directory, its JSON crosses a strict 16 \
 MiB and depth-bounded validated boundary, and an independent forward-chaining \
 oracle must derive the generated label from the public question and query \
-before the instance enters a task pool."""
+before the instance enters an instance pool."""
 rationale = """
 Validated generation inputs support explicit custom cohorts, canonical \
 manifests make the published pool identities reproducible, and surface-text \
 label derivation prevents the generator's own answer from being the sole \
 evidence for correctness."""
 date = "2026-08-06"
-check = "uv run --extra c18 pytest -q --run-integration tests/c18"
 
 [[contracts]]
 title = "C19 generation is transition-complete and reproducible"
@@ -282,7 +310,7 @@ closed wall, key, ball, and door object subset. MiniGrid 3.1.0, Gymnasium \
 answer-relevant physical-state oracle parses only the public grid and script \
 and agrees with the live MiniGrid adapter after every generated action prefix. \
 Default generation is deterministic and balanced across its 22 scenario, \
-size, and fact strata. The canonical manifest path accepts only those default \
+size, and fact categories. The canonical manifest path accepts only those default \
 generation parameters, and regeneration reproduces the committed 352-instance \
 pool identity."""
 rationale = """
@@ -291,4 +319,23 @@ before it can corrupt private gold, while closed generated worlds, balanced \
 deterministic generation, exact runtime versions, and a canonical manifest \
 make the task family reproducible."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/c19"
+
+
+[[contracts]]
+title = "Optimizer inputs select one validated settings variant"
+statement = """
+RunSpec is a strict frozen Pydantic boundary containing exactly one \
+optimizer settings variant. COPRO, GEPA, MIPROv2, and Codex settings own \
+their applicable controls; GEPA and MIPROv2 compose validated train/validation \
+sizes. Execution accepts an explicit OptimizationProblem; local Python input \
+files define the problem, including task generation, scorer, prompt contract, \
+provider config, and scripted fake inputs. There is no built-in task registry. \
+Partitions are checked against the prepared internal split before directory \
+creation; GEPA partitions cover it exactly. \
+The CLI translates its flags into the selected variant and rejects unrelated \
+nondefault options before creating a run directory. Codex runtime authorization \
+remains an explicit process-state check rather than model validation."""
+rationale = """
+A valid input must describe the controls the selected optimizer will honor, \
+while environment-dependent authorization remains at the execution boundary."""
+date = "2026-10-16"

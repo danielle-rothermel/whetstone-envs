@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Optimizer orchestration delegates preparation, binding, runtime setup, and
+  publication to focused helpers. Optimizer modules own their construction;
+  concrete frozen binding records replace optional controls, and COPRO controls
+  are constructed only for COPRO. Shared proposer routing has its own module.
+
 - Optimizer inputs are strict frozen Pydantic models in `optim/spec.py`, with
   one nested settings variant and composed train/validation sizes. The CLI
   preserves its flags and rejects options belonging to another optimizer;

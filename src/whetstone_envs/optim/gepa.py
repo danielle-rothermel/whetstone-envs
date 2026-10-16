@@ -20,8 +20,12 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
+from whetstone_envs.optim._bindings import GepaBinding
 from whetstone_envs.optim.experiment import provider_call_config_ref
-from whetstone_envs.optim.split import require_disjoint_split
+from whetstone_envs.optim.split import (
+    partition_internal_split,
+    require_disjoint_split,
+)
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -31,6 +35,8 @@ if TYPE_CHECKING:
     from whetstone.optim.proposal.proposer import ProposerTransport
 
     from whetstone_envs.optim.families import FamilySpec
+    from whetstone_envs.optim.proposals import ProposalRuntime
+    from whetstone_envs.optim.spec import GepaSettings
 
 GEPA_COMPONENT_NAME = "generate"
 #: Per-family schema names for the two identities GEPA mints. Both are
@@ -230,3 +236,35 @@ __all__ = [
     "gepa_policy_identity_hash",
     "gepa_prompt_services",
 ]
+
+
+def bind_gepa(  # noqa: PLR0913
+    *,
+    settings: GepaSettings,
+    store: ObjectStore,
+    engine: EvalEngine,
+    experiment: Experiment,
+    family: FamilySpec,
+    run_id: str,
+    proposer: ProposalRuntime,
+) -> GepaBinding:
+    trainset, valset = partition_internal_split(
+        tuple(engine.sampling.task_hashes),
+        train_size=settings.partition.train_size,
+        val_size=settings.partition.val_size,
+    )
+    adapter = build_gepa_adapter(
+        store=store,
+        engine=engine,
+        experiment=experiment,
+        family=family,
+        run_id=run_id,
+        proposer_transport=proposer.transport,
+        proposer_config_ref=proposer.route.ref,
+        max_metric_calls=settings.max_metric_calls,
+        reflection_minibatch_size=settings.reflection_minibatch_size,
+        seed=settings.seed,
+        trainset_task_hashes=trainset,
+        valset_task_hashes=valset,
+    )
+    return GepaBinding(adapter=adapter, control=adapter.control)

@@ -47,11 +47,15 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.provider.language_model import PlainPromptAdapter
 
+from whetstone_envs.optim._bindings import Miprov2Binding
 from whetstone_envs.optim.experiment import (
     gold_by_task_hash,
     provider_call_config_ref,
 )
-from whetstone_envs.optim.split import require_disjoint_split
+from whetstone_envs.optim.split import (
+    partition_internal_split,
+    require_disjoint_split,
+)
 
 if TYPE_CHECKING:
     from dr_store import ObjectStore
@@ -61,6 +65,8 @@ if TYPE_CHECKING:
     from whetstone.optim.proposal.proposer import ProposerTransport
 
     from whetstone_envs.optim.families import FamilySpec
+    from whetstone_envs.optim.proposals import ProposalRuntime
+    from whetstone_envs.optim.spec import Miprov2Settings
 
 #: The single optimizable component: every family's rollout graph exposes
 #: exactly one provider trace, so MIPROv2 optimizes one prompt component.
@@ -474,3 +480,42 @@ __all__ = [
     "miprov2_run",
     "miprov2_run_ref",
 ]
+
+
+def bind_miprov2(  # noqa: PLR0913
+    *,
+    settings: Miprov2Settings,
+    store: ObjectStore,
+    engine: EvalEngine,
+    experiment: Experiment,
+    family: FamilySpec,
+    proposer: ProposalRuntime,
+) -> Miprov2Binding:
+    trainset, valset = partition_internal_split(
+        tuple(engine.sampling.task_hashes),
+        train_size=settings.partition.train_size,
+        val_size=settings.partition.val_size,
+    )
+    control = build_miprov2_control(
+        engine=engine,
+        experiment=experiment,
+        family=family,
+        proposer_config_ref=proposer.route.ref,
+        demo_mode=settings.demo_mode,
+        seed=settings.seed,
+        minibatch=settings.minibatch,
+        minibatch_size=settings.minibatch_size,
+        minibatch_full_eval_steps=settings.minibatch_full_eval_steps,
+        num_trials=settings.num_trials,
+        num_candidates=settings.num_candidates,
+        trainset_task_hashes=trainset,
+        valset_task_hashes=valset,
+    )
+    adapter = build_miprov2_adapter(
+        store=store,
+        engine=engine,
+        control=control,
+        family=family,
+        proposer_transport=proposer.transport,
+    )
+    return Miprov2Binding(adapter=adapter, control=control)

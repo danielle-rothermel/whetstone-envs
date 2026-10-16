@@ -17,6 +17,7 @@ from whetstone.optim.codex.executor import build_codex_executor
 from whetstone.optim.codex.preflight import codex_auth_preflight
 from whetstone.optim.codex.runner import SubprocessCodexRunner
 
+from whetstone_envs.optim._bindings import CodexBinding
 from whetstone_envs.optim.codex_runtime import (
     ENVS_CODEX_RUNTIME_CONFIG_CLASS,
     EnvsCodexRuntimeConfig,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from whetstone.optim.codex.runner import CodexPromptContext
 
     from whetstone_envs.optim.families import FamilySpec
+    from whetstone_envs.optim.spec import CodexSettings
 
 CODEX_EVALUATE_CALL_CAP = 8
 
@@ -352,3 +354,40 @@ __all__ = [
     "refuse_unauthorized_real_codex",
     "resolve_codex_agent_model",
 ]
+
+
+def bind_codex(  # noqa: PLR0913
+    *,
+    settings: CodexSettings,
+    store: ObjectStore,
+    engine: EvalEngine,
+    experiment: Experiment,
+    family: FamilySpec,
+    runtime_config: EnvsCodexRuntimeConfig,
+    output_dir: Path,
+    sqlite_path: Path,
+    test_seam: CodexTestSeam | None = None,
+    prompt_builder: Callable[[CodexPromptContext], str] | None = None,
+) -> CodexBinding:
+    control = build_codex_control(
+        engine=engine,
+        experiment=experiment,
+        family=family,
+        model=resolve_codex_agent_model(settings.model),
+        max_tool_calls=settings.capacity,
+        codex_binary=settings.binary,
+        reasoning_effort=settings.reasoning_effort,
+        wall_seconds=settings.wall_seconds,
+    )
+    adapter = build_codex_adapter(
+        store=store,
+        control=control,
+        engine=engine,
+        runtime_config=runtime_config,
+        reward_policy=experiment.reward_policy,
+        store_path=sqlite_path,
+        run_root=codex_run_root(output_dir),
+        test_seam=test_seam,
+        prompt_builder=prompt_builder,
+    )
+    return CodexBinding(adapter=adapter, control=control)

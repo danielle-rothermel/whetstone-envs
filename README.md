@@ -145,7 +145,9 @@ selected tool-call candidate is recorded in the terminal optimization result.
 Optimizer Python inputs are imported from `whetstone_envs.optim.spec`.
 `RunSpec` contains one `CoproSettings`, `GepaSettings`, `Miprov2Settings`, or
 `CodexSettings` object. GEPA and MIPROv2 compose `TrainValSizes` as `partition`.
-Inputs validate at construction; unknown fields and invalid combinations fail
+Optimizer modules own adapter/control construction; `optim.run` coordinates
+preparation, runtime execution, and publication. Inputs validate at
+construction; unknown fields and invalid combinations fail
 before creating a run directory. CLI flags are translated into these models.
 
 ```python

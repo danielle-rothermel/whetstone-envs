@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from whetstone.eval.protocol import EvalEngine
     from whetstone.provider.policy import ProviderExecutionPolicy
 
+    from whetstone_envs.optim.spec import RunSpec
+
 #: The two transports a run may name, mirroring ``RunSpec.transport``.
 #: Spelled here as a persisted enumeration because this config crosses a
 #: process boundary.
@@ -214,3 +216,19 @@ __all__ = [
     "CodexRuntimeTransport",
     "EnvsCodexRuntimeConfig",
 ]
+
+
+def runtime_config_for_run(
+    *, spec: RunSpec, n_per_category: int, pool_seed_start: int
+) -> EnvsCodexRuntimeConfig:
+    return EnvsCodexRuntimeConfig(
+        family_id=spec.family.value,
+        split_sizes=spec.split_sizes,
+        n_per_category=n_per_category,
+        pool_seed_start=pool_seed_start,
+        num_seeds=spec.num_seeds,
+        transport=spec.transport.value,
+        model=spec.model,
+        reasoning_effort=spec.task_reasoning_effort,
+        provider_concurrency=spec.provider_concurrency,
+    )

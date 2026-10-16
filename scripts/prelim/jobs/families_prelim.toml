@@ -1,0 +1,177 @@
+# Prelim sweep over the task families. Expand into a queue with
+#   uv run --no-sync python scripts/prelim/queue_make.py \
+#     scripts/prelim/jobs/families_prelim.toml --queue <queue-dir>
+# and start workers from the repository root with OPENROUTER_API_KEY set:
+#   mise exec -- uv run --no-sync python scripts/prelim/queue_worker.py \
+#     --queue <queue-dir>
+# Search wall caps: 1800 s at 300 calls, 3600 s at 1000, 10800 s at 3000.
+# Reflection model defaults to openai/gpt-5.4-nano unless a job sets one.
+# The c23 jobs are naive screens; the refl-* jobs compare proposers on c18.
+
+[queue]
+command = ["uv", "run", "--no-sync", "python", "scripts/prelim/gepa_family.py"]
+out_root = "~/drotherm/data/whetstone-envs/studies/families-prelim"
+
+[[jobs]]
+name = "c18-g41-mini-naive"
+args = ["--family", "c18", "--arm", "naive", "--task-model", "openai/gpt-4.1-mini"]
+
+[[jobs]]
+name = "c18-g41-mini-formatfixed"
+args = ["--family", "c18", "--arm", "format_fixed", "--task-model", "openai/gpt-4.1-mini"]
+
+[[jobs]]
+name = "c18-g41-mini-null-300"
+args = ["--family", "c18", "--arm", "null", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c18-g41-mini-null-1000"
+args = ["--family", "c18", "--arm", "null", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c18-g41-mini-null-3000"
+args = ["--family", "c18", "--arm", "null", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-s1"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--seed", "1", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-s2"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--seed", "2", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-1000"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-3000"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c11-g5-mini-low-naive"
+args = ["--family", "c11", "--arm", "naive", "--task-model", "openai/gpt-5-mini", "--reasoning", "low"]
+
+[[jobs]]
+name = "c11-g5-mini-low-formatfixed"
+args = ["--family", "c11", "--arm", "format_fixed", "--task-model", "openai/gpt-5-mini", "--reasoning", "low"]
+
+[[jobs]]
+name = "c11-g5-mini-low-null-300"
+args = ["--family", "c11", "--arm", "null", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c11-g5-mini-low-null-1000"
+args = ["--family", "c11", "--arm", "null", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c11-g5-mini-low-null-3000"
+args = ["--family", "c11", "--arm", "null", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-300"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-300-s1"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "300", "--seed", "1", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-300-s2"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "300", "--seed", "2", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-1000"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-3000"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c22-g41-mini-naive"
+args = ["--family", "c22", "--arm", "naive", "--task-model", "openai/gpt-4.1-mini"]
+
+[[jobs]]
+name = "c22-g41-mini-formatfixed"
+args = ["--family", "c22", "--arm", "format_fixed", "--task-model", "openai/gpt-4.1-mini"]
+
+[[jobs]]
+name = "c22-g41-mini-null-300"
+args = ["--family", "c22", "--arm", "null", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c22-g41-mini-null-1000"
+args = ["--family", "c22", "--arm", "null", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c22-g41-mini-null-3000"
+args = ["--family", "c22", "--arm", "null", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c22-g41-mini-gepa-300"
+args = ["--family", "c22", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c22-g41-mini-gepa-1000"
+args = ["--family", "c22", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c22-g41-mini-gepa-3000"
+args = ["--family", "c22", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c23-g5-mini-medium-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "openai/gpt-5-mini", "--reasoning", "medium"]
+
+[[jobs]]
+name = "c23-g5-minimal-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "openai/gpt-5", "--reasoning", "minimal"]
+
+[[jobs]]
+name = "c19-g5-mini-low-naive"
+args = ["--family", "c19", "--arm", "naive", "--task-model", "openai/gpt-5-mini", "--reasoning", "low"]
+
+[[jobs]]
+name = "c19-g5-mini-low-formatfixed"
+args = ["--family", "c19", "--arm", "format_fixed", "--task-model", "openai/gpt-5-mini", "--reasoning", "low"]
+
+[[jobs]]
+name = "c19-g5-mini-low-null-300"
+args = ["--family", "c19", "--arm", "null", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c19-g5-mini-low-null-1000"
+args = ["--family", "c19", "--arm", "null", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c19-g5-mini-low-null-3000"
+args = ["--family", "c19", "--arm", "null", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c19-g5-mini-low-gepa-300"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "300", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c19-g5-mini-low-gepa-1000"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "1000", "--wall-cap-s", "3600"]
+
+[[jobs]]
+name = "c19-g5-mini-low-gepa-3000"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--max-metric-calls", "3000", "--wall-cap-s", "10800"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-refl-g5-nano"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--reflection-model", "openai/gpt-5-nano", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-refl-g5-mini"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--reflection-model", "openai/gpt-5-mini", "--wall-cap-s", "1800"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-refl-g5"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--max-metric-calls", "300", "--reflection-model", "openai/gpt-5", "--wall-cap-s", "1800"]

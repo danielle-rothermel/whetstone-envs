@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Preliminary sweep tooling in `scripts/prelim/`: `gepa_family.py` runs naive,
+  format-fixed, null, and upstream-GEPA arms for C11, C18, C19, C22, and C23
+  over OpenRouter, and `queue_make.py`/`queue_worker.py` run a file-based job
+  queue over `jobs/families_prelim.toml`.
+
 - Task-specific terminal viewers in `scripts/c11/viz.py`, `scripts/c18/viz.py`,
   `scripts/c19/viz.py`, `scripts/c22/viz.py`, and `scripts/c23/viz.py`. Each
   separates public inputs from private debugging gold, identifies the instance

@@ -78,7 +78,6 @@ MIN_MIPROV2_TASKS = 2
 INLINE_EXECUTOR_SCHEMA_SUFFIX = "miprov2_proposal_executor"
 #: Minibatching is off by default: every trial then evaluates the whole
 #: validation split, which is the schedule this runner has always produced.
-#: The protocol's auto-light configuration turns it on explicitly.
 DEFAULT_MIPROV2_MINIBATCH = False
 #: Trials between full-validation re-evaluations of the incumbent. Only
 #: observable once ``minibatch`` is on.

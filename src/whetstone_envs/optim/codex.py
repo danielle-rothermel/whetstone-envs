@@ -214,15 +214,8 @@ def build_codex_adapter(  # noqa: PLR0913
     Results there, and ``reward_policy`` is the policy that server scores
     with -- the same one the control pins by hash.
 
-    ``prompt_builder`` replaces the instruction the agent receives. It is
-    a *diagnostic* seam, not a production one: no ``RunSpec`` field and no
-    CLI flag reaches it, and the only caller is the real-CLI ladder, whose
-    capacity and no-tool-call rungs cannot observe what they assert under
-    the truthful production prompt -- an agent correctly told it may make
-    one call makes one call, and the durable refusal path is never
-    exercised. A builder inherits the default's obligations: see
-    ``CodexPromptContext``, which carries the ``model_route`` and
-    ``base_ref`` the agent can derive from nothing it can see.
+    ``prompt_builder`` is a diagnostic seam outside the input model and CLI.
+    ``CodexPromptContext`` supplies the resolved route and base reference.
 
     ``runtime_config`` is what that out-of-process server rebuilds its
     engine from, and ``engine`` is the in-process engine it must agree

@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Provider transports use concrete generation requests, invocation evidence,
+  call configs, and Whetstone's transport signature. Fake tasks use the owned
+  task-row type; retry policy, attempt limits, delay bounds, and jitter remain
+  unchanged. Remove redundant provider comments and docstrings.
+
 - Standalone evaluation, optimizer execution, and Codex subprocess rebuilding
   share policy, transport, and evaluation-engine assembly in
   `evaluation/runtime.py`. Transport kinds have the same owner. Codex retains

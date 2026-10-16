@@ -39,8 +39,7 @@ class EnvsCodexRuntimeConfig(BaseModel):
 
     This is a persisted cross-process contract -- the MCP server validates
     it out of a subprocess environment variable -- so it is a frozen,
-    ``extra="forbid"`` model and its field spellings are pinned by a
-    golden test.
+    ``extra="forbid"`` model.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -175,8 +174,7 @@ class EnvsCodexRuntimeConfig(BaseModel):
 
 #: The ``module:Class`` path the Codex runner records so the MCP server
 #: can load this config. It is a persisted string crossing a process
-#: boundary, so it is named here and pinned by a golden test rather than
-#: derived from ``__name__`` at a call site.
+#: boundary, so its spelling is explicit rather than derived from module names.
 ENVS_CODEX_RUNTIME_CONFIG_CLASS = (
     "whetstone_envs.optim.codex_runtime:EnvsCodexRuntimeConfig"
 )

@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Standalone C19 execution lives in `whetstone_envs.evaluation`, runtime evidence
+  extraction in `whetstone_envs.optim.extraction`, and shared run-directory
+  handling in `whetstone_envs.artifacts`. Reporting owns presentation and CLI
+  dispatch. Runtime execution no longer imports reporting. Evaluation inputs
+  are strict frozen Pydantic models, with invalid settings rejected at
+  construction; internal prepared candidates and task plans are frozen slotted
+  dataclasses. Extraction uses focused joining, hydration, accounting, and
+  ordered-history helpers. Saved report formats and valid run behavior remain
+  unchanged by this extraction.
+
 - Portable evaluation and trajectory models, canonical report file operations,
   accounting, and comparisons are owned by `whetstone_envs.evidence`.
   Reporting and optimizer callers use that package directly; the reporting

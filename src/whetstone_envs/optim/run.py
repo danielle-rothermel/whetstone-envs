@@ -64,6 +64,11 @@ from whetstone.optim.tools.execution import EvaluatingToolExecutor
 from whetstone.optim.tools.facade import ToolAdmissionAuthority
 from whetstone.provider.language_model import PlainPromptAdapter
 
+from whetstone_envs.artifacts import (
+    default_output_dir,
+    durable_run_boundary,
+    prepare_output_root,
+)
 from whetstone_envs.evidence import publish_trajectory_report
 from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
@@ -85,6 +90,9 @@ from whetstone_envs.optim.codex_runtime import EnvsCodexRuntimeConfig
 from whetstone_envs.optim.experiment import (
     provider_call_config_ref,
     provider_config_ref,
+)
+from whetstone_envs.optim.extraction.trajectory import (
+    project_trajectory_report,
 )
 from whetstone_envs.optim.families import (
     KNOWN_FAMILY_IDS,
@@ -121,11 +129,6 @@ from whetstone_envs.optim.split import (
     TRAIN_VAL_OPTIMIZERS,
     partition_internal_split,
 )
-from whetstone_envs.reporting.projection import project_trajectory_report
-from whetstone_envs.reporting.publication import (
-    durable_run_boundary,
-    prepare_output_root,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -140,10 +143,6 @@ if TYPE_CHECKING:
     from whetstone.optim.proposal.proposer import ProposerTransport
 
     from whetstone_envs.optim.codex_runtime import CodexRuntimeTransport
-
-DEFAULT_OUTPUT_ROOT = (
-    Path.home() / "drotherm" / "data" / "runs" / ("whetstone-envs")
-)
 
 OPTIMIZERS = ("codex", "copro", "gepa", "miprov2")
 
@@ -449,10 +448,6 @@ def _validate_codex_settings(spec: RunSpec) -> None:
             "codex_reasoning_effort must be one of "
             f"{list(CODEX_REASONING_EFFORTS)}"
         )
-
-
-def default_output_dir(run_id: str) -> Path:
-    return DEFAULT_OUTPUT_ROOT / run_id
 
 
 def _proposal_contract(family: FamilySpec) -> CoproProposalContractRecord:
@@ -1195,7 +1190,6 @@ __all__ = [
     "DEFAULT_MIPROV2_MINIBATCH",
     "DEFAULT_MIPROV2_NUM_CANDIDATES",
     "DEFAULT_MIPROV2_NUM_TRIALS",
-    "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_SPLIT_SIZES",
     "DEMO_MODES",
     "GEPA_DEFAULT_SEED",
@@ -1211,7 +1205,6 @@ __all__ = [
     "CodexTestSeam",
     "RealCodexRefusedError",
     "RunSpec",
-    "default_output_dir",
     "installed_whetstone_ai_version",
     "registered_family_ids",
     "run_optimizer",

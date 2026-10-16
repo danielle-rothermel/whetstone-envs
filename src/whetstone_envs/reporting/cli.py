@@ -243,7 +243,7 @@ def _console(*, no_color: bool):
 
 def _candidate_inputs(raw: list[tuple[str, str, str | None]] | None):
     from whetstone_envs.c19 import PROBES
-    from whetstone_envs.reporting.execution import CandidateInput
+    from whetstone_envs.evaluation.spec import CandidateInput
 
     if raw is None:
         return ()
@@ -269,10 +269,8 @@ def _dispatch(arguments: argparse.Namespace) -> int:
         render_c19_info(console, show_templates=arguments.show_templates)
         return 0
     if arguments.command == "run":
-        from whetstone_envs.reporting.execution import (
-            C19EvalSpec,
-            run_c19_evaluation,
-        )
+        from whetstone_envs.evaluation.run import run_c19_evaluation
+        from whetstone_envs.evaluation.spec import C19EvalSpec
         from whetstone_envs.reporting.rich_views import render_summary
 
         output = run_c19_evaluation(
@@ -368,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(arguments)
     except Exception as error:  # noqa: BLE001 - CLI translates boundary errors.
-        from whetstone_envs.reporting.publication import DurableRunError
+        from whetstone_envs.artifacts import DurableRunError
 
         console = _console(no_color=arguments.no_color)
         if isinstance(error, DurableRunError):

@@ -276,3 +276,43 @@ A deterministic, portable, offline presentation derived only from one strict \
 evaluation or optimization trajectory report plus packaged trusted assets. It \
 is replaceable from its authoritative JSON source, contains private debugging \
 data, and defines no persistence or interchange schema."""
+
+[[terms]]
+name = "standalone evaluation"
+definition = """
+Execution of named C19 candidates against a selected task split with repeated \
+evaluations, configured provider transport, runtime storage, and portable \
+evidence publication."""
+exported_symbols = [
+    "whetstone_envs.evaluation.spec.CandidateInput",
+    "whetstone_envs.evaluation.spec.C19EvalSpec",
+    "whetstone_envs.evaluation.run.EvalRunOutput",
+    "whetstone_envs.evaluation.run.run_c19_evaluation",
+]
+
+[[terms]]
+name = "runtime evidence extraction"
+definition = """
+Reading and validating persisted Whetstone evaluation and optimizer records, \
+then translating them into portable evaluation and trajectory reports without \
+executing candidates or publishing files."""
+exported_symbols = [
+    "whetstone_envs.optim.extraction.evaluation.EvaluationCandidate",
+    "whetstone_envs.optim.extraction.evaluation.project_eval_report",
+    "whetstone_envs.optim.extraction.trajectory.project_trajectory_report",
+]
+
+[[terms]]
+name = "run artifact directory"
+definition = """
+A resolved directory outside detected Git repositories holding execution \
+outputs, with a shared default location and a failure boundary preserving \
+the directory for inspection."""
+exported_symbols = [
+    "whetstone_envs.artifacts.DEFAULT_OUTPUT_ROOT",
+    "whetstone_envs.artifacts.DurableRunError",
+    "whetstone_envs.artifacts.default_output_dir",
+    "whetstone_envs.artifacts.durable_run_boundary",
+    "whetstone_envs.artifacts.prepare_output_root",
+    "whetstone_envs.artifacts.validate_output_root",
+]

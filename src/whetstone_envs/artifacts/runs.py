@@ -8,9 +8,16 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-class DurableRunError(RuntimeError):
-    """An operation failed after its durable run directory was created."""
+DEFAULT_OUTPUT_ROOT = (
+    Path.home() / "drotherm" / "data" / "runs" / "whetstone-envs"
+)
 
+
+def default_output_dir(run_id: str) -> Path:
+    return DEFAULT_OUTPUT_ROOT / run_id
+
+
+class DurableRunError(RuntimeError):
     def __init__(self, directory: Path, cause: Exception) -> None:
         super().__init__(str(cause))
         self.directory = directory
@@ -44,7 +51,6 @@ def repository_roots() -> tuple[Path, ...]:
 
 
 def validate_output_root(path: Path) -> Path:
-    """Resolve and reject a run directory inside any detected repository."""
     resolved = path.resolve()
     target_repository = _git_root(resolved)
     if target_repository is not None or any(
@@ -61,7 +67,9 @@ def prepare_output_root(path: Path) -> Path:
 
 
 __all__ = [
+    "DEFAULT_OUTPUT_ROOT",
     "DurableRunError",
+    "default_output_dir",
     "durable_run_boundary",
     "prepare_output_root",
     "repository_roots",

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dr_providers import ReasoningEffort
 
+from whetstone_envs.artifacts import DurableRunError, default_output_dir
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
     MAX_UNFORCED_PROVIDER_CONCURRENCY,
@@ -33,11 +34,9 @@ from whetstone_envs.optim.run import (
     TRANSPORTS,
     CodexReasoningEffort,
     RunSpec,
-    default_output_dir,
     registered_family_ids,
     run_optimizer,
 )
-from whetstone_envs.reporting.publication import DurableRunError
 
 
 def _split_sizes(value: str) -> tuple[int, int, int]:

@@ -10,6 +10,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from whetstone_envs.artifacts import validate_output_root
 from whetstone_envs.c19._info import C19_INFO
 from whetstone_envs.evidence import (
     EvalReport,
@@ -20,7 +21,6 @@ from whetstone_envs.evidence import (
     load_trajectory_report,
 )
 from whetstone_envs.reporting._comparison import comparison_label
-from whetstone_envs.reporting.publication import validate_output_root
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

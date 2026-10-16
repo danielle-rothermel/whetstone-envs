@@ -37,13 +37,22 @@ execution-contract code:
 - [**Evidence**][evidence-source] owns strict evaluation and optimization
   trajectory records, row accounting, paired comparisons, and bounded
   canonical report files without execution dependencies.
-- [**Reporting**][reporting-source] provides standalone evaluation execution,
-  terminal and self-contained HTML inspection.
+- **Artifacts** owns run directories, the shared default output path, and
+  errors carrying the directory of a failed run.
+- [**Reporting**][reporting-source] provides terminal and self-contained HTML
+  inspection plus CLI dispatch to standalone evaluation.
 
 Task-family implementations live in their owning subpackages alongside the
 shared harness. An optional [`whetstone_envs.optim`][optim-source] extra maps
 those contracts onto whetstone-ai experiments; installing it requires Python
 3.13 or 3.14 and pins published `whetstone-ai==0.1.17`.
+
+Standalone C19 execution lives in `whetstone_envs.evaluation` and requires the
+same `optim` extra. `evaluation.spec` validates candidate inputs and run
+settings; `evaluation.run` prepares tasks, configures providers, executes
+candidates, and publishes reports. `optim.extraction` reads Whetstone runtime
+evidence into portable reports for evaluation and optimizer execution.
+Reporting reads those portable reports without importing the runtime stack.
 
 ## Installation
 

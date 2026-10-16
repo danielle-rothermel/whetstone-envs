@@ -163,7 +163,10 @@ ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]
-runtime-evaluated-base-classes = ["whetstone_envs.evidence._models._StrictModel"]
+runtime-evaluated-base-classes = [
+    "whetstone_envs.evaluation.spec._EvaluationInput",
+    "whetstone_envs.evidence._models._StrictModel",
+]
 
 [tool.ty.src]
 include = ["scripts", "src", "tests"]
@@ -173,12 +176,13 @@ exclude = [
 ]
 
 [[tool.ty.overrides]]
-# The optimizer and reporting packages import whetstone-ai,
+# The optional runtime packages import whetstone-ai,
 # which the `optim` extra installs only on Python 3.13+. The 3.12 check
 # therefore type-checks these files against no whetstone at all, so the
 # imports are unresolvable there by construction and nowhere else.
 include = [
     "src/whetstone_envs/optim/**",
+    "src/whetstone_envs/evaluation/**",
     "src/whetstone_envs/reporting/**",
     "tests/optim/**",
     "tests/real_codex/**",

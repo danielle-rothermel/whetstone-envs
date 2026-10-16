@@ -4,6 +4,43 @@
 
 Reproducible quick-test environment contracts and task families.
 
+## Visualize task examples
+
+Run these commands from the repository root. Each script generates local
+examples and shows their IDs, seeds, categories, public inputs, and clearly
+labeled private gold. No model or provider calls are made.
+
+| Task | Command | Display |
+| --- | --- | --- |
+| C11: JSON canonicalization | `uv run python scripts/c11/viz.py` | Original and canonical JSON, with escaped views to expose whitespace and control characters. |
+| C18: deductive entailment | `uv run --extra c18 python scripts/c18/viz.py` | Facts, rules, query, expected verdict, deduction depth, and distractor policy. |
+| C19: MiniGrid state prediction | `uv run python scripts/c19/viz.py` | Grid with row/column coordinates, ordered actions, question, and expected final-state answer. |
+| C22: instruction constraints | `uv run python scripts/c22/viz.py` | Numbered public constraints and decoded private scoring parameters. |
+| C23: string induction | `uv run python scripts/c23/viz.py` | Demonstrations, quoted query and expected output, rule family, and context length. |
+
+Every script accepts `--count N` (default `1`) and `--probes` to show both
+rendered probe prompts. C11, C18, C19, and C23 generate small balanced pools
+with `--n-per-category N` (default `1`); increase it when requesting more
+examples than the pool contains. `--count` selects the first instances in
+pool order. C11, C18, and C19 also accept `--seed-start`.
+
+Use `--hard` for C18's hard configuration or `--preset hard` for C22's fixed
+hard pool. C22 and C23 retain their configured generation seeds. C23 instances
+retain expected output rather than the sampled hidden rule itself.
+
+```bash
+uv run python scripts/c11/viz.py --count 5 --probes
+uv run --extra c18 python scripts/c18/viz.py --hard --count 3
+uv run python scripts/c22/viz.py --preset hard --count 3
+```
+
+<details>
+<summary>C19 terminal preview</summary>
+
+![C19 instance viewer](docs/images/task-viewer-c19.svg)
+
+</details>
+
 ## Scope
 
 This repo owns the environment data and evaluation rules shared by Whetstone's

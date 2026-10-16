@@ -1,0 +1,181 @@
+<svg class="rich-terminal" viewBox="0 0 1238 782.0" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .c19-instance-viewer-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .c19-instance-viewer-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .c19-instance-viewer-r1 { fill: #00823d }
+.c19-instance-viewer-r2 { fill: #c5c8c6;font-weight: bold }
+.c19-instance-viewer-r3 { fill: #c5c8c6 }
+.c19-instance-viewer-r4 { fill: #c5c8c6;font-style: italic; }
+.c19-instance-viewer-r5 { fill: #868887 }
+.c19-instance-viewer-r6 { fill: #68a0b3;font-weight: bold }
+.c19-instance-viewer-r7 { fill: #68a0b3 }
+.c19-instance-viewer-r8 { fill: #98a84b }
+    </style>
+
+    <defs>
+    <clipPath id="c19-instance-viewer-clip-terminal">
+      <rect x="0" y="0" width="1219.0" height="731.0" />
+    </clipPath>
+    <clipPath id="c19-instance-viewer-line-0">
+    <rect x="0" y="1.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-1">
+    <rect x="0" y="25.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-2">
+    <rect x="0" y="50.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-3">
+    <rect x="0" y="74.7" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-4">
+    <rect x="0" y="99.1" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-5">
+    <rect x="0" y="123.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-6">
+    <rect x="0" y="147.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-7">
+    <rect x="0" y="172.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-8">
+    <rect x="0" y="196.7" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-9">
+    <rect x="0" y="221.1" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-10">
+    <rect x="0" y="245.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-11">
+    <rect x="0" y="269.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-12">
+    <rect x="0" y="294.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-13">
+    <rect x="0" y="318.7" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-14">
+    <rect x="0" y="343.1" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-15">
+    <rect x="0" y="367.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-16">
+    <rect x="0" y="391.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-17">
+    <rect x="0" y="416.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-18">
+    <rect x="0" y="440.7" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-19">
+    <rect x="0" y="465.1" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-20">
+    <rect x="0" y="489.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-21">
+    <rect x="0" y="513.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-22">
+    <rect x="0" y="538.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-23">
+    <rect x="0" y="562.7" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-24">
+    <rect x="0" y="587.1" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-25">
+    <rect x="0" y="611.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-26">
+    <rect x="0" y="635.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-27">
+    <rect x="0" y="660.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="c19-instance-viewer-line-28">
+    <rect x="0" y="684.7" width="1220" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1236" height="780" rx="8"/><text class="c19-instance-viewer-title" fill="#c5c8c6" text-anchor="middle" x="618" y="27">C19&#160;instance&#160;viewer</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#c19-instance-viewer-clip-terminal)">
+    
+    <g class="c19-instance-viewer-matrix">
+    <text class="c19-instance-viewer-r1" x="0" y="20" textLength="366" clip-path="url(#c19-instance-viewer-line-0)">─────────────────────────────&#160;</text><text class="c19-instance-viewer-r2" x="366" y="20" textLength="475.8" clip-path="url(#c19-instance-viewer-line-0)">c19-navigation-small-coordinate-1000000</text><text class="c19-instance-viewer-r1" x="841.8" y="20" textLength="378.2" clip-path="url(#c19-instance-viewer-line-0)">&#160;──────────────────────────────</text><text class="c19-instance-viewer-r3" x="1220" y="20" textLength="12.2" clip-path="url(#c19-instance-viewer-line-0)">
+</text><text class="c19-instance-viewer-r3" x="0" y="44.4" textLength="671" clip-path="url(#c19-instance-viewer-line-1)">Seed:&#160;1000000&#160;|&#160;Categories:&#160;navigation|small|coordinate</text><text class="c19-instance-viewer-r3" x="1220" y="44.4" textLength="12.2" clip-path="url(#c19-instance-viewer-line-1)">
+</text><text class="c19-instance-viewer-r4" x="0" y="68.8" textLength="390.4" clip-path="url(#c19-instance-viewer-line-2)">&#160;&#160;&#160;Public&#160;initial&#160;grid&#160;(row,&#160;&#160;&#160;&#160;</text><text class="c19-instance-viewer-r3" x="1220" y="68.8" textLength="12.2" clip-path="url(#c19-instance-viewer-line-2)">
+</text><text class="c19-instance-viewer-r4" x="0" y="93.2" textLength="390.4" clip-path="url(#c19-instance-viewer-line-3)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;column)&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="c19-instance-viewer-r3" x="1220" y="93.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-3)">
+</text><text class="c19-instance-viewer-r3" x="1220" y="117.6" textLength="12.2" clip-path="url(#c19-instance-viewer-line-4)">
+</text><text class="c19-instance-viewer-r2" x="24.4" y="142" textLength="36.6" clip-path="url(#c19-instance-viewer-line-5)">row</text><text class="c19-instance-viewer-r2" x="97.6" y="142" textLength="24.4" clip-path="url(#c19-instance-viewer-line-5)">0&#160;</text><text class="c19-instance-viewer-r2" x="158.6" y="142" textLength="24.4" clip-path="url(#c19-instance-viewer-line-5)">1&#160;</text><text class="c19-instance-viewer-r2" x="219.6" y="142" textLength="24.4" clip-path="url(#c19-instance-viewer-line-5)">2&#160;</text><text class="c19-instance-viewer-r2" x="280.6" y="142" textLength="24.4" clip-path="url(#c19-instance-viewer-line-5)">3&#160;</text><text class="c19-instance-viewer-r2" x="341.6" y="142" textLength="24.4" clip-path="url(#c19-instance-viewer-line-5)">4&#160;</text><text class="c19-instance-viewer-r3" x="1220" y="142" textLength="12.2" clip-path="url(#c19-instance-viewer-line-5)">
+</text><text class="c19-instance-viewer-r3" x="0" y="166.4" textLength="390.4" clip-path="url(#c19-instance-viewer-line-6)">&#160;──────────────────────────────&#160;</text><text class="c19-instance-viewer-r3" x="1220" y="166.4" textLength="12.2" clip-path="url(#c19-instance-viewer-line-6)">
+</text><text class="c19-instance-viewer-r5" x="24.4" y="190.8" textLength="36.6" clip-path="url(#c19-instance-viewer-line-7)">0&#160;&#160;</text><text class="c19-instance-viewer-r3" x="97.6" y="190.8" textLength="24.4" clip-path="url(#c19-instance-viewer-line-7)">WG</text><text class="c19-instance-viewer-r3" x="158.6" y="190.8" textLength="24.4" clip-path="url(#c19-instance-viewer-line-7)">WG</text><text class="c19-instance-viewer-r3" x="219.6" y="190.8" textLength="24.4" clip-path="url(#c19-instance-viewer-line-7)">WG</text><text class="c19-instance-viewer-r3" x="280.6" y="190.8" textLength="24.4" clip-path="url(#c19-instance-viewer-line-7)">WG</text><text class="c19-instance-viewer-r3" x="341.6" y="190.8" textLength="24.4" clip-path="url(#c19-instance-viewer-line-7)">WG</text><text class="c19-instance-viewer-r3" x="1220" y="190.8" textLength="12.2" clip-path="url(#c19-instance-viewer-line-7)">
+</text><text class="c19-instance-viewer-r3" x="1220" y="215.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-8)">
+</text><text class="c19-instance-viewer-r5" x="24.4" y="239.6" textLength="36.6" clip-path="url(#c19-instance-viewer-line-9)">1&#160;&#160;</text><text class="c19-instance-viewer-r3" x="97.6" y="239.6" textLength="24.4" clip-path="url(#c19-instance-viewer-line-9)">WG</text><text class="c19-instance-viewer-r3" x="341.6" y="239.6" textLength="24.4" clip-path="url(#c19-instance-viewer-line-9)">WG</text><text class="c19-instance-viewer-r3" x="1220" y="239.6" textLength="12.2" clip-path="url(#c19-instance-viewer-line-9)">
+</text><text class="c19-instance-viewer-r3" x="1220" y="264" textLength="12.2" clip-path="url(#c19-instance-viewer-line-10)">
+</text><text class="c19-instance-viewer-r5" x="24.4" y="288.4" textLength="36.6" clip-path="url(#c19-instance-viewer-line-11)">2&#160;&#160;</text><text class="c19-instance-viewer-r3" x="97.6" y="288.4" textLength="24.4" clip-path="url(#c19-instance-viewer-line-11)">WG</text><text class="c19-instance-viewer-r3" x="341.6" y="288.4" textLength="24.4" clip-path="url(#c19-instance-viewer-line-11)">WG</text><text class="c19-instance-viewer-r3" x="1220" y="288.4" textLength="12.2" clip-path="url(#c19-instance-viewer-line-11)">
+</text><text class="c19-instance-viewer-r3" x="1220" y="312.8" textLength="12.2" clip-path="url(#c19-instance-viewer-line-12)">
+</text><text class="c19-instance-viewer-r5" x="24.4" y="337.2" textLength="36.6" clip-path="url(#c19-instance-viewer-line-13)">3&#160;&#160;</text><text class="c19-instance-viewer-r3" x="97.6" y="337.2" textLength="24.4" clip-path="url(#c19-instance-viewer-line-13)">WG</text><text class="c19-instance-viewer-r6" x="219.6" y="337.2" textLength="24.4" clip-path="url(#c19-instance-viewer-line-13)">&gt;&gt;</text><text class="c19-instance-viewer-r3" x="341.6" y="337.2" textLength="24.4" clip-path="url(#c19-instance-viewer-line-13)">WG</text><text class="c19-instance-viewer-r3" x="1220" y="337.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-13)">
+</text><text class="c19-instance-viewer-r3" x="1220" y="361.6" textLength="12.2" clip-path="url(#c19-instance-viewer-line-14)">
+</text><text class="c19-instance-viewer-r5" x="24.4" y="386" textLength="36.6" clip-path="url(#c19-instance-viewer-line-15)">4&#160;&#160;</text><text class="c19-instance-viewer-r3" x="97.6" y="386" textLength="24.4" clip-path="url(#c19-instance-viewer-line-15)">WG</text><text class="c19-instance-viewer-r3" x="158.6" y="386" textLength="24.4" clip-path="url(#c19-instance-viewer-line-15)">WG</text><text class="c19-instance-viewer-r3" x="219.6" y="386" textLength="24.4" clip-path="url(#c19-instance-viewer-line-15)">WG</text><text class="c19-instance-viewer-r3" x="280.6" y="386" textLength="24.4" clip-path="url(#c19-instance-viewer-line-15)">WG</text><text class="c19-instance-viewer-r3" x="341.6" y="386" textLength="24.4" clip-path="url(#c19-instance-viewer-line-15)">WG</text><text class="c19-instance-viewer-r3" x="1220" y="386" textLength="12.2" clip-path="url(#c19-instance-viewer-line-15)">
+</text><text class="c19-instance-viewer-r3" x="1220" y="410.4" textLength="12.2" clip-path="url(#c19-instance-viewer-line-16)">
+</text><text class="c19-instance-viewer-r3" x="0" y="434.8" textLength="732" clip-path="url(#c19-instance-viewer-line-17)">W:&#160;wall&#160;|&#160;K:&#160;key&#160;|&#160;A:&#160;ball&#160;|&#160;D:&#160;closed&#160;door&#160;|&#160;L:&#160;locked&#160;door</text><text class="c19-instance-viewer-r3" x="1220" y="434.8" textLength="12.2" clip-path="url(#c19-instance-viewer-line-17)">
+</text><text class="c19-instance-viewer-r3" x="0" y="459.2" textLength="695.4" clip-path="url(#c19-instance-viewer-line-18)">Blank:&#160;empty&#160;|&#160;__:&#160;open&#160;door&#160;|&#160;&gt;&gt;&#160;VV&#160;&lt;&lt;&#160;^^:&#160;agent&#160;heading</text><text class="c19-instance-viewer-r3" x="1220" y="459.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-18)">
+</text><text class="c19-instance-viewer-r7" x="0" y="483.6" textLength="24.4" clip-path="url(#c19-instance-viewer-line-19)">╭─</text><text class="c19-instance-viewer-r7" x="24.4" y="483.6" textLength="451.4" clip-path="url(#c19-instance-viewer-line-19)">─────────────────────────────────────</text><text class="c19-instance-viewer-r7" x="475.8" y="483.6" textLength="268.4" clip-path="url(#c19-instance-viewer-line-19)">&#160;Public&#160;action&#160;script&#160;</text><text class="c19-instance-viewer-r7" x="744.2" y="483.6" textLength="451.4" clip-path="url(#c19-instance-viewer-line-19)">─────────────────────────────────────</text><text class="c19-instance-viewer-r7" x="1195.6" y="483.6" textLength="24.4" clip-path="url(#c19-instance-viewer-line-19)">─╮</text><text class="c19-instance-viewer-r3" x="1220" y="483.6" textLength="12.2" clip-path="url(#c19-instance-viewer-line-19)">
+</text><text class="c19-instance-viewer-r7" x="0" y="508" textLength="12.2" clip-path="url(#c19-instance-viewer-line-20)">│</text><text class="c19-instance-viewer-r3" x="24.4" y="508" textLength="122" clip-path="url(#c19-instance-viewer-line-20)">LFFRFFRFLF</text><text class="c19-instance-viewer-r7" x="1207.8" y="508" textLength="12.2" clip-path="url(#c19-instance-viewer-line-20)">│</text><text class="c19-instance-viewer-r3" x="1220" y="508" textLength="12.2" clip-path="url(#c19-instance-viewer-line-20)">
+</text><text class="c19-instance-viewer-r7" x="0" y="532.4" textLength="1220" clip-path="url(#c19-instance-viewer-line-21)">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</text><text class="c19-instance-viewer-r3" x="1220" y="532.4" textLength="12.2" clip-path="url(#c19-instance-viewer-line-21)">
+</text><text class="c19-instance-viewer-r3" x="0" y="556.8" textLength="1220" clip-path="url(#c19-instance-viewer-line-22)">1.&#160;left&#160;→&#160;2.&#160;forward&#160;→&#160;3.&#160;forward&#160;→&#160;4.&#160;right&#160;→&#160;5.&#160;forward&#160;→&#160;6.&#160;forward&#160;→&#160;7.&#160;right&#160;→&#160;8.&#160;forward&#160;→&#160;9.&#160;</text><text class="c19-instance-viewer-r3" x="1220" y="556.8" textLength="12.2" clip-path="url(#c19-instance-viewer-line-22)">
+</text><text class="c19-instance-viewer-r3" x="0" y="581.2" textLength="219.6" clip-path="url(#c19-instance-viewer-line-23)">left&#160;→&#160;10.&#160;forward</text><text class="c19-instance-viewer-r3" x="1220" y="581.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-23)">
+</text><text class="c19-instance-viewer-r7" x="0" y="605.6" textLength="24.4" clip-path="url(#c19-instance-viewer-line-24)">╭─</text><text class="c19-instance-viewer-r7" x="24.4" y="605.6" textLength="475.8" clip-path="url(#c19-instance-viewer-line-24)">───────────────────────────────────────</text><text class="c19-instance-viewer-r7" x="500.2" y="605.6" textLength="207.4" clip-path="url(#c19-instance-viewer-line-24)">&#160;Public&#160;question&#160;</text><text class="c19-instance-viewer-r7" x="707.6" y="605.6" textLength="488" clip-path="url(#c19-instance-viewer-line-24)">────────────────────────────────────────</text><text class="c19-instance-viewer-r7" x="1195.6" y="605.6" textLength="24.4" clip-path="url(#c19-instance-viewer-line-24)">─╮</text><text class="c19-instance-viewer-r3" x="1220" y="605.6" textLength="12.2" clip-path="url(#c19-instance-viewer-line-24)">
+</text><text class="c19-instance-viewer-r7" x="0" y="630" textLength="12.2" clip-path="url(#c19-instance-viewer-line-25)">│</text><text class="c19-instance-viewer-r3" x="24.4" y="630" textLength="451.4" clip-path="url(#c19-instance-viewer-line-25)">What&#160;is&#160;the&#160;agent&#x27;s&#160;final&#160;coordinate?</text><text class="c19-instance-viewer-r7" x="1207.8" y="630" textLength="12.2" clip-path="url(#c19-instance-viewer-line-25)">│</text><text class="c19-instance-viewer-r3" x="1220" y="630" textLength="12.2" clip-path="url(#c19-instance-viewer-line-25)">
+</text><text class="c19-instance-viewer-r7" x="0" y="654.4" textLength="1220" clip-path="url(#c19-instance-viewer-line-26)">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</text><text class="c19-instance-viewer-r3" x="1220" y="654.4" textLength="12.2" clip-path="url(#c19-instance-viewer-line-26)">
+</text><text class="c19-instance-viewer-r8" x="0" y="678.8" textLength="24.4" clip-path="url(#c19-instance-viewer-line-27)">╭─</text><text class="c19-instance-viewer-r8" x="24.4" y="678.8" textLength="378.2" clip-path="url(#c19-instance-viewer-line-27)">───────────────────────────────</text><text class="c19-instance-viewer-r8" x="402.6" y="678.8" textLength="414.8" clip-path="url(#c19-instance-viewer-line-27)">&#160;Private&#160;gold:&#160;final-state&#160;answer&#160;</text><text class="c19-instance-viewer-r8" x="817.4" y="678.8" textLength="378.2" clip-path="url(#c19-instance-viewer-line-27)">───────────────────────────────</text><text class="c19-instance-viewer-r8" x="1195.6" y="678.8" textLength="24.4" clip-path="url(#c19-instance-viewer-line-27)">─╮</text><text class="c19-instance-viewer-r3" x="1220" y="678.8" textLength="12.2" clip-path="url(#c19-instance-viewer-line-27)">
+</text><text class="c19-instance-viewer-r8" x="0" y="703.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-28)">│</text><text class="c19-instance-viewer-r3" x="24.4" y="703.2" textLength="36.6" clip-path="url(#c19-instance-viewer-line-28)">2,3</text><text class="c19-instance-viewer-r8" x="1207.8" y="703.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-28)">│</text><text class="c19-instance-viewer-r3" x="1220" y="703.2" textLength="12.2" clip-path="url(#c19-instance-viewer-line-28)">
+</text><text class="c19-instance-viewer-r8" x="0" y="727.6" textLength="1220" clip-path="url(#c19-instance-viewer-line-29)">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</text><text class="c19-instance-viewer-r3" x="1220" y="727.6" textLength="12.2" clip-path="url(#c19-instance-viewer-line-29)">
+</text>
+    </g>
+    </g>
+</svg>

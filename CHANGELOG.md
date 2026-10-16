@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Task-specific terminal viewers in `scripts/c11/viz.py`, `scripts/c18/viz.py`,
+  `scripts/c19/viz.py`, `scripts/c22/viz.py`, and `scripts/c23/viz.py`. Each
+  separates public inputs from private debugging gold, identifies the instance
+  and generation seed, and optionally displays both rendered probes.
+
 - Focused standard-library tests for shared instance, split, manifest, evidence,
   report-rendering, and optimizer contracts. Repository checks run core tests
   on all supported Python versions and optimizer checks on Python 3.13+.
@@ -16,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a nonblank name and ordered instances with unique identifiers.
 
 ### Changed
+
+- Installed-wheel base-import validation follows the optional evaluation-package
+  boundary; evaluation runtime imports require the optimizer extra.
 
 - Optimizer execution accepts an explicit `OptimizationProblem` from Python
   code or `--problem` input files. Shared evaluation owns experiment preparation,

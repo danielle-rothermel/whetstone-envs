@@ -236,12 +236,15 @@ def _validate_package_files(
     _fail(f"{artifact.name} package file mismatch:\n" + "\n".join(details))
 
 
-def _public_modules() -> list[str]:
+def _base_install_modules() -> list[str]:
     modules = ["whetstone_envs"]
     modules.extend(
         f"whetstone_envs.{path.name}"
         for path in sorted(PACKAGE_DIR.iterdir())
-        if path.is_dir() and (path / "__init__.py").is_file()
+        # Evaluation support requires the optional optim dependencies.
+        if path.name != "evaluation"
+        and path.is_dir()
+        and (path / "__init__.py").is_file()
     )
     return modules
 
@@ -260,7 +263,7 @@ def _smoke_test_wheel(wheel: Path, expected_version: str) -> None:
     ):
         environment.pop(variable, None)
     environment["EXPECTED_VERSION"] = expected_version
-    environment["SMOKE_MODULES"] = ",".join(_public_modules())
+    environment["SMOKE_MODULES"] = ",".join(_base_install_modules())
     code = """
 import importlib
 import os

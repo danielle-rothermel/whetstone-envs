@@ -22,7 +22,7 @@ An instance pool contains one instance group and additionally rejects duplicate 
 public prompt identities; its category index is derived from that group's \
 ordered instances."""
 rationale = """
-Named membership and identifier uniqueness have one owner, while the task \
+Named membership and identifier uniqueness have one owner, while the instance \
 pool retains the stronger public-task uniqueness required for evaluation."""
 date = "2026-10-15"
 

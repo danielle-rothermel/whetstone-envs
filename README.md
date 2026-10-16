@@ -371,8 +371,8 @@ cached, read-only mapping by name. Serialization includes `pool` and
 `split_groups`, and named lookup is reconstructed from them.
 
 Experiment preparation requests `internal_eval`, `official`, and `held_out`
-in that order. The optimizer CLI and persisted evaluation schemas retain
-those three evaluation roles and their existing size conventions.
+in that order. The Python problem file supplies their sizes; prepared
+experiments and persisted evaluation schemas retain those three roles.
 
 ## Probes
 
@@ -530,7 +530,7 @@ validated configurations produce explicit, unpinned cohorts. Regeneration is a
 repository operation:
 
 ```bash
-uv run python scripts/task-setup/regenerate-c18.py \
+uv run --extra c18 python scripts/task-setup/regenerate-c18.py \
   --config default \
   --output src/whetstone_envs/c18/resources/default.manifest.json
 ```

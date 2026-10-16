@@ -42,8 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   task-row type; retry policy, attempt limits, delay bounds, and jitter remain
   unchanged. Remove redundant provider comments and docstrings.
 
-- Standalone evaluation, optimizer execution, and Codex subprocess rebuilding
-  share policy, transport, and evaluation-engine assembly in
+- Optimizer execution and Codex subprocess rebuilding share policy, transport,
+  and evaluation-engine assembly in
   `evaluation/runtime.py`. Transport kinds have the same owner. Codex retains
   its persisted configuration contract and explicit runtime authorization.
 
@@ -54,22 +54,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Optimizer inputs are strict frozen Pydantic models in `optim/spec.py`, with
   one nested settings variant and composed train/validation sizes. The CLI
-  preserves its flags and rejects options belonging to another optimizer;
+  rejects options belonging to another optimizer;
   programmatic callers construct the selected settings model directly.
 
 - Remove unused pytest/browser dependencies, configuration, workflow, and
   contract check pointers. Remove the obsolete MIPROv2 old-version guard and
   study-specific commentary from optimizer inputs and concurrency policy.
 
-- Standalone C19 execution lives in `whetstone_envs.evaluation`, runtime evidence
-  extraction in `whetstone_envs.optim.extraction`, and shared run-directory
-  handling in `whetstone_envs.artifacts`. Reporting owns presentation and CLI
-  dispatch. Runtime execution no longer imports reporting. Evaluation inputs
-  are strict frozen Pydantic models, with invalid settings rejected at
-  construction; internal prepared candidates and task plans are frozen slotted
-  dataclasses. Extraction uses focused joining, hydration, accounting, and
-  ordered-history helpers. Saved report formats and valid run behavior remain
-  unchanged by this extraction.
+- Shared experiment preparation lives in `whetstone_envs.evaluation`, runtime
+  evidence extraction in `whetstone_envs.optim.extraction`, and shared
+  run-directory handling in `whetstone_envs.artifacts`. Reporting owns
+  presentation and CLI dispatch. Runtime execution no longer imports reporting.
+  Extraction uses focused joining, hydration, accounting, and ordered-history
+  helpers.
 
 - Portable evaluation and trajectory models, canonical report file operations,
   accounting, and comparisons are owned by `whetstone_envs.evidence`.
@@ -89,8 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   selection, coverage-first allocation, instance assignment, and named group
   construction. Selected cohorts, tie order, and source ordering are preserved.
 - Pool manifests and pool identity payloads use schema version 2. Evaluation
-  reports use `whetstone_envs.eval_report/v4` and trajectory reports use
-  `whetstone_envs.trajectory_report/v3`. Category field names replace strata names
+  reports use `whetstone_envs.eval_report/v5` and trajectory reports use
+  `whetstone_envs.trajectory_report/v4`. Category field names replace strata names
   in the persisted formats; packaged pool manifests are regenerated.
   Pool content hashes change with the versioned identity payload.
   Older persisted schemas are rejected; recorded run files are left untouched.
@@ -135,8 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   telemetry required by their upstream schema.
 - Automatic study report generation, its Markdown/HTML renderers and
   presentation assets, and the `whetstone-study report` command. Study
-  results remain in `study.json` and its referenced evidence; the CLI
-  retains planning, execution, leakage checks, and pointer checks.
+  artifacts remain in existing `study.json` files and their referenced
+  evidence; no study CLI remains.
 - The `models` and `pools` packages; instance APIs are imported from
   `whetstone_envs.instances`.
 - The `make_instance` constructor, standalone `public_prompt_identity` helper,

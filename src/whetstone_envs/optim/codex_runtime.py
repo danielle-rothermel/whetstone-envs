@@ -4,19 +4,17 @@ from typing import TYPE_CHECKING, Literal
 
 from dr_providers import ProviderKind, ReasoningEffort
 from pydantic import BaseModel, ConfigDict, PositiveFloat, StrictInt, StrictStr
-from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-from whetstone.eval.runtime_engine import RuntimeEvalEngine
 
+from whetstone_envs.evaluation.runtime import (
+    TransportKind,
+    evaluation_execution_policy,
+    prepare_evaluation_runtime,
+)
 from whetstone_envs.optim.families import family_spec
 from whetstone_envs.optim.provider import (
     DEFAULT_PROVIDER_CONCURRENCY,
-    bind_openrouter_transport,
-    fake_gold_by_prompt,
-    fake_transport_factory,
-    hardened_execution_policy,
     openrouter_seeded_call_config,
-    widened_execution_policy,
 )
 
 if TYPE_CHECKING:
@@ -123,13 +121,11 @@ class EnvsCodexRuntimeConfig(BaseModel):
 
     @property
     def execution_policy(self) -> ProviderExecutionPolicy:
-        policy = widened_execution_policy(
-            self._reference.execution_policy,
+        return evaluation_execution_policy(
+            self._reference,
+            transport=TransportKind(self.transport),
             concurrency=self.provider_concurrency,
         )
-        if self.transport == "openrouter":
-            return hardened_execution_policy(policy)
-        return policy
 
     @property
     def mutation_field(self) -> str:
@@ -167,39 +163,14 @@ class EnvsCodexRuntimeConfig(BaseModel):
             ),
         )
         experiment = prepared.experiment
-        execution_policy = self.execution_policy
-        if self.transport == "openrouter":
-            _, transport_factory = bind_openrouter_transport(execution_policy)
-        else:
-            transport_factory = fake_transport_factory(
-                gold_by_prompt=fake_gold_by_prompt(
-                    experiment,
-                    render_contract=family.render_contract(),
-                    ceiling_template=family.probes.ceiling_template,
-                )
-            )
-        # Assembled here rather than through ``_reference.build_engine``,
-        # which accepts neither a policy nor a concurrency and would
-        # therefore discard both -- rebuilding the engine at whetstone's
-        # default width over the unwidened, unhardened policy. This is
-        # the same in-process pair that helper builds for
-        # ``driver_mode="in_process"``, which is this config's mode.
-        driver = GraphRolloutEvalDriver(
-            eval_runner=family.eval_runner(),
-            mutation_field=family.mutation_field,
-            render_contract=family.render_contract(),
-            transport_factory=transport_factory,
-        )
-        return RuntimeEvalEngine(
-            store=store,
+        runtime = prepare_evaluation_runtime(
             experiment=experiment,
-            sampling=experiment.eval_configs.split_for(
-                self._reference.split_role
-            ),
-            execution_policy=execution_policy,
-            driver=driver,
+            family=family,
+            reference=self._reference,
+            transport=TransportKind(self.transport),
             concurrency=self.provider_concurrency,
         )
+        return runtime.build_engine(store)
 
 
 #: The ``module:Class`` path the Codex runner records so the MCP server

@@ -163,6 +163,7 @@ helpers live together in instances/instance_pool.py. Portable report models, \
 file operations, accounting, and comparisons are imported from \
 whetstone_envs.evidence, which depends on neither reporting nor the optimizer \
 stack. Standalone C19 execution is owned by whetstone_envs.evaluation, \
+shared engine assembly by whetstone_envs.evaluation.runtime, \
 runtime evidence extraction by whetstone_envs.optim.extraction, and shared \
 run-directory handling by whetstone_envs.artifacts. Evaluation and optimizer \
 execution depend on extraction and portable evidence, never on reporting; \

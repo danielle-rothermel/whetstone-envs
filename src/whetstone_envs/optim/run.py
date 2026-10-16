@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from dr_providers import ProviderKind
 from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     RegisteredRuntime,
@@ -16,8 +15,6 @@ from whetstone.coordination.runtime_bootstrap import (
     prepare_miprov2_run,
 )
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
-from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
-from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
@@ -29,6 +26,10 @@ from whetstone_envs.artifacts import (
     default_output_dir,
     durable_run_boundary,
     prepare_output_root,
+)
+from whetstone_envs.evaluation.runtime import (
+    evaluation_reference_config,
+    prepare_evaluation_runtime,
 )
 from whetstone_envs.evidence import publish_trajectory_report
 from whetstone_envs.optim.codex import (
@@ -47,12 +48,7 @@ from whetstone_envs.optim.miprov2 import (
     miprov2_run_ref,
 )
 from whetstone_envs.optim.provider import (
-    bind_openrouter_transport,
-    fake_gold_by_prompt,
-    fake_transport_factory,
-    hardened_execution_policy,
     openrouter_seeded_call_config,
-    widened_execution_policy,
 )
 from whetstone_envs.optim.spec import (
     CodexSettings,
@@ -149,57 +145,19 @@ def _build_evaluation(run: _PreparedRun, store: ObjectStore) -> _RunEvaluation:
     spec = run.spec
     family = run.family
     experiment = run.prepared.experiment
-    api_key_env = (
-        "OPENROUTER_API_KEY"
-        if spec.transport == "openrouter"
-        else "WHETSTONE_TOY_API_KEY"
-    )
-    if spec.transport == "openrouter":
-        runtime_config = ReferenceEvalRuntimeConfig(
-            transport_api_key_env=api_key_env,
-            provider_kind=ProviderKind.OPENROUTER,
-        )
-    else:
-        runtime_config = ReferenceEvalRuntimeConfig(
-            transport_api_key_env=api_key_env,
-        )
-    execution_policy = widened_execution_policy(
-        runtime_config.execution_policy,
-        concurrency=spec.provider_concurrency,
-    )
-    if spec.transport == "openrouter":
-        execution_policy = hardened_execution_policy(execution_policy)
-    live_transport = None
-    if spec.transport == "openrouter":
-        live_transport, transport_factory = bind_openrouter_transport(
-            execution_policy
-        )
-    else:
-        transport_factory = fake_transport_factory(
-            gold_by_prompt=fake_gold_by_prompt(
-                experiment,
-                render_contract=family.render_contract(),
-                ceiling_template=family.probes.ceiling_template,
-            )
-        )
-    engine = RuntimeEvalEngine(
-        store=store,
+    runtime = prepare_evaluation_runtime(
         experiment=experiment,
-        sampling=experiment.eval_configs.split_for(runtime_config.split_role),
-        execution_policy=execution_policy,
-        driver=GraphRolloutEvalDriver(
-            eval_runner=family.eval_runner(),
-            mutation_field=family.mutation_field,
-            render_contract=family.render_contract(),
-            transport_factory=transport_factory,
-        ),
+        family=family,
+        reference=evaluation_reference_config(spec.transport),
+        transport=spec.transport,
         concurrency=spec.provider_concurrency,
     )
+    engine = runtime.build_engine(store)
     proposer = prepare_proposer(
         experiment=experiment,
         model=spec.proposer_model,
-        live_transport=live_transport,
-        execution_policy=execution_policy,
+        live_transport=runtime.live_transport,
+        execution_policy=runtime.execution_policy,
     )
     return _RunEvaluation(engine=engine, proposer=proposer)
 

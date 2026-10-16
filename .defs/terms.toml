@@ -331,5 +331,5 @@ exported_symbols = [
     "whetstone_envs.optim.spec.CodexSettings",
     "whetstone_envs.optim.spec.TrainValSizes",
     "whetstone_envs.optim.spec.OptimizerKind",
-    "whetstone_envs.optim.spec.TransportKind",
+    "whetstone_envs.evaluation.runtime.TransportKind",
 ]

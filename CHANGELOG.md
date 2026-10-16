@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Standalone evaluation, optimizer execution, and Codex subprocess rebuilding
+  share policy, transport, and evaluation-engine assembly in
+  `evaluation/runtime.py`. Transport kinds have the same owner. Codex retains
+  its persisted configuration contract and explicit runtime authorization.
+
 - Optimizer orchestration delegates preparation, binding, runtime setup, and
   publication to focused helpers. Optimizer modules own their construction;
   concrete frozen binding records replace optional controls, and COPRO controls

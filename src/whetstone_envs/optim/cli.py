@@ -8,6 +8,7 @@ from pathlib import Path
 from dr_providers import ReasoningEffort
 
 from whetstone_envs.artifacts import DurableRunError, default_output_dir
+from whetstone_envs.evaluation.runtime import TransportKind
 from whetstone_envs.optim.codex import (
     ALLOW_REAL_CODEX_ENV,
     ALLOW_REAL_CODEX_ENV_VALUE,
@@ -47,7 +48,6 @@ from whetstone_envs.optim.spec import (
     OptimizerSettings,
     RunSpec,
     TrainValSizes,
-    TransportKind,
 )
 from whetstone_envs.optim.split import MIN_COPRO_BREADTH
 

@@ -53,6 +53,8 @@ settings; `evaluation.run` prepares tasks, configures providers, executes
 candidates, and publishes reports. `optim.extraction` reads Whetstone runtime
 evidence into portable reports for evaluation and optimizer execution.
 Reporting reads those portable reports without importing the runtime stack.
+`evaluation.runtime` owns shared provider policy, transport binding, and engine
+assembly for standalone evaluation, optimizer execution, and Codex rebuilding.
 
 ## Installation
 
@@ -152,7 +154,8 @@ before creating a run directory. CLI flags are translated into these models.
 
 ```python
 from whetstone_envs.optim.run import run_optimizer
-from whetstone_envs.optim.spec import CoproSettings, RunSpec, TransportKind
+from whetstone_envs.optim.spec import CoproSettings, RunSpec
+from whetstone_envs.evaluation.runtime import TransportKind
 
 run_optimizer(RunSpec(optimizer=CoproSettings(), transport=TransportKind.FAKE))
 ```

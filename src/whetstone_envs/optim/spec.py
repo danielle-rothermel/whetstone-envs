@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from dr_providers import ReasoningEffort
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from whetstone_envs.evaluation.runtime import TransportKind
 from whetstone_envs.optim.codex import (
     CODEX_DEFAULT_BINARY,
     CodexReasoningEffort,
@@ -35,12 +36,6 @@ class OptimizerKind(StrEnum):
     COPRO = auto()
     GEPA = auto()
     MIPROV2 = auto()
-
-
-@verify(UNIQUE)
-class TransportKind(StrEnum):
-    FAKE = auto()
-    OPENROUTER = auto()
 
 
 class _RunInput(BaseModel):
@@ -170,5 +165,4 @@ __all__ = [
     "OptimizerSettings",
     "RunSpec",
     "TrainValSizes",
-    "TransportKind",
 ]

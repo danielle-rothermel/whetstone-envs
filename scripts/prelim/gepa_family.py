@@ -136,6 +136,12 @@ PARAPHRASE_ARMS = frozenset({Arm.NULL, Arm.BESTOFN})
 
 
 @verify(ENUM_UNIQUE)
+class Feedback(StrEnum):
+    GOLD = auto()
+    RICH = auto()
+
+
+@verify(ENUM_UNIQUE)
 class Status(StrEnum):
     RUNNING = auto()
     OUT_OF_BAND = auto()
@@ -455,6 +461,7 @@ class Run:
         self.family = Family(args.family)
         self.spec = FAMILIES[self.family]
         self.objective = Reader(args.objective)
+        self.feedback = Feedback(args.feedback)
         self.scoring = Scoring(args.scoring)
         self.prompt_format = PromptFormat(args.prompt_format)
         self.thinking = (
@@ -550,6 +557,7 @@ class Run:
             "wall_cap_s": args.wall_cap_s,
             "band": [args.band_low, args.band_high],
             "objective": self.objective,
+            "feedback": self.feedback,
             "scoring": self.scoring,
             "prompt_format": self.prompt_format,
             "logprobs": self.logprobs,
@@ -1030,6 +1038,20 @@ class GepaAdapter:
         self.run = run
         self.arm = Arm(run.args.arm)
         self.rng = random.Random(run.args.seed)  # noqa: S311
+        self.answer_form = tomllib.loads(FORMAT_SENTENCES.read_text("utf-8"))[
+            run.family
+        ]
+
+    def rich_suffix(self, row: Row) -> str:
+        verdict = (
+            "the answer was read in the required form but is wrong"
+            if row.strict_valid
+            else "no answer in the required form could be read"
+        )
+        return (
+            f"\nStrict reader: {verdict}."
+            f"\nExpected answer form: {self.answer_form}"
+        )
 
     def evaluate(
         self,
@@ -1058,6 +1080,8 @@ class GepaAdapter:
                 if row.score >= 1
                 else self.run.spec.feedback(row.response, row.gold)
             )
+            if self.run.feedback is Feedback.RICH and row.score < 1:
+                feedback += self.rich_suffix(row)
             records.append(
                 {
                     "Inputs": body[:REFLECT_INPUT_CHARS],
@@ -1397,6 +1421,7 @@ def run_gepa(run: Run) -> tuple[str | None, float]:
                 Arm.GEPA_NOFEEDBACK: "score only",
                 Arm.GEPA_SHUFFLED: "feedback deranged across items",
             }[Arm(args.arm)],
+            "feedback": run.feedback,
         },
     )
     return best["instruction"], scores[result.best_idx]
@@ -1688,6 +1713,16 @@ def parse_args() -> argparse.Namespace:
         choices=list(Reader),
         default=Reader.STRICT,
         help="reader whose correctness the arms optimize and report",
+    )
+    parser.add_argument(
+        "--feedback",
+        choices=list(Feedback),
+        default=Feedback.GOLD,
+        help=(
+            "reflective feedback on failed items: gold gives the expected "
+            "answer; rich adds the strict reader's validity verdict and the "
+            "family's expected answer form from format_sentences.toml"
+        ),
     )
     parser.add_argument(
         "--scoring", choices=list(Scoring), default=Scoring.GENERATE

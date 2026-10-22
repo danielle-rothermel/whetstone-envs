@@ -22,11 +22,14 @@ from gepa.utils.stop_condition import TimeoutStopCondition
 from readers import Family, Reader, options, read
 
 from whetstone_envs import c11, c18, c19, c22, c23, gsm8k, ifeval
+from whetstone_envs.c18.oracle import extract_verdict
 from whetstone_envs.c22.constraints import ConstraintStack
 from whetstone_envs.c22.generation import Preset as C22Preset
 from whetstone_envs.c22.generation import _generate_pool as c22_generate
 from whetstone_envs.c22.oracle import evaluate as c22_evaluate
+from whetstone_envs.c23._scoring import extract_last_output
 from whetstone_envs.instances import Instance
+from whetstone_envs.probes import normalize
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -44,6 +47,8 @@ HTTP_SERVER_ERROR = 500
 GOLD_FEEDBACK_CHARS = 800
 REFLECT_INPUT_CHARS = 3000
 REFLECT_OUTPUT_CHARS = 1500
+STRICT_READING_CHARS = 200
+TAIL_MARKER = "[... response head omitted ...]\n"
 TOP_LOGPROBS = 5
 PLAIN_ANSWER_PREFIX = "\nAnswer:"
 PROBE_CHARS = 4000
@@ -1031,6 +1036,18 @@ class Run:
         return time.monotonic() - started > self.args.wall_cap_s
 
 
+def strict_reading(family: Family, response: str) -> str | None:
+    if family is Family.C18:
+        return extract_verdict(normalize(response))
+    if family in (Family.C11, Family.C19):
+        return normalize(response)
+    if family is Family.C23:
+        return normalize(extract_last_output(response))
+    if family is Family.GSM8K:
+        return gsm8k.strict_answer(response)
+    return None
+
+
 class GepaAdapter:
     propose_new_texts = None
 
@@ -1043,15 +1060,36 @@ class GepaAdapter:
         ]
 
     def rich_suffix(self, row: Row) -> str:
-        verdict = (
-            "the answer was read in the required form but is wrong"
-            if row.strict_valid
-            else "no answer in the required form could be read"
+        if row.strict_valid:
+            reason = (
+                "the answer was read in the required form but does not "
+                "match the expected answer"
+            )
+        elif row.forgiving_correct:
+            reason = (
+                "the expected answer appears in the response, but not in "
+                "the required form, so the strict reader cannot accept it"
+            )
+        else:
+            reason = "no answer in the required form could be read"
+        read_text = strict_reading(self.run.family, row.response)
+        shown = (
+            "nothing"
+            if not read_text
+            else repr(read_text[-STRICT_READING_CHARS:])
         )
         return (
-            f"\nStrict reader: {verdict}."
+            f"\nStrict reader read: {shown}"
+            f"\nReason: {reason}."
             f"\nExpected answer form: {self.answer_form}"
         )
+
+    def shown_output(self, response: str) -> str:
+        if self.run.feedback is Feedback.GOLD:
+            return response[:REFLECT_OUTPUT_CHARS]
+        if len(response) <= REFLECT_OUTPUT_CHARS:
+            return response
+        return TAIL_MARKER + response[-REFLECT_OUTPUT_CHARS:]
 
     def evaluate(
         self,
@@ -1085,7 +1123,7 @@ class GepaAdapter:
             records.append(
                 {
                     "Inputs": body[:REFLECT_INPUT_CHARS],
-                    "Generated Outputs": row.response[:REFLECT_OUTPUT_CHARS],
+                    "Generated Outputs": self.shown_output(row.response),
                     "Feedback": feedback,
                 }
             )
@@ -1721,7 +1759,9 @@ def parse_args() -> argparse.Namespace:
         help=(
             "reflective feedback on failed items: gold gives the expected "
             "answer; rich adds the strict reader's validity verdict and the "
-            "family's expected answer form from format_sentences.toml"
+            "family's expected answer form from format_sentences.toml, "
+            "what the strict reader read, and the reason for failure, and "
+            "shows the response tail instead of its head"
         ),
     )
     parser.add_argument(

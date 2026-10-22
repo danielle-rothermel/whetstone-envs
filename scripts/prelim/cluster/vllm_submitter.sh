@@ -13,10 +13,12 @@ source "$POOL_DIR/env.sh"
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
 EXCLUDE=${EXCLUDE:-}
 MAX_POOLS=${MAX_POOLS:-$CILVR_MAX_POOLS}
+TOTAL_CAP=${TOTAL_CAP:-$MAX_POOLS}
 mkdir -p "$QROOT/pool-logs"
 ts() { date '+%Y-%m-%dT%H:%M:%S'; }
 while :; do
     active=$(squeue -h -u "$USER" -p "$PARTITION" -o '%j' | grep -c "^$POOL_PREFIX")
+    total=$(squeue -h -u "$USER" -p "$PARTITION" -o '%i' | wc -l)
     remaining=0
     while IFS=$'\t' read -r slug _; do
         pending=$(find "$QROOT/$slug/pending" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
@@ -26,13 +28,14 @@ while :; do
         squeue -h -u "$USER" -n "$POOL_PREFIX$slug" -o '%i' | grep -q . && continue
         attempts=$(cat "$QROOT/$slug/attempts" 2>/dev/null || echo 0)
         (( attempts >= MAX_ATTEMPTS )) && continue
-        (( active >= MAX_POOLS )) && break
+        (( active >= MAX_POOLS || total >= TOTAL_CAP )) && break
         jid=$(sbatch --parsable --account "$ACCOUNT" --partition "$PARTITION" \
             --job-name "$POOL_PREFIX$slug" --output "$QROOT/pool-logs/$POOL_PREFIX$slug-%j.out" \
             --export "ALL,QROOT=$QROOT,MODEL_SLUG=$slug,POOL_DIR=$POOL_DIR" "$POOL_DIR/vllm_pool.sbatch")
         echo $((attempts + 1)) > "$QROOT/$slug/attempts"
         echo "[$(ts)] submitted $slug job=$jid attempt=$((attempts + 1))"
         active=$((active + 1))
+        total=$((total + 1))
     done < "$QROOT/models.tsv"
     if (( remaining == 0 )); then
         echo "[$(ts)] no pending jobs; exiting"

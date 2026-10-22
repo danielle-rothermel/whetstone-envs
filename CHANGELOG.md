@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- IFBench task family in `whetstone_envs.ifbench`: the pinned
+  `allenai/IFBench` test prompts and vendored upstream checkers with strict and
+  loose prompt-level scoring, and an `ifbench` family in the prelim family
+  runner and its readers. Adds the `emoji` and `syllapy` dependencies.
+
 - GSM8K and IFEval task families in `whetstone_envs.gsm8k` and
   `whetstone_envs.ifeval`, each with a pinned packaged copy of its Hub dataset,
   strict and forgiving scoring, and `gsm8k`/`ifeval` families in the prelim

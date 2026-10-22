@@ -8,3 +8,4 @@ c22 = "Reply with only the response text itself, with no preamble, commentary, o
 c23 = "End your reply with a final line of the form Output: <transformed string>."
 gsm8k = "End your reply with a final line of the form #### <number>."
 ifeval = "Reply with only the response text itself, with no preamble or commentary."
+ifbench = "Reply with only the response text itself, with no preamble or commentary."

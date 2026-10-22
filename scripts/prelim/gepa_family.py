@@ -21,7 +21,16 @@ from gepa import EvaluationBatch, optimize
 from gepa.utils.stop_condition import TimeoutStopCondition
 from readers import Family, Reader, options, read
 
-from whetstone_envs import c11, c18, c19, c22, c23, gsm8k, ifeval
+from whetstone_envs import (
+    c11,
+    c18,
+    c19,
+    c22,
+    c23,
+    gsm8k,
+    ifbench,
+    ifeval,
+)
 from whetstone_envs.c18.oracle import extract_verdict
 from whetstone_envs.c22.constraints import ConstraintStack
 from whetstone_envs.c22.generation import Preset as C22Preset
@@ -208,6 +217,11 @@ def ifeval_feedback(response: str, gold: str) -> str:
     return f"Incorrect. Failed instructions: {failed}"
 
 
+def ifbench_feedback(response: str, gold: str) -> str:
+    failed = ", ".join(ifbench.check_strict(response, gold).failed)
+    return f"Incorrect. Failed instructions: {failed}"
+
+
 def dataset_pool(
     generate: Callable[[], Any], n_per_category: int | None
 ) -> Sequence[Instance]:
@@ -272,6 +286,11 @@ FAMILIES: dict[Family, FamilySpec] = {
         ifeval.NAIVE_TEMPLATE,
         lambda n: dataset_pool(ifeval.generate_pool, n),
         ifeval_feedback,
+    ),
+    Family.IFBENCH: FamilySpec(
+        ifbench.NAIVE_TEMPLATE,
+        lambda n: dataset_pool(ifbench.generate_pool, n),
+        ifbench_feedback,
     ),
 }
 

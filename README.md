@@ -84,6 +84,10 @@ execution-contract code:
 - [**IFEval**][ifeval-source] packages the pinned `google/IFEval` prompts with
   prompt-level strict and loose checking by the upstream checker that C22
   vendors.
+- [**IFBench**][ifbench-source] packages the pinned `allenai/IFBench` test
+  prompts with prompt-level strict and loose checking by the vendored upstream
+  IFBench checkers, which need the NLTK `punkt`, `punkt_tab`, `stopwords`, and
+  `averaged_perceptron_tagger_eng` data.
 - [**Evidence**][evidence-source] owns strict evaluation and optimization
   trajectory records, row accounting, paired comparisons, and bounded
   canonical report files without execution dependencies.
@@ -722,6 +726,7 @@ uv run python -m whetstone_envs.c19.regenerate
 [c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23
 [gsm8k-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/gsm8k
 [ifeval-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/ifeval
+[ifbench-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/ifbench
 [optim-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/optim
 [reporting-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/reporting
 [evidence-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/evidence

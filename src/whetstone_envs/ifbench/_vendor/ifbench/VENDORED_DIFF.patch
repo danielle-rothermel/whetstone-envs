@@ -1,0 +1,77 @@
+diff -ru -x _ up/classic_instructions.py vendored/classic_instructions.py
+--- up/classic_instructions.py	2026-10-22 10:11:20
++++ vendored/classic_instructions.py	2026-10-22 10:11:21
+@@ -30,8 +30,8 @@
+ from absl import logging
+ import langdetect
+ 
+-from ifbench import instructions_util
+-from ifbench.instructions import Instruction
++from . import instructions_util
++from .instructions import Instruction
+ 
+ 
+ _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
+diff -ru -x _ up/evaluation_lib.py vendored/evaluation_lib.py
+--- up/evaluation_lib.py	2026-10-22 10:11:20
++++ vendored/evaluation_lib.py	2026-10-22 10:11:21
+@@ -20,7 +20,7 @@
+ import json
+ from typing import Dict, Optional, Union
+ 
+-from ifbench import instructions_registry
++from . import instructions_registry
+ 
+ 
+ @dataclasses.dataclass
+diff -ru -x _ up/instructions.py vendored/instructions.py
+--- up/instructions.py	2026-10-22 10:11:20
++++ vendored/instructions.py	2026-10-22 10:11:21
+@@ -22,14 +22,8 @@
+ from pathlib import Path
+ from typing import Dict, Optional, Sequence, Union
+ 
+-# Set NLTK data path to local directory before importing nltk
+-_nltk_data_dir = Path(__file__).parent / ".nltk_data"
+-_nltk_data_dir.mkdir(exist_ok=True)
+-os.environ.setdefault("NLTK_DATA", str(_nltk_data_dir))
+-
+ import nltk
+ 
+-nltk.data.path.insert(0, str(_nltk_data_dir))
+ import emoji
+ import syllapy
+ import unicodedata
+@@ -37,7 +31,7 @@
+ import csv
+ import io
+ 
+-from ifbench import instructions_util
++from . import instructions_util
+ 
+ 
+ def _word_tokens_without_punctuation(text):
+diff -ru -x _ up/instructions_registry.py vendored/instructions_registry.py
+--- up/instructions_registry.py	2026-10-22 10:11:20
++++ vendored/instructions_registry.py	2026-10-22 10:11:21
+@@ -14,7 +14,7 @@
+ 
+ """Registry of all instructions."""
+ 
+-from ifbench import classic_instructions, instructions
++from . import classic_instructions, instructions
+ 
+ 
+ _KEYWORD = "keywords:"
+diff -ru -x _ up/instructions_util.py vendored/instructions_util.py
+--- up/instructions_util.py	2026-10-22 10:11:20
++++ vendored/instructions_util.py	2026-10-22 10:11:21
+@@ -1602,8 +1602,6 @@
+         nltk.download("averaged_perceptron_tagger_eng", quiet=True)
+ 
+ 
+-download_nltk_resources()
+-
+ 
+ def split_into_sentences(text):
+     """Split the text into sentences using NLTK.

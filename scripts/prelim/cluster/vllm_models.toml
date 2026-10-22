@@ -1,0 +1,116 @@
+[[models]]
+slug = "qwen3-4b-instruct"
+hf = "Qwen/Qwen3-4B"
+kind = "instruct"
+thinking_off = true
+
+[[models]]
+slug = "qwen3-4b-base"
+hf = "Qwen/Qwen3-4B-Base"
+kind = "base"
+
+[[models]]
+slug = "qwen3-1.7b-instruct"
+hf = "Qwen/Qwen3-1.7B"
+kind = "instruct"
+thinking_off = true
+
+[[models]]
+slug = "qwen3-1.7b-base"
+hf = "Qwen/Qwen3-1.7B-Base"
+kind = "base"
+
+[[models]]
+slug = "qwen3-8b-instruct"
+hf = "Qwen/Qwen3-8B"
+kind = "instruct"
+thinking_off = true
+
+[[models]]
+slug = "qwen3-8b-base"
+hf = "Qwen/Qwen3-8B-Base"
+kind = "base"
+
+[[models]]
+slug = "olmo3-7b-instruct"
+hf = "allenai/Olmo-3-7B-Instruct"
+kind = "instruct"
+chat_template = "olmo3-7b-instruct.jinja"
+
+[[models]]
+slug = "olmo3-7b-sft"
+hf = "allenai/Olmo-3-7B-Instruct-SFT"
+kind = "instruct"
+chat_template = "olmo3-7b-instruct.jinja"
+
+[[models]]
+slug = "olmo3-7b-dpo"
+hf = "allenai/Olmo-3-7B-Instruct-DPO"
+kind = "instruct"
+chat_template = "olmo3-7b-instruct.jinja"
+
+[[models]]
+slug = "olmo3-7b-base"
+hf = "allenai/Olmo-3-1025-7B"
+kind = "base"
+
+[[models]]
+slug = "olmoe-1b-7b-instruct"
+hf = "allenai/OLMoE-1B-7B-0125-Instruct"
+kind = "instruct"
+
+[[models]]
+slug = "olmoe-1b-7b-base"
+hf = "allenai/OLMoE-1B-7B-0125"
+kind = "base"
+
+[[models]]
+slug = "qwen3-0.6b-instruct"
+hf = "Qwen/Qwen3-0.6B"
+kind = "instruct"
+thinking_off = true
+small = true
+
+[[models]]
+slug = "qwen3-0.6b-base"
+hf = "Qwen/Qwen3-0.6B-Base"
+kind = "base"
+small = true
+
+[[models]]
+slug = "dd-dclm-1b-s0"
+hf = "drotherm/DataDecide-dclm-baseline-1B"
+revision = "aba7be9276bf140803c7b86e8e1661e8cd76473a"
+kind = "base"
+max_model_len = 2048
+
+[[models]]
+slug = "dd-dolma-1b-s0"
+hf = "drotherm/DataDecide-dolma1.7-1B"
+revision = "6210894569baef17e9db00735b7ee96b68a6ab1b"
+kind = "base"
+max_model_len = 2048
+
+[[models]]
+slug = "pythia-1b-s0"
+hf = "EleutherAI/pythia-1b"
+kind = "base"
+max_model_len = 2048
+small = true
+
+[[models]]
+slug = "pythia-2.8b-s0"
+hf = "EleutherAI/pythia-2.8b"
+kind = "base"
+max_model_len = 2048
+
+[[models]]
+slug = "qwen3-30b-a3b-instruct-2507"
+hf = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+kind = "instruct"
+
+[[models]]
+slug = "qwen3-32b-instruct"
+hf = "Qwen/Qwen3-32B"
+kind = "instruct"
+thinking_off = true

@@ -50,7 +50,7 @@ def specs(*, small: bool) -> list[Spec]:
             Spec(fam, "gepa", "forgiving", "generate", s) for s in range(3)
         ]
         out.append(Spec(fam, "naive", "strict", "likelihood", 0))
-        out.append(Spec(fam, "gepa", "strict", "likelihood", 0))
+        out += [Spec(fam, "gepa", "strict", "likelihood", s) for s in range(3)]
     if not small:
         for fam in SKILL_FAMILIES:
             out.append(Spec(fam, "naive", "strict", "generate", 0))

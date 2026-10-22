@@ -9,7 +9,7 @@ set -uo pipefail
 : "${POOL_DIR:?POOL_DIR must be set}"
 source "$POOL_DIR/env.sh"
 WORKERS=${WORKERS:-8}
-IDLE_EXIT_S=${IDLE_EXIT_S:-900}
+IDLE_EXIT_S=${IDLE_EXIT_S:-300}
 row=$(awk -F'\t' -v s="$MODEL_SLUG" '$1 == s' "$QROOT/models.tsv")
 if [[ -z "$row" ]]; then
     echo "model $MODEL_SLUG not in $QROOT/models.tsv" >&2

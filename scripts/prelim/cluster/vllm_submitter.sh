@@ -11,6 +11,8 @@ POLL_S=${4:-120}
 POOL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$POOL_DIR/env.sh"
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
+EXCLUDE=${EXCLUDE:-}
+MAX_POOLS=${MAX_POOLS:-$CILVR_MAX_POOLS}
 mkdir -p "$QROOT/pool-logs"
 ts() { date '+%Y-%m-%dT%H:%M:%S'; }
 while :; do
@@ -19,11 +21,12 @@ while :; do
     while IFS=$'\t' read -r slug _; do
         pending=$(find "$QROOT/$slug/pending" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
         (( pending == 0 )) && continue
+        [[ -n "$EXCLUDE" && "$slug" =~ $EXCLUDE ]] && continue
         remaining=$((remaining + 1))
         squeue -h -u "$USER" -n "$POOL_PREFIX$slug" -o '%i' | grep -q . && continue
         attempts=$(cat "$QROOT/$slug/attempts" 2>/dev/null || echo 0)
         (( attempts >= MAX_ATTEMPTS )) && continue
-        (( active >= CILVR_MAX_POOLS )) && break
+        (( active >= MAX_POOLS )) && break
         jid=$(sbatch --parsable --account "$ACCOUNT" --partition "$PARTITION" \
             --job-name "$POOL_PREFIX$slug" --output "$QROOT/pool-logs/$POOL_PREFIX$slug-%j.out" \
             --export "ALL,QROOT=$QROOT,MODEL_SLUG=$slug,POOL_DIR=$POOL_DIR" "$POOL_DIR/vllm_pool.sbatch")

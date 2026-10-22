@@ -44,7 +44,6 @@ HTTP_SERVER_ERROR = 500
 GOLD_FEEDBACK_CHARS = 800
 REFLECT_INPUT_CHARS = 3000
 REFLECT_OUTPUT_CHARS = 1500
-NULL_PROPOSAL_ATTEMPTS = 5
 TOP_LOGPROBS = 5
 PLAIN_ANSWER_PREFIX = "\nAnswer:"
 PROBE_CHARS = 4000
@@ -70,14 +69,70 @@ Write one new paraphrase of the current instruction that keeps its meaning \
 and differs from the instructions already written. You receive no examples, \
 model outputs, answers, or scores. Reply with only the new instruction text."""
 
+APE_PROPOSE_PROMPT = """\
+I gave a friend an instruction and {count} inputs. The friend read the \
+instruction and wrote an output for every one of the inputs. Here are the \
+input-output pairs:
+
+{demos}
+
+Write the instruction I gave. Reply with only the instruction text."""
+
+APE_RESAMPLE_PROMPT = """\
+Generate a variation of the following instruction while keeping the semantic \
+meaning.
+
+Input: {instruction}
+
+Reply with only the new instruction text."""
+
+OPRO_PROMPT = """\
+Your task is to generate the instruction <INS>. The instruction is placed \
+before every problem. Below are some previous instructions with their \
+scores. The score ranges from 0 to 100.
+
+{history}
+
+Below are some problems.
+
+{exemplars}
+
+Generate an instruction that is different from all the instructions <INS> \
+above, and has a higher score than all the instructions <INS> above. The \
+instruction should begin with <INS> and end with </INS>. The instruction \
+should be concise, effective, and generally applicable to all problems \
+above."""
+
+PROPOSAL_ATTEMPTS = 5
+APE_INITIAL = 8
+APE_SURVIVORS = 3
+APE_RESAMPLE = 2
+APE_FINAL = 2
+APE_DEMOS = 5
+OPRO_HISTORY = 20
+OPRO_EXEMPLARS = 3
+OPRO_OPEN = "<INS>"
+OPRO_CLOSE = "</INS>"
+FENCE = "```"
+SHUFFLE_ATTEMPTS = 20
+
 
 @verify(ENUM_UNIQUE)
 class Arm(StrEnum):
     NAIVE = auto()
     FORMAT_FIXED = auto()
     NULL = auto()
+    BESTOFN = auto()
+    APE = auto()
+    OPRO = auto()
     GEPA = auto()
+    GEPA_NOFEEDBACK = "gepa-nofeedback"
+    GEPA_SHUFFLED = "gepa-shuffled"
     EVAL = auto()
+
+
+GEPA_ARMS = frozenset({Arm.GEPA, Arm.GEPA_NOFEEDBACK, Arm.GEPA_SHUFFLED})
+PARAPHRASE_ARMS = frozenset({Arm.NULL, Arm.BESTOFN})
 
 
 @verify(ENUM_UNIQUE)
@@ -438,12 +493,9 @@ class Run:
             if out is None
             else (out / "logprobs.jsonl").open("a", encoding="utf-8")
         )
-        self.candidates = (
-            None
-            if out is None
-            else (out / "candidates.jsonl").open("a", encoding="utf-8")
-        )
         self.candidate_ids: dict[str | None, int] = {}
+        self.candidate_rows: list[dict[str, Any]] = []
+        self.round = 0
         self.started = time.monotonic()
         self.task_calls = 0
         self.task_cost = 0.0
@@ -514,6 +566,13 @@ class Run:
         (self.out / "results.json").write_text(
             json.dumps(self.results, indent=1) + "\n", encoding="utf-8"
         )
+        path = self.out / "candidates.jsonl"
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(
+            "".join(json.dumps(row) + "\n" for row in self.candidate_rows),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
 
     def total_cost(self) -> float:
         return round(self.task_cost + self.reflection_cost, 6)
@@ -526,10 +585,16 @@ class Run:
                 "candidate": index,
                 "source": source,
                 "instruction": instruction,
+                "arm": self.args.arm,
+                "round": self.round,
+                "scores": [],
             }
-            if self.candidates is not None:
-                self.candidates.write(json.dumps(record) + "\n")
-                self.candidates.flush()
+            self.candidate_rows.append(record)
+            if self.out is not None:
+                with (self.out / "candidates.jsonl").open(
+                    "a", encoding="utf-8"
+                ) as f:
+                    f.write(json.dumps(record) + "\n")
         return self.candidate_ids[instruction]
 
     def body(
@@ -898,6 +963,14 @@ class Run:
             self.logprob_file.flush()
         if phase in {"naive_heldout", "best_heldout"}:
             self.heldout_rows[phase] = rows
+        self.candidate_rows[index]["scores"].append(
+            {
+                "phase": phase,
+                "round": self.round,
+                "n": len(rows),
+                "mean": mean(rows),
+            }
+        )
         errors = sum(row.error is not None for row in rows)
         self.log(
             f"{phase} candidate={index} n={len(rows)} mean={mean(rows):.3f}"
@@ -931,6 +1004,8 @@ class GepaAdapter:
 
     def __init__(self, run: Run) -> None:
         self.run = run
+        self.arm = Arm(run.args.arm)
+        self.rng = random.Random(run.args.seed)  # noqa: S311
 
     def evaluate(
         self,
@@ -938,8 +1013,9 @@ class GepaAdapter:
         candidate: dict[str, str],
         capture_traces: bool = False,  # noqa: FBT001, FBT002
     ) -> EvaluationBatch:
+        self.run.round = self.run.reflection_calls
         rows = self.run.evaluate(
-            candidate["instruction"], batch, "gepa", "gepa"
+            candidate["instruction"], batch, "gepa", self.run.args.arm
         )
         return EvaluationBatch(
             outputs=[row.response for row in rows],
@@ -947,14 +1023,9 @@ class GepaAdapter:
             trajectories=rows if capture_traces else None,
         )
 
-    def make_reflective_dataset(
-        self,
-        candidate: dict[str, str],  # noqa: ARG002
-        eval_batch: EvaluationBatch,
-        components_to_update: list[str],
-    ) -> Mapping[str, Sequence[Mapping[str, Any]]]:
+    def feedback_records(self, rows: Sequence[Row]) -> list[dict[str, Any]]:
         records = []
-        for row in eval_batch.trajectories or []:
+        for row in rows:
             body = render(
                 self.run.spec.naive_template, None, row.prompt_inputs
             )
@@ -970,47 +1041,299 @@ class GepaAdapter:
                     "Feedback": feedback,
                 }
             )
+        return records
+
+    def derangement(self, n: int) -> list[int]:
+        order = list(range(n))
+        for _ in range(SHUFFLE_ATTEMPTS):
+            self.rng.shuffle(order)
+            if n < 2 or all(i != j for i, j in enumerate(order)):  # noqa: PLR2004
+                break
+        return order
+
+    def make_reflective_dataset(
+        self,
+        candidate: dict[str, str],  # noqa: ARG002
+        eval_batch: EvaluationBatch,
+        components_to_update: list[str],
+    ) -> Mapping[str, Sequence[Mapping[str, Any]]]:
+        rows = list(eval_batch.trajectories or [])
+        records: list[dict[str, Any]]
+        if self.arm is Arm.GEPA_NOFEEDBACK:
+            records = [{"Score": f"{row.score:g}"} for row in rows]
+        else:
+            records = self.feedback_records(rows)
+        if self.arm is Arm.GEPA_SHUFFLED:
+            order = self.derangement(len(records))
+            feedback = [records[j]["Feedback"] for j in order]
+            for record, text in zip(records, feedback, strict=True):
+                record["Feedback"] = text
         return dict.fromkeys(components_to_update, records)
 
 
-def run_null(run: Run) -> tuple[str | None, float]:
+def clean_proposal(text: str) -> str:
+    text = text.strip()
+    if text.startswith(FENCE) and text.endswith(FENCE) and len(text) > 1:
+        text = text[len(FENCE) : -len(FENCE)].strip()
+    return text
+
+
+def propose(
+    run: Run, make_prompt: Callable[[], str], written: Sequence[str | None]
+) -> str | None:
+    for _ in range(PROPOSAL_ATTEMPTS):
+        try:
+            text = clean_proposal(run.reflect(make_prompt()))
+        except ProviderError as exc:
+            run.log(f"{run.args.arm} proposal failed: {exc}")
+            continue
+        if text and text not in written:
+            return text
+    run.log(f"{run.args.arm} proposals exhausted")
+    return None
+
+
+def demo_block(run: Run, items: Sequence[Instance]) -> str:
+    blocks = []
+    for number, inst in enumerate(items, start=1):
+        body = render(run.spec.naive_template, None, inst.prompt_inputs)
+        blocks.append(
+            f"Input {number}:\n{body[:REFLECT_INPUT_CHARS]}\n"
+            f"Output {number}:\n{inst.gold[:GOLD_FEEDBACK_CHARS]}"
+        )
+    return "\n\n".join(blocks)
+
+
+def run_paraphrase(run: Run) -> tuple[str | None, float]:
     args = run.args
+    phase = args.arm
     started = time.monotonic()
     val = run.splits.val
     seed = run.seed_instruction
-    seed_rows = run.evaluate(seed, val, "null", "seed")
+    seed_rows = run.evaluate(seed, val, phase, "seed")
     best, best_val = seed, mean(seed_rows)
-    written = [seed]
+    written: list[str | None] = [seed]
     used = len(val)
     while used + len(val) <= args.max_metric_calls:
         if run.wall_exceeded(started):
-            run.log("null wall cap reached")
+            run.log(f"{phase} wall cap reached")
             break
-        proposal = None
-        for _ in range(NULL_PROPOSAL_ATTEMPTS):
-            prompt = NULL_PROMPT.format(
+        run.round = len(written)
+        proposal = propose(
+            run,
+            lambda: NULL_PROMPT.format(
                 template=run.spec.naive_template,
                 seed=seed,
                 previous="\n".join(f"- {text}" for text in written),
-            )
-            try:
-                text = run.reflect(prompt).strip()
-            except ProviderError as exc:
-                run.log(f"null proposal failed: {exc}")
-                continue
-            if text and text not in written:
-                proposal = text
-                break
+            ),
+            written,
+        )
         if proposal is None:
-            run.log("null proposals exhausted")
             break
         written.append(proposal)
-        rows = run.evaluate(proposal, val, "null", "null")
+        rows = run.evaluate(proposal, val, phase, phase)
         used += len(val)
         if mean(rows) > best_val:
             best, best_val = proposal, mean(rows)
-            run.log(f"null new best val={best_val:.3f}")
-    run.results.update(metric_calls=used, candidates=len(written))
+            run.log(f"{phase} new best val={best_val:.3f}")
+    run.results.update(
+        metric_calls=used,
+        candidates=len(written),
+        proposals=len(written) - 1,
+        hyperparameters={
+            "selection": "full validation",
+            "includes_seed": True,
+            "proposal_attempts": PROPOSAL_ATTEMPTS,
+        },
+    )
+    return best, best_val
+
+
+def ranked(tally: dict[str, list[float]], order: Sequence[str]) -> list[str]:
+    position = {text: index for index, text in enumerate(order)}
+    return sorted(
+        tally,
+        key=lambda text: (
+            -sum(tally[text]) / len(tally[text]),
+            -len(tally[text]),
+            position[text],
+        ),
+    )
+
+
+def ape_initial(
+    run: Run, rng: random.Random, count: int, order: list[str]
+) -> list[str]:
+    fresh: list[str] = []
+    for _ in range(count):
+        demos = rng.sample(
+            run.splits.train, min(APE_DEMOS, len(run.splits.train))
+        )
+        text = propose(
+            run,
+            lambda demos=demos: APE_PROPOSE_PROMPT.format(
+                count=len(demos), demos=demo_block(run, demos)
+            ),
+            order,
+        )
+        if text is not None:
+            order.append(text)
+            fresh.append(text)
+    return fresh
+
+
+def run_ape(run: Run) -> tuple[str | None, float]:
+    args = run.args
+    started = time.monotonic()
+    rng = random.Random(args.seed)  # noqa: S311
+    val = run.splits.val
+    batch_n = min(args.minibatch, len(val))
+    final_k = min(APE_FINAL, args.max_metric_calls // len(val))
+    if final_k < 1:
+        msg = "--max-metric-calls must be at least --val-n for ape"
+        raise SystemExit(msg)
+    remaining = args.max_metric_calls - final_k * len(val)
+    tally: dict[str, list[float]] = {}
+    order: list[str] = []
+    proposals = 0
+
+    def score(texts: Sequence[str], batch: Sequence[Instance]) -> None:
+        nonlocal remaining
+        for text in texts:
+            rows = run.evaluate(text, batch, "ape", "ape")
+            remaining -= len(rows)
+            tally.setdefault(text, []).extend(row.score for row in rows)
+
+    run.round = 0
+    fresh = ape_initial(
+        run, rng, min(APE_INITIAL, remaining // batch_n), order
+    )
+    proposals += len(fresh)
+    score(fresh, rng.sample(val, batch_n))
+    while tally and not run.wall_exceeded(started):
+        survivors = ranked(tally, order)[:APE_SURVIVORS]
+        room = remaining // batch_n - len(survivors)
+        count = min(len(survivors) * APE_RESAMPLE, room)
+        if count <= 0:
+            break
+        run.round += 1
+        fresh = []
+        for index in range(count):
+            parent = survivors[index % len(survivors)]
+            text = propose(
+                run,
+                lambda parent=parent: APE_RESAMPLE_PROMPT.format(
+                    instruction=parent
+                ),
+                order,
+            )
+            if text is not None:
+                order.append(text)
+                fresh.append(text)
+        if not fresh:
+            break
+        proposals += len(fresh)
+        score([*survivors, *fresh], rng.sample(val, batch_n))
+    if not tally:
+        msg = "ape produced no proposals"
+        raise ProviderError(msg)
+    run.round += 1
+    finalists = ranked(tally, order)[:final_k]
+    scored = [
+        (text, mean(run.evaluate(text, val, "ape_val", "ape")))
+        for text in finalists
+    ]
+    best, best_val = max(scored, key=lambda pair: pair[1])
+    run.results.update(
+        metric_calls=args.max_metric_calls - remaining,
+        candidates=len(order),
+        proposals=proposals,
+        rounds=run.round,
+        hyperparameters={
+            "initial": APE_INITIAL,
+            "survivors": APE_SURVIVORS,
+            "resample_per_survivor": APE_RESAMPLE,
+            "finalists": final_k,
+            "demos": APE_DEMOS,
+            "minibatch": batch_n,
+            "includes_seed": False,
+            "selection": "full validation over finalists",
+        },
+    )
+    return best, best_val
+
+
+def opro_instruction(text: str) -> str:
+    start = text.find(OPRO_OPEN)
+    if start < 0:
+        return text
+    end = text.find(OPRO_CLOSE, start)
+    stop = len(text) if end < 0 else end
+    return text[start + len(OPRO_OPEN) : stop].strip()
+
+
+def run_opro(run: Run) -> tuple[str | None, float]:
+    args = run.args
+    started = time.monotonic()
+    rng = random.Random(args.seed)  # noqa: S311
+    val = run.splits.val
+    seed = run.seed_instruction
+    history: list[tuple[str, float]] = [
+        (seed, mean(run.evaluate(seed, val, "opro", "seed")))
+    ]
+    used = len(val)
+    proposals = 0
+
+    def prompt() -> str:
+        shown = sorted(history, key=lambda pair: pair[1])[-OPRO_HISTORY:]
+        lines = "\n\n".join(
+            f"text:\n{text}\nscore:\n{round(100 * value)}"
+            for text, value in shown
+        )
+        demos = rng.sample(
+            run.splits.train, min(OPRO_EXEMPLARS, len(run.splits.train))
+        )
+        exemplars = "\n\n".join(
+            f"Problem:\n{OPRO_OPEN}\n"
+            f"{render(run.spec.naive_template, None, i.prompt_inputs)}"
+            f"\nAnswer:\n{i.gold[:GOLD_FEEDBACK_CHARS]}"
+            for i in demos
+        )
+        return OPRO_PROMPT.format(history=lines, exemplars=exemplars)
+
+    while used + len(val) <= args.max_metric_calls:
+        if run.wall_exceeded(started):
+            run.log("opro wall cap reached")
+            break
+        run.round = len(history)
+        written = [text for text, _ in history]
+        text = None
+        for _ in range(PROPOSAL_ATTEMPTS):
+            raw = propose(run, prompt, written)
+            if raw is None:
+                break
+            parsed = opro_instruction(raw)
+            if parsed and parsed not in written:
+                text = parsed
+                break
+        if text is None:
+            break
+        proposals += 1
+        value = mean(run.evaluate(text, val, "opro", "opro"))
+        used += len(val)
+        history.append((text, value))
+    best, best_val = max(history, key=lambda pair: pair[1])
+    run.results.update(
+        metric_calls=used,
+        candidates=len(history),
+        proposals=proposals,
+        hyperparameters={
+            "history": OPRO_HISTORY,
+            "exemplars": OPRO_EXEMPLARS,
+            "includes_seed": True,
+            "selection": "full validation",
+        },
+    )
     return best, best_val
 
 
@@ -1042,6 +1365,15 @@ def run_gepa(run: Run) -> tuple[str | None, float]:
         metric_calls=result.total_metric_calls,
         candidates=len(result.candidates),
         candidate_val_scores=scores,
+        proposals=run.reflection_calls,
+        hyperparameters={
+            "minibatch": args.minibatch,
+            "reflective_dataset": {
+                Arm.GEPA: "inputs, outputs, feedback with gold",
+                Arm.GEPA_NOFEEDBACK: "score only",
+                Arm.GEPA_SHUFFLED: "feedback deranged across items",
+            }[Arm(args.arm)],
+        },
     )
     return best["instruction"], scores[result.best_idx]
 
@@ -1091,8 +1423,12 @@ def run_arm(run: Run) -> None:
         sentences = tomllib.loads(FORMAT_SENTENCES.read_text("utf-8"))
         best = sentences[args.family]
         best_val = mean(run.evaluate(best, run.splits.val, "val", "format"))
-    elif arm is Arm.NULL:
-        best, best_val = run_null(run)
+    elif arm in PARAPHRASE_ARMS:
+        best, best_val = run_paraphrase(run)
+    elif arm is Arm.APE:
+        best, best_val = run_ape(run)
+    elif arm is Arm.OPRO:
+        best, best_val = run_opro(run)
     else:
         best, best_val = run_gepa(run)
 
@@ -1267,15 +1603,23 @@ def main() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run one prelim arm (naive, format_fixed, null, gepa, or eval) "
-            "for one whetstone-envs task family. The task model is served "
+            "Run one prelim arm (naive, format_fixed, null, bestofn, ape, "
+            "opro, gepa, gepa-nofeedback, gepa-shuffled, or eval) for one "
+            "whetstone-envs task family. The task model is served "
             "by any OpenAI-compatible endpoint (--base-url, OpenRouter by "
             "default); reflection always uses OpenRouter. Items come from "
             "the family generator, shuffled by --split-seed into train, "
             "validation, and held-out slices. Every other arm screens the "
             "naive probe on validation and stops when it falls outside the "
             "band; in-band runs score naive and the arm's best instruction "
-            "on held-out. The eval arm skips the screen and the naive "
+            "on held-out. Search arms share --max-metric-calls: null and "
+            "bestofn score paraphrases of the seed on validation; ape "
+            "proposes instructions from train demonstrations, screens them "
+            "on validation minibatches, resamples the survivors, and picks "
+            "among finalists on validation; opro proposes from the scored "
+            "history; gepa reflects on feedback, gepa-nofeedback on scores "
+            "only, and gepa-shuffled on feedback deranged across items. "
+            "The eval arm skips the screen and the naive "
             "baseline and scores only --instruction-file on held-out. "
             "Every item is read by the strict and forgiving readers of "
             "readers.py; --objective picks the one the arms optimize. "
@@ -1283,7 +1627,7 @@ def parse_args() -> argparse.Namespace:
             "log-likelihood on vLLM (c18 and c19 only). Writes items.jsonl, "
             "logprobs.jsonl, candidates.jsonl, results.json, and "
             "progress.log under --out. Requires the --api-key-env "
-            "variable, and OPENROUTER_API_KEY for the null and gepa arms."
+            "variable, and OPENROUTER_API_KEY for the search arms."
         )
     )
     parser.add_argument("--family", required=True, choices=list(Family))
@@ -1351,7 +1695,7 @@ def parse_args() -> argparse.Namespace:
         "--seed-file",
         help=(
             "instruction replacing the seed of every arm: the naive "
-            "baseline, and the starting candidate of gepa and null"
+            "baseline, and the starting candidate of every search arm but ape"
         ),
     )
     parser.add_argument(
@@ -1369,7 +1713,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-n", type=int, default=40)
     parser.add_argument("--heldout-n", type=int, default=48)
     parser.add_argument(
-        "--seed", type=int, default=0, help="optimizer seed (gepa)"
+        "--seed", type=int, default=0, help="optimizer seed of the search arms"
     )
     parser.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     parser.add_argument(
@@ -1381,14 +1725,14 @@ def parse_args() -> argparse.Namespace:
         "--max-metric-calls",
         type=int,
         default=300,
-        help="task calls available to the null and gepa searches",
+        help="task calls available to the search arms",
     )
     parser.add_argument("--minibatch", type=int, default=4)
     parser.add_argument(
         "--wall-cap-s",
         type=float,
         default=3600.0,
-        help="wall-clock cap on the null and gepa searches",
+        help="wall-clock cap on the search arms",
     )
     parser.add_argument("--band-low", type=float, default=0.10)
     parser.add_argument("--band-high", type=float, default=0.85)

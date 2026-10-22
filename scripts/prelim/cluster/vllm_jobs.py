@@ -12,6 +12,7 @@ DEFAULT_MAX_MODEL_LEN = 4096
 DEFAULT_GPU_UTIL = 0.85
 LARGE_GPU_UTIL = 0.92
 LARGE_SLUGS = ("qwen3-30b-a3b-instruct-2507", "qwen3-32b-instruct")
+LONG_TOKENS = 2048
 RUNNER = [
     "uvx",
     "--from",
@@ -39,6 +40,7 @@ class Spec:
     objective: str
     scoring: str
     seed: int
+    variant: tuple[str, ...] = ()
 
 
 def specs(*, small: bool) -> list[Spec]:
@@ -61,6 +63,67 @@ def specs(*, small: bool) -> list[Spec]:
     return out
 
 
+def variant_specs(*, small: bool, base: bool, long_ok: bool) -> list[Spec]:
+    families = (
+        LIKELIHOOD_FAMILIES if small else LIKELIHOOD_FAMILIES + SKILL_FAMILIES
+    )
+    out: list[Spec] = []
+    for fam in families:
+        out.append(Spec(fam, "naive", "strict", "generate", 0, ("seedinstr",)))
+        if long_ok:
+            out.append(
+                Spec(fam, "naive", "strict", "generate", 0, ("tok2048",))
+            )
+            out.append(
+                Spec(
+                    fam,
+                    "naive",
+                    "strict",
+                    "generate",
+                    0,
+                    ("seedinstr", "tok2048"),
+                )
+            )
+        if base:
+            out.append(
+                Spec(
+                    fam,
+                    "naive",
+                    "strict",
+                    "generate",
+                    0,
+                    ("seedinstr", "shots3"),
+                )
+            )
+    for fam in LIKELIHOOD_FAMILIES:
+        out.append(
+            Spec(fam, "naive", "strict", "likelihood", 0, ("seedinstr",))
+        )
+        if base:
+            out.append(
+                Spec(
+                    fam,
+                    "naive",
+                    "strict",
+                    "likelihood",
+                    0,
+                    ("seedinstr", "shots3"),
+                )
+            )
+    return out
+
+
+def variant_args(variant: tuple[str, ...], seed_file: str) -> list[str]:
+    out: list[str] = []
+    if "seedinstr" in variant:
+        out += ["--seed-file", seed_file]
+    if "tok2048" in variant:
+        out += ["--max-tokens", "2048"]
+    if "shots3" in variant:
+        out += ["--shots", "3"]
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Write model-major vLLM queue job files and models.tsv."
@@ -76,6 +139,8 @@ def main() -> None:
         "--scoring", choices=("generate", "likelihood", "all"), default="all"
     )
     parser.add_argument("--only", nargs="*", default=None)
+    parser.add_argument("--variants", action="store_true")
+    parser.add_argument("--seed-file")
     args = parser.parse_args()
 
     models = tomllib.loads(args.models.read_text(encoding="utf-8"))["models"]
@@ -114,12 +179,23 @@ def main() -> None:
         qdir = args.stage_dir / slug
         for state in STATES:
             (qdir / state).mkdir(parents=True, exist_ok=True)
-        for spec in specs(small=bool(m.get("small"))):
+        chosen = (
+            variant_specs(
+                small=bool(m.get("small")),
+                base=m["kind"] == "base",
+                long_ok=m.get("max_model_len", DEFAULT_MAX_MODEL_LEN)
+                > LONG_TOKENS,
+            )
+            if args.variants
+            else specs(small=bool(m.get("small")))
+        )
+        for spec in chosen:
             if args.scoring not in ("all", spec.scoring):
                 continue
             name = (
                 f"{spec.family}-{slug}-{spec.arm}-{spec.objective}-"
                 f"{spec.scoring}-s{spec.seed}"
+                + "".join(f"-{v}" for v in spec.variant)
             )
             job_file = f"{args.cluster_qroot}/{slug}/pending/{name}.json"
             argv = [
@@ -188,6 +264,11 @@ def main() -> None:
                     "--wall-cap-s",
                     "3600",
                 ]
+            if spec.variant:
+                if args.seed_file is None:
+                    msg = "--variants needs --seed-file"
+                    raise SystemExit(msg)
+                argv += variant_args(spec.variant, args.seed_file)
             argv += ["--out", f"{args.cluster_out_root}/{name}"]
             record = {"name": name, "cwd": args.cluster_clone, "argv": argv}
             (qdir / "pending" / f"{name}.json").write_text(

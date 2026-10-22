@@ -124,26 +124,25 @@ def variant_args(variant: tuple[str, ...], seed_file: str) -> list[str]:
     return out
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Write model-major vLLM queue job files and models.tsv."
-    )
-    parser.add_argument("--models", type=Path, required=True)
-    parser.add_argument("--stage-dir", type=Path, required=True)
-    parser.add_argument("--cluster-qroot", required=True)
-    parser.add_argument("--cluster-clone", required=True)
-    parser.add_argument("--cluster-out-root", required=True)
-    parser.add_argument("--registry", required=True)
-    parser.add_argument("--code-tag", required=True)
-    parser.add_argument(
-        "--scoring", choices=("generate", "likelihood", "all"), default="all"
-    )
-    parser.add_argument("--only", nargs="*", default=None)
-    parser.add_argument("--variants", action="store_true")
-    parser.add_argument("--seed-file")
-    args = parser.parse_args()
+def choose_specs(m: dict, args: argparse.Namespace) -> list[Spec]:
+    small = bool(m.get("small"))
+    long_ok = m.get("max_model_len", DEFAULT_MAX_MODEL_LEN) > LONG_TOKENS
+    if args.variants:
+        return variant_specs(
+            small=small, base=m["kind"] == "base", long_ok=long_ok
+        )
+    chosen = specs(small=small)
+    if not args.gepa_seedinstr:
+        return chosen
+    variant = ("seedinstr", "tok2048") if long_ok else ("seedinstr",)
+    return [
+        Spec(sp.family, sp.arm, sp.objective, sp.scoring, sp.seed, variant)
+        for sp in chosen
+        if sp.arm == "gepa"
+    ]
 
-    models = tomllib.loads(args.models.read_text(encoding="utf-8"))["models"]
+
+def write_models_tsv(models: list[dict], stage_dir: Path) -> None:
     rows = []
     for idx, m in enumerate(models):
         slug = m["slug"]
@@ -166,10 +165,34 @@ def main() -> None:
                 ]
             )
         )
-    args.stage_dir.mkdir(parents=True, exist_ok=True)
-    (args.stage_dir / "models.tsv").write_text(
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    (stage_dir / "models.tsv").write_text(
         "\n".join(rows) + "\n", encoding="utf-8"
     )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Write model-major vLLM queue job files and models.tsv."
+    )
+    parser.add_argument("--models", type=Path, required=True)
+    parser.add_argument("--stage-dir", type=Path, required=True)
+    parser.add_argument("--cluster-qroot", required=True)
+    parser.add_argument("--cluster-clone", required=True)
+    parser.add_argument("--cluster-out-root", required=True)
+    parser.add_argument("--registry", required=True)
+    parser.add_argument("--code-tag", required=True)
+    parser.add_argument(
+        "--scoring", choices=("generate", "likelihood", "all"), default="all"
+    )
+    parser.add_argument("--only", nargs="*", default=None)
+    parser.add_argument("--variants", action="store_true")
+    parser.add_argument("--gepa-seedinstr", action="store_true")
+    parser.add_argument("--seed-file")
+    args = parser.parse_args()
+
+    models = tomllib.loads(args.models.read_text(encoding="utf-8"))["models"]
+    write_models_tsv(models, args.stage_dir)
     total = 0
     for idx, m in enumerate(models):
         slug = m["slug"]
@@ -179,16 +202,7 @@ def main() -> None:
         qdir = args.stage_dir / slug
         for state in STATES:
             (qdir / state).mkdir(parents=True, exist_ok=True)
-        chosen = (
-            variant_specs(
-                small=bool(m.get("small")),
-                base=m["kind"] == "base",
-                long_ok=m.get("max_model_len", DEFAULT_MAX_MODEL_LEN)
-                > LONG_TOKENS,
-            )
-            if args.variants
-            else specs(small=bool(m.get("small")))
-        )
+        chosen = choose_specs(m, args)
         for spec in chosen:
             if args.scoring not in ("all", spec.scoring):
                 continue

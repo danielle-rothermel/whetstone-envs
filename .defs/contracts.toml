@@ -171,7 +171,8 @@ reporting owns inspection and presentation of saved evidence. \
 Task-family contracts are imported from their owning \
 task-family subpackage, including whetstone_envs.c11, whetstone_envs.c18, \
 whetstone_envs.c19, whetstone_envs.c22, whetstone_envs.c23, \
-whetstone_envs.gsm8k, and whetstone_envs.ifeval. The optional \
+whetstone_envs.gsm8k, whetstone_envs.ifeval, and whetstone_envs.ifbench. \
+The optional \
 optim extra supplies whetstone-ai for evaluation support and optimizer bindings; \
 portable evidence and reporting need no optimizer dependencies. The root \
 whetstone_envs namespace exports no API."""

@@ -242,6 +242,19 @@ exported_symbols = [
 ]
 
 [[terms]]
+name = "IFBench task family"
+definition = """
+An evaluation task family over the 300 allenai/IFBench test prompts, packaged \
+at a pinned upstream commit, scored at prompt level by the vendored upstream \
+strict and loose instruction checks."""
+exported_symbols = [
+    "whetstone_envs.ifbench.NAIVE_TEMPLATE",
+    "whetstone_envs.ifbench.check_loose",
+    "whetstone_envs.ifbench.check_strict",
+    "whetstone_envs.ifbench.generate_pool",
+]
+
+[[terms]]
 name = "prepared optimization problem"
 definition = """
 An explicit combination of a prepared experiment and source instance split, \

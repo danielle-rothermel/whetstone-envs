@@ -76,6 +76,7 @@ class Arm(StrEnum):
     FORMAT_FIXED = auto()
     NULL = auto()
     GEPA = auto()
+    EVAL = auto()
 
 
 @verify(ENUM_UNIQUE)
@@ -587,8 +588,29 @@ def run_gepa(run: Run) -> tuple[str | None, float]:
     return best["instruction"], scores[result.best_idx]
 
 
+def run_eval(run: Run) -> None:
+    instruction = Path(run.args.instruction_file).read_text("utf-8")
+    rows = run.evaluate(
+        instruction, run.splits.heldout, "best_heldout", "given"
+    )
+    run.results.update(
+        status=Status.DONE,
+        best_instruction=instruction,
+        best_candidate=run.candidate_ids[instruction],
+        best_heldout=mean(rows),
+    )
+    run.write_results()
+    run.log(
+        f"done best_heldout={mean(rows):.3f} task_calls={run.task_calls}"
+        f" cost=${run.task_cost:.4f}"
+    )
+
+
 def main() -> None:
     args = parse_args()
+    if Arm(args.arm) is Arm.EVAL and args.instruction_file is None:
+        msg = "--arm eval requires --instruction-file"
+        raise SystemExit(msg)
     out = Path(args.out).expanduser()
     if out.exists() and any(out.iterdir()):
         msg = f"output directory is not empty: {out}"
@@ -602,6 +624,9 @@ def main() -> None:
         f"start family={args.family} arm={args.arm} model={args.task_model}"
         f" reasoning={args.reasoning} reflection={args.reflection_model}"
     )
+    if Arm(args.arm) is Arm.EVAL:
+        run_eval(run)
+        return
     naive_val = mean(run.evaluate(None, run.splits.val, "screen", "naive"))
     in_band = args.band_low <= naive_val <= args.band_high
     run.results.update(naive_val=naive_val, in_band=in_band)
@@ -652,16 +677,18 @@ def main() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run one prelim arm (naive, format_fixed, null, or gepa) for one "
-            "whetstone-envs task family. The task model is served by any "
-            "OpenAI-compatible endpoint (--base-url, OpenRouter by default); "
-            "reflection always uses OpenRouter. Items come from the "
-            "family generator, shuffled by --split-seed into train, "
-            "validation, and held-out slices. Every run screens the naive "
-            "probe on validation and stops when it falls outside the band; "
-            "in-band runs score naive and the arm's best instruction on "
-            "held-out. Writes items.jsonl, candidates.jsonl, results.json, "
-            "and progress.log under --out. Requires the --api-key-env "
+            "Run one prelim arm (naive, format_fixed, null, gepa, or eval) "
+            "for one whetstone-envs task family. The task model is served "
+            "by any OpenAI-compatible endpoint (--base-url, OpenRouter by "
+            "default); reflection always uses OpenRouter. Items come from "
+            "the family generator, shuffled by --split-seed into train, "
+            "validation, and held-out slices. Every other arm screens the "
+            "naive probe on validation and stops when it falls outside the "
+            "band; in-band runs score naive and the arm's best instruction "
+            "on held-out. The eval arm skips the screen and the naive "
+            "baseline and scores only --instruction-file on held-out. "
+            "Writes items.jsonl, candidates.jsonl, results.json, and "
+            "progress.log under --out. Requires the --api-key-env "
             "variable, and OPENROUTER_API_KEY for the null and gepa arms."
         )
     )
@@ -685,6 +712,10 @@ def parse_args() -> argparse.Namespace:
             "object or as reasoning_effort on other endpoints; omitted "
             "when unset"
         ),
+    )
+    parser.add_argument(
+        "--instruction-file",
+        help="file whose exact text the eval arm scores on held-out",
     )
     parser.add_argument("--reflection-model", default="openai/gpt-5.4-nano")
     parser.add_argument("--train-n", type=int, default=24)

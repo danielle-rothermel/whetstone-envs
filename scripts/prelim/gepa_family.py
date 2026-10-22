@@ -21,7 +21,7 @@ from gepa import EvaluationBatch, optimize
 from gepa.utils.stop_condition import TimeoutStopCondition
 from readers import Family, Reader, options, read
 
-from whetstone_envs import c11, c18, c19, c22, c23
+from whetstone_envs import c11, c18, c19, c22, c23, gsm8k, ifeval
 from whetstone_envs.c22.constraints import ConstraintStack
 from whetstone_envs.c22.generation import Preset as C22Preset
 from whetstone_envs.c22.generation import _generate_pool as c22_generate
@@ -192,6 +192,20 @@ def c22_feedback(response: str, gold: str) -> str:
     return f"Incorrect. Failed constraints: {failed}"
 
 
+def ifeval_feedback(response: str, gold: str) -> str:
+    failed = ", ".join(ifeval.check_strict(response, gold).failed)
+    return f"Incorrect. Failed instructions: {failed}"
+
+
+def dataset_pool(
+    generate: Callable[[], Any], n_per_category: int | None
+) -> Sequence[Instance]:
+    if n_per_category is not None:
+        msg = "--n-per-category does not apply to dataset families"
+        raise SystemExit(msg)
+    return generate().instance_group.instances
+
+
 def pool_of(
     generate: Callable[..., Any], n_per_category: int | None
 ) -> Sequence[Instance]:
@@ -237,6 +251,16 @@ FAMILIES: dict[Family, FamilySpec] = {
         c23.PROBES.naive_template,
         lambda n: pool_of(c23.generate_pool, n),
         gold_feedback,
+    ),
+    Family.GSM8K: FamilySpec(
+        gsm8k.NAIVE_TEMPLATE,
+        lambda n: dataset_pool(gsm8k.generate_pool, n),
+        gold_feedback,
+    ),
+    Family.IFEVAL: FamilySpec(
+        ifeval.NAIVE_TEMPLATE,
+        lambda n: dataset_pool(ifeval.generate_pool, n),
+        ifeval_feedback,
     ),
 }
 

@@ -12,6 +12,10 @@ license-files = [
     "src/whetstone_envs/c22/_vendor/instruction_following_eval/PROVENANCE.md",
     "src/whetstone_envs/c23/attribution/LICENSE",
     "src/whetstone_envs/c23/attribution/PROVENANCE.md",
+    "src/whetstone_envs/gsm8k/attribution/LICENSE",
+    "src/whetstone_envs/gsm8k/attribution/PROVENANCE.md",
+    "src/whetstone_envs/ifeval/attribution/LICENSE",
+    "src/whetstone_envs/ifeval/attribution/PROVENANCE.md",
 ]
 authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" },

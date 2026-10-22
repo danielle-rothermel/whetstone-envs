@@ -20,6 +20,8 @@ from gepa.utils.stop_condition import TimeoutStopCondition
 
 from whetstone_envs import c11, c18, c19, c22, c23
 from whetstone_envs.c22.constraints import ConstraintStack
+from whetstone_envs.c22.generation import Preset as C22Preset
+from whetstone_envs.c22.generation import _generate_pool as c22_generate
 from whetstone_envs.c22.oracle import evaluate as c22_evaluate
 from whetstone_envs.instances import Instance
 from whetstone_envs.scoring import exact_match
@@ -27,7 +29,8 @@ from whetstone_envs.scoring import exact_match
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY"
 FORMAT_SENTENCES = Path(__file__).with_name("format_sentences.toml")
 SEED_INSTRUCTION = "Solve the task below."
 SPLIT_SEED = 20261016
@@ -85,7 +88,7 @@ class Status(StrEnum):
 @dataclass(frozen=True, slots=True)
 class FamilySpec:
     naive_template: str
-    pool: Callable[[], Sequence[Instance]]
+    pool: Callable[[int | None], Sequence[Instance]]
     score: Callable[[str, str], int]
     feedback: Callable[[str, str], str]
 
@@ -101,34 +104,54 @@ def c22_feedback(response: str, gold: str) -> str:
     return f"Incorrect. Failed constraints: {failed}"
 
 
+def pool_of(
+    generate: Callable[..., Any], n_per_category: int | None
+) -> Sequence[Instance]:
+    pool = (
+        generate()
+        if n_per_category is None
+        else generate(n_per_category=n_per_category)
+    )
+    return pool.instance_group.instances
+
+
+def c22_pool(n_per_category: int | None) -> Sequence[Instance]:
+    if n_per_category is None:
+        return c22.generate_pool().instance_group.instances
+    pool = c22_generate(
+        C22Preset.DEFAULT, instances_per_category=n_per_category
+    )
+    return pool.instance_group.instances
+
+
 FAMILIES: dict[Family, FamilySpec] = {
     Family.C11: FamilySpec(
         c11.PROBES.naive_template,
-        lambda: c11.generate_pool().instance_group.instances,
+        lambda n: pool_of(c11.generate_pool, n),
         exact_match,
         gold_feedback,
     ),
     Family.C18: FamilySpec(
         c18.PROBES.naive_template,
-        lambda: c18.generate_pool().instance_group.instances,
+        lambda n: pool_of(c18.generate_pool, n),
         c18.score_gold,
         gold_feedback,
     ),
     Family.C19: FamilySpec(
         c19.PROBES.naive_template,
-        lambda: c19.generate_pool().instance_group.instances,
+        lambda n: pool_of(c19.generate_pool, n),
         exact_match,
         gold_feedback,
     ),
     Family.C22: FamilySpec(
         c22.PROBES.naive_template,
-        lambda: c22.generate_pool().instance_group.instances,
+        c22_pool,
         lambda response, gold: c22.score(gold, response),
         c22_feedback,
     ),
     Family.C23: FamilySpec(
         c23.PROBES.naive_template,
-        lambda: c23.generate_pool().instance_group.instances,
+        lambda n: pool_of(c23.generate_pool, n),
         c23.score_gold,
         gold_feedback,
     ),
@@ -143,6 +166,8 @@ class ProviderError(RuntimeError):
 class Reply:
     text: str
     cost: float | None
+    provider: str | None
+    finish_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +181,8 @@ class Row:
     score: float
     error: str | None
     cost: float | None
+    provider: str | None
+    finish_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +206,7 @@ def mean(rows: Sequence[Row]) -> float:
 
 
 def make_splits(spec: FamilySpec, args: argparse.Namespace) -> Splits:
-    instances = list(spec.pool())
+    instances = list(spec.pool(args.n_per_category))
     random.Random(args.split_seed).shuffle(instances)  # noqa: S311
     needed = args.train_n + args.val_n + args.heldout_n
     if needed > len(instances):
@@ -199,7 +226,9 @@ class Run:
         self.args = args
         self.out = out
         self.spec = FAMILIES[Family(args.family)]
-        self.key = os.environ["OPENROUTER_API_KEY"]
+        self.task_base_url = args.base_url.rstrip("/")
+        self.task_openrouter = self.task_base_url == OPENROUTER_BASE_URL
+        self.task_key = os.environ[args.api_key_env]
         self.splits = make_splits(self.spec, args)
         self.split_of = {
             inst.id: name
@@ -225,10 +254,12 @@ class Run:
             "family": args.family,
             "arm": args.arm,
             "task_model": args.task_model,
+            "base_url": self.task_base_url,
             "reasoning": args.reasoning,
             "reflection_model": args.reflection_model,
             "seed": args.seed,
             "split_seed": args.split_seed,
+            "n_per_category": args.n_per_category,
             "data_source": "generator",
             "sizes": {
                 "train": args.train_n,
@@ -279,28 +310,37 @@ class Run:
         model: str,
         prompt: str | list[dict[str, Any]],
         effort: str | None,
+        *,
+        openrouter: bool,
     ) -> dict:
         messages = (
             prompt
             if isinstance(prompt, list)
             else [{"role": "user", "content": prompt}]
         )
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "usage": {"include": True},
-        }
-        if effort:
-            body["reasoning"] = {"effort": effort}
+        body: dict[str, Any] = {"model": model, "messages": messages}
+        if openrouter:
+            body["usage"] = {"include": True}
+            if effort:
+                body["reasoning"] = {"effort": effort}
+        elif effort:
+            body["reasoning_effort"] = effort
         return body
 
-    async def post(self, client: httpx.AsyncClient, body: dict) -> Reply:
+    async def post(
+        self,
+        client: httpx.AsyncClient,
+        body: dict,
+        *,
+        base_url: str,
+        key: str,
+    ) -> Reply:
         last = ""
         for attempt in range(HTTP_RETRIES):
             try:
                 response = await client.post(
-                    OPENROUTER_URL,
-                    headers={"Authorization": f"Bearer {self.key}"},
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
                     json=body,
                 )
             except httpx.HTTPError as exc:
@@ -319,9 +359,12 @@ class Run:
                         last = f"no choices: {str(payload)[:300]}"
                     else:
                         usage = payload.get("usage") or {}
+                        message = choices[0].get("message") or {}
                         return Reply(
-                            text=choices[0]["message"].get("content") or "",
+                            text=message.get("content") or "",
                             cost=usage.get("cost"),
+                            provider=payload.get("provider"),
+                            finish_reason=choices[0].get("finish_reason"),
                         )
             await asyncio.sleep(2**attempt)
         raise ProviderError(last)
@@ -348,17 +391,24 @@ class Run:
                     self.spec.naive_template, instruction, inst.prompt_inputs
                 )
                 body = self.body(
-                    self.args.task_model, prompt, self.args.reasoning
+                    self.args.task_model,
+                    prompt,
+                    self.args.reasoning,
+                    openrouter=self.task_openrouter,
                 )
                 error = None
-                cost = None
+                reply = Reply("", None, None, None)
                 async with gate:
                     try:
-                        reply = await self.post(client, body)
+                        reply = await self.post(
+                            client,
+                            body,
+                            base_url=self.task_base_url,
+                            key=self.task_key,
+                        )
                     except ProviderError as exc:
-                        text, error = "", str(exc)
-                    else:
-                        text, cost = reply.text, reply.cost
+                        error = str(exc)
+                text = reply.text
                 score = float(self.spec.score(text, inst.gold))
                 return Row(
                     instance_id=inst.id,
@@ -369,7 +419,9 @@ class Run:
                     gold=inst.gold,
                     score=score,
                     error=error,
-                    cost=cost,
+                    cost=reply.cost,
+                    provider=reply.provider,
+                    finish_reason=reply.finish_reason,
                 )
 
             return list(await asyncio.gather(*(one(i) for i in batch)))
@@ -397,11 +449,16 @@ class Run:
         return rows
 
     def reflect(self, prompt: str | list[dict[str, Any]]) -> str:
-        body = self.body(self.args.reflection_model, prompt, None)
+        body = self.body(
+            self.args.reflection_model, prompt, None, openrouter=True
+        )
+        key = os.environ[OPENROUTER_KEY_ENV]
 
         async def call() -> Reply:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
-                return await self.post(client, body)
+                return await self.post(
+                    client, body, base_url=OPENROUTER_BASE_URL, key=key
+                )
 
         reply = asyncio.run(call())
         self.reflection_calls += 1
@@ -596,20 +653,38 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run one prelim arm (naive, format_fixed, null, or gepa) for one "
-            "whetstone-envs task family over OpenRouter. Items come from the "
+            "whetstone-envs task family. The task model is served by any "
+            "OpenAI-compatible endpoint (--base-url, OpenRouter by default); "
+            "reflection always uses OpenRouter. Items come from the "
             "family generator, shuffled by --split-seed into train, "
             "validation, and held-out slices. Every run screens the naive "
             "probe on validation and stops when it falls outside the band; "
             "in-band runs score naive and the arm's best instruction on "
             "held-out. Writes items.jsonl, candidates.jsonl, results.json, "
-            "and progress.log under --out. Requires OPENROUTER_API_KEY."
+            "and progress.log under --out. Requires the --api-key-env "
+            "variable, and OPENROUTER_API_KEY for the null and gepa arms."
         )
     )
     parser.add_argument("--family", required=True, choices=list(Family))
     parser.add_argument("--arm", required=True, choices=list(Arm))
     parser.add_argument("--task-model", required=True)
     parser.add_argument(
-        "--reasoning", help="task-model reasoning effort; omitted when unset"
+        "--base-url",
+        default=OPENROUTER_BASE_URL,
+        help="OpenAI-compatible base URL serving the task model",
+    )
+    parser.add_argument(
+        "--api-key-env",
+        default=OPENROUTER_KEY_ENV,
+        help="environment variable holding the task endpoint's API key",
+    )
+    parser.add_argument(
+        "--reasoning",
+        help=(
+            "task-model reasoning effort, sent as OpenRouter's reasoning "
+            "object or as reasoning_effort on other endpoints; omitted "
+            "when unset"
+        ),
     )
     parser.add_argument("--reflection-model", default="openai/gpt-5.4-nano")
     parser.add_argument("--train-n", type=int, default=24)
@@ -619,6 +694,11 @@ def parse_args() -> argparse.Namespace:
         "--seed", type=int, default=0, help="optimizer seed (gepa)"
     )
     parser.add_argument("--split-seed", type=int, default=SPLIT_SEED)
+    parser.add_argument(
+        "--n-per-category",
+        type=int,
+        help="generator items per category; the family default when unset",
+    )
     parser.add_argument(
         "--max-metric-calls",
         type=int,

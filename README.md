@@ -46,7 +46,8 @@ uv run python scripts/c22/viz.py --preset hard --count 3
 </details>
 
 [`scripts/prelim`](scripts/prelim) holds untested preliminary sweep tooling:
-a per-family OpenRouter runner for naive, format-fixed, null, and GEPA arms
+a per-family runner for naive, format-fixed, null, and GEPA arms whose task
+model is served by OpenRouter or any OpenAI-compatible endpoint
 (`gepa_family.py`) and a file-based job queue with its jobs file.
 
 ## Scope

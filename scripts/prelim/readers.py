@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import UNIQUE as ENUM_UNIQUE
 from enum import StrEnum, auto, verify
 
-from whetstone_envs import c18, c22, c23
+from whetstone_envs import c18, c22, c23, gsm8k, ifeval
 from whetstone_envs.c18.oracle import extract_verdict
 from whetstone_envs.c23._scoring import extract_last_output
 from whetstone_envs.probes import normalize
@@ -35,6 +35,8 @@ class Family(StrEnum):
     C19 = auto()
     C22 = auto()
     C23 = auto()
+    GSM8K = auto()
+    IFEVAL = auto()
 
 
 @verify(ENUM_UNIQUE)
@@ -225,12 +227,40 @@ def forgiving_c23(response: str, gold: str) -> Verdict:
     )
 
 
+def gsm8k_verdict(answer: str | None, gold: str) -> Verdict:
+    return Verdict(valid=answer is not None, correct=answer == gold)
+
+
+def strict_gsm8k(response: str, gold: str) -> Verdict:
+    return gsm8k_verdict(gsm8k.strict_answer(response), gold)
+
+
+def forgiving_gsm8k(response: str, gold: str) -> Verdict:
+    return gsm8k_verdict(gsm8k.forgiving_answer(response), gold)
+
+
+def strict_ifeval(response: str, gold: str) -> Verdict:
+    return Verdict(
+        valid=bool(normalize(response)),
+        correct=ifeval.check_strict(response, gold).all_followed,
+    )
+
+
+def forgiving_ifeval(response: str, gold: str) -> Verdict:
+    return Verdict(
+        valid=bool(normalize(THINK_BLOCK.sub("", response))),
+        correct=ifeval.check_loose(response, gold).all_followed,
+    )
+
+
 STRICT: dict[Family, Callable[[str, str], Verdict]] = {
     Family.C11: strict_c11,
     Family.C18: strict_c18,
     Family.C19: strict_c19,
     Family.C22: strict_c22,
     Family.C23: strict_c23,
+    Family.GSM8K: strict_gsm8k,
+    Family.IFEVAL: strict_ifeval,
 }
 
 FORGIVING: dict[Family, Callable[[str, str], Verdict]] = {
@@ -239,6 +269,8 @@ FORGIVING: dict[Family, Callable[[str, str], Verdict]] = {
     Family.C19: forgiving_c19,
     Family.C22: strict_c22,
     Family.C23: forgiving_c23,
+    Family.GSM8K: forgiving_gsm8k,
+    Family.IFEVAL: forgiving_ifeval,
 }
 
 READERS: dict[Reader, dict[Family, Callable[[str, str], Verdict]]] = {

@@ -214,6 +214,34 @@ exported_symbols = [
 ]
 
 [[terms]]
+name = "GSM8K task family"
+definition = """
+An evaluation task family over the 1319-item openai/gsm8k main test split, \
+packaged at a pinned Hub revision, prompted with the eight Wei et al. \
+chain-of-thought exemplars, with strict scoring of a final #### <number> \
+line and forgiving scoring of the last number in the response."""
+exported_symbols = [
+    "whetstone_envs.gsm8k.FEWSHOT_EXEMPLARS",
+    "whetstone_envs.gsm8k.NAIVE_TEMPLATE",
+    "whetstone_envs.gsm8k.generate_pool",
+    "whetstone_envs.gsm8k.score_forgiving",
+    "whetstone_envs.gsm8k.score_strict",
+]
+
+[[terms]]
+name = "IFEval task family"
+definition = """
+An evaluation task family over the 541 google/IFEval prompts, packaged at a \
+pinned Hub revision, scored at prompt level by the upstream strict and loose \
+instruction-following checks."""
+exported_symbols = [
+    "whetstone_envs.ifeval.NAIVE_TEMPLATE",
+    "whetstone_envs.ifeval.check_loose",
+    "whetstone_envs.ifeval.check_strict",
+    "whetstone_envs.ifeval.generate_pool",
+]
+
+[[terms]]
 name = "prepared optimization problem"
 definition = """
 An explicit combination of a prepared experiment and source instance split, \

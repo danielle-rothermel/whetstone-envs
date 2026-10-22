@@ -78,6 +78,12 @@ execution-contract code:
   composed IFEval constraints and strict all-pass scoring.
 - [**C23 subregular induction**][c23-source] provides determinate hidden-rule
   string transformations across four ISL and OSL categories.
+- [**GSM8K**][gsm8k-source] packages the pinned `openai/gsm8k` test split, the
+  standard eight chain-of-thought exemplars, and strict `#### <number>` and
+  forgiving last-number scoring.
+- [**IFEval**][ifeval-source] packages the pinned `google/IFEval` prompts with
+  prompt-level strict and loose checking by the upstream checker that C22
+  vendors.
 - [**Evidence**][evidence-source] owns strict evaluation and optimization
   trajectory records, row accounting, paired comparisons, and bounded
   canonical report files without execution dependencies.
@@ -714,6 +720,8 @@ uv run python -m whetstone_envs.c19.regenerate
 [probes-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/probes
 [scoring-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/scoring
 [c23-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/c23
+[gsm8k-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/gsm8k
+[ifeval-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/ifeval
 [optim-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/optim
 [reporting-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/reporting
 [evidence-source]: https://github.com/danielle-rothermel/whetstone-envs/tree/main/src/whetstone_envs/evidence

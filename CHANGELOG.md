@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- GSM8K and IFEval task families in `whetstone_envs.gsm8k` and
+  `whetstone_envs.ifeval`, each with a pinned packaged copy of its Hub dataset,
+  strict and forgiving scoring, and `gsm8k`/`ifeval` families in the prelim
+  family runner and its readers.
+
 - Preliminary sweep tooling in `scripts/prelim/`: `gepa_family.py` runs naive,
   format-fixed, null, and upstream-GEPA arms for C11, C18, C19, C22, and C23
   over OpenRouter, and `queue_make.py`/`queue_worker.py` run a file-based job

@@ -92,7 +92,7 @@ def variant_specs(*, small: bool, base: bool, long_ok: bool) -> list[Spec]:
                     "strict",
                     "generate",
                     0,
-                    ("seedinstr", "shots3"),
+                    ("seedinstr", "shots3ans"),
                 )
             )
     for fam in LIKELIHOOD_FAMILIES:
@@ -107,7 +107,7 @@ def variant_specs(*, small: bool, base: bool, long_ok: bool) -> list[Spec]:
                     "strict",
                     "likelihood",
                     0,
-                    ("seedinstr", "shots3"),
+                    ("seedinstr", "shots3ans"),
                 )
             )
     return out
@@ -119,7 +119,7 @@ def variant_args(variant: tuple[str, ...], seed_file: str) -> list[str]:
         out += ["--seed-file", seed_file]
     if "tok2048" in variant:
         out += ["--max-tokens", "2048"]
-    if "shots3" in variant:
+    if "shots3ans" in variant:
         out += ["--shots", "3"]
     return out
 

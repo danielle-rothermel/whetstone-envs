@@ -114,3 +114,31 @@ slug = "qwen3-32b-instruct"
 hf = "Qwen/Qwen3-32B"
 kind = "instruct"
 thinking_off = true
+
+[[models]]
+slug = "dd-dclm-530m-s0"
+hf = "drotherm/DataDecide-dclm-baseline-530M"
+revision = "5bbac1a906e5e44d8f99efacbc2ed3a3025e519b"
+kind = "base"
+max_model_len = 2048
+
+[[models]]
+slug = "dd-dolma-530m-s0"
+hf = "drotherm/DataDecide-dolma1.7-530M"
+revision = "94450e7fc2eb1c62af4dc0566d8dc8bf77fc6acd"
+kind = "base"
+max_model_len = 2048
+
+[[models]]
+slug = "dd-dclm-750m-s0"
+hf = "drotherm/DataDecide-dclm-baseline-750M"
+revision = "100c6acd7ee36c827563465725172326d24992ac"
+kind = "base"
+max_model_len = 2048
+
+[[models]]
+slug = "dd-dolma-750m-s0"
+hf = "drotherm/DataDecide-dolma1.7-750M"
+revision = "cd382f0d579c70bf3f953b5225e649fbc529c276"
+kind = "base"
+max_model_len = 2048

@@ -60,6 +60,7 @@ STRICT_READING_CHARS = 200
 TAIL_MARKER = "[... response head omitted ...]\n"
 TOP_LOGPROBS = 5
 PLAIN_ANSWER_PREFIX = "\nAnswer:"
+SHOT_STOP = "\n\nExample "
 PROBE_CHARS = 4000
 CHAT_PATH = "/chat/completions"
 COMPLETIONS_PATH = "/completions"
@@ -430,7 +431,9 @@ def with_shots(
     blocks = [instruction]
     for number, inst in enumerate(examples, start=1):
         body = render(template, None, inst.prompt_inputs)
-        blocks.append(f"Example {number}:\n{body}\n{inst.gold}")
+        blocks.append(
+            f"Example {number}:\n{body}{PLAIN_ANSWER_PREFIX} {inst.gold}"
+        )
     return "\n\n".join(blocks)
 
 
@@ -696,14 +699,16 @@ class Run:
     def task_request(self, prompt: str) -> tuple[str, dict[str, Any]]:
         args = self.args
         if self.prompt_format is PromptFormat.PLAIN:
-            body: dict[str, Any] = {
-                "model": args.task_model,
-                "prompt": self.plain_text(prompt),
-            }
+            text = self.plain_text(prompt)
+            stop = list(args.stop or [])
+            if args.shots:
+                text += PLAIN_ANSWER_PREFIX
+                stop.append(SHOT_STOP)
+            body: dict[str, Any] = {"model": args.task_model, "prompt": text}
             if self.logprobs:
                 body["logprobs"] = TOP_LOGPROBS
-            if args.stop:
-                body["stop"] = args.stop
+            if stop:
+                body["stop"] = stop
             path = COMPLETIONS_PATH
         else:
             body = self.body(

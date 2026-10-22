@@ -1,0 +1,160 @@
+# Overnight 2026-10-22 OpenRouter sweep: naive and gepa arms only.
+# Every run uses train 48, validation 60, held-out 240 with --split-seed 0;
+# c18, c22, and c23 enlarge their generator pools with --n-per-category.
+# The band screen is disabled (--band-low 0 --band-high 1) and only recorded.
+# GEPA: 300 metric calls, minibatch 4, 3600 s wall cap, reflection
+# openai/gpt-5.4-nano; c19 gpt-5-mini adds one 1000-call run at 7200 s.
+# c23 jobs are naive screens; gepa follow-ups are added for in-band models.
+# qwen/qwen3-14b runs without a reasoning setting: OpenRouter accepts
+# reasoning disable requests for it, but its providers still reason.
+# Expand with
+#   uv run --no-sync python scripts/prelim/queue_make.py \
+#     scripts/prelim/jobs/overnight_20261022.toml --queue <queue-dir>
+
+[queue]
+command = ["uv", "run", "--no-sync", "python", "scripts/prelim/gepa_family.py"]
+out_root = "~/drotherm/data/runs/whetstone-envs/overnight-20261022/out"
+
+[[jobs]]
+name = "c19-g5-mini-low-naive"
+args = ["--family", "c19", "--arm", "naive", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c19-g5-mini-low-gepa-300-s0"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "0"]
+
+[[jobs]]
+name = "c19-g5-mini-low-gepa-300-s1"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "1"]
+
+[[jobs]]
+name = "c19-g5-mini-low-gepa-300-s2"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "2"]
+
+[[jobs]]
+name = "c19-g5-mini-low-gepa-1000-s0"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "1000", "--minibatch", "4", "--wall-cap-s", "7200", "--seed", "0"]
+
+[[jobs]]
+name = "c19-g41-mini-naive"
+args = ["--family", "c19", "--arm", "naive", "--task-model", "openai/gpt-4.1-mini", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c19-g41-mini-gepa-300-s0"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "0"]
+
+[[jobs]]
+name = "c19-g41-mini-gepa-300-s1"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "1"]
+
+[[jobs]]
+name = "c19-g41-mini-gepa-300-s2"
+args = ["--family", "c19", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "2"]
+
+[[jobs]]
+name = "c18-g41-mini-naive"
+args = ["--family", "c18", "--arm", "naive", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-s0"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "0"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-s1"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "1"]
+
+[[jobs]]
+name = "c18-g41-mini-gepa-300-s2"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "2"]
+
+[[jobs]]
+name = "c18-qwen3-14b-naive"
+args = ["--family", "c18", "--arm", "naive", "--task-model", "qwen/qwen3-14b", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c18-qwen3-14b-gepa-300-s0"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "qwen/qwen3-14b", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "0"]
+
+[[jobs]]
+name = "c18-qwen3-14b-gepa-300-s1"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "qwen/qwen3-14b", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "1"]
+
+[[jobs]]
+name = "c18-qwen3-14b-gepa-300-s2"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "qwen/qwen3-14b", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "2"]
+
+[[jobs]]
+name = "c18-llama33-70b-naive"
+args = ["--family", "c18", "--arm", "naive", "--task-model", "meta-llama/llama-3.3-70b-instruct", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c18-llama33-70b-gepa-300-s0"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "meta-llama/llama-3.3-70b-instruct", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "0"]
+
+[[jobs]]
+name = "c18-llama33-70b-gepa-300-s1"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "meta-llama/llama-3.3-70b-instruct", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "1"]
+
+[[jobs]]
+name = "c18-llama33-70b-gepa-300-s2"
+args = ["--family", "c18", "--arm", "gepa", "--task-model", "meta-llama/llama-3.3-70b-instruct", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "2"]
+
+[[jobs]]
+name = "c11-g5-mini-low-naive"
+args = ["--family", "c11", "--arm", "naive", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-300-s0"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "0"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-300-s1"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "1"]
+
+[[jobs]]
+name = "c11-g5-mini-low-gepa-300-s2"
+args = ["--family", "c11", "--arm", "gepa", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "2"]
+
+[[jobs]]
+name = "c22-g41-mini-naive"
+args = ["--family", "c22", "--arm", "naive", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "60", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c22-g41-mini-gepa-300-s0"
+args = ["--family", "c22", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "60", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "0"]
+
+[[jobs]]
+name = "c22-g41-mini-gepa-300-s1"
+args = ["--family", "c22", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "60", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "1"]
+
+[[jobs]]
+name = "c22-g41-mini-gepa-300-s2"
+args = ["--family", "c22", "--arm", "gepa", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "60", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1", "--reflection-model", "openai/gpt-5.4-nano", "--max-metric-calls", "300", "--minibatch", "4", "--wall-cap-s", "3600", "--seed", "2"]
+
+[[jobs]]
+name = "c23-g41-mini-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "openai/gpt-4.1-mini", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c23-g5-mini-low-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "openai/gpt-5-mini", "--reasoning", "low", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c23-g5-mini-med-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "openai/gpt-5-mini", "--reasoning", "medium", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c23-g5-minimal-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "openai/gpt-5", "--reasoning", "minimal", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c23-qwen3-14b-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "qwen/qwen3-14b", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c23-llama33-70b-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "meta-llama/llama-3.3-70b-instruct", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
+
+[[jobs]]
+name = "c23-gem25-flash-naive"
+args = ["--family", "c23", "--arm", "naive", "--task-model", "google/gemini-2.5-flash", "--n-per-category", "90", "--train-n", "48", "--val-n", "60", "--heldout-n", "240", "--split-seed", "0", "--band-low", "0", "--band-high", "1"]
